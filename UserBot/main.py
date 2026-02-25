@@ -2683,7 +2683,7 @@ async def _process_approved_direct_buy_payments(application) -> None:
             FROM userbot_payments p
             LEFT JOIN userbot_users u ON u.id = p.user_id
             WHERE p.status = 'approved' AND p.method = 'card'
-            ORDER BY p.id ASC
+            ORDER BY p.id DESC
             LIMIT 40
             """
         )
@@ -2699,72 +2699,82 @@ async def _process_approved_direct_buy_payments(application) -> None:
         payment_id = int(row.get("id") or 0)
         if payment_id <= 0:
             continue
-        meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
-        if str(meta.get("pay_flow") or "").strip().lower() != "direct_buy":
-            continue
-        done_state = str(meta.get("direct_done") or "").strip().lower()
-        if done_state in {"1", "err"}:
-            continue
 
-        internal_user_id = int(row.get("user_id") or 0)
-        tg_id = int(row.get("telegram_id") or 0)
-        amount = int(row.get("amount") or 0)
-        sid = _parse_number_meta(meta.get("sid"), as_int=True)
-        gb = _parse_number_meta(meta.get("gb"), as_int=False)
-        days = _parse_number_meta(meta.get("days"), as_int=True)
-        renew_service_id = _parse_number_meta(meta.get("renew_service_id"), as_int=True)
-        service_name = str(meta.get("service_name") or "").strip()
-        if renew_service_id > 0 and not service_name:
-            renew_service = userbot_db.get_service_by_id(renew_service_id) or {}
-            service_name = (renew_service.get("name") or "").strip()
-        if not service_name:
-            service_name = _generate_random_service_name()
+        try:
+            meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
+            if str(meta.get("pay_flow") or "").strip().lower() != "direct_buy":
+                continue
+            done_state = str(meta.get("direct_done") or "").strip().lower()
+            if done_state in {"1", "err"}:
+                continue
 
-        if internal_user_id <= 0 or tg_id <= 0 or amount <= 0 or sid <= 0 or gb <= 0 or days <= 0:
-            _update_payment_receipt_meta(payment_id, {"direct_done": "err", "direct_error": "invalid_meta"})
-            continue
+            internal_user_id = int(row.get("user_id") or 0)
+            tg_id = int(row.get("telegram_id") or 0)
+            amount = int(row.get("amount") or 0)
+            sid = _parse_number_meta(meta.get("sid"), as_int=True)
+            gb = _parse_number_meta(meta.get("gb"), as_int=False)
+            days = _parse_number_meta(meta.get("days"), as_int=True)
+            renew_service_id = _parse_number_meta(meta.get("renew_service_id"), as_int=True)
+            service_name = str(meta.get("service_name") or "").strip()
+            if renew_service_id > 0 and not service_name:
+                renew_service = userbot_db.get_service_by_id(renew_service_id) or {}
+                service_name = (renew_service.get("name") or "").strip()
+            if not service_name:
+                service_name = _generate_random_service_name()
 
-        tg_user = SimpleNamespace(
-            id=tg_id,
-            username=str(row.get("username") or ""),
-            full_name=str(row.get("full_name") or ""),
-        )
-        pending_wallet = {
-            "internal_user_id": internal_user_id,
-            "amount": amount,
-            "sid": sid,
-            "gb": gb,
-            "days": days,
-            "renew_service_id": renew_service_id,
-        }
-        ok = await _process_wallet_purchase(
-            context=fake_ctx,
-            user_id=tg_id,
-            tg_user=tg_user,
-            chat_id=tg_id,
-            pending_wallet=pending_wallet,
-            service_name=service_name,
-            skip_wallet_charge=True,
-            tx_code_override=str(row.get("tx_code") or "").strip(),
-        )
-        if ok:
-            _update_payment_receipt_meta(
-                payment_id,
-                {
-                    "direct_done": "1",
-                    "direct_done_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-                    "service_name": service_name,
-                },
+            if internal_user_id <= 0 or tg_id <= 0 or amount <= 0 or sid <= 0 or gb <= 0 or days <= 0:
+                _update_payment_receipt_meta(payment_id, {"direct_done": "err", "direct_error": "invalid_meta"})
+                continue
+
+            tg_user = SimpleNamespace(
+                id=tg_id,
+                username=str(row.get("username") or ""),
+                full_name=str(row.get("full_name") or ""),
             )
-        else:
-            _update_payment_receipt_meta(
-                payment_id,
-                {
-                    "direct_done": "err",
-                    "direct_error": "fulfillment_failed",
-                    "service_name": service_name,
-                },
+            pending_wallet = {
+                "internal_user_id": internal_user_id,
+                "amount": amount,
+                "sid": sid,
+                "gb": gb,
+                "days": days,
+                "renew_service_id": renew_service_id,
+            }
+            ok = await _process_wallet_purchase(
+                context=fake_ctx,
+                user_id=tg_id,
+                tg_user=tg_user,
+                chat_id=tg_id,
+                pending_wallet=pending_wallet,
+                service_name=service_name,
+                skip_wallet_charge=True,
+                tx_code_override=str(row.get("tx_code") or "").strip(),
             )
+            if ok:
+                _update_payment_receipt_meta(
+                    payment_id,
+                    {
+                        "direct_done": "1",
+                        "direct_done_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                        "service_name": service_name,
+                    },
+                )
+            else:
+                _update_payment_receipt_meta(
+                    payment_id,
+                    {
+                        "direct_done": "err",
+                        "direct_error": "fulfillment_failed",
+                        "service_name": service_name,
+                    },
+                )
+        except Exception as e:
+            # یک پرداخت خراب نباید کل صف پرداخت مستقیم را متوقف کند.
+            logger.exception(
+                "Direct-buy fulfillment row failed (payment_id=%s): %s",
+                payment_id,
+                e,
+            )
+            continue
 
 
 async def _direct_buy_delivery_loop(application) -> None:
