@@ -45,6 +45,7 @@ Usage:
 Commands:
   install         First-time setup: dependencies + venv + db init + restart bots
   update          Safe backup + git update (if possible) + dependencies + restart bots
+  menu            Interactive menu (install/update/start/stop/restart/...)
   start           Start AdminBot and UserBot
   stop            Stop AdminBot and UserBot
   restart         Restart AdminBot and UserBot
@@ -55,6 +56,7 @@ Commands:
   help            Show this help
 
 Notes:
+  - Running ./install.sh with no args opens interactive menu (TTY mode)
   - install/update automatically install Python package dependencies from requirements.txt
   - Telegram library is installed automatically via requirements.txt
 USAGE
@@ -466,14 +468,52 @@ update_all() {
   _green "OK: update completed."
 }
 
-main() {
-  local cmd="${1:-install}"
+interactive_menu() {
+  while true; do
+    echo "========================================="
+    echo "Hiddify-SellBot | Version: $APP_VERSION"
+    echo "========================================="
+    echo "1) install        6) status"
+    echo "2) update         7) config"
+    echo "3) start          8) factory-reset"
+    echo "4) stop           9) version"
+    echo "5) restart        10) help"
+    echo "0) exit"
+    echo "-----------------------------------------"
+    read -rp "Select option: " choice
+    case "${choice:-}" in
+      1) run_command install; return $? ;;
+      2) run_command update; return $? ;;
+      3) run_command start; return $? ;;
+      4) run_command stop; return $? ;;
+      5) run_command restart; return $? ;;
+      6) run_command status; return $? ;;
+      7) run_command config; return $? ;;
+      8) run_command factory-reset; return $? ;;
+      9) run_command version; return $? ;;
+      10) run_command help; return $? ;;
+      0|q|Q|quit|exit)
+        _green "Exit."
+        return 0
+        ;;
+      *)
+        _yellow "WARN: invalid option."
+        ;;
+    esac
+  done
+}
+
+run_command() {
+  local cmd="$1"
   case "$cmd" in
     install)
       install_all
       ;;
     update)
       update_all
+      ;;
+    menu)
+      interactive_menu
       ;;
     start)
       start_bots
@@ -509,4 +549,16 @@ main() {
   esac
 }
 
-main "${1:-install}"
+main() {
+  local cmd="${1:-}"
+  if [ -z "$cmd" ]; then
+    if [ -t 0 ]; then
+      interactive_menu
+      return $?
+    fi
+    cmd="install"
+  fi
+  run_command "$cmd"
+}
+
+main "${1:-}"
