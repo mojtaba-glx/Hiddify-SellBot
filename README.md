@@ -2,10 +2,22 @@
 
 Telegram AdminBot + UserBot for Hiddify sales workflows.
 
-## Quick Start
+## Quick Start (Menu Mode)
 
 ```bash
-git clone https://github.com/mojtaba-glx/Hiddify-SellBot.git && cd Hiddify-SellBot && chmod +x install.sh && ./install.sh install
+git clone https://github.com/mojtaba-glx/Hiddify-SellBot.git && cd Hiddify-SellBot && chmod +x install.sh && ./install.sh
+```
+
+`./install.sh` with no command opens the interactive menu:
+
+```text
+1) install  2) update  3) start  4) stop  5) restart ...
+```
+
+## First-Time Install (Direct Command)
+
+```bash
+cd ~/Hiddify-SellBot && ./install.sh install
 ```
 
 ## One-Line Update (after first install)
