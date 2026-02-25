@@ -500,6 +500,17 @@ update_all() {
 }
 
 interactive_menu() {
+  _run_menu_cmd() {
+    local cmd="$1"
+    if run_command "$cmd"; then
+      _green "OK: $cmd completed."
+    else
+      _red "ERROR: $cmd failed."
+    fi
+    echo "-----------------------------------------"
+    read -rp "Press Enter to return menu..." _
+  }
+
   while true; do
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
@@ -514,17 +525,17 @@ interactive_menu() {
     echo "-----------------------------------------"
     read -rp "Select option: " choice
     case "${choice:-}" in
-      1) run_command install; return $? ;;
-      2) run_command update; return $? ;;
-      3) run_command start; return $? ;;
-      4) run_command stop; return $? ;;
-      5) run_command restart; return $? ;;
-      6) run_command status; return $? ;;
-      7) run_command config; return $? ;;
-      8) run_command factory-reset; return $? ;;
-      9) run_command version; return $? ;;
-      10) run_command help; return $? ;;
-      11) run_command uninstall; return $? ;;
+      1) _run_menu_cmd install ;;
+      2) _run_menu_cmd update ;;
+      3) _run_menu_cmd start ;;
+      4) _run_menu_cmd stop ;;
+      5) _run_menu_cmd restart ;;
+      6) _run_menu_cmd status ;;
+      7) _run_menu_cmd config ;;
+      8) _run_menu_cmd factory-reset ;;
+      9) _run_menu_cmd version ;;
+      10) _run_menu_cmd help ;;
+      11) _run_menu_cmd uninstall ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
