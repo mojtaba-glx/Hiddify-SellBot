@@ -46,6 +46,7 @@ Commands:
   install         First-time setup: dependencies + venv + db init + restart bots
   update          Safe backup + git update (if possible) + dependencies + restart bots
   menu            Interactive menu (install/update/start/stop/restart/...)
+  uninstall       Stop bots and remove runtime/data files from this folder
   start           Start AdminBot and UserBot
   stop            Stop AdminBot and UserBot
   restart         Restart AdminBot and UserBot
@@ -59,6 +60,7 @@ Notes:
   - Running ./install.sh with no args opens interactive menu (TTY mode)
   - install/update automatically install Python package dependencies from requirements.txt
   - Telegram library is installed automatically via requirements.txt
+  - uninstall removes .env, venv, logs, backups, receipts, and runtime DB/data files
 USAGE
 }
 
@@ -441,6 +443,35 @@ factory_reset() {
   _green "OK: factory reset completed."
 }
 
+uninstall_all() {
+  if [ ! -t 0 ]; then
+    _red "ERROR: uninstall requires an interactive terminal."
+    return 1
+  fi
+
+  _yellow "This will uninstall Hiddify-SellBot runtime from this folder:"
+  _yellow "- stop bots"
+  _yellow "- remove .env, venv, logs, backups, receipts, and runtime DB/data files"
+  _yellow "- keep source code files"
+  local confirm=""
+  read -rp "Type DELETE to confirm uninstall: " confirm
+  if [ "$confirm" != "DELETE" ]; then
+    _yellow "Cancelled."
+    return 0
+  fi
+
+  stop_bots
+  rm -rf "$VENV_DIR" "$LOG_DIR" "$BACKUP_DIR" "$RECEIPT_DIR"
+  rm -f "$ENV_FILE"
+  rm -f "$ROOT_DIR/Shared/hiddify_sellbot.db"
+  rm -f "$ROOT_DIR/Shared/servers.json"
+  rm -f "$ROOT_DIR/Shared/plans.json"
+
+  _green "OK: uninstall completed for $ROOT_DIR"
+  _yellow "To remove source code too, run manually:"
+  _yellow "cd \"$(dirname "$ROOT_DIR")\" && rm -rf \"$(basename "$ROOT_DIR")\""
+}
+
 install_all() {
   setup_venv_and_requirements
   check_required_env
@@ -478,6 +509,7 @@ interactive_menu() {
     echo "3) start          8) factory-reset"
     echo "4) stop           9) version"
     echo "5) restart        10) help"
+    echo "11) uninstall"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -492,6 +524,7 @@ interactive_menu() {
       8) run_command factory-reset; return $? ;;
       9) run_command version; return $? ;;
       10) run_command help; return $? ;;
+      11) run_command uninstall; return $? ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
@@ -531,6 +564,9 @@ run_command() {
       ;;
     config)
       configure_env
+      ;;
+    uninstall)
+      uninstall_all
       ;;
     factory-reset)
       factory_reset
