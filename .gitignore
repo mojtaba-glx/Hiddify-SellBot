@@ -1,0 +1,23 @@
+# Secrets and runtime artifacts
+.env
+logs/
+backups/
+Receiptions/
+Backup_Bot_*.json
+Backup_Bot_*.zip
+Backup_All_*.zip
+Pre*.tar.gz
+Pre*.zip
+*.pid
+
+# Local databases
+*.db
+Shared/*.db
+
+# Python cache/venv
+__pycache__/
+*.pyc
+venv/
+
+# Generated files
+pdf/pages/
