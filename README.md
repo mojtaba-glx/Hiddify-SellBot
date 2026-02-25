@@ -45,5 +45,7 @@ cd ~/Hiddify-SellBot && ./install.sh update
 
 - Dependencies are installed automatically from `requirements.txt`.
 - `.env` is required (`ADMIN_ID`, `ADMIN_BOT_TOKEN`, `USER_BOT_TOKEN`).
+- `install` asks for tokens only on first setup (when `.env` does not exist).
+- `update` never asks for tokens and only updates code/dependencies then restarts bots.
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.

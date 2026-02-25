@@ -75,9 +75,19 @@ load_env_file() {
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line%$'\r'}"
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && continue
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line#export }"
+    [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*= ]] && continue
     local key="${line%%=*}"
+    key="$(printf '%s' "$key" | sed -E 's/[[:space:]]+$//')"
     local value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+$//')"
+    if [[ "$value" =~ ^\".*\"$ ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" =~ ^\'.*\'$ ]]; then
+      value="${value:1:${#value}-2}"
+    fi
     export "$key=$value"
   done < "$env_file"
 }
@@ -140,6 +150,7 @@ configure_env() {
 }
 
 check_required_env() {
+  local allow_prompt="${1:-0}"  # 1=may ask interactive config, 0=never prompt
   load_env_file "$ENV_FILE" || true
   local missing=()
   [ -n "${ADMIN_ID:-}" ] || missing+=("ADMIN_ID")
@@ -149,12 +160,12 @@ check_required_env() {
   if [ "${#missing[@]}" -gt 0 ]; then
     ENV_WAS_MISSING=1
     _yellow "WARN: missing required .env keys: ${missing[*]}"
-    if [ -t 0 ]; then
+    if [ "$allow_prompt" = "1" ] && [ -t 0 ]; then
       configure_env || return 1
       load_env_file "$ENV_FILE" || true
       [ -n "${ADMIN_ID:-}" ] && [ -n "${ADMIN_BOT_TOKEN:-}" ] && [ -n "${USER_BOT_TOKEN:-}" ] && return 0
     fi
-    _red "ERROR: please complete .env and run again."
+    _red "ERROR: please complete .env and run again (or run: ./install.sh config)."
     return 1
   fi
 }
@@ -385,7 +396,7 @@ start_single_bot() {
 
 start_bots() {
   ensure_dirs
-  check_required_env
+  check_required_env 0
   [ -x "$VENV_DIR/bin/python" ] || {
     _red "ERROR: virtual environment is missing. Run ./install.sh install first."
     return 1
@@ -425,7 +436,17 @@ show_status() {
 }
 
 factory_reset() {
+  if [ ! -t 0 ]; then
+    _red "ERROR: factory-reset requires an interactive terminal."
+    return 1
+  fi
   _yellow "Factory reset will remove bot data (DB/services/settings/receipts)."
+  local confirm=""
+  read -rp "Type RESET to confirm factory-reset: " confirm
+  if [ "$confirm" != "RESET" ]; then
+    _yellow "Cancelled."
+    return 0
+  fi
   create_snapshot_backup "PreFactoryReset"
 
   stop_bots
@@ -474,7 +495,11 @@ uninstall_all() {
 
 install_all() {
   setup_venv_and_requirements
-  check_required_env
+  local allow_prompt=0
+  if [ ! -f "$ENV_FILE" ]; then
+    allow_prompt=1
+  fi
+  check_required_env "$allow_prompt"
   init_database
   stop_bots
   start_bots
@@ -491,7 +516,7 @@ update_all() {
   create_snapshot_backup "PreUpdate"
   update_source_if_git
   setup_venv_and_requirements
-  check_required_env
+  check_required_env 0
   init_database
   stop_bots
   start_bots
