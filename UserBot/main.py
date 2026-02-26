@@ -1705,6 +1705,57 @@ def _normalize_service_name_input(raw: str) -> str:
     return text
 
 
+def _is_panel_unauthorized_error(exc: Exception) -> bool:
+    t = str(exc or "").lower()
+    return (
+        "http 401" in t
+        or "http 403" in t
+        or "unauthorized" in t
+        or "unathorized" in t
+        or "forbidden" in t
+    )
+
+
+def _normalized_panel_identity(server: dict) -> tuple[str, str]:
+    panel_url = str(server.get("panel_url") or "").strip().rstrip("/").lower()
+    admin_proxy = str(server.get("admin_proxy_path") or "").strip().strip("/").lower()
+    return panel_url, admin_proxy
+
+
+def _find_auth_fallback_servers_for_panel(server: dict) -> list[dict]:
+    """
+    If one server record has wrong admin_uuid/api_key, try sibling records
+    with same panel_url/admin_proxy_path and different credentials.
+    """
+    target_panel, target_proxy = _normalized_panel_identity(server)
+    if not target_panel or not target_proxy:
+        return []
+    curr_id = int(server.get("id") or 0)
+    curr_key = str(server.get("admin_uuid") or server.get("api_key") or "").strip()
+    out: list[dict] = []
+    seen_ids: set[int] = set()
+    for s in (database.get_servers() or []):
+        sid = int(s.get("id") or 0)
+        if sid == curr_id or sid in seen_ids:
+            continue
+        p, a = _normalized_panel_identity(s)
+        if p != target_panel or a != target_proxy:
+            continue
+        alt_key = str(s.get("admin_uuid") or s.get("api_key") or "").strip()
+        if not alt_key or alt_key == curr_key:
+            continue
+        out.append(s)
+        seen_ids.add(sid)
+    return out
+
+
+def _format_rename_panel_error(server: dict, exc: Exception) -> str:
+    title = str(server.get("title") or f"server-{server.get('id') or '?'}")
+    if _is_panel_unauthorized_error(exc):
+        return f"{title}: دسترسی ادمین نامعتبر است (کلید Admin/API این سرور را بررسی کنید)."
+    return f"{title}: خطا در بروزرسانی نام."
+
+
 async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> tuple[bool, str]:
     service_id = int(service.get("id") or 0)
     if service_id <= 0:
@@ -1723,8 +1774,19 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> 
             await hiddify_api.patch_user(srv, uuid, {"name": new_name})
             updated_targets.append((srv, uuid))
         except Exception as e:
-            title = str(srv.get("title") or f"server-{srv.get('id') or '?'}")
-            errors.append(f"{title}: {e}")
+            # Retry with sibling server records (same panel/proxy, different admin key).
+            patched = False
+            if _is_panel_unauthorized_error(e):
+                for alt_srv in _find_auth_fallback_servers_for_panel(srv):
+                    try:
+                        await hiddify_api.patch_user(alt_srv, uuid, {"name": new_name})
+                        updated_targets.append((alt_srv, uuid))
+                        patched = True
+                        break
+                    except Exception:
+                        continue
+            if not patched:
+                errors.append(_format_rename_panel_error(srv, e))
 
     # اگر حتی یک پنل fail شد، برای جلوگیری از ناسازگاری، پنل‌های موفق را rollback می‌کنیم.
     if errors:
@@ -4481,7 +4543,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=(
                     "✍️ لطفاً نام جدید اشتراک را ارسال کنید:\n"
                     "• حداقل 3 و حداکثر 64 کاراکتر\n"
-                    "برای لغو: لغو❌"
+                    "برای انصراف، روی دکمه «بازگشت» بزنید."
                 ),
                 reply_markup=cancel_keyboard(),
             )
