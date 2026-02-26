@@ -284,13 +284,13 @@ def subscription_status_keyboard(
     کیبورد وضعیت اشتراک مطابق UI جدید:
     - کانفیگ‌ها
     - تمدید اشتراک
-    - بروزرسانی اطلاعات
+    - تغییر نام اشتراک
     - جداسازی اشتراک (فقط برای اشتراک‌های متصل‌شده دستی)
     """
     keyboard = [
         [InlineKeyboardButton("کانفیگ ها📝", callback_data=f"status:configs:{service_id}")],
         [InlineKeyboardButton("تمدید اشتراک♾", callback_data=f"status:renew:{service_id}")],
-        [InlineKeyboardButton("بروزرسانی اطلاعات🔄", callback_data=f"status:refresh:{service_id}")],
+        [InlineKeyboardButton("تغییر نام اشتراک✏️", callback_data=f"status:rename:{service_id}")],
     ]
     if show_detach:
         keyboard.append([InlineKeyboardButton("جداسازی اشتراک⭕", callback_data=f"status:detach:{service_id}")])

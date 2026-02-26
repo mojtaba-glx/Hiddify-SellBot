@@ -2127,6 +2127,26 @@ def update_service_runtime(
         conn.close()
 
 
+def update_service_name(service_id: int, new_name: str) -> bool:
+    init_db()
+    sid = int(service_id or 0)
+    name = str(new_name or "").strip()
+    if sid <= 0 or not name:
+        return False
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE userbot_services SET name = ? WHERE id = ?",
+            (name, sid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def update_service_note_by_panel_user(
     server_id: int,
     panel_user_uuid: str,

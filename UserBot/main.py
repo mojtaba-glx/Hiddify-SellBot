@@ -279,6 +279,7 @@ def get_user_step(context, user_id):
     context.user_data.pop(f"pending_wallet_{user_id}", None)
     context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
     context.user_data.pop(f"pending_pay_{user_id}", None)
+    context.user_data.pop(f"pending_rename_service_{user_id}", None)
     return None
 
 def set_user_step(context, user_id, step):
@@ -1696,6 +1697,63 @@ async def _service_exists_on_panel(service: dict) -> bool:
     if found_any:
         return True
     return missing_count < len(targets)
+
+
+def _normalize_service_name_input(raw: str) -> str:
+    text = str(raw or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> tuple[bool, str]:
+    service_id = int(service.get("id") or 0)
+    if service_id <= 0:
+        return False, "❌ سرویس نامعتبر است."
+
+    old_name = str(service.get("name") or "").strip()
+    targets = _get_service_panel_targets(service)
+    if not targets:
+        return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
+
+    updated_targets: list[tuple[dict, str]] = []
+    errors: list[str] = []
+
+    for srv, uuid in targets:
+        try:
+            await hiddify_api.patch_user(srv, uuid, {"name": new_name})
+            updated_targets.append((srv, uuid))
+        except Exception as e:
+            title = str(srv.get("title") or f"server-{srv.get('id') or '?'}")
+            errors.append(f"{title}: {e}")
+
+    # اگر حتی یک پنل fail شد، برای جلوگیری از ناسازگاری، پنل‌های موفق را rollback می‌کنیم.
+    if errors:
+        if updated_targets and old_name:
+            for srv, uuid in updated_targets:
+                try:
+                    await hiddify_api.patch_user(srv, uuid, {"name": old_name})
+                except Exception as re_err:
+                    logger.warning(
+                        "Failed rollback service name on panel (service_id=%s, server_id=%s, uuid=%s): %s",
+                        service_id,
+                        srv.get("id"),
+                        uuid,
+                        re_err,
+                    )
+        preview = "\n".join(errors[:3])
+        extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
+        return False, "❌ تغییر نام روی همه سرورها انجام نشد.\n" + preview + extra
+
+    try:
+        ok_db = userbot_db.update_service_name(service_id, new_name)
+    except Exception as e:
+        logger.exception("Failed updating service name in DB (service_id=%s): %s", service_id, e)
+        return False, "❌ نام روی پنل بروزرسانی شد ولی ذخیره در دیتابیس خطا داد."
+
+    if not ok_db:
+        return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
+
+    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد."
 
 
 async def _service_probe_state(service: dict) -> str:
@@ -4413,6 +4471,22 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        if action == "rename":
+            context.user_data[f"pending_rename_service_{user_id}"] = {
+                "service_id": int(service_id or 0),
+            }
+            set_user_step(context, user_id, "WAIT_RENAME_SERVICE_NAME")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    "✍️ لطفاً نام جدید اشتراک را ارسال کنید:\n"
+                    "• حداقل 3 و حداکثر 64 کاراکتر\n"
+                    "برای لغو: لغو❌"
+                ),
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
         if action == "copy_id":
             comment_meta = _parse_service_comment(service.get("comment") or "")
             service_code = str(comment_meta.get("code") or service.get("id") or "").strip()
@@ -5663,6 +5737,78 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 show_sub_link=settings.get("show_sub_link", True),
                 show_configs=_should_show_configs_button(settings),
                 show_detach=_is_connected_service(service),
+            ),
+        )
+        return
+
+    # --- تغییر نام اشتراک: دریافت نام جدید ---
+    if step == "WAIT_RENAME_SERVICE_NAME":
+        if _is_back_or_cancel_text(text):
+            set_user_step(context, user_id, None)
+            context.user_data.pop(f"pending_rename_service_{user_id}", None)
+            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            return
+
+        pending_rename = context.user_data.get(f"pending_rename_service_{user_id}", None) or {}
+        service_id = int(pending_rename.get("service_id") or 0)
+        if service_id <= 0:
+            set_user_step(context, user_id, None)
+            context.user_data.pop(f"pending_rename_service_{user_id}", None)
+            await update.message.reply_text("❌ اطلاعات سرویس نامعتبر است.", reply_markup=_main_menu_keyboard())
+            return
+
+        u_db = userbot_db.get_user_by_telegram_id(user_id) or {}
+        internal_user_id = int(u_db.get("id") or 0)
+        service = userbot_db.get_service_by_id(service_id) or {}
+        if not service or internal_user_id <= 0 or int(service.get("user_id") or 0) != internal_user_id:
+            set_user_step(context, user_id, None)
+            context.user_data.pop(f"pending_rename_service_{user_id}", None)
+            await update.message.reply_text("❌ اشتراک موردنظر یافت نشد.", reply_markup=_main_menu_keyboard())
+            return
+
+        new_name = _normalize_service_name_input(text or "")
+        if len(new_name) < 3:
+            await update.message.reply_text(
+                "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        if len(new_name) > 64:
+            await update.message.reply_text(
+                "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        old_name = str(service.get("name") or "").strip()
+        if new_name == old_name:
+            await update.message.reply_text(
+                "ℹ️ نام جدید با نام فعلی یکسان است. نام دیگری وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        await update.message.reply_text("⏳ در حال بروزرسانی نام اشتراک...")
+        ok, result_text = await _rename_service_across_panels_and_db(service, new_name)
+        if not ok:
+            await update.message.reply_text(result_text, reply_markup=cancel_keyboard())
+            return
+
+        set_user_step(context, user_id, None)
+        context.user_data.pop(f"pending_rename_service_{user_id}", None)
+        refreshed = userbot_db.get_service_by_id(service_id) or service
+        refreshed = await _sync_service_runtime_from_panels(refreshed)
+        settings = _get_subscription_settings()
+        await update.message.reply_text(result_text, reply_markup=_main_menu_keyboard())
+        await update.message.reply_text(
+            _build_subscription_status_text(refreshed),
+            parse_mode="Markdown",
+            reply_markup=subscription_status_keyboard(
+                refreshed.get("id"),
+                show_direct_config=settings.get("show_direct_config", True),
+                show_sub_link=settings.get("show_sub_link", True),
+                show_configs=_should_show_configs_button(settings),
+                show_detach=_is_connected_service(refreshed),
             ),
         )
         return
