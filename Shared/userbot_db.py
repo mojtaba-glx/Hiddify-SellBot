@@ -1139,6 +1139,46 @@ def toggle_backup_restore_setting(name: str) -> Dict[str, Any]:
     return set_backup_restore_settings(settings)
 
 
+def claim_setting_slot_once(key: str, slot_value: str) -> bool:
+    """
+    Atomically claim a one-time slot in userbot_settings.
+    Returns True if claimed now, False if this exact slot was already claimed.
+    """
+    k = str(key or "").strip()
+    v = str(slot_value or "").strip()
+    if not k or not v:
+        return False
+
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("SELECT value FROM userbot_settings WHERE key = ? LIMIT 1", (k,))
+        row = cur.fetchone()
+        if row and str(row["value"] or "").strip() == v:
+            conn.commit()
+            return False
+        cur.execute(
+            """
+            INSERT INTO userbot_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (k, v),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def claim_auto_backup_slot_once(slot_value: str) -> bool:
+    return claim_setting_slot_once("auto_backup_last_slot", slot_value)
+
+
 def get_sub_reminder_settings() -> Dict[str, Any]:
     init_db()
     conn = _get_conn()

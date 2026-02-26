@@ -3712,6 +3712,18 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
     if str(context.bot_data.get("_userbot_auto_backup_slot") or "") == slot_key:
         return
 
+    # Cross-process dedupe: if multiple AdminBot instances are running, only one should
+    # claim and process this 6-hour slot.
+    try:
+        claimed = await asyncio.to_thread(userbot_db.claim_auto_backup_slot_once, slot_key)
+    except Exception as e:
+        logger.warning("Auto backup slot claim failed (fallback to memory guard): %s", e)
+        claimed = True
+    if not claimed:
+        context.bot_data["_userbot_auto_backup_slot"] = slot_key
+        return
+    context.bot_data["_userbot_auto_backup_slot"] = slot_key
+
     admin_id = int(os.getenv("ADMIN_ID", "0") or "0")
     if admin_id <= 0:
         return
@@ -3755,6 +3767,10 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if bool(settings.get("event_channel_enabled", False)):
         target = str(settings.get("event_channel_id") or "").strip()
+        if target:
+            # Prevent duplicate sends if event channel is configured to the same chat as admin.
+            if target == str(admin_id):
+                target = ""
         if target:
             try:
                 with backup_path.open("rb") as fh:

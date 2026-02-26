@@ -382,6 +382,26 @@ start_single_bot() {
     return 0
   fi
 
+  if [ -f "$pid_file" ]; then
+    local current_pid
+    current_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$current_pid" ] && kill -0 "$current_pid" 2>/dev/null; then
+      _yellow "WARN: $title is already running (PID=$current_pid)."
+      return 0
+    fi
+    rm -f "$pid_file"
+  fi
+
+  if command -v pgrep >/dev/null 2>&1; then
+    local existing_pid
+    existing_pid="$(pgrep -f "$main_py" | head -n 1 || true)"
+    if [ -n "$existing_pid" ]; then
+      echo "$existing_pid" > "$pid_file"
+      _yellow "WARN: $title is already running (detected PID=$existing_pid). Skipping duplicate start."
+      return 0
+    fi
+  fi
+
   nohup "$VENV_DIR/bin/python" "$main_py" >> "$log_file" 2>&1 &
   local pid=$!
   echo "$pid" > "$pid_file"
