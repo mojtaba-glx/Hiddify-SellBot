@@ -13,6 +13,7 @@ SSL_MODE_ENV = "HIDDIFY_SSL_MODE"
 SSL_MODE_AUTO = "auto"
 SSL_MODE_SECURE = "secure"
 SSL_MODE_INSECURE = "insecure"
+API_TIMEOUT_ENV = "HIDDIFY_API_TIMEOUT_SECONDS"
 
 
 class HiddifyApiError(Exception):
@@ -177,6 +178,15 @@ def _looks_like_tls_error(exc: Exception) -> bool:
     )
 
 
+def _get_api_timeout_seconds() -> float:
+    raw = str(os.getenv(API_TIMEOUT_ENV, "8") or "8").strip()
+    try:
+        val = float(raw)
+    except Exception:
+        return 8.0
+    return min(max(val, 2.0), 60.0)
+
+
 async def _request(
     method: str,
     url: str,
@@ -195,8 +205,10 @@ async def _request(
     }
     mode = _get_ssl_mode()
 
+    timeout_seconds = _get_api_timeout_seconds()
+
     async def _send_request(verify: Any) -> httpx.Response:
-        async with httpx.AsyncClient(timeout=20.0, verify=verify) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, verify=verify) as client:
             return await client.request(
                 method,
                 url,
@@ -224,7 +236,8 @@ async def _request(
                 )
                 resp = await _send_request(_build_insecure_ssl_context())
     except httpx.RequestError as e:
-        raise HiddifyApiError(f"خطا در اتصال به Hiddify API: {e}") from e
+        msg = str(e).strip() or e.__class__.__name__
+        raise HiddifyApiError(f"خطا در اتصال به Hiddify API: {msg}") from e
 
     if resp.status_code >= 400:
         raise HiddifyApiError(f"HTTP {resp.status_code}: {resp.text}")
@@ -616,6 +629,219 @@ async def patch_user(
     return data
 
 
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    s = str(value).strip().lower()
+    if s in {"1", "true", "yes", "on", "active", "enabled", "y"}:
+        return True
+    if s in {"0", "false", "no", "off", "inactive", "disabled", "n"}:
+        return False
+    return None
+
+
+def _user_is_disabled(data: Dict[str, Any]) -> bool:
+    mode = str(data.get("mode") or "").strip().lower()
+    status = str(data.get("status") or "").strip().lower()
+    is_active = _coerce_bool(data.get("is_active"))
+    active = _coerce_bool(data.get("active"))
+    enabled = _coerce_bool(data.get("enabled"))
+    enable = _coerce_bool(data.get("enable"))
+    if mode in {"disable", "disabled", "inactive"}:
+        return True
+    if status in {"disable", "disabled", "inactive", "deactive", "off"}:
+        return True
+    if is_active is False:
+        return True
+    if active is False:
+        return True
+    if enabled is False:
+        return True
+    if enable is False:
+        return True
+    return False
+
+
+def _user_is_enabled(data: Dict[str, Any]) -> bool:
+    mode = str(data.get("mode") or "").strip().lower()
+    status = str(data.get("status") or "").strip().lower()
+    is_active = _coerce_bool(data.get("is_active"))
+    active = _coerce_bool(data.get("active"))
+    enabled = _coerce_bool(data.get("enabled"))
+    enable = _coerce_bool(data.get("enable"))
+    if mode in {"disable", "disabled", "inactive"}:
+        return False
+    if status in {"disable", "disabled", "inactive", "deactive", "off"}:
+        return False
+    if mode in {"no_reset", "active", "enabled", "enable"}:
+        return True
+    if status in {"active", "enabled", "enable", "on"}:
+        return True
+    if is_active is True:
+        return True
+    if active is True:
+        return True
+    if enabled is True:
+        return True
+    if enable is True:
+        return True
+    return False
+
+
+def _has_disable_markers(data: Dict[str, Any]) -> bool:
+    for key in ("is_active", "active", "enabled", "enable", "mode", "status"):
+        if key in data:
+            return True
+    mode = str(data.get("mode") or "").strip()
+    status = str(data.get("status") or "").strip()
+    return bool(mode or status)
+
+
+async def enable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]:
+    """
+    فعال‌سازی کاربر به‌صورت سازگار با نسخه‌های مختلف پنل.
+    """
+    attempts = (
+        {"is_active": True},
+        {"is_active": 1},
+        {"enable": True},
+        {"enable": 1},
+        {"enable": "y"},
+        {"enabled": True},
+        {"enabled": 1},
+        {"status": "active"},
+        {"mode": "no_reset"},
+        {"is_active": True, "enable": "y"},
+        {"is_active": True, "mode": "no_reset"},
+        {"enable": "y", "status": "active"},
+    )
+    last_err: Optional[Exception] = None
+    last_data: Optional[Dict[str, Any]] = None
+
+    for payload in attempts:
+        try:
+            patched = await patch_user(server, user_uuid, payload)
+            last_data = patched
+        except Exception as e:
+            last_err = e
+            continue
+
+        try:
+            current = await get_user_by_uuid(server, user_uuid)
+            if _user_is_enabled(current) and not _user_is_disabled(current):
+                return current
+            last_data = current
+        except Exception as e:
+            last_err = e
+            if _has_disable_markers(patched) and _user_is_enabled(patched) and not _user_is_disabled(patched):
+                return patched
+            continue
+
+        if _has_disable_markers(patched) and _user_is_enabled(patched) and not _user_is_disabled(patched):
+            return patched
+
+    if isinstance(last_data, dict):
+        if _user_is_enabled(last_data) and not _user_is_disabled(last_data):
+            return last_data
+        if _has_disable_markers(last_data):
+            raise HiddifyApiError(
+                "enable_user did not activate user: "
+                f"is_active={last_data.get('is_active')} "
+                f"active={last_data.get('active')} "
+                f"enabled={last_data.get('enabled')} "
+                f"enable={last_data.get('enable')} "
+                f"mode={last_data.get('mode')} "
+                f"status={last_data.get('status')}"
+            )
+    if last_err:
+        raise HiddifyApiError(f"enable_user failed: {last_err}") from last_err
+    if isinstance(last_data, dict):
+        raise HiddifyApiError(
+            "enable_user failed: panel response has no enable markers and activation could not be verified"
+        )
+    raise HiddifyApiError("enable_user failed: unknown error")
+
+
+async def disable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]:
+    """
+    غیرفعال‌سازی کاربر به‌صورت سازگار با نسخه‌های مختلف پنل:
+    1) is_active=False
+    2) mode=disable
+    3) هر دو با هم
+    سپس verify با GET.
+    """
+    attempts = (
+        {"is_active": False},
+        {"is_active": 0},
+        {"enable": False},
+        {"enable": 0},
+        {"enable": "n"},
+        {"enabled": False},
+        {"enabled": 0},
+        {"mode": "disable"},
+        {"status": "disable"},
+        {"enable": "n", "status": "disable"},
+        {"enable": "n", "mode": "disable"},
+        {"is_active": False, "mode": "disable"},
+        {"is_active": False, "status": "disable"},
+        {"is_active": False, "enable": "n"},
+    )
+    last_err: Optional[Exception] = None
+    last_data: Optional[Dict[str, Any]] = None
+
+    for payload in attempts:
+        try:
+            patched = await patch_user(server, user_uuid, payload)
+            last_data = patched
+        except Exception as e:
+            last_err = e
+            continue
+
+        try:
+            current = await get_user_by_uuid(server, user_uuid)
+            if _user_is_disabled(current):
+                return current
+            last_data = current
+        except Exception as e:
+            last_err = e
+            # اگر verify شکست خورد، فقط وقتی موفق می‌دانیم که پاسخ PATCH
+            # صراحتا وضعیت غیرفعال را نشان دهد.
+            if _has_disable_markers(patched) and _user_is_disabled(patched):
+                return patched
+            continue
+
+        # برخی پنل‌ها پاسخ PATCH کامل نمی‌دهند؛
+        # بنابراین حتی اگر PATCH موفق بود، تا زمانی که current یا patched
+        # وضعیت غیرفعال را ندهد، این تلاش را ناموفق در نظر می‌گیریم.
+        if _has_disable_markers(patched) and _user_is_disabled(patched):
+            return patched
+
+    if isinstance(last_data, dict):
+        if _user_is_disabled(last_data):
+            return last_data
+        if _has_disable_markers(last_data):
+            raise HiddifyApiError(
+                "disable_user did not deactivate user: "
+                f"is_active={last_data.get('is_active')} "
+                f"active={last_data.get('active')} "
+                f"enabled={last_data.get('enabled')} "
+                f"enable={last_data.get('enable')} "
+                f"mode={last_data.get('mode')} "
+                f"status={last_data.get('status')}"
+            )
+    if last_err:
+        raise HiddifyApiError(f"disable_user failed: {last_err}") from last_err
+    if isinstance(last_data, dict):
+        raise HiddifyApiError(
+            "disable_user failed: panel response has no disable markers and deactivation could not be verified"
+        )
+    raise HiddifyApiError("disable_user failed: unknown error")
+
+
 async def create_user(
     server: Dict[str, Any],
     payload: Dict[str, Any],
@@ -663,7 +889,7 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
     except HiddifyApiError:
         # اگر پنل DELETE نداشت، می‌ریم سراغ غیرفعال‌کردن کاربر
         try:
-            await patch_user(server, user_uuid, {"is_active": False})
+            await disable_user(server, user_uuid)
         except Exception as e:
             raise HiddifyApiError(f"خطا در delete_user (fallback is_active=False): {e}") from e
 

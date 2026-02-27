@@ -15,6 +15,7 @@ from html import escape as html_escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from telegram import (
     Update,
@@ -66,6 +67,7 @@ DEFAULT_SUBS_SETTINGS = {
 WALLET_EDIT_STATE = "userbot_wallet_edit"
 MESSAGE_SEND_STATE = "userbot_message_send"
 SUB_REMINDER_EDIT_STATE = "userbot_sub_reminder_edit"
+SUB_BASE_URL_EDIT_STATE = "userbot_sub_base_url_edit"
 TRIAL_SPEC_EDIT_STATE = "userbot_trial_spec_edit"
 RENEW_POLICY_EDIT_STATE = "userbot_renew_policy_edit"
 EVENT_CHANNEL_EDIT_STATE = "userbot_event_channel_edit"
@@ -110,6 +112,28 @@ def _display_name(user: Dict[str, Any]) -> str:
     if full_name:
         return full_name
     return str(user.get("telegram_id") or user.get("id") or "کاربر")
+
+
+def _normalize_public_base_url(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text == "0":
+        return ""
+    if "://" not in text:
+        text = "https://" + text
+    parsed = urlparse(text)
+    scheme = (parsed.scheme or "").strip().lower()
+    if scheme not in {"http", "https"}:
+        return ""
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return ""
+    port = parsed.port
+    netloc = host
+    if port:
+        netloc = f"{host}:{port}"
+    return f"{scheme}://{netloc}"
 
 
 def _format_gb(value: Any) -> str:
@@ -542,32 +566,9 @@ async def _send_ticket_photo_message_with_fallback(
 
 
 async def _send_auto_gift_message_if_needed(pay: Dict[str, Any]) -> None:
-    if not USER_BOT_TOKEN or not isinstance(pay, dict):
-        return
-    try:
-        settings = userbot_db.get_marketing_settings()
-    except Exception:
-        return
-
-    gift_text = str(settings.get("auto_gift_text") or "").strip()
-    min_charge = int(settings.get("min_auto_gift_charge") or 0)
-    if not gift_text:
-        return
-    try:
-        amount = int(float(pay.get("amount") or 0))
-    except Exception:
-        amount = 0
-    if amount < min_charge:
-        return
-
-    tg_id = int(pay.get("telegram_id") or 0)
-    if tg_id <= 0:
-        return
-    try:
-        user_bot = Bot(token=USER_BOT_TOKEN)
-        await user_bot.send_message(chat_id=tg_id, text=gift_text)
-    except Exception as e:
-        logger.warning(f"Failed to send auto gift message for payment {pay.get('id')}: {e}")
+    # هدیه اتوماتیک ممکن است اعمال شود، اما پیام نوتیفیکیشن آن
+    # طبق درخواست محصول به کاربر ارسال نمی‌شود.
+    return
 
 
 async def _send_payment_event_channel_report_if_enabled(pay: Dict[str, Any]) -> None:
@@ -752,7 +753,6 @@ def _parse_service_comment_meta(raw_comment: str) -> Dict[str, str]:
 
 def build_subscription_tracking_keyboard(service: Dict[str, Any]) -> InlineKeyboardMarkup:
     service_id = int(service.get("id") or 0)
-    server_id = int(service.get("server_id") or 0)
     user_id = int(service.get("user_id") or 0)
     service_name = str(service.get("name") or "سرویس").strip() or "سرویس"
     user_btn_title = service_name
@@ -766,13 +766,12 @@ def build_subscription_tracking_keyboard(service: Dict[str, Any]) -> InlineKeybo
             user_btn_title = str(telegram_id)
         else:
             user_btn_title = _display_name(user_row)
-    meta = _parse_service_comment_meta(str(service.get("comment") or ""))
-    user_uuid = str(meta.get("uuid") or "").strip()
+    target_server_id, target_user_uuid = _service_primary_target(service)
 
-    if server_id > 0 and user_uuid:
-        cfg_cb = f"server:{server_id}:usercfg:{user_uuid}"
-        edit_cb = f"server:{server_id}:useredit:{user_uuid}"
-        del_cb = f"server:{server_id}:userdel:{user_uuid}"
+    if target_server_id > 0 and target_user_uuid:
+        cfg_cb = f"server:{target_server_id}:usercfg:{target_user_uuid}"
+        edit_cb = f"server:{target_server_id}:useredit:{target_user_uuid}"
+        del_cb = f"server:{target_server_id}:userdel:{target_user_uuid}"
     else:
         cfg_cb = f"userbot:svc:{service_id}:configs"
         edit_cb = f"userbot:svc:{service_id}:edit"
@@ -951,6 +950,18 @@ def _service_panel_targets(service: Dict[str, Any]) -> List[Tuple[int, str]]:
             targets.append(pair)
 
     return targets
+
+
+def _service_primary_target(service: Dict[str, Any]) -> Tuple[int, str]:
+    """Best-effort resolve (server_id, panel_user_uuid) for service action buttons."""
+    for sid, uuid in _service_panel_targets(service):
+        if int(sid or 0) > 0 and str(uuid or "").strip():
+            return int(sid), str(uuid).strip()
+    sid = int(service.get("server_id") or 0)
+    uuid = _extract_service_uuid(service)
+    if sid > 0 and uuid:
+        return sid, uuid
+    return 0, ""
 
 
 async def _service_exists_on_panel(service: Dict[str, Any]) -> bool:
@@ -1473,6 +1484,7 @@ def build_sub_link_status_menu_keyboard(settings: Dict[str, bool]) -> InlineKeyb
         [InlineKeyboardButton(f"لینک اشتراک b64 | {sub_b64_icon}", callback_data="userbot:settings:sub_link_status:show_sub_link_b64")],
         [InlineKeyboardButton(f"Multi Server | {multi_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server")],
         [InlineKeyboardButton(f"Multi Server b64 | {multi_b64_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server_b64")],
+        [InlineKeyboardButton("🌐 تنظیم دامنه Multi Server", callback_data="userbot:settings:sub_link_status:set_base_url")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:subscription")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -2031,6 +2043,68 @@ def _atomic_write_bytes(target_path: Path, payload: bytes) -> None:
     with tmp_path.open("wb") as fh:
         fh.write(payload)
     tmp_path.replace(target_path)
+
+
+def _normalize_plans_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("مقدار plans.json معتبر نیست.")
+    servers = payload.get("servers")
+    if not isinstance(servers, dict):
+        return payload
+
+    for key, block in list(servers.items()):
+        if not isinstance(block, dict):
+            continue
+        mode = str(block.get("display_mode") or block.get("mode") or "").strip().lower()
+        if mode not in {"fixed", "dynamic", "mixed"}:
+            mode = "dynamic"
+        block["display_mode"] = mode
+        block.setdefault("categories", [])
+        block.setdefault("plans", [])
+        block.setdefault("dynamic_settings", {})
+        block.setdefault("next_category_id", 1)
+        block.setdefault("next_plan_id", 1)
+        servers[key] = block
+    payload["servers"] = servers
+    return payload
+
+
+def _normalize_servers_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("مقدار servers.json معتبر نیست.")
+    servers = payload.get("servers")
+    if not isinstance(servers, list):
+        return payload
+
+    normalized: List[Dict[str, Any]] = []
+    for raw in servers:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+
+        panel_url = str(row.get("panel_url") or row.get("url") or "").strip()
+        if panel_url:
+            row["panel_url"] = panel_url.rstrip("/")
+
+        admin_proxy = str(row.get("admin_proxy_path") or row.get("proxy_path_admin") or "").strip().strip("/")
+        if admin_proxy:
+            row["admin_proxy_path"] = admin_proxy
+
+        user_proxy = str(row.get("user_proxy_path") or row.get("proxy_path_user") or admin_proxy).strip().strip("/")
+        if user_proxy:
+            row["user_proxy_path"] = user_proxy
+
+        admin_uuid = str(row.get("admin_uuid") or row.get("uuid_admin") or row.get("api_key") or "").strip()
+        if admin_uuid:
+            row["admin_uuid"] = admin_uuid
+
+        row.setdefault("users", [])
+        row.setdefault("plans", [])
+        row.setdefault("domains", row.get("domains") or [])
+        normalized.append(row)
+
+    payload["servers"] = normalized
+    return payload
 
 
 def _restore_sqlite_db_from_file(src_db: Path, dst_db: Path) -> None:
@@ -3331,15 +3405,21 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
         servers_member = _find_member(["Shared/servers.json", "servers.json"])
         if servers_member:
             payload = zf.read(members[servers_member])
-            json.loads(payload.decode("utf-8"))
-            _atomic_write_bytes(shared_dir / "servers.json", payload)
+            servers_obj = _normalize_servers_payload(json.loads(payload.decode("utf-8")))
+            _atomic_write_bytes(
+                shared_dir / "servers.json",
+                json.dumps(servers_obj, ensure_ascii=False, indent=2).encode("utf-8"),
+            )
             restored_files.append("Shared/servers.json")
 
         plans_member = _find_member(["Shared/plans.json", "plans.json"])
         if plans_member:
             payload = zf.read(members[plans_member])
-            json.loads(payload.decode("utf-8"))
-            _atomic_write_bytes(shared_dir / "plans.json", payload)
+            plans_obj = _normalize_plans_payload(json.loads(payload.decode("utf-8")))
+            _atomic_write_bytes(
+                shared_dir / "plans.json",
+                json.dumps(plans_obj, ensure_ascii=False, indent=2).encode("utf-8"),
+            )
             restored_files.append("Shared/plans.json")
 
         receipts_members = [
@@ -3418,20 +3498,24 @@ def _restore_from_json_backup(backup_file: Path) -> Dict[str, Any]:
         payload = data.get("servers_json")
         if not isinstance(payload, dict):
             raise ValueError("مقدار servers_json معتبر نیست.")
+        payload = _normalize_servers_payload(payload)
         _atomic_write_bytes(shared_dir / "servers.json", json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
         restored_files.append("Shared/servers.json")
     elif "servers" in data and "settings" in data:
-        _atomic_write_bytes(shared_dir / "servers.json", json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+        payload = _normalize_servers_payload(data)
+        _atomic_write_bytes(shared_dir / "servers.json", json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
         restored_files.append("Shared/servers.json")
 
     if "plans_json" in data:
         payload = data.get("plans_json")
         if not isinstance(payload, dict):
             raise ValueError("مقدار plans_json معتبر نیست.")
+        payload = _normalize_plans_payload(payload)
         _atomic_write_bytes(shared_dir / "plans.json", json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
         restored_files.append("Shared/plans.json")
     elif "servers" in data and isinstance(data.get("servers"), dict) and "settings" not in data:
-        _atomic_write_bytes(shared_dir / "plans.json", json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+        payload = _normalize_plans_payload(data)
+        _atomic_write_bytes(shared_dir / "plans.json", json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
         restored_files.append("Shared/plans.json")
 
     if not restored_files:
@@ -5108,6 +5192,45 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         await send_sub_status_reminder_menu(msg.chat_id, context)
         return
 
+    # بررسی ویزارد تنظیم دامنه Multi Server
+    if context.user_data.get(SUB_BASE_URL_EDIT_STATE):
+        if text in CANCEL_WORDS:
+            context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
+            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            return
+
+        normalized = _normalize_public_base_url(text)
+        if text.strip() != "0" and not normalized:
+            await msg.reply_text(
+                "❌ ورودی نامعتبر است.\n"
+                "نمونه صحیح:\n"
+                "https://user.yourdomain.com\n"
+                "یا برای ریست: 0",
+                reply_markup=userbot_cancel_keyboard(),
+            )
+            return
+
+        try:
+            stored = userbot_db.set_managed_sub_base_url(normalized)
+        except Exception as e:
+            context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
+            await msg.reply_text(f"❌ خطا در ذخیره دامنه:\n{e}", reply_markup=admin_main_keyboard())
+            return
+
+        context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
+        if stored:
+            await msg.reply_text(
+                f"✅ دامنه Multi Server ذخیره شد:\n{stored}",
+                reply_markup=admin_main_keyboard(),
+            )
+        else:
+            await msg.reply_text(
+                "✅ دامنه Multi Server به حالت خودکار برگشت.",
+                reply_markup=admin_main_keyboard(),
+            )
+        await send_sub_link_status_menu(msg.chat_id, context)
+        return
+
     # بررسی ویزارد مشخصات اشتراک تستی
     if context.user_data.get(TRIAL_SPEC_EDIT_STATE):
         edit_type = context.user_data.get(TRIAL_SPEC_EDIT_STATE)
@@ -5329,23 +5452,41 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             context.user_data.pop(MESSAGE_SEND_STATE, None)
             await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
             return
-        
-        user_id = context.user_data.pop(MESSAGE_SEND_STATE)
+
+        raw_state = context.user_data.pop(MESSAGE_SEND_STATE)
+        if isinstance(raw_state, dict):
+            user_id = int(raw_state.get("user_id") or 0)
+        else:
+            try:
+                user_id = int(raw_state or 0)
+            except Exception:
+                user_id = 0
+        if user_id <= 0:
+            await msg.reply_text("❌ کاربر نامعتبر است.", reply_markup=admin_main_keyboard())
+            return
         user = userbot_db.get_user_by_id(user_id)
-        
+
         if user and user.get('telegram_id') and USER_BOT_TOKEN:
             try:
                 user_bot = Bot(token=USER_BOT_TOKEN)
-                # پیام با فرمت مشخص
-                final_msg = f"📬 پیام جدید از مدیریت:\n\n{text}"
-                await user_bot.send_message(chat_id=user['telegram_id'], text=final_msg)
-                await msg.reply_text("📤 پیام برای کاربر ارسال شد.", reply_markup=admin_main_keyboard())
+                final_msg = (
+                    "📩 پیام جدیدی از سمت ادمین دریافت شد\n"
+                    f"📄 متن پیام: {text}"
+                )
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("📩پاسخ", callback_data="support:adminmsg:reply")]]
+                )
+                await user_bot.send_message(
+                    chat_id=user['telegram_id'],
+                    text=final_msg,
+                    reply_markup=kb,
+                )
+                await msg.reply_text("📩پیام ارسال شد", reply_markup=admin_main_keyboard())
             except Exception as e:
                 await msg.reply_text(f"❌ خطا در ارسال پیام به کاربر: {e}", reply_markup=admin_main_keyboard())
         else:
             await msg.reply_text("❌ کاربر یافت نشد یا شناسه تلگرام ندارد.", reply_markup=admin_main_keyboard())
-        
-        await send_user_profile(user_id, msg.chat_id, context)
+
         return
 
 
@@ -5686,7 +5827,12 @@ async def send_subscription_settings_menu(chat_id: int, context: ContextTypes.DE
         await context.bot.send_message(chat_id, text, reply_markup=kb)
 
 async def send_sub_link_status_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "📁وضعیت نمایش لینک اشتراک"
+    current_base = userbot_db.get_managed_sub_base_url()
+    current_base_text = current_base if current_base else "خودکار (بر اساس دامنه سرور/ENV)"
+    text = (
+        "📁وضعیت نمایش لینک اشتراک\n\n"
+        f"🌐 دامنه فعلی Multi Server:\n{current_base_text}"
+    )
     settings = _get_subscription_settings(context)
     kb = build_sub_link_status_menu_keyboard(settings)
     if message:
@@ -6550,8 +6696,11 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         
         elif act == "message":
             await query.answer()
-            context.user_data[MESSAGE_SEND_STATE] = uid
-            await msg.reply_text("📨 متن پیام خود را بنویسید:", reply_markup=userbot_cancel_keyboard())
+            context.user_data[MESSAGE_SEND_STATE] = {"user_id": int(uid)}
+            await msg.reply_text(
+                "✍ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
+                reply_markup=userbot_cancel_keyboard(),
+            )
         
         elif act == "reset_trial":
             userbot_db.reset_free_trial(uid)
@@ -6579,15 +6728,94 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     # --- 4. سرویس‌ها (Services) ---
     if data.startswith("userbot:svc:"):
         parts = data.split(":")
-        sid = int(parts[2])
-        if "delete" in data: await query.answer("عملیات حذف سرویس بزودی...", show_alert=True)
-        elif "configs" in data: await query.answer("نمایش کانفیگ بزودی...", show_alert=True)
-        elif "edit" in data: await query.answer("ویرایش سرویس بزودی...", show_alert=True)
-        elif "extend" in data: await query.answer("تمدید سرویس بزودی...", show_alert=True)
-        else:
-            # نمایش جزئیات سرویس
+        if len(parts) < 3:
+            await query.answer("❌ داده نامعتبر است.", show_alert=True)
+            return
+        try:
+            service_id = int(parts[2])
+        except Exception:
+            await query.answer("❌ شناسه سرویس نامعتبر است.", show_alert=True)
+            return
+
+        action = parts[3] if len(parts) >= 4 else ""
+        service = userbot_db.get_service_by_id(service_id)
+        if not service:
+            await query.answer("❌ سرویس یافت نشد.", show_alert=True)
+            return
+
+        if not action:
             await query.answer()
-            await send_service_detail(sid, cid, context, message=msg)
+            await send_service_detail(service_id, cid, context, message=msg)
+            return
+
+        target_server_id, target_user_uuid = _service_primary_target(service)
+        if target_server_id <= 0 or not target_user_uuid:
+            await query.answer(
+                "❌ شناسه پنل این سرویس پیدا نشد. ابتدا سرویس را همگام‌سازی کنید.",
+                show_alert=True,
+            )
+            return
+
+        # Local import to avoid module-load circular dependency.
+        from AdminBot import servers as server_ops
+
+        if action == "configs":
+            await query.answer()
+            await server_ops.send_user_configs_menu(
+                target_server_id,
+                target_user_uuid,
+                cid,
+                context,
+                message=msg,
+            )
+            return
+
+        if action == "edit":
+            await query.answer()
+            await server_ops.send_user_edit_menu(
+                target_server_id,
+                target_user_uuid,
+                cid,
+                context,
+                message=msg,
+            )
+            return
+
+        if action == "extend":
+            await query.answer()
+            await server_ops.send_user_extend_menu(
+                target_server_id,
+                target_user_uuid,
+                cid,
+                context,
+                message=msg,
+            )
+            return
+
+        if action == "delete":
+            await query.answer()
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ بله، حذف شود",
+                            callback_data=f"deluser:{target_server_id}:{target_user_uuid}:yes",
+                        ),
+                        InlineKeyboardButton(
+                            "لغو❌",
+                            callback_data=f"deluser:{target_server_id}:{target_user_uuid}:no",
+                        ),
+                    ]
+                ]
+            )
+            await msg.edit_text(
+                "❓ آیا از حذف کامل این کاربر مطمئن هستید؟\n"
+                "این عملیات قابل بازگشت نیست.",
+                reply_markup=kb,
+            )
+            return
+
+        await query.answer("❌ گزینه نامعتبر است.", show_alert=True)
         return
 
     # --- 5. سفارشات (Orders) ---
@@ -6750,8 +6978,11 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         if not uid:
             await query.answer("❌ کاربر نامعتبر است.", show_alert=True)
             return
-        context.user_data[MESSAGE_SEND_STATE] = int(uid)
-        await msg.reply_text("📨 متن پیام خود را بنویسید:", reply_markup=userbot_cancel_keyboard())
+        context.user_data[MESSAGE_SEND_STATE] = {"user_id": int(uid)}
+        await msg.reply_text(
+            "✍ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
+            reply_markup=userbot_cancel_keyboard(),
+        )
         return
     if data == "userbot:payments:search":
         await query.answer()
@@ -7694,6 +7925,23 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if data.startswith("userbot:settings:sub_link_status:"):
         action = data.split(":")[-1]
+        if action == "set_base_url":
+            context.user_data[SUB_BASE_URL_EDIT_STATE] = "edit"
+            current = userbot_db.get_managed_sub_base_url() or "خودکار"
+            await query.answer()
+            prompt = (
+                "🌐 دامنه عمومی Multi Server را وارد کنید.\n"
+                "نمونه:\n"
+                "https://site.example.com\n\n"
+                "مقدار فعلی:\n"
+                f"{current}\n\n"
+                "برای بازگشت به حالت خودکار عدد 0 را ارسال کنید."
+            )
+            try:
+                await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
+            except Exception:
+                await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
+            return
         if action in {
             "show_direct_config",
             "show_auto_sub_link",

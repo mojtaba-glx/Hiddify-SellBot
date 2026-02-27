@@ -9,9 +9,11 @@ import time
 import hashlib
 import re
 import asyncio
+import socket
 from html import escape
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -311,11 +313,15 @@ SUB_SERVER_HOST = (os.getenv("SUB_SERVER_HOST", "0.0.0.0") or "0.0.0.0").strip()
 SUB_SERVER_PORT = int(os.getenv("SUB_SERVER_PORT", "8787") or "8787")
 SUB_SERVER_PUBLIC_SCHEME = (os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower()
 SUB_SERVER_PUBLIC_PORT = int(os.getenv("SUB_SERVER_PUBLIC_PORT", str(SUB_SERVER_PORT)) or str(SUB_SERVER_PORT))
+SUB_SERVER_PUBLIC_HOST = (os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
 USERBOT_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_ACTION_COOLDOWN_SECONDS", "1.5") or "1.5")
 USERBOT_RATE_LIMIT_NOTICE_SECONDS = float(os.getenv("USERBOT_RATE_LIMIT_NOTICE_SECONDS", "5.0") or "5.0")
 BUY_MENU_HOLD_SECONDS = float(os.getenv("USERBOT_BUY_MENU_HOLD_SECONDS", "10") or "10")
 USERBOT_STATUS_PROBE_CONCURRENCY = int(os.getenv("USERBOT_STATUS_PROBE_CONCURRENCY", "3") or "3")
 USERBOT_STATUS_SYNC_CONCURRENCY = int(os.getenv("USERBOT_STATUS_SYNC_CONCURRENCY", "2") or "2")
+USERBOT_MISSING_SERVICE_DELETE_DAYS = int(
+    os.getenv("USERBOT_MISSING_SERVICE_DELETE_DAYS", "7") or "7"
+)
 USERBOT_TICKET_AUTOCLOSE_ENABLED = (os.getenv("USERBOT_TICKET_AUTOCLOSE_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 USERBOT_TICKET_AUTOCLOSE_HOURS = int(os.getenv("USERBOT_TICKET_AUTOCLOSE_HOURS", "24") or "24")
 USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS = int(os.getenv("USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS", "600") or "600")
@@ -1216,11 +1222,37 @@ def _main_menu_keyboard():
 def _resolve_sub_service_base_url(service: Optional[dict] = None) -> str:
     """
     آدرس عمومی سرویس ساب:
-    1) اگر SUB_SERVICE_BASE_URL ست باشد، همان
-    2) در غیر این‌صورت تلاش از دامنه سرویس
+    1) اگر دامنه سفارشی از تنظیمات ادمین ست باشد، همان
+    2) اگر SUB_SERVICE_BASE_URL ست باشد، همان
+    3) در غیر این‌صورت تلاش از دامنه سرویس
     """
+    try:
+        custom_base = (userbot_db.get_managed_sub_base_url() or "").strip().rstrip("/")
+    except Exception:
+        custom_base = ""
+    if custom_base:
+        return custom_base
+
     if SUB_SERVICE_BASE_URL:
         return SUB_SERVICE_BASE_URL
+
+    # Optional explicit public host (domain or IP) for managed sub links.
+    explicit = (SUB_SERVER_PUBLIC_HOST or "").strip().rstrip("/")
+    if explicit:
+        try:
+            parsed = urlparse(explicit if "://" in explicit else f"//{explicit}")
+            host = (parsed.hostname or "").strip()
+            scheme = (parsed.scheme or SUB_SERVER_PUBLIC_SCHEME or "https").strip().lower()
+            port = parsed.port if parsed.port is not None else SUB_SERVER_PUBLIC_PORT
+            if host:
+                default_port = (scheme == "https" and int(port) == 443) or (
+                    scheme == "http" and int(port) == 80
+                )
+                if default_port:
+                    return f"{scheme}://{host}"
+                return f"{scheme}://{host}:{int(port)}"
+        except Exception:
+            pass
 
     if service:
         try:
@@ -1261,7 +1293,42 @@ def _resolve_sub_service_base_url(service: Optional[dict] = None) -> str:
                             return f"{scheme}://{host}"
                         return f"{scheme}://{host}:{SUB_SERVER_PUBLIC_PORT}"
 
-    return f"http://127.0.0.1:{SUB_SERVER_PORT}"
+    # Last fallback: use server IP (not localhost) to keep links usable remotely.
+    detected_ip = ""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ip = str(s.getsockname()[0] or "").strip()
+            if ip and not ip.startswith("127."):
+                detected_ip = ip
+    except Exception:
+        pass
+
+    if not detected_ip:
+        try:
+            infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+            for info in infos:
+                ip = str((info[4] or [""])[0] or "").strip()
+                if ip and not ip.startswith("127."):
+                    detected_ip = ip
+                    break
+        except Exception:
+            pass
+
+    if not detected_ip:
+        host = (SUB_SERVER_HOST or "").strip()
+        if host and host not in {"0.0.0.0", "::", "127.0.0.1", "localhost"}:
+            detected_ip = host
+    if not detected_ip:
+        detected_ip = "127.0.0.1"
+
+    scheme = SUB_SERVER_PUBLIC_SCHEME or "https"
+    default_port = (scheme == "https" and SUB_SERVER_PUBLIC_PORT == 443) or (
+        scheme == "http" and SUB_SERVER_PUBLIC_PORT == 80
+    )
+    if default_port:
+        return f"{scheme}://{detected_ip}"
+    return f"{scheme}://{detected_ip}:{SUB_SERVER_PUBLIC_PORT}"
 
 
 def _get_or_create_bot_sub_links(service_id: int, service: Optional[dict] = None) -> tuple[str, str]:
@@ -1272,7 +1339,8 @@ def _get_or_create_bot_sub_links(service_id: int, service: Optional[dict] = None
 
 def _should_show_configs_button(settings: dict) -> bool:
     return bool(
-        settings.get("show_sub_link", True)
+        settings.get("show_direct_config", True)
+        or settings.get("show_sub_link", True)
         or settings.get("show_auto_sub_link", False)
         or settings.get("show_sub_link_b64", False)
         or settings.get("show_multi_server", False)
@@ -1415,6 +1483,7 @@ def _build_subscription_status_text(service):
     ])
     return "\n".join(lines)
 
+
 def _extract_uuid_from_comment(comment: str) -> Optional[str]:
     return _parse_service_comment(comment).get("uuid")
 
@@ -1436,6 +1505,47 @@ def _extract_uuid_from_user_input(raw: str) -> Optional[str]:
 def _is_connected_service(service: dict) -> bool:
     meta = _parse_service_comment(service.get("comment") or "")
     return str(meta.get("linked") or "").strip() == "1" or str(meta.get("source") or "").strip() == "connect"
+
+
+def _service_local_lock_reason(service: dict) -> Optional[str]:
+    """
+    Local lock state used to block config/subscription access immediately.
+    """
+    if not service:
+        return "service_not_found"
+
+    usage_current = _to_float(service.get("usage_current"), 0.0)
+    usage_limit = _to_float(service.get("usage_limit"), 0.0)
+    if usage_limit > 0 and (not _is_unlimited_volume(usage_limit)) and usage_current >= usage_limit:
+        return "usage_limit_reached"
+
+    try:
+        days_left = int(service.get("days_left"))
+    except Exception:
+        days_left = None
+    if days_left is not None and (not _is_unlimited_time(days_left)) and days_left < 0:
+        return "time_expired"
+
+    try:
+        service_id = int(service.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    if service_id > 0:
+        mappings = userbot_db.get_service_nodes(service_id)
+        if mappings and not any(int((m or {}).get("is_active") or 0) == 1 for m in mappings):
+            return "nodes_inactive"
+
+    return None
+
+
+def _service_local_lock_text(reason: Optional[str]) -> str:
+    if reason == "usage_limit_reached":
+        return "⛔ این اشتراک به سقف حجم رسیده و موقتاً غیرفعال است."
+    if reason == "time_expired":
+        return "⛔ زمان این اشتراک به پایان رسیده و موقتاً غیرفعال است."
+    if reason == "nodes_inactive":
+        return "⛔ این اشتراک در حال حاضر غیرفعال است."
+    return "⛔ دسترسی این اشتراک موقتاً محدود شده است."
 
 
 async def _find_panel_user_targets_by_uuid(user_uuid: str) -> list[tuple[dict, dict]]:
@@ -1915,8 +2025,11 @@ async def _filter_existing_services(services: list[dict]) -> tuple[list[dict], i
         except Exception:
             missing_info = {"missing_streak": 1, "first_missing_at": "", "last_missing_at": ""}
 
-        # سرویس فعلاً مخفی بماند، اما حذف نهایی فقط بعد از 30 روز عدم مشاهده.
-        if not _older_than_days(str(missing_info.get("first_missing_at") or ""), 30):
+        # سرویس فعلاً مخفی بماند، اما حذف نهایی فقط بعد از TTL تنظیم‌شده انجام شود.
+        if not _older_than_days(
+            str(missing_info.get("first_missing_at") or ""),
+            USERBOT_MISSING_SERVICE_DELETE_DAYS,
+        ):
             continue
         try:
             userbot_db.delete_service(sid)
@@ -2012,7 +2125,7 @@ async def _deactivate_created_users(created_nodes: list[dict]) -> None:
             server = database.get_server_by_id(sid)
             if not server:
                 continue
-            await hiddify_api.patch_user(server, uuid, {"is_active": False})
+            await hiddify_api.disable_user(server, uuid)
         except Exception as e:
             logger.warning(
                 "Rollback deactivate failed for sid=%s uuid=%s: %s",
@@ -2137,8 +2250,19 @@ async def _apply_service_renewal_on_targets(
     last_online = None
     for srv, uuid in targets:
         patched = await hiddify_api.patch_user(srv, uuid, payload)
+        await hiddify_api.enable_user(srv, uuid)
         if last_online is None:
             last_online = patched.get("last_online")
+
+    try:
+        service_id = int(service.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    if service_id > 0:
+        try:
+            userbot_db.set_service_nodes_active(service_id, 1)
+        except Exception as e:
+            logger.warning("Failed to re-enable service_nodes after renewal (service_id=%s): %s", service_id, e)
     return final_limit, final_days, last_online
 
 
@@ -2187,6 +2311,66 @@ def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
     return base_url.replace(panel_url, display_domain.rstrip("/"), 1)
 
 
+def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    panel_url = (server.get("panel_url") or "").rstrip("/")
+    user_proxy = (server.get("user_proxy_path") or "").strip("/")
+    if not panel_url or not user_proxy or not user_uuid:
+        return None
+    return f"{panel_url}/{user_proxy}/{user_uuid}"
+
+
+def _get_service_node_fetch_base_urls(service: dict) -> list[str]:
+    """
+    Base URLs for fetching direct configs.
+    Tries both display domain (user.*) and raw panel domain (dl.*).
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    service_id = int(service.get("id") or 0)
+    mappings = userbot_db.get_service_nodes(service_id) if service_id > 0 else []
+    if mappings:
+        active_mappings = [m for m in mappings if int((m or {}).get("is_active") or 0) == 1]
+        if active_mappings:
+            mappings = active_mappings
+        else:
+            return []
+    primary_server_id = int(service.get("server_id") or 0)
+    mappings = sorted(
+        mappings,
+        key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id,
+    )
+
+    for m in mappings:
+        try:
+            sid = int(m.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        uuid = str(m.get("panel_user_uuid") or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+        server = database.get_server_by_id(sid)
+        if not server:
+            continue
+        for base in (_build_user_base_url(server, uuid), _build_panel_base_url(server, uuid)):
+            if not base or base in seen:
+                continue
+            out.append(base)
+            seen.add(base)
+
+    if not out:
+        sid = int(service.get("server_id") or 0)
+        server = database.get_server_by_id(sid) if sid else None
+        uuid = _extract_uuid_from_comment(service.get("comment") or "")
+        if server and uuid:
+            for base in (_build_user_base_url(server, uuid), _build_panel_base_url(server, uuid)):
+                if not base or base in seen:
+                    continue
+                out.append(base)
+                seen.add(base)
+    return out
+
+
 def _get_service_node_base_urls(service: dict) -> list[str]:
     """
     آدرس base_url سرویس روی همه نودهای نگاشت‌شده.
@@ -2196,6 +2380,12 @@ def _get_service_node_base_urls(service: dict) -> list[str]:
 
     service_id = int(service.get("id") or 0)
     mappings = userbot_db.get_service_nodes(service_id) if service_id > 0 else []
+    if mappings:
+        active_mappings = [m for m in mappings if int((m or {}).get("is_active") or 0) == 1]
+        if active_mappings:
+            mappings = active_mappings
+        else:
+            return []
     primary_server_id = int(service.get("server_id") or 0)
     # اول نودها، بعد سرور اصلی
     mappings = sorted(
@@ -2232,60 +2422,579 @@ def _get_service_node_base_urls(service: dict) -> list[str]:
     return out
 
 
-def _fetch_remote_lines(url: str) -> list[str]:
+def _sanitize_config_text(value: Any) -> str:
+    text = str(value or "").strip()
+    # Remove hidden directional/BOM chars that break protocol detection.
+    for ch in ("\ufeff", "\u200e", "\u200f", "\u202a", "\u202b", "\u202c"):
+        text = text.replace(ch, "")
+    return text.strip()
+
+
+def _extract_proto_and_link(value: Any) -> tuple[str, str]:
+    text = _sanitize_config_text(value)
+    if not text:
+        return "", ""
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _push(s: Any) -> None:
+        t = _sanitize_config_text(s)
+        if not t or t in seen:
+            return
+        seen.add(t)
+        candidates.append(t)
+
+    _push(text)
+    _push(unquote(text))
+    _push(unquote(unquote(text)))
+
+    # Support wrapped links such as hiddify://... ?url=<encoded-config>
+    for t in list(candidates):
+        try:
+            parsed = urlparse(t)
+            q = parse_qs(parsed.query or "")
+        except Exception:
+            q = {}
+        for key in ("url", "config", "link", "uri", "sub"):
+            for val in q.get(key, []):
+                _push(val)
+                _push(unquote(val))
+                _push(unquote(unquote(val)))
+
+    for cand in candidates:
+        low = cand.lower()
+        for proto in ("vless", "vmess", "trojan"):
+            if low.startswith(f"{proto}://"):
+                return proto, cand.rstrip("'\",;)]}")
+        m = re.search(r"(?i)\b(vless|vmess|trojan)://\S+", cand)
+        if not m:
+            continue
+        link = _sanitize_config_text(m.group(0)).rstrip("'\",;)]}")
+        return str(m.group(1)).lower(), link
+    return "", ""
+
+
+def _extract_all_config_links(value: Any) -> list[str]:
+    """
+    Extract any config-like URI from text (not only vless/vmess/trojan).
+    Source can be raw line, decoded line, or wrapped URL query params.
+    """
+    text = _sanitize_config_text(value)
+    if not text:
+        return []
+
+    candidates: list[str] = []
+    seen_candidates: set[str] = set()
+
+    def _push_candidate(s: Any) -> None:
+        t = _sanitize_config_text(s)
+        if not t or t in seen_candidates:
+            return
+        seen_candidates.add(t)
+        candidates.append(t)
+
+    _push_candidate(text)
+    _push_candidate(unquote(text))
+    _push_candidate(unquote(unquote(text)))
+
+    for t in list(candidates):
+        try:
+            parsed = urlparse(t)
+            q = parse_qs(parsed.query or "")
+        except Exception:
+            q = {}
+        for key in ("url", "config", "link", "uri", "sub"):
+            for val in q.get(key, []):
+                _push_candidate(val)
+                _push_candidate(unquote(val))
+                _push_candidate(unquote(unquote(val)))
+
+    uri_re = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{1,24})://[^\s<>\"']+")
+    blocked_schemes = {"http", "https"}
+
+    out: list[str] = []
+    seen_links: set[str] = set()
+    for cand in candidates:
+        for m in uri_re.finditer(cand):
+            link = _sanitize_config_text(m.group(0)).rstrip("'\",;)]}")
+            if not link:
+                continue
+            scheme = str(m.group(1) or "").lower()
+            if not scheme or scheme in blocked_schemes:
+                continue
+            if link in seen_links:
+                continue
+            seen_links.add(link)
+            out.append(link)
+    return out
+
+
+def _extract_config_link_from_line(value: Any) -> str:
+    """
+    Strict parser:
+    - only accepts full-line URI
+    - no substring extraction
+    - blocks non-config schemes
+    """
+    raw = _sanitize_config_text(value)
+    if not raw:
+        return ""
+
+    raw = raw.rstrip("'\",;)]}")
+    if "://" not in raw:
+        return ""
+    if re.search(r"\s", raw):
+        return ""
+
+    m = re.match(r"(?i)^([a-z][a-z0-9+.\-]{1,24})://", raw)
+    if not m:
+        return ""
+
+    scheme = str(m.group(1) or "").lower()
+    blocked = {"http", "https", "hiddify", "ftp", "file", "mailto", "tg"}
+    if scheme in blocked:
+        return ""
+    if len(raw) < 16:
+        return ""
+    return raw
+
+
+def _collect_all_direct_configs_for_service(service: dict) -> list[str]:
+    """
+    Strict source: only all.txt outputs from service/node fetch bases.
+    Returns unique config links in discovered order.
+    """
+    out: list[str] = []
+    seen_links: set[str] = set()
+
+    # Use only user-facing subscription domains to stay aligned with all.txt shown to user.
+    for base_url in _get_service_node_base_urls(service):
+        seen_lines: set[str] = set()
+        for suffix in ("all.txt", "all.txt?base64=1"):
+            lines = _fetch_remote_lines(f"{base_url}/{suffix}")
+            for ln in lines:
+                raw = _sanitize_config_text(ln)
+                if not raw or raw in seen_lines:
+                    continue
+                seen_lines.add(raw)
+                link = _extract_config_link_from_line(raw)
+                if not link or link in seen_links:
+                    continue
+                seen_links.add(link)
+                out.append(link)
+    return out
+
+
+async def _collect_all_direct_configs_from_api_for_service(service: dict) -> list[str]:
+    """
+    Fallback source when subscription endpoints (all.txt) are blocked (e.g. HTTP 400/403).
+    """
+    out: list[str] = []
+    seen: set[str] = set()
     try:
-        req = Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (HiddifySellBot)",
-                "Accept": "*/*",
-            },
+        mapped = await _collect_direct_configs_map_from_api(
+            service,
+            protocols=("vless", "vmess", "trojan"),
         )
-        with urlopen(req, timeout=12) as resp:
-            raw = resp.read()
-        body = raw.decode("utf-8", errors="ignore")
-        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    except Exception as e:
+        logger.warning("API fallback for direct configs failed: %s", e)
+        return out
+
+    for proto in ("vless", "vmess", "trojan"):
+        for link in (mapped.get(proto) or []):
+            raw = _sanitize_config_text(link)
+            if not raw or raw in seen:
+                continue
+            seen.add(raw)
+            out.append(raw)
+    return out
+
+
+async def _send_service_direct_configs_shell(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    service_id: int,
+    service: dict,
+) -> None:
+    lock_reason = _service_local_lock_reason(service)
+    if lock_reason:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=_service_local_lock_text(lock_reason),
+            reply_markup=_main_menu_keyboard(),
+        )
+        return
+
+    links = _collect_all_direct_configs_for_service(service)
+    source_hint = ""
+    allow_api_fallback = str(os.getenv("DIRECT_CONFIG_API_FALLBACK", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not links and allow_api_fallback:
+        links = await _collect_all_direct_configs_from_api_for_service(service)
+        if links:
+            source_hint = (
+                "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ "
+                "کانفیگ‌ها از API پنل خوانده شد.\n\n"
+            )
+    base_urls = _get_service_node_base_urls(service)
+    fallback_base = base_urls[0] if base_urls else ""
+
+    if not links:
+        msg = "❌ کانفیگی از لینک اشتراک استخراج نشد."
+        if fallback_base:
+            msg = (
+                f"{msg}\n"
+                "می‌توانید از لینک اشتراک استفاده کنید:\n"
+                f"{fallback_base}/all.txt"
+            )
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=msg,
+            disable_web_page_preview=True,
+        )
+        return
+
+    server_title = str(service.get("server_title") or "").strip()
+    header = "🔗 کانفیگ‌های مستقیم"
+    if server_title:
+        header = f"{header} | {server_title}"
+    clean_links = [str(x).strip() for x in links if str(x).strip()]
+
+    # Try single message first (best UX for one-shot copy).
+    all_links_text = "\n".join(clean_links)
+    one_block_text = (
+        f"{source_hint}{header}\n"
+        "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
+        f"<pre><code class=\"language-shell\">{escape(all_links_text)}</code></pre>"
+    )
+    if len(one_block_text) <= 3900:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=one_block_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        return
+
+    # Fallback: split into multiple shell messages (no txt file).
+    max_payload = 2800
+    parts: list[list[str]] = []
+    cur: list[str] = []
+    cur_len = 0
+    for link in clean_links:
+        add = len(link) + 1
+        if cur and (cur_len + add > max_payload):
+            parts.append(cur)
+            cur = [link]
+            cur_len = add
+        else:
+            cur.append(link)
+            cur_len += add
+    if cur:
+        parts.append(cur)
+
+    for idx, chunk in enumerate(parts, start=1):
+        part_header = header if len(parts) == 1 else f"{header} ({idx}/{len(parts)})"
+        part_text = (
+            f"{source_hint if idx == 1 else ''}{part_header}\n"
+            "برای کپی، باکس زیر را کپی کنید:\n"
+            f"<pre><code class=\"language-shell\">{escape(chr(10).join(chunk))}</code></pre>"
+        )
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=part_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+
+def _iter_text_values(obj: Any):
+    if obj is None:
+        return
+    if isinstance(obj, str):
+        txt = _sanitize_config_text(obj)
+        if txt:
+            yield txt
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_text_values(v)
+        return
+    if isinstance(obj, (list, tuple, set)):
+        for v in obj:
+            yield from _iter_text_values(v)
+        return
+
+
+def _fetch_remote_lines(url: str) -> list[str]:
+    raw_url = str(url or "").strip()
+    if not raw_url:
+        return []
+
+    def _decode_to_lines(body_text: str) -> list[str]:
+        lines = [_sanitize_config_text(ln) for ln in body_text.splitlines() if _sanitize_config_text(ln)]
         if lines and any("://" in ln for ln in lines):
             return lines
-        # Try base64 decode if content doesn't contain protocol links
-        try:
-            decoded = base64.b64decode(body.strip() + "===", validate=False).decode("utf-8", errors="ignore")
-            decoded_lines = [ln.strip() for ln in decoded.splitlines() if ln.strip()]
-            return decoded_lines
-        except Exception:
-            return lines
-    except Exception as e:
-        logger.warning(f"Failed to fetch remote lines from {url}: {e}")
-        return []
+
+        compact = re.sub(r"\s+", "", body_text or "")
+        candidates = [body_text.strip(), compact]
+        for cand in candidates:
+            cand = str(cand or "").strip()
+            if not cand:
+                continue
+            for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+                try:
+                    padded = cand + ("=" * ((4 - len(cand) % 4) % 4))
+                    decoded = decoder(padded).decode("utf-8", errors="ignore")
+                    decoded_lines = [_sanitize_config_text(ln) for ln in decoded.splitlines() if _sanitize_config_text(ln)]
+                    if decoded_lines:
+                        return decoded_lines
+                except Exception:
+                    continue
+        return lines
+
+    urls_to_try = [raw_url]
+    low = raw_url.lower()
+    if "/all.txt" in low and "asn=" not in low:
+        sep = "&" if "?" in raw_url else "?"
+        urls_to_try.append(f"{raw_url}{sep}asn=unknown")
+
+    user_agents = [
+        "HiddifyNext/1.0",
+        "ClashMetaForAndroid/2.11.5",
+        "v2rayN/6.45",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ]
+
+    base_headers = {
+        "Accept": "text/plain,*/*;q=0.9",
+        "Accept-Language": "en-US,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+
+    errors: list[str] = []
+    seen_errors: set[str] = set()
+
+    for target in urls_to_try:
+        for ua in user_agents:
+            try:
+                req = Request(target, headers={**base_headers, "User-Agent": ua})
+                with urlopen(req, timeout=15) as resp:
+                    raw = resp.read()
+                body = raw.decode("utf-8", errors="ignore")
+                parsed = _decode_to_lines(body)
+                if parsed:
+                    return parsed
+            except HTTPError as e:
+                body_snippet = ""
+                try:
+                    body_snippet = (e.read() or b"").decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    body_snippet = ""
+                msg = f"{target} -> HTTP {getattr(e, 'code', '?')}: {(body_snippet or str(e))[:220]}"
+                if msg not in seen_errors:
+                    seen_errors.add(msg)
+                    errors.append(msg)
+            except Exception as e:
+                msg = f"{target} -> {str(e)[:220]}"
+                if msg not in seen_errors:
+                    seen_errors.add(msg)
+                    errors.append(msg)
+
+    if errors:
+        logger.warning(
+            "Failed to fetch remote lines from %s. tries=%s, first_errors=%s",
+            raw_url,
+            len(urls_to_try) * len(user_agents),
+            " | ".join(errors[:2]),
+        )
+    else:
+        logger.warning("Failed to fetch remote lines from %s: unknown error", raw_url)
+    return []
 
 
 def _collect_direct_configs(base_url: str, proto: str) -> list[str]:
     proto = (proto or "").strip().lower()
-    all_lines = _fetch_remote_lines(f"{base_url}/all.txt")
-    filtered = [ln for ln in all_lines if ln.lower().startswith(f"{proto}://")]
-    if filtered:
-        return filtered
-    # Fallback endpoints
-    fallback = _fetch_remote_lines(f"{base_url}/{proto}.txt")
-    if fallback:
-        return fallback
-    # Extra fallback for base64-only responses
-    alt = _fetch_remote_lines(f"{base_url}/sub/?format=base64")
-    return [ln for ln in alt if ln.lower().startswith(f"{proto}://")]
+    if not proto:
+        return []
+    return _collect_direct_configs_map(base_url, protocols=(proto,)).get(proto, [])
 
 
-def _available_direct_protocols(base_url: str) -> set[str]:
+def _collect_direct_configs_map(
+    base_url: str,
+    protocols: tuple[str, ...] = ("vless", "vmess", "trojan"),
+) -> dict[str, list[str]]:
+    allowed = tuple((p or "").strip().lower() for p in protocols if (p or "").strip())
+    result: dict[str, list[str]] = {proto: [] for proto in allowed}
+    if not result:
+        return result
+
     lines = _fetch_remote_lines(f"{base_url}/all.txt")
     if not lines:
         lines = _fetch_remote_lines(f"{base_url}/sub/?format=base64")
-    protos = set()
+
     for ln in lines:
         low = ln.lower()
-        if low.startswith("vless://"):
-            protos.add("vless")
-        elif low.startswith("vmess://"):
-            protos.add("vmess")
-    return protos
+        for proto in result:
+            if low.startswith(f"{proto}://"):
+                result[proto].append(ln)
+                break
+
+    # Fallback endpoint per protocol for entries that are still empty.
+    for proto in result:
+        if result[proto]:
+            continue
+        fallback_lines = _fetch_remote_lines(f"{base_url}/{proto}.txt")
+        if fallback_lines:
+            result[proto] = [ln for ln in fallback_lines if ln.lower().startswith(f"{proto}://")]
+    return result
+
+
+async def _collect_direct_configs_map_from_api(
+    service: dict,
+    protocols: tuple[str, ...] = ("vless", "vmess", "trojan"),
+) -> dict[str, list[str]]:
+    allowed = tuple((p or "").strip().lower() for p in protocols if (p or "").strip())
+    result: dict[str, list[str]] = {proto: [] for proto in allowed}
+    seen: dict[str, set[str]] = {proto: set() for proto in allowed}
+    if not result:
+        return result
+
+    targets: list[tuple[dict, str]] = []
+    seen_targets: set[tuple[int, str]] = set()
+
+    try:
+        service_id = int(service.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+
+    mappings = userbot_db.get_service_nodes(service_id) if service_id > 0 else []
+    for m in mappings:
+        try:
+            sid = int((m or {}).get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        uuid = str((m or {}).get("panel_user_uuid") or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+        server = database.get_server_by_id(sid)
+        if not server:
+            continue
+        key = (sid, uuid)
+        if key in seen_targets:
+            continue
+        seen_targets.add(key)
+        targets.append((server, uuid))
+
+    if not targets:
+        try:
+            sid = int(service.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        server = database.get_server_by_id(sid) if sid > 0 else None
+        uuid = _extract_uuid_from_comment(service.get("comment") or "")
+        if server and uuid:
+            targets.append((server, uuid))
+
+    for server, uuid in targets:
+        try:
+            configs_raw = await hiddify_api.get_user_configs(server, uuid)
+        except Exception:
+            continue
+
+        if isinstance(configs_raw, dict):
+            configs = (
+                configs_raw.get("configs")
+                or configs_raw.get("items")
+                or configs_raw.get("all_configs")
+                or configs_raw.get("results")
+                or configs_raw.get("data")
+                or []
+            )
+        elif isinstance(configs_raw, list):
+            configs = configs_raw
+        else:
+            configs = []
+
+        for item in configs:
+            candidates: list[Any] = []
+            preferred_proto = ""
+            if isinstance(item, dict):
+                preferred_proto = _sanitize_config_text(item.get("protocol")).lower()
+                candidates.extend(
+                    [
+                        item.get("link"),
+                        item.get("url"),
+                        item.get("uri"),
+                        item.get("config"),
+                    ]
+                )
+                # Deep scan to support nested API schemas.
+                candidates.extend(list(_iter_text_values(item)))
+            else:
+                candidates.extend(list(_iter_text_values(item)))
+
+            for raw in candidates:
+                proto, link = _extract_proto_and_link(raw)
+                if not link:
+                    continue
+                # Trust protocol extracted from link first; only fallback to API field if extraction failed.
+                if not proto and preferred_proto in result:
+                    proto = preferred_proto
+                if proto not in result:
+                    continue
+                if link in seen[proto]:
+                    continue
+                seen[proto].add(link)
+                result[proto].append(link)
+
+    return result
+
+
+async def _collect_direct_configs_map_for_service(
+    service: dict,
+    protocols: tuple[str, ...] = ("vless", "vmess", "trojan"),
+) -> dict[str, list[str]]:
+    # Strict source: only from all.txt (subscription output), no API extras.
+    allowed = tuple((p or "").strip().lower() for p in protocols if (p or "").strip())
+    result: dict[str, list[str]] = {proto: [] for proto in allowed}
+    seen: dict[str, set[str]] = {proto: set() for proto in allowed}
+
+    for base_url in _get_service_node_fetch_base_urls(service):
+        candidate_lines: list[str] = []
+        local_seen: set[str] = set()
+        for suffix in ("all.txt", "all.txt?base64=1"):
+            lines = _fetch_remote_lines(f"{base_url}/{suffix}")
+            for ln in lines:
+                raw = str(ln).strip()
+                if not raw or raw in local_seen:
+                    continue
+                local_seen.add(raw)
+                candidate_lines.append(raw)
+        if not candidate_lines:
+            continue
+        for ln in candidate_lines:
+            proto, link = _extract_proto_and_link(ln)
+            if proto not in allowed or not link:
+                continue
+            if link in seen[proto]:
+                continue
+            seen[proto].add(link)
+            result[proto].append(link)
+    return result
+
+
+def _available_direct_protocols(base_url: str) -> set[str]:
+    mapped = _collect_direct_configs_map(base_url)
+    return {proto for proto, items in mapped.items() if items}
 
 
 async def _send_long_message(
@@ -2907,6 +3616,16 @@ async def _direct_buy_delivery_loop(application) -> None:
             logger.warning("Direct-buy delivery loop error: %s", e)
         await asyncio.sleep(6)
 
+
+def _resolve_plan_display_mode(server_block: Optional[Dict[str, Any]]) -> str:
+    """Resolve plan display mode with backward compatibility for legacy `mode` key."""
+    block = server_block or {}
+    raw_mode = str(block.get("display_mode") or block.get("mode") or "").strip().lower()
+    if raw_mode in {"fixed", "dynamic", "mixed"}:
+        return raw_mode
+    return "dynamic"
+
+
 async def show_fixed_categories(query, sid, server_block):
     txp = _get_tx_plans_settings()
     text_settings = _get_text_settings()
@@ -3008,7 +3727,7 @@ async def _send_buy_flow_for_server(
         )
         return
 
-    display_mode = server_block.get("display_mode", "fixed")
+    display_mode = _resolve_plan_display_mode(server_block)
     title = "تمدید اشتراک" if is_renew else "خرید اشتراک"
 
     if display_mode == "mixed":
@@ -4040,6 +4759,18 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "noop":
             return
 
+        if action == "adminmsg":
+            sub = parts[2] if len(parts) > 2 else ""
+            if sub == "reply":
+                set_user_step(context, user_id, "WAIT_ADMIN_DIRECT_REPLY_TEXT")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="📩 لطفا پاسخ خود را ارسال کنید:",
+                )
+                return
+            await query.answer("گزینه نامعتبر است.", show_alert=True)
+            return
+
         if action == "back_main":
             try:
                 await query.message.delete()
@@ -4502,7 +5233,10 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 missing_info = {"missing_streak": 1, "first_missing_at": "", "last_missing_at": ""}
 
-            if _older_than_days(str(missing_info.get("first_missing_at") or ""), 30):
+            if _older_than_days(
+                str(missing_info.get("first_missing_at") or ""),
+                USERBOT_MISSING_SERVICE_DELETE_DAYS,
+            ):
                 try:
                     userbot_db.delete_service(sid)
                 except Exception as e:
@@ -4516,6 +5250,16 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             userbot_db.mark_service_seen(int(service.get("id") or 0))
         except Exception:
             pass
+
+        lock_reason = _service_local_lock_reason(service)
+        if action in {"configs", "direct", "directcfg", "sub_link", "auto_sub", "sub_b64", "multi", "multi_b64"}:
+            if lock_reason:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=_service_local_lock_text(lock_reason),
+                    reply_markup=_main_menu_keyboard(),
+                )
+                return
 
         if action in {"menu", "refresh"}:
             service = await _sync_service_runtime_from_panels(service)
@@ -4578,6 +5322,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 query,
                 reply_markup=subscription_configs_keyboard(
                     service_id,
+                    show_direct_config=settings.get("show_direct_config", True),
                     show_sub_link=settings.get("show_sub_link", True),
                     show_auto_sub_link=settings.get("show_auto_sub_link", False),
                     show_sub_link_b64=settings.get("show_sub_link_b64", False),
@@ -4600,35 +5345,11 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if action == "direct":
-            server_id = int(service.get("server_id") or 0)
-            server = database.get_server_by_id(server_id) if server_id else None
-            user_uuid = _extract_uuid_from_comment(service.get("comment") or "")
-            if not server or not user_uuid:
-                await context.bot.send_message(chat_id=user_id, text="❌ لینک کانفیگ در دسترس نیست.", reply_markup=_main_menu_keyboard())
-                return
-            base_url = _build_user_base_url(server, user_uuid)
-            if not base_url:
-                await context.bot.send_message(chat_id=user_id, text="❌ تنظیمات لینک کانفیگ این سرور ناقص است.", reply_markup=_main_menu_keyboard())
-                return
-
-            vless_links = _collect_direct_configs(base_url, "vless")
-            vmess_links = _collect_direct_configs(base_url, "vmess")
-            show_vless = bool(vless_links)
-            show_vmess = bool(vmess_links)
-            if not show_vless and not show_vmess:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ فعلاً کانفیگ مستقیم برای این سرویس در دسترس نیست.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            await _safe_edit_message_reply_markup(
-                query,
-                reply_markup=direct_configs_keyboard(
-                    service_id,
-                    show_vless=show_vless,
-                    show_vmess=show_vmess,
-                ),
+            await _send_service_direct_configs_shell(
+                context,
+                user_id=user_id,
+                service_id=int(service_id or 0),
+                service=service,
             )
             return
 
@@ -4728,50 +5449,12 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if action == "directcfg":
-            proto = (parts[3] if len(parts) > 3 else "").lower().strip()
-            if proto not in {"vless", "vmess"}:
-                await context.bot.send_message(chat_id=user_id, text="❌ پروتکل نامعتبر است.", reply_markup=_main_menu_keyboard())
-                return
-            server_id = int(service.get("server_id") or 0)
-            server = database.get_server_by_id(server_id) if server_id else None
-            user_uuid = _extract_uuid_from_comment(service.get("comment") or "")
-            if not server or not user_uuid:
-                await context.bot.send_message(chat_id=user_id, text="❌ لینک کانفیگ در دسترس نیست.", reply_markup=_main_menu_keyboard())
-                return
-            base_url = _build_user_base_url(server, user_uuid)
-            if not base_url:
-                await context.bot.send_message(chat_id=user_id, text="❌ تنظیمات لینک کانفیگ این سرور ناقص است.", reply_markup=_main_menu_keyboard())
-                return
-
-            links = _collect_direct_configs(base_url, proto)
-            if not links:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"❌ کانفیگ {proto.upper()} یافت نشد.",
-                    reply_markup=direct_configs_keyboard(
-                        service_id,
-                        show_vless=bool(_collect_direct_configs(base_url, "vless")),
-                        show_vmess=bool(_collect_direct_configs(base_url, "vmess")),
-                    ),
-                )
-                return
-
-            text_lines = [f"{proto.upper()} CONFIGS", ""]
-            for idx, link in enumerate(links, start=1):
-                text_lines.append(f"{idx}.")
-                text_lines.append(f"<code>{escape(link)}</code>")
-                text_lines.append("")
-
-            await _send_long_message(
+            # Backward compatibility for old/stale protocol buttons in old messages.
+            await _send_service_direct_configs_shell(
                 context,
-                user_id,
-                "\n".join(text_lines).strip(),
-                parse_mode="HTML",
-                reply_markup=direct_configs_keyboard(
-                    service_id,
-                    show_vless=bool(_collect_direct_configs(base_url, "vless")),
-                    show_vmess=bool(_collect_direct_configs(base_url, "vmess")),
-                ),
+                user_id=user_id,
+                service_id=int(service_id or 0),
+                service=service,
             )
             return
 
@@ -5094,7 +5777,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data_plans = plans_storage._load_all_plans()
         server_block = data_plans.get("servers", {}).get(str(sid), {})
         
-        display_mode = server_block.get("display_mode", "fixed")
+        display_mode = _resolve_plan_display_mode(server_block)
         
         if display_mode == "mixed":
             # نمایش صفحه اصلی خرید با ویزارد و دکمه پلن‌های آماده
@@ -5192,19 +5875,44 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ زمان نشست تمام شده، لطفا دوباره تلاش کنید.", show_alert=True)
             return
             
-        dyn_settings = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {}).get("dynamic_settings", {})
+        data_plans = plans_storage._load_all_plans()
+        server_block = data_plans.get("servers", {}).get(str(sid), {})
+        dyn_settings = server_block.get("dynamic_settings", {})
+        display_mode = _resolve_plan_display_mode(server_block)
         gb, months = wiz_data['gb'], wiz_data['months']
-        
-        step_gb = dyn_settings.get('step_gb', 10)
-        step_month = dyn_settings.get('step_month', 1)
-        
-        if action == "gb_inc": gb = min(dyn_settings.get('max_gb', 500), gb + step_gb)
-        elif action == "gb_dec": gb = max(dyn_settings.get('min_gb', 10), gb - step_gb)
-        elif action == "month_inc": months = min(dyn_settings.get('max_month', 12), months + step_month)
-        elif action == "month_dec": months = max(dyn_settings.get('min_month', 1), months - step_month)
+
+        min_gb = max(1, int(dyn_settings.get('min_gb', 10) or 10))
+        max_gb = max(min_gb, int(dyn_settings.get('max_gb', 500) or 500))
+        min_month = max(1, int(dyn_settings.get('min_month', 1) or 1))
+        max_month = max(min_month, int(dyn_settings.get('max_month', 12) or 12))
+        step_gb = max(1, int(dyn_settings.get('step_gb', 10) or 10))
+        step_month = max(1, int(dyn_settings.get('step_month', 1) or 1))
+
+        if action == "gb_inc":
+            if gb >= max_gb:
+                await query.answer(f"حداکثر حجم {max_gb} گیگابایت می‌باشد.", show_alert=True)
+                return
+            gb = min(max_gb, gb + step_gb)
+        elif action == "gb_dec":
+            if gb <= min_gb:
+                await query.answer(f"حداقل حجم {min_gb} گیگابایت می‌باشد.", show_alert=True)
+                return
+            gb = max(min_gb, gb - step_gb)
+        elif action == "month_inc":
+            if months >= max_month:
+                await query.answer(f"حداکثر دوره {max_month} ماه می‌باشد.", show_alert=True)
+                return
+            months = min(max_month, months + step_month)
+        elif action == "month_dec":
+            if months <= min_month:
+                await query.answer(f"حداقل دوره {min_month} ماه می‌باشد.", show_alert=True)
+                return
+            months = max(min_month, months - step_month)
         elif action == "show_fixed":
             # نمایش لیست پلن‌های آماده (طبق اسکرین‌شات)
-            server_block = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {})
+            if display_mode != "mixed":
+                await query.answer("این گزینه فقط در حالت ترکیبی فعال است.", show_alert=True)
+                return
             plans = server_block.get("plans", [])
             if not plans:
                 await query.answer("❌ پلن آماده‌ای برای این سرور وجود ندارد.", show_alert=True)
@@ -5242,10 +5950,11 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[f"wiz_{user_id}"] = wiz_data
         
         price = (gb * dyn_settings.get('price_per_gb', 2000)) + (months * dyn_settings.get('price_per_month', 30000))
-        await _safe_edit_message_reply_markup(
-            query,
-            reply_markup=mixed_buy_keyboard(sid, gb, months, price),
-        )
+        if display_mode == "mixed":
+            markup = mixed_buy_keyboard(sid, gb, months, price)
+        else:
+            markup = buy_wizard_keyboard(sid, gb, months, price)
+        await _safe_edit_message_reply_markup(query, reply_markup=markup)
 
     # تایید نهایی و هدایت به پرداخت
     elif data.startswith("buy:confirm_dyn:"):
@@ -5460,6 +6169,75 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     step = get_user_step(context, user_id)
     text = update.message.text
+
+    if step == "WAIT_ADMIN_DIRECT_REPLY_TEXT":
+        if _is_back_or_cancel_text(text):
+            set_user_step(context, user_id, None)
+            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            return
+
+        reply_text = str(text or "").strip()
+        if not reply_text:
+            await update.message.reply_text("❌ لطفا پاسخ خود را به صورت متنی ارسال کنید:")
+            return
+
+        user_row = userbot_db.get_user_by_telegram_id(user_id)
+        if not user_row:
+            internal_uid = userbot_db.upsert_user(
+                update.effective_user.id,
+                update.effective_user.username,
+                update.effective_user.full_name,
+            )
+            user_row = userbot_db.get_user_by_id(internal_uid) or {}
+        internal_uid = int((user_row or {}).get("id") or 0)
+        display_name = str(
+            (user_row or {}).get("full_name")
+            or update.effective_user.full_name
+            or (user_row or {}).get("username")
+            or update.effective_user.username
+            or user_id
+        ).strip()
+
+        if not (ADMIN_ID and ADMIN_BOT_TOKEN):
+            set_user_step(context, user_id, None)
+            await update.message.reply_text(
+                "❌ تنظیمات پشتیبانی کامل نیست. لطفا بعدا تلاش کنید.",
+                reply_markup=_main_menu_keyboard(),
+            )
+            return
+
+        admin_text = (
+            "📬 تیکت جدیدی دریافت شد\n"
+            f"📄 متن تیکت: {reply_text}"
+        )
+
+        rows = []
+        if internal_uid > 0:
+            rows.append([InlineKeyboardButton(display_name, callback_data=f"userbot:user:{internal_uid}")])
+            rows.append([InlineKeyboardButton("📨پاسخ", callback_data=f"userbot:user:{internal_uid}:message")])
+        admin_kb = InlineKeyboardMarkup(rows) if rows else None
+
+        try:
+            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+            await admin_bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_text,
+                reply_markup=admin_kb,
+            )
+        except Exception as e:
+            logger.warning("Failed to forward direct admin message reply (tg=%s): %s", user_id, e)
+            await update.message.reply_text(
+                "❌ ارسال پیام با خطا مواجه شد. لطفا دوباره تلاش کنید.",
+                reply_markup=_main_menu_keyboard(),
+            )
+            return
+
+        set_user_step(context, user_id, None)
+        await update.message.reply_text(
+            "✅ پیام شما با موفقیت برای پشتیبانی ارسال شد\n⏳ در سریع‌ترین زمان ممکن پاسخگو خواهیم بود.",
+            reply_markup=_main_menu_keyboard(),
+        )
+        return
 
     if step == "WAIT_TICKET_TITLE":
         if _is_back_or_cancel_text(text):

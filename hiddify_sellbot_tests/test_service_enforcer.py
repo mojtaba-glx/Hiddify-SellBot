@@ -10,15 +10,31 @@ class TestServiceEnforcer(unittest.IsolatedAsyncioTestCase):
             "disable_calls": [],
             "set_active": [],
         }
+        state = {"u1": True, "u2": True}
+        usage = {"u1": 6, "u2": 5}
 
         async def fake_get_user_by_uuid(server, user_uuid):
-            if user_uuid == "u1":
-                return {"current_usage_GB": 6, "start_date": "2026-02-01", "package_days": 30}
-            return {"current_usage_GB": 5, "start_date": "2026-02-01", "package_days": 30}
+            return {
+                "current_usage_GB": usage.get(user_uuid, 0),
+                "start_date": "2026-02-01",
+                "package_days": 30,
+                "is_active": state.get(user_uuid, True),
+            }
 
         async def fake_patch_user(server, user_uuid, payload):
             calls["disable_calls"].append((server["id"], user_uuid, payload))
-            return {}
+            mode = str(payload.get("mode") or "").strip().lower()
+            status = str(payload.get("status") or "").strip().lower()
+            is_active = payload.get("is_active")
+            should_disable = (
+                is_active in (False, 0, "0", "false", "False")
+                or mode == "disable"
+                or status == "disable"
+            )
+            if should_disable and user_uuid in state:
+                state[user_uuid] = False
+                return {"is_active": False}
+            return {"is_active": state.get(user_uuid, True)}
 
         orig_get_services = service_enforcer.userbot_db.get_services_for_enforcement
         orig_get_mappings = service_enforcer.userbot_db.get_service_nodes

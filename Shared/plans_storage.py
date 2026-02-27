@@ -29,6 +29,13 @@ _PLANS_FILE = Path(__file__).with_name("plans.json")
 # ------------------ IO کمکی ------------------
 
 
+def _resolve_display_mode(block: Dict[str, Any]) -> str:
+    raw_mode = str(block.get("display_mode") or block.get("mode") or "").strip().lower()
+    if raw_mode in {"fixed", "dynamic", "mixed"}:
+        return raw_mode
+    return "dynamic"
+
+
 def _load_all_plans() -> Dict[str, Any]:
     if not _PLANS_FILE.exists():
         return {"servers": {}}
@@ -56,7 +63,10 @@ def _get_server_block(
     key = str(server_id)
     servers = data.setdefault("servers", {})
     if key in servers:
-        return servers[key]
+        block = servers[key]
+        if isinstance(block, dict):
+            block.setdefault("display_mode", _resolve_display_mode(block))
+        return block
     if not create:
         return None
 
@@ -78,7 +88,7 @@ def get_plan_display_mode(server_id: int) -> str:
     """fixed / dynamic / mixed (پیش‌فرض dynamic)"""
     data = _load_all_plans()
     block = _get_server_block(data, server_id, create=True)
-    return block.get("display_mode", "dynamic")
+    return _resolve_display_mode(block)
 
 
 def set_plan_display_mode(server_id: int, mode: str) -> None:

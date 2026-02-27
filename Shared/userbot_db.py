@@ -261,6 +261,16 @@ def init_db() -> None:
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS userbot_service_reminder_state (
+            service_id INTEGER PRIMARY KEY,
+            days_sent INTEGER DEFAULT 0,
+            usage_sent INTEGER DEFAULT 0,
+            updated_at TEXT
+        )
+        """
+    )
 
     cur.execute("""CREATE TABLE IF NOT EXISTS userbot_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER UNIQUE NOT NULL, user_id INTEGER,
@@ -1251,6 +1261,43 @@ def set_sub_reminder_value(name: str, value: int) -> Dict[str, Any]:
     return set_sub_reminder_settings(settings)
 
 
+def get_managed_sub_base_url() -> str:
+    """
+    Base URL for internal multi-server subscription links.
+    Empty value means fallback to automatic resolution/env.
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT value FROM userbot_settings WHERE key = 'managed_sub_base_url' LIMIT 1")
+        row = cur.fetchone()
+        if not row or row["value"] is None:
+            return ""
+        return str(row["value"]).strip().rstrip("/")
+    finally:
+        conn.close()
+
+
+def set_managed_sub_base_url(base_url: str) -> str:
+    init_db()
+    value = str(base_url or "").strip().rstrip("/")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO userbot_settings (key, value) VALUES ('managed_sub_base_url', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (value,),
+        )
+        conn.commit()
+        return value
+    finally:
+        conn.close()
+
+
 def get_trial_spec_settings() -> Dict[str, Any]:
     init_db()
     conn = _get_conn()
@@ -1854,6 +1901,7 @@ def delete_service(service_id: int) -> None:
         cur.execute("DELETE FROM userbot_service_nodes WHERE service_id = ?", (sid,))
         cur.execute("DELETE FROM userbot_sub_tokens WHERE service_id = ?", (sid,))
         cur.execute("DELETE FROM userbot_service_probe WHERE service_id = ?", (sid,))
+        cur.execute("DELETE FROM userbot_service_reminder_state WHERE service_id = ?", (sid,))
         cur.execute("DELETE FROM userbot_services WHERE id = ?", (sid,))
         conn.commit()
     finally:
@@ -1906,6 +1954,55 @@ def delete_services_by_panel_user(server_id: int, panel_user_uuid: str) -> int:
         for r in cur.fetchall():
             try:
                 service_ids.add(int(r["id"]))
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+    removed = 0
+    for service_id in service_ids:
+        try:
+            delete_service(service_id)
+            removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def delete_services_by_server(server_id: int) -> int:
+    """
+    حذف کامل سرویس‌های وابسته به یک سرور:
+    - سرویس‌هایی که server_id اصلی‌شان برابر باشد
+    - سرویس‌هایی که در نگاشت نودها (userbot_service_nodes) به این server_id وصل‌اند
+    خروجی: تعداد سرویس‌های حذف‌شده.
+    """
+    init_db()
+    sid = int(server_id or 0)
+    if sid <= 0:
+        return 0
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        service_ids: set[int] = set()
+
+        cur.execute(
+            "SELECT id FROM userbot_services WHERE server_id = ?",
+            (sid,),
+        )
+        for r in cur.fetchall():
+            try:
+                service_ids.add(int(r["id"]))
+            except Exception:
+                pass
+
+        cur.execute(
+            "SELECT DISTINCT service_id FROM userbot_service_nodes WHERE server_id = ?",
+            (sid,),
+        )
+        for r in cur.fetchall():
+            try:
+                service_ids.add(int(r["service_id"]))
             except Exception:
                 pass
     finally:
@@ -2082,13 +2179,127 @@ def get_services_for_enforcement() -> List[Dict[str, Any]]:
     try:
         cur.execute(
             """
-            SELECT *
-            FROM userbot_services
-            ORDER BY id ASC
+            SELECT s.*
+            FROM userbot_services s
+            WHERE (
+                EXISTS (
+                    SELECT 1
+                    FROM userbot_service_nodes n
+                    WHERE n.service_id = s.id
+                      AND COALESCE(n.is_active, 1) = 1
+                )
+                OR (
+                    COALESCE(s.usage_limit, 0) > 0
+                    AND COALESCE(s.usage_current, 0) >= COALESCE(s.usage_limit, 0)
+                )
+                OR COALESCE(s.days_left, 0) < 0
+            )
+            ORDER BY
+                CASE
+                    WHEN COALESCE(s.usage_limit, 0) > 0
+                         AND COALESCE(s.usage_current, 0) >= COALESCE(s.usage_limit, 0)
+                    THEN 0
+                    WHEN COALESCE(s.days_left, 0) < 0
+                    THEN 1
+                    ELSE 2
+                END,
+                s.id DESC
             """
         )
         rows = cur.fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_services_for_reminder() -> List[Dict[str, Any]]:
+    """
+    سرویس‌ها به همراه شناسه تلگرام کاربر، برای ارسال یادآور تمدید.
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT s.*, u.telegram_id, u.username, u.full_name
+            FROM userbot_services s
+            JOIN userbot_users u ON u.id = s.user_id
+            WHERE u.telegram_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM userbot_service_nodes n
+                WHERE n.service_id = s.id
+                  AND COALESCE(n.is_active, 1) = 1
+              )
+            ORDER BY s.id DESC
+            """
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_service_reminder_state(service_id: int) -> Dict[str, Any]:
+    init_db()
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return {"days_sent": -1, "usage_sent": -1}
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT days_sent, usage_sent
+            FROM userbot_service_reminder_state
+            WHERE service_id = ?
+            LIMIT 1
+            """,
+            (sid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"days_sent": -1, "usage_sent": -1}
+        return {
+            "days_sent": int(row["days_sent"] if row["days_sent"] is not None else -1),
+            "usage_sent": int(row["usage_sent"] if row["usage_sent"] is not None else -1),
+        }
+    finally:
+        conn.close()
+
+
+def set_service_reminder_state(
+    service_id: int,
+    *,
+    days_sent: Optional[int] = None,
+    usage_sent: Optional[int] = None,
+) -> None:
+    init_db()
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+    current = get_service_reminder_state(sid)
+    d_val = int(days_sent) if days_sent is not None else int(current.get("days_sent", -1))
+    u_val = int(usage_sent) if usage_sent is not None else int(current.get("usage_sent", -1))
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO userbot_service_reminder_state (service_id, days_sent, usage_sent, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(service_id) DO UPDATE SET
+                days_sent = excluded.days_sent,
+                usage_sent = excluded.usage_sent,
+                updated_at = excluded.updated_at
+            """,
+            (sid, d_val, u_val, now),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -2230,6 +2441,37 @@ def set_service_nodes_active(service_id: int, is_active: int) -> None:
             WHERE service_id = ?
             """,
             (int(bool(is_active)), now, int(service_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_service_node_active(
+    service_id: int,
+    server_id: int,
+    panel_user_uuid: str,
+    is_active: int,
+) -> None:
+    init_db()
+    sid = int(service_id or 0)
+    srv = int(server_id or 0)
+    uuid = str(panel_user_uuid or "").strip()
+    if sid <= 0 or srv <= 0 or not uuid:
+        return
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE userbot_service_nodes
+            SET is_active = ?, updated_at = ?
+            WHERE service_id = ?
+              AND server_id = ?
+              AND (panel_user_uuid = ? OR panel_user_id = ?)
+            """,
+            (int(bool(is_active)), now, sid, srv, uuid, uuid),
         )
         conn.commit()
     finally:

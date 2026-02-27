@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+from html import escape
 
 from telegram import (
     Update,
@@ -174,15 +175,8 @@ def _build_node_edit_text(server_id: int, node: Dict[str, Any]) -> str:
     target_sid = int(node.get("target_server_id") or 0)
     child = database.get_server_by_id(target_sid) if target_sid > 0 else None
     panel_url = (child or {}).get("panel_url") or ""
-    panel_host = "—"
-    if panel_url:
-        try:
-            panel_host = urlparse(panel_url).hostname or panel_url
-        except Exception:
-            panel_host = panel_url
-    user_proxy = (child or {}).get("user_proxy_path") or "—"
-    admin_proxy = (child or {}).get("admin_proxy_path") or "—"
-    admin_uuid = (child or {}).get("admin_uuid") or "—"
+    admin_proxy = (child or {}).get("admin_proxy_path") or ""
+    admin_uuid = (child or {}).get("admin_uuid") or ""
     users_limit = (child or {}).get("users_limit")
     users_limit_text = str(users_limit) if users_limit not in (None, "") else "—"
     domains = (child or {}).get("domains") or []
@@ -194,18 +188,48 @@ def _build_node_edit_text(server_id: int, node: Dict[str, Any]) -> str:
         else:
             domain = str(first)
 
+    def _to_clickable_url(raw: Any) -> str:
+        value = str(raw or "").strip()
+        if not value or value == "—":
+            return ""
+        if value.startswith("http://") or value.startswith("https://"):
+            return value
+        return f"https://{value}"
+
+    def _safe_text(raw: Any, fallback: str = "—") -> str:
+        value = str(raw if raw not in (None, "") else fallback)
+        return escape(value)
+
+    panel_link = _to_clickable_url(panel_url)
+    server_panel_link = ""
+    if panel_link:
+        base = panel_link.rstrip("/")
+        ap = str(admin_proxy or "").strip().strip("/")
+        au = str(admin_uuid or "").strip().strip("/")
+        if ap and au:
+            server_panel_link = f"{base}/{ap}/{au}/"
+        elif ap:
+            server_panel_link = f"{base}/{ap}/"
+        else:
+            server_panel_link = base
+    server_title = _safe_text(node.get("title") or "—")
+    if server_panel_link:
+        server_line = f'🖥 سرور: <a href="{escape(server_panel_link, quote=True)}">{server_title}</a>'
+    else:
+        server_line = f"🖥 سرور: {server_title}"
+    node_id_text = f"\u200e{int(node.get('id') or 0)}\u200e"
+    server_id_text = f"\u200e{target_sid or '—'}\u200e"
+    domain_text = str(domain or "").strip().rstrip("/") or "—"
+    panel_text = str(panel_url or "").strip().rstrip("/") or "—"
+
     return (
         "✏️ ویرایش نود\n"
-        "❖ • -------------------------- • ❖\n"
-        f"🧩 عنوان: {node.get('title') or '—'}\n"
-        f"🌐 میزبان: {node.get('host') or '—'}\n"
-        f"🆔 نود: {int(node.get('id') or 0)} | 🗄 سرور: {target_sid or '—'}\n"
-        f"🔗 دامنه ساب: {domain}\n"
-        f"📡 پنل: {panel_host}\n"
-        f"🔐 کاربر: {user_proxy}\n"
-        f"🔐 ادمین: {admin_proxy}\n"
-        f"🔑 UUID: {admin_uuid}\n"
-        f"👤 محدودیت: {users_limit_text}\n\n"
+        "❖⬩──────────────⬩❖\n"
+        f"{server_line}\n"
+        f"🗄️ سرور: {escape(server_id_text)} | 🆔 نود: {escape(node_id_text)}\n"
+        f"🔗 دامنه ساب: {_safe_text(domain_text)}\n"
+        f"📡 آدرس پنل: {_safe_text(panel_text)}\n"
+        f"👤 محدودیت کاربران: {_safe_text(users_limit_text)}\n\n"
         "فیلد موردنظر را انتخاب کنید:"
     )
 
@@ -243,9 +267,20 @@ async def send_node_edit_menu(
     text = _build_node_edit_text(server_id, node)
     kb = _build_node_edit_keyboard(server_id, node_id)
     if message is not None:
-        await message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+        await message.edit_text(
+            text,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+            parse_mode="HTML",
+        )
     else:
-        await context.bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
+        await context.bot.send_message(
+            chat_id,
+            text,
+            reply_markup=kb,
+            disable_web_page_preview=True,
+            parse_mode="HTML",
+        )
 
 
 # ===============================

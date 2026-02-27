@@ -27,7 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, userbot_db
+from Shared import database, hiddify_api, userbot_db, plans_storage
 from AdminBot.keyboards import (
     admin_main_keyboard,
     BTN_SERVERS,
@@ -88,6 +88,11 @@ from AdminBot.userbot import (
 
 load_dotenv()
 SUB_BOT_USERNAME = os.getenv("SUB_BOT_USERNAME", "")
+PANEL_PREREQ_SCRIPT_URL = (
+    os.getenv("PANEL_PREREQ_SCRIPT_URL", "")
+    or "https://raw.githubusercontent.com/mojtaba-glx/Hiddify-Panel-Prereq/main/install.sh"
+).strip()
+SERVER_DISPLAY_VERSION = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,12").strip()
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +143,39 @@ def _server_title(server: Dict[str, Any]) -> str:
     if title:
         return title
     return f"server-{server.get('id', '?')}"
+
+
+def _format_server_location_title(title: str) -> str:
+    """
+    Normalize server title to look like: «لوکیشن 🇩🇪 آلمان»
+    while avoiding duplicate location word/flag.
+    """
+    raw = str(title or "").strip()
+    if not raw:
+        return "لوکیشن نامشخص"
+
+    flag = ""
+    if "ترکیه" in raw:
+        flag = "🇹🇷"
+    elif "آلمان" in raw:
+        flag = "🇩🇪"
+    elif "هلند" in raw:
+        flag = "🇳🇱"
+    elif "فنلاند" in raw:
+        flag = "🇫🇮"
+    elif "هند" in raw:
+        flag = "🇮🇳"
+
+    has_location_word = "لوکیشن" in raw
+    has_flag = bool(flag) and (flag in raw)
+    if has_location_word:
+        if has_flag:
+            return raw
+        return f"{raw} {flag}".strip()
+
+    if flag:
+        return f"لوکیشن {flag} {raw}".strip()
+    return f"لوکیشن {raw}".strip()
 
 
 def _build_full_backup_zip(
@@ -451,6 +489,154 @@ def _owner_button_title(owner: Dict[str, Any]) -> str:
     return str(telegram_id) if telegram_id is not None else "پروفایل کاربر"
 
 
+async def _resolve_panel_user_uuid(
+    server: Dict[str, Any],
+    server_id: int,
+    user_ref: Any,
+) -> str:
+    """
+    Resolve a stable panel UUID for user operations.
+    user_ref can be UUID or local/panel numeric ID.
+    """
+    ref = str(user_ref or "").strip()
+    if not ref:
+        return ref
+
+    try:
+        data = await hiddify_api.get_user_by_uuid(server, ref)
+        resolved = str((data or {}).get("uuid") or ref).strip()
+        if resolved:
+            return resolved
+    except Exception:
+        pass
+
+    try:
+        local_id = int(ref)
+    except (TypeError, ValueError):
+        local_id = None
+
+    if local_id is not None:
+        try:
+            local_user = database.get_user(server_id, local_id) or {}
+        except Exception:
+            local_user = {}
+        local_uuid = str(local_user.get("uuid") or "").strip()
+        if local_uuid:
+            return local_uuid
+
+    try:
+        users = await hiddify_api.list_users(server)
+        for u in users or []:
+            if str(u.get("id") or "").strip() == ref:
+                found_uuid = str(u.get("uuid") or "").strip()
+                if found_uuid:
+                    return found_uuid
+    except Exception:
+        pass
+
+    return ref
+
+
+async def _set_user_active_state_on_related_servers(
+    server_id: int,
+    user_uuid: str,
+    *,
+    active: bool,
+) -> tuple[str, int, int, List[str]]:
+    """
+    Enable/disable user on full related cluster (main + nodes).
+    Returns: (resolved_uuid, changed_count, total_targets, failed_titles)
+    """
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return str(user_uuid or "").strip(), 0, 0, ["سرور اصلی پیدا نشد"]
+
+    resolved_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
+    targets = _get_related_server_targets(server_id)
+    if not targets:
+        targets = [server]
+
+    changed = 0
+    failed: List[str] = []
+    for target in targets:
+        try:
+            tid = int(target.get("id") or 0)
+        except (TypeError, ValueError):
+            tid = 0
+        title = (target.get("title") or f"سرور #{tid or '?'}").strip()
+        try:
+            if active:
+                await hiddify_api.enable_user(target, resolved_uuid)
+            else:
+                await hiddify_api.disable_user(target, resolved_uuid)
+            changed += 1
+        except Exception as e:
+            logger.warning(
+                "Failed setting active=%s for user_uuid=%s on server_id=%s (%s): %s",
+                active,
+                resolved_uuid,
+                tid,
+                title,
+                e,
+            )
+            failed.append(title)
+
+    return resolved_uuid, changed, len(targets), failed
+
+
+async def _patch_user_on_related_servers(
+    server_id: int,
+    user_uuid: str,
+    patch_data: Dict[str, Any],
+) -> tuple[str, int, int, List[str]]:
+    """
+    Apply patch_user on full related cluster (main + nodes).
+    Returns: (resolved_uuid, changed_count, total_targets, failed_titles)
+    """
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return str(user_uuid or "").strip(), 0, 0, ["سرور اصلی پیدا نشد"]
+
+    resolved_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
+    targets = _get_related_server_targets(server_id)
+    if not targets:
+        targets = [server]
+
+    changed = 0
+    failed: List[str] = []
+    for target in targets:
+        try:
+            tid = int(target.get("id") or 0)
+        except (TypeError, ValueError):
+            tid = 0
+        title = (target.get("title") or f"سرور #{tid or '?'}").strip()
+
+        target_uuid = resolved_uuid
+        if tid > 0:
+            try:
+                target_uuid = await _resolve_panel_user_uuid(
+                    target, tid, resolved_uuid
+                )
+            except Exception:
+                target_uuid = resolved_uuid
+
+        try:
+            await hiddify_api.patch_user(target, target_uuid, patch_data)
+            changed += 1
+        except Exception as e:
+            logger.warning(
+                "Failed patching user on server_id=%s (%s), uuid=%s, patch=%s: %s",
+                tid,
+                title,
+                target_uuid,
+                patch_data,
+                e,
+            )
+            failed.append(title)
+
+    return resolved_uuid, changed, len(targets), failed
+
+
 def _to_float(value: Any) -> Optional[float]:
     try:
         if value is None:
@@ -472,6 +658,41 @@ def _to_bool(value: Any) -> Optional[bool]:
         if v in {"false", "0", "no", "off"}:
             return False
     return None
+
+
+def _panel_user_is_active(user_data: Dict[str, Any]) -> bool:
+    """
+    Detect active/disabled state from heterogeneous panel fields.
+    """
+    mode = str(user_data.get("mode") or "").strip().lower()
+    status = str(user_data.get("status") or "").strip().lower()
+
+    if mode in {"disable", "disabled", "inactive"}:
+        return False
+    if status in {"disable", "disabled", "inactive", "deactive", "off"}:
+        return False
+
+    explicit_false = False
+    explicit_true = False
+    for key in ("is_active", "active", "enabled", "enable"):
+        b = _to_bool(user_data.get(key))
+        if b is False:
+            explicit_false = True
+        elif b is True:
+            explicit_true = True
+
+    if explicit_false:
+        return False
+    if explicit_true:
+        return True
+
+    if mode in {"no_reset", "active", "enabled", "enable"}:
+        return True
+    if status in {"active", "enabled", "enable", "on"}:
+        return True
+
+    # default in panel is usually active unless explicitly disabled
+    return True
 
 
 # مثلا ۵ دقیقه؛ اگر خواستی مثل پنل دقیق‌تر بشه، همین عدد رو بعدا تنظیم می‌کنیم
@@ -776,24 +997,36 @@ async def send_servers_list(
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
 
 
-def build_server_detail_text(server: Dict[str, Any]) -> str:
+def build_server_detail_text(
+    server: Dict[str, Any],
+    *,
+    users_count_override: Optional[int] = None,
+    plans_count_override: Optional[int] = None,
+) -> str:
     title = server.get("title", f"سرور #{server.get('id')}")
     panel_url = (server.get("panel_url") or "").strip()
     admin_proxy = (server.get("admin_proxy_path") or "").strip().strip("/")
     admin_uuid = (server.get("admin_uuid") or server.get("api_key") or "").strip().strip("/")
+    server_id = int(server.get("id") or 0)
     users_limit = int(server.get("users_limit") or 0)
-    users_count = 0
-    plans_count = 0
-    try:
-        users_count = len(database.get_users(int(server.get("id") or 0)) or [])
-    except Exception:
-        users_count = len(server.get("users") or [])
-    try:
-        plans_count = len(database.get_plans(int(server.get("id") or 0)) or [])
-    except Exception:
-        plans_count = len(server.get("plans") or [])
+    users_count = int(users_count_override) if users_count_override is not None else 0
+    plans_count = int(plans_count_override) if plans_count_override is not None else 0
+    if users_count_override is None:
+        try:
+            users_count = len(database.get_users(server_id) or [])
+        except Exception:
+            users_count = len(server.get("users") or [])
+    if plans_count_override is None:
+        try:
+            mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
+            if mode == "dynamic":
+                plans_count = 0
+            else:
+                plans_count = len(plans_storage.get_plans(server_id) or [])
+        except Exception:
+            plans_count = 0
     priority = int(server.get("priority") or 0)
-    version = int(server.get("version") or 11)
+    version_text = SERVER_DISPLAY_VERSION or f"V{int(server.get('version') or 11)}"
     safe_title = escape(str(title))
 
     admin_panel_url = ""
@@ -817,7 +1050,32 @@ def build_server_detail_text(server: Dict[str, Any]) -> str:
         f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
         f"📋 تعداد پلن ها: {plans_count}\n"
         f"🟩 اولویت: {priority}\n"
-        f"📦 نسخه: {version}"
+        f"📦 نسخه: {escape(version_text)}"
+    )
+
+
+async def build_server_detail_text_live(server: Dict[str, Any]) -> str:
+    server_id = int(server.get("id") or 0)
+    users_count = 0
+    try:
+        users_count = len(await hiddify_api.list_users(server))
+    except Exception as e:
+        logger.warning("Failed reading users count from panel (server_id=%s): %s", server_id, e)
+        try:
+            users_count = len(database.get_users(server_id) or [])
+        except Exception:
+            users_count = len(server.get("users") or [])
+
+    try:
+        mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
+        plans_count = 0 if mode == "dynamic" else len(plans_storage.get_plans(server_id) or [])
+    except Exception:
+        plans_count = 0
+
+    return build_server_detail_text(
+        server,
+        users_count_override=users_count,
+        plans_count_override=plans_count,
     )
 
 
@@ -1427,7 +1685,7 @@ async def send_expired_user_detail(
         source,
         user_name_link=user_link,
     )
-    keyboard = build_expired_user_detail_keyboard(server_id, user_uuid, owner=owner)
+    keyboard = build_expired_user_detail_keyboard(server_id, panel_user_uuid, owner=owner)
     if message is not None:
         try:
             await message.edit_text(
@@ -1498,30 +1756,31 @@ async def send_user_detail(
         user_name_link=user_link,
     )
 
+    action_user_uuid = panel_user_uuid
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
                     "کانفیگ ها📄",
-                    callback_data=f"server:{server_id}:usercfg:{user_uuid}",
+                    callback_data=f"server:{server_id}:usercfg:{action_user_uuid}",
                 )
             ],
             [
                 InlineKeyboardButton(
                     "ویرایش کاربر✏️",
-                    callback_data=f"server:{server_id}:useredit:{user_uuid}",
+                    callback_data=f"server:{server_id}:useredit:{action_user_uuid}",
                 )
             ],
             [
                 InlineKeyboardButton(
                     "تمدید اشتراک♾️",
-                    callback_data=f"server:{server_id}:userextend:{user_uuid}",
+                    callback_data=f"server:{server_id}:userextend:{action_user_uuid}",
                 )
             ],
             [
                 InlineKeyboardButton(
                     "حذف کاربر🗑️",
-                    callback_data=f"server:{server_id}:userdel:{user_uuid}",
+                    callback_data=f"server:{server_id}:userdel:{action_user_uuid}",
                 )
             ],
             [
@@ -1576,74 +1835,83 @@ async def send_user_configs_menu(
         return
 
     user_data = None
+    source = "api"
     try:
         user_data = await hiddify_api.get_user_by_uuid(server, user_uuid)
     except hiddify_api.HiddifyApiError:
+        source = "local"
         try:
             local_id = int(user_uuid)
         except ValueError:
             local_id = None
         if local_id is not None:
             user_data = database.get_user(server_id, local_id)
+    user_data = dict(user_data or {})
+    if not user_data.get("uuid"):
+        user_data["uuid"] = user_uuid
+    if not user_data.get("name") and not user_data.get("username"):
+        user_data["name"] = f"User_{user_uuid}"
 
-    name = (user_data or {}).get("name") or (user_data or {}).get(
-        "username"
-    ) or f"User_{user_uuid}"
+    # نمایش عنوان سرور با قالب «لوکیشن 🇩🇪 آلمان»
+    server_for_display = dict(server)
+    server_for_display["title"] = _format_server_location_title(server.get("title") or "")
 
-    text = (
-        f"کانفیگ ها 📄\n"
-        f"کاربر: {name}\n"
-        "━━━━━━━━━━━━━━\n"
-        "یکی از گزینه‌های زیر را برای دریافت کانفیگ / لینک اشتراک انتخاب کنید:"
+    # لینک پنل کاربر پشت اسم نمایش داده شود.
+    user_name_link = _build_user_base_url(server, user_uuid)
+    text = build_user_detail_html_text(
+        server_for_display,
+        user_data,
+        source=source,
+        user_name_link=user_name_link,
     )
 
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "کانفیگ مستقیم📄",
+                    "📄 کانفیگ مستقیم",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:direct",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "لینک اشتراک خودکار🔗",
+                    "🔗 لینک اشتراک خودکار",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:auto_sub",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "لینک اشتراک🔗",
+                    "🔗 لینک اشتراک",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "لینک اشتراک b64🔗",
+                    "🔗 لینک اشتراک b64",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub_b64",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "Multi Server🌐",
+                    "Multi Server 🌐",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "Multi Server b64🌐",
+                    "Multi Server b64 🌐",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi_b64",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "لینک اتصال اشتراک به ربات🤖",
+                    "🤖 لینک اتصال اشتراک به ربات",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:bot_link",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    "🔙 بازگشت",
                     callback_data=f"server:{server_id}:useruuid:{user_uuid}",
                 )
             ],
@@ -1651,9 +1919,20 @@ async def send_user_configs_menu(
     )
 
     if message is not None and message.text:
-        await message.edit_text(text, reply_markup=keyboard)
+        await message.edit_text(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
     else:
-        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 async def send_direct_config_menu(
@@ -1683,29 +1962,35 @@ async def send_direct_config_menu(
     ) or f"User_{user_uuid}"
 
     text = (
-        f"کانفیگ مستقیم 📄\n"
-        f"کاربر: {name}\n"
+        "📄 کانفیگ مستقیم\n"
+        f"👤 کاربر: {name}\n"
         "━━━━━━━━━━━━━━\n"
-        "یکی از گزینه‌های زیر را انتخاب کنید:"
+        "پروتکل موردنظر را انتخاب کنید:"
     )
 
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "Vless",
+                    "🟢 VLESS",
                     callback_data=f"server:{server_id}:directcfg:{user_uuid}:vless",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "Vmess",
+                    "🔵 VMESS",
                     callback_data=f"server:{server_id}:directcfg:{user_uuid}:vmess",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    "🟠 TROJAN",
+                    callback_data=f"server:{server_id}:directcfg:{user_uuid}:trojan",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔙 بازگشت",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}",
                 )
             ],
@@ -1852,8 +2137,9 @@ async def apply_plan_to_user(
     if gb:
         patch_data["usage_limit_GB"] = float(gb)
 
+    target_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
     try:
-        await hiddify_api.patch_user(server, user_uuid, patch_data)
+        await hiddify_api.patch_user(server, target_user_uuid, patch_data)
     except Exception as e:
         await context.bot.send_message(
             chat_id, f"❌ خطا در اعمال پلن روی کاربر:\n{e}"
@@ -1864,7 +2150,7 @@ async def apply_plan_to_user(
         chat_id,
         "✅ اشتراک کاربر با موفقیت بر اساس پلن انتخاب‌شده تمدید شد.",
     )
-    await send_user_detail(server_id, user_uuid, chat_id, context)
+    await send_user_detail(server_id, target_user_uuid, chat_id, context)
 
 
 # ===============================
@@ -1911,12 +2197,15 @@ async def send_user_edit_menu(
 
     text = build_user_detail_text(server, user_data, source)
 
+    is_active_now = _panel_user_is_active(user_data if isinstance(user_data, dict) else {})
+    toggle_label = "کاربر فعال 🟢" if is_active_now else "کاربر غیرفعال 🔴"
+
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "ویرایش نام👤",
-                    callback_data=f"ued:{server_id}:{user_uuid}:name",
+                    toggle_label,
+                    callback_data=f"ued:{server_id}:{user_uuid}:toggle_active",
                 )
             ],
             [
@@ -1947,8 +2236,8 @@ async def send_user_edit_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "به‌روزرسانی پیام🔄",
-                    callback_data=f"ued:{server_id}:{user_uuid}:refresh",
+                    "تغییرنام اشتراک✏️",
+                    callback_data=f"ued:{server_id}:{user_uuid}:rename_sub",
                 )
             ],
             [
@@ -2011,15 +2300,120 @@ async def send_search_menu(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
-    text = (
-        "🔎 بخش جستجوی کاربران\n"
-        "یکی از گزینه‌های زیر را انتخاب کنید:"
-    )
+    # متن کوتاه برای جلوگیری از ارسال حباب خالی (فقط ساعت).
+    text = "🔍 جستجوی کاربر"
     kb = build_search_menu_keyboard()
     if message is not None:
         await message.edit_text(text, reply_markup=kb)
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+
+
+SEARCH_RESULTS_COLUMNS = 3
+SEARCH_RESULTS_ROWS = 7
+SEARCH_RESULTS_PAGE_SIZE = SEARCH_RESULTS_COLUMNS * SEARCH_RESULTS_ROWS
+
+
+def _smart_status_emoji(status: str) -> str:
+    s = str(status or "").strip().lower()
+    if s == "online":
+        return "🔵"
+    if s == "expired":
+        return "🔴"
+    return "🟡"
+
+
+def _build_smart_search_results_keyboard(
+    results: List[Dict[str, Any]],
+    page: int,
+    total_pages: int,
+) -> InlineKeyboardMarkup:
+    start = (page - 1) * SEARCH_RESULTS_PAGE_SIZE
+    end = start + SEARCH_RESULTS_PAGE_SIZE
+    page_items = results[start:end]
+
+    rows: List[List[InlineKeyboardButton]] = []
+    page_buttons: List[InlineKeyboardButton] = []
+    for item in page_items:
+        name = str(item.get("name") or "").strip() or "کاربر"
+        name_short = name[:20]
+        emoji = _smart_status_emoji(str(item.get("status") or ""))
+        page_buttons.append(
+            InlineKeyboardButton(
+                f"{name_short}{emoji}",
+                callback_data=f"search:sel:{item['server_id']}:{item['user_uuid']}",
+            )
+        )
+
+    for i in range(0, len(page_buttons), SEARCH_RESULTS_COLUMNS):
+        chunk = page_buttons[i:i + SEARCH_RESULTS_COLUMNS]
+        rows.append(list(reversed(chunk)))
+
+    if total_pages > 1:
+        nav: List[InlineKeyboardButton] = []
+        if page > 1:
+            nav.append(
+                InlineKeyboardButton(
+                    "➡️",
+                    callback_data=f"search:page:{page - 1}",
+                )
+            )
+        nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav.append(
+                InlineKeyboardButton(
+                    "⬅️",
+                    callback_data=f"search:page:{page + 1}",
+                )
+            )
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton("بازگشت🔙", callback_data="search:back")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_smart_search_results_page(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    page: int = 1,
+    message=None,
+) -> None:
+    results = context.user_data.get("smart_search_results") or []
+    if not results:
+        text = "❌ نتیجه جستجو در دسترس نیست."
+        if message is not None:
+            await message.edit_text(text)
+        else:
+            await context.bot.send_message(chat_id, text)
+        return
+
+    total = len(results)
+    total_pages = max(1, (total + SEARCH_RESULTS_PAGE_SIZE - 1) // SEARCH_RESULTS_PAGE_SIZE)
+    if page < 1:
+        page = 1
+    if page > total_pages:
+        page = total_pages
+
+    online_count = sum(1 for r in results if str(r.get("status") or "").lower() == "online")
+    expired_count = sum(1 for r in results if str(r.get("status") or "").lower() == "expired")
+    offline_count = max(0, total - online_count - expired_count)
+
+    text = (
+        "[📥 نتیجه جستجو]\n"
+        "#️⃣ لیست کاربران\n"
+        "شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
+        f"👤 تعداد کاربران: {total}\n"
+        f"🔵 کاربران آنلاین: {online_count}\n"
+        f"🟡 کاربران آفلاین: {offline_count}\n"
+        f"🔴 کاربران منقضی: {expired_count}"
+    )
+    kb = _build_smart_search_results_keyboard(results, page, total_pages)
+
+    if message is not None:
+        await message.edit_text(text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
 
 
 async def _list_server_users_fast(server: Dict[str, Any], timeout_sec: float = 4.5) -> List[Dict[str, Any]]:
@@ -2539,7 +2933,7 @@ async def handle_edit_server_flow(
     # بازگشت به منوی جزئیات سرور
     server = database.get_server_by_id(server_id)
     if server:
-        text_detail = build_server_detail_text(server)
+        text_detail = await build_server_detail_text_live(server)
         kb = build_server_detail_keyboard(server_id)
         await message.reply_text(
             text_detail,
@@ -2564,7 +2958,7 @@ async def send_server_edit_menu(
             await context.bot.send_message(chat_id, text)
         return
 
-    text = build_server_detail_text(server)
+    text = await build_server_detail_text_live(server)
 
     kb = InlineKeyboardMarkup(
         [
@@ -2938,50 +3332,106 @@ async def handle_edit_user_flow(
         context.user_data.pop("state", None)
         return
 
+    target_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
+
     try:
         if state == EDIT_STATE_NAME:
             new_name = text
-            await hiddify_api.patch_user(server, user_uuid, {"name": new_name})
-            await message.reply_text(f"✅ نام کاربر به «{new_name}» بروزرسانی شد.")
+            target_user_uuid, changed, total, failed = await _patch_user_on_related_servers(
+                server_id,
+                target_user_uuid,
+                {"name": new_name},
+            )
+            if changed <= 0:
+                detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                await message.reply_text(f"❌ تغییر نام اشتراک انجام نشد.{detail}")
+                context.user_data.pop("state", None)
+                await send_user_edit_menu(server_id, target_user_uuid, message.chat_id, context)
+                return
+            try:
+                owner = userbot_db.get_service_owner_by_panel_uuid(str(target_user_uuid))
+                local_service_id = int((owner or {}).get("service_id") or 0)
+                if local_service_id > 0:
+                    userbot_db.update_service_name(local_service_id, new_name)
+            except Exception as sync_err:
+                logger.warning(
+                    "Failed syncing service name to userbot_services (server_id=%s, user_uuid=%s): %s",
+                    server_id,
+                    user_uuid,
+                    sync_err,
+                )
+            success_text = f"✅ نام اشتراک به «{new_name}» بروزرسانی شد."
+            if failed:
+                success_text += f"\n⚠️ روی {changed} از {total} سرور اعمال شد."
+            await message.reply_text(success_text)
 
         elif state == EDIT_STATE_USAGE:
             usage_gb = float(text.replace(",", "."))
             if usage_gb < 0:
                 raise ValueError
-            await hiddify_api.patch_user(
-                server, user_uuid, {"usage_limit_GB": usage_gb}
+            target_user_uuid, changed, total, failed = await _patch_user_on_related_servers(
+                server_id,
+                target_user_uuid,
+                {"usage_limit_GB": usage_gb},
             )
-            await message.reply_text(
-                f"✅ محدودیت حجم کاربر روی {format_gb(usage_gb)} گیگابایت تنظیم شد."
-            )
+            if changed <= 0:
+                detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                await message.reply_text(f"❌ تنظیم حجم کاربر انجام نشد.{detail}")
+                context.user_data.pop("state", None)
+                await send_user_edit_menu(server_id, target_user_uuid, message.chat_id, context)
+                return
+            success_text = f"✅ محدودیت حجم کاربر روی {format_gb(usage_gb)} گیگابایت تنظیم شد."
+            if failed:
+                success_text += f"\n⚠️ روی {changed} از {total} سرور اعمال شد."
+            await message.reply_text(success_text)
 
         elif state == EDIT_STATE_DAYS:
             days = int(text)
             if days <= 0:
                 raise ValueError
             today_str = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
-            await hiddify_api.patch_user(
-                server,
-                user_uuid,
+            target_user_uuid, changed, total, failed = await _patch_user_on_related_servers(
+                server_id,
+                target_user_uuid,
                 {"package_days": days, "start_date": today_str},
             )
-            await message.reply_text(
-                f"✅ مدت اشتراک روی {days} روز از امروز تنظیم شد."
-            )
+            if changed <= 0:
+                detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                await message.reply_text(f"❌ تنظیم مدت اشتراک انجام نشد.{detail}")
+                context.user_data.pop("state", None)
+                await send_user_edit_menu(server_id, target_user_uuid, message.chat_id, context)
+                return
+            success_text = f"✅ مدت اشتراک روی {days} روز از امروز تنظیم شد."
+            if failed:
+                success_text += f"\n⚠️ روی {changed} از {total} سرور اعمال شد."
+            await message.reply_text(success_text)
 
         elif state == EDIT_STATE_COMMENT:
             comment = text
-            await hiddify_api.patch_user(server, user_uuid, {"comment": comment})
+            target_user_uuid, changed, total, failed = await _patch_user_on_related_servers(
+                server_id,
+                target_user_uuid,
+                {"comment": comment},
+            )
+            if changed <= 0:
+                detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                await message.reply_text(f"❌ بروزرسانی یادداشت انجام نشد.{detail}")
+                context.user_data.pop("state", None)
+                await send_user_edit_menu(server_id, target_user_uuid, message.chat_id, context)
+                return
             try:
-                userbot_db.update_service_note_by_panel_user(server_id, str(user_uuid), comment)
+                userbot_db.update_service_note_by_panel_user(server_id, str(target_user_uuid), comment)
             except Exception as e:
                 logger.warning(
                     "Failed syncing note to userbot_services (server_id=%s, user_uuid=%s): %s",
                     server_id,
-                    user_uuid,
+                    target_user_uuid,
                     e,
                 )
-            await message.reply_text("✅ یادداشت کاربر بروزرسانی شد.")
+            success_text = "✅ یادداشت کاربر بروزرسانی شد."
+            if failed:
+                success_text += f"\n⚠️ روی {changed} از {total} سرور اعمال شد."
+            await message.reply_text(success_text)
 
         else:
             await message.reply_text("❌ حالت ویرایش نامعتبر است.")
@@ -2991,7 +3441,7 @@ async def handle_edit_user_flow(
         await message.reply_text(f"❌ خطا در بروزرسانی کاربر:\n{e}")
 
     context.user_data.pop("state", None)
-    await send_user_edit_menu(server_id, user_uuid, message.chat_id, context)
+    await send_user_edit_menu(server_id, target_user_uuid, message.chat_id, context)
 
 
 # ===============================
@@ -3009,6 +3459,7 @@ async def handle_smart_search_input(
     if _is_cancel_text(text):
         context.user_data.pop("state", None)
         context.user_data.pop("search_scope", None)
+        context.user_data.pop("smart_search_results", None)
         await message.reply_text(
             "❌ جستجو لغو شد.", reply_markup=admin_main_keyboard()
         )
@@ -3066,51 +3517,16 @@ async def handle_smart_search_input(
     context.user_data.pop("state", None)
 
     if not results:
+        context.user_data.pop("smart_search_results", None)
         await message.reply_text(
             "❌ کاربر یافت نشد.",
             reply_markup=admin_main_keyboard(),
         )
         return
 
-    keyboard_rows: List[List[InlineKeyboardButton]] = []
-    result_buttons: List[InlineKeyboardButton] = []
-    online_count = 0
-    lines = [
-        "#️⃣کاربران",
-        "شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید",
-        f"👤 تعداد کاربران: {len(results)}",
-        "",
-    ]
-
-    for r in results:
-        status = r["status"]
-        if status == "online":
-            emoji = "🔵"
-            online_count += 1
-        elif status == "expired":
-            emoji = "🟡"
-        else:
-            emoji = "🟢"
-        result_buttons.append(
-            InlineKeyboardButton(
-                f"{emoji} {r['name']}",
-                callback_data=f"search:sel:{r['server_id']}:{r['user_uuid']}",
-            )
-        )
-
-    # نمایش تک‌ستونی مطابق UI درخواستی
-    for btn in result_buttons:
-        keyboard_rows.append([btn])
-
-    lines.insert(3, f"🔵 کاربران آنلاین: {online_count}")
-
-    keyboard_rows.append(
-        [InlineKeyboardButton("بازگشت🔙", callback_data="search:back")]
-    )
-
-    kb = InlineKeyboardMarkup(keyboard_rows)
+    context.user_data["smart_search_results"] = results
     await message.reply_text("✅ کاربر یافت شد", reply_markup=admin_main_keyboard())
-    await message.reply_text("\n".join(lines), reply_markup=kb)
+    await send_smart_search_results_page(message.chat_id, context, page=1)
 
 
 # ===============================
@@ -3188,9 +3604,12 @@ async def handle_server_inline_callback(
 
         if action == "smart":
             try:
-                await msg.edit_reply_markup(reply_markup=None)
+                await msg.delete()
             except Exception:
-                pass
+                try:
+                    await msg.edit_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
             context.user_data["state"] = SEARCH_SMART_INPUT
             await msg.reply_text(
                 "🔍 جستجوی هوشمند کاربر در کل ربات\n"
@@ -3286,7 +3705,7 @@ async def handle_server_inline_callback(
                 if hasattr(hiddify_api, "delete_user"):
                     await hiddify_api.delete_user(target, user_uuid)
                 else:
-                    await hiddify_api.patch_user(target, user_uuid, {"is_active": False})
+                    await hiddify_api.disable_user(target, user_uuid)
             except Exception as e:
                 failed_servers.append(f"{target_title}: {e}")
                 continue
@@ -3399,6 +3818,97 @@ async def handle_server_inline_callback(
             )
             return
 
+        if field == "activate":
+            server = database.get_server_by_id(server_id)
+            if not server:
+                await msg.edit_text("❌ سرور پیدا نشد.")
+                return
+            target_user_uuid, changed, total, failed = await _set_user_active_state_on_related_servers(
+                server_id,
+                user_uuid,
+                active=True,
+            )
+            if changed <= 0:
+                detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                await msg.edit_text(f"❌ فعال‌سازی کاربر انجام نشد.{detail}")
+                return
+            if failed:
+                try:
+                    await query.answer(
+                        f"⚠️ روی {changed} از {total} سرور فعال شد.",
+                        show_alert=False,
+                    )
+                except Exception:
+                    pass
+            await send_user_edit_menu(
+                server_id, target_user_uuid, chat_id, context, message=msg
+            )
+            return
+
+        if field == "deactivate":
+            server = database.get_server_by_id(server_id)
+            if not server:
+                await msg.edit_text("❌ سرور پیدا نشد.")
+                return
+            target_user_uuid, changed, total, failed = await _set_user_active_state_on_related_servers(
+                server_id,
+                user_uuid,
+                active=False,
+            )
+            if changed <= 0:
+                detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                await msg.edit_text(f"❌ غیرفعال‌سازی کاربر انجام نشد.{detail}")
+                return
+            if failed:
+                try:
+                    await query.answer(
+                        f"⚠️ روی {changed} از {total} سرور غیرفعال شد.",
+                        show_alert=False,
+                    )
+                except Exception:
+                    pass
+            await send_user_edit_menu(
+                server_id, target_user_uuid, chat_id, context, message=msg
+            )
+            return
+
+        if field == "toggle_active":
+            server = database.get_server_by_id(server_id)
+            if not server:
+                await msg.edit_text("❌ سرور پیدا نشد.")
+                return
+
+            target_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
+            try:
+                current = await hiddify_api.get_user_by_uuid(server, target_user_uuid)
+            except Exception:
+                current = {}
+
+            currently_active = _panel_user_is_active(current if isinstance(current, dict) else {})
+            target_user_uuid, changed, total, failed = await _set_user_active_state_on_related_servers(
+                server_id,
+                target_user_uuid,
+                active=(not currently_active),
+            )
+            if changed <= 0:
+                detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                await msg.edit_text(f"❌ تغییر وضعیت کاربر انجام نشد.{detail}")
+                return
+            if failed:
+                action_title = "فعال" if not currently_active else "غیرفعال"
+                try:
+                    await query.answer(
+                        f"⚠️ روی {changed} از {total} سرور {action_title} شد.",
+                        show_alert=False,
+                    )
+                except Exception:
+                    pass
+
+            await send_user_edit_menu(
+                server_id, target_user_uuid, chat_id, context, message=msg
+            )
+            return
+
         if field == "usage":
             set_edit_state(EDIT_STATE_USAGE)
             await msg.edit_text(
@@ -3423,25 +3933,39 @@ async def handle_server_inline_callback(
             )
             return
 
+        if field == "rename_sub":
+            set_edit_state(EDIT_STATE_NAME)
+            await msg.edit_text(
+                "✍️ لطفاً نام جدید اشتراک را ارسال کنید:",
+                reply_markup=cancel_kb,
+            )
+            return
+
         if field == "reset_usage":
             server = database.get_server_by_id(server_id)
             if not server:
                 await msg.edit_text("❌ سرور پیدا نشد.")
                 return
+            target_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
             now_str = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
             try:
-                await hiddify_api.patch_user(
-                    server,
-                    user_uuid,
+                target_user_uuid, changed, total, failed = await _patch_user_on_related_servers(
+                    server_id,
+                    target_user_uuid,
                     {"current_usage_GB": 0, "last_reset_time": now_str},
                 )
-                await msg.edit_text(
-                    "✅ حجم مصرفی کاربر به 0 گیگابایت بازنشانی شد."
-                )
+                if changed <= 0:
+                    detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                    await msg.edit_text(f"❌ بازنشانی حجم انجام نشد.{detail}")
+                else:
+                    success_text = "✅ حجم مصرفی کاربر به 0 گیگابایت بازنشانی شد."
+                    if failed:
+                        success_text += f"\n⚠️ روی {changed} از {total} سرور اعمال شد."
+                    await msg.edit_text(success_text)
             except Exception as e:
                 await msg.edit_text(f"❌ خطا در بازنشانی حجم:\n{e}")
             await send_user_edit_menu(
-                server_id, user_uuid, chat_id, context
+                server_id, target_user_uuid, chat_id, context
             )
             return
 
@@ -3450,8 +3974,9 @@ async def handle_server_inline_callback(
             if not server:
                 await msg.edit_text("❌ سرور پیدا نشد.")
                 return
+            target_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
             try:
-                user_data = await hiddify_api.get_user_by_uuid(server, user_uuid)
+                user_data = await hiddify_api.get_user_by_uuid(server, target_user_uuid)
                 package_days = user_data.get("package_days") or 0
                 if not package_days:
                     await msg.edit_text(
@@ -3459,18 +3984,23 @@ async def handle_server_inline_callback(
                     )
                 else:
                     now_str = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
-                    await hiddify_api.patch_user(
-                        server,
-                        user_uuid,
+                    target_user_uuid, changed, total, failed = await _patch_user_on_related_servers(
+                        server_id,
+                        target_user_uuid,
                         {"package_days": int(package_days), "start_date": now_str},
                     )
-                    await msg.edit_text(
-                        f"✅ مدت اشتراک کاربر با همان {int(package_days)} روز، از امروز بازنشانی شد."
-                    )
+                    if changed <= 0:
+                        detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+                        await msg.edit_text(f"❌ بازنشانی مدت انجام نشد.{detail}")
+                    else:
+                        success_text = f"✅ مدت اشتراک کاربر با همان {int(package_days)} روز، از امروز بازنشانی شد."
+                        if failed:
+                            success_text += f"\n⚠️ روی {changed} از {total} سرور اعمال شد."
+                        await msg.edit_text(success_text)
             except Exception as e:
                 await msg.edit_text(f"❌ خطا در بازنشانی مدت:\n{e}")
             await send_user_edit_menu(
-                server_id, user_uuid, chat_id, context
+                server_id, target_user_uuid, chat_id, context
             )
             return
 
@@ -3637,18 +4167,25 @@ async def handle_server_inline_callback(
         await query.answer()
 
         if data == "search:back":
-            try:
-                await msg.edit_reply_markup(reply_markup=None)
-            except Exception:
-                pass
-
-            await msg.reply_text(
-                "به منوی اصلی برگشتید.",
-                reply_markup=admin_main_keyboard(),
-            )
+            context.user_data.pop("smart_search_results", None)
+            await send_search_menu(chat_id=msg.chat_id, context=context, message=msg)
             return
 
         parts = data.split(":")
+        if len(parts) == 3 and parts[1] == "page":
+            try:
+                page = int(parts[2])
+            except ValueError:
+                await msg.edit_text("❌ شماره صفحه نامعتبر است.")
+                return
+            await send_smart_search_results_page(
+                chat_id=msg.chat_id,
+                context=context,
+                page=page,
+                message=msg,
+            )
+            return
+
         if len(parts) == 4 and parts[1] == "sel":
             try:
                 server_id = int(parts[2])
@@ -3794,7 +4331,7 @@ async def handle_server_inline_callback(
                 if not server:
                     await msg.edit_text("❌ سرور پیدا نشد.")
                     return
-                text = build_server_detail_text(server)
+                text = await build_server_detail_text_live(server)
                 kb = build_server_detail_keyboard(server_id)
                 await msg.edit_text(
                     text,
@@ -3806,12 +4343,25 @@ async def handle_server_inline_callback(
 
             if choice == "yes":
                 try:
+                    removed_services = 0
+                    try:
+                        removed_services = int(
+                            userbot_db.delete_services_by_server(server_id) or 0
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Failed deleting userbot services for server_id=%s during server delete: %s",
+                            server_id,
+                            cleanup_err,
+                        )
                     database.delete_server(server_id)
                 except Exception as e:
                     await msg.edit_text(f"❌ خطا در حذف سرور:\n{e}")
                     return
 
-                await msg.edit_text("✅ سرور با موفقیت حذف شد.")
+                await msg.edit_text(
+                    f"✅ سرور با موفقیت حذف شد.\n🧹 سرویس‌های پاک‌شده از دیتابیس ربات: {removed_services}"
+                )
                 await send_servers_list(chat_id, context)
                 return
 
@@ -3936,6 +4486,15 @@ async def handle_server_inline_callback(
             await msg.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
+        prereq_cmd = f'sudo bash -c "$(curl -fsSL {PANEL_PREREQ_SCRIPT_URL})" install'
+        await msg.reply_text(
+            "⚠️ قبل از اضافه کردن سرور، حتما اسکریپت پیش‌نیاز را روی همان سرور پنل هیدیفای نصب کنید:\n\n"
+            "```shell\n"
+            f"{prereq_cmd}\n"
+            "```",
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
         await msg.reply_text(
             "لطفاً عنوان سرور را وارد کنید:",
             reply_markup=cancel_keyboard(),
@@ -3955,7 +4514,7 @@ async def handle_server_inline_callback(
             if not server:
                 await msg.edit_text("❌ سرور پیدا نشد.")
                 return
-            text = build_server_detail_text(server)
+            text = await build_server_detail_text_live(server)
             kb = build_server_detail_keyboard(server_id)
             await msg.edit_text(
                 text,
@@ -4064,7 +4623,7 @@ async def handle_server_inline_callback(
                     [
                         [
                             InlineKeyboardButton(
-                                "بازگشت به منوی کانفیگ‌ها",
+                                "🔙 بازگشت به منوی کانفیگ‌ها",
                                 callback_data=f"server:{server_id}:usercfg:{user_uuid}",
                             )
                         ]
@@ -4106,31 +4665,41 @@ async def handle_server_inline_callback(
                 )
                 return
 
-            items = []
-            index = 1
+            links: List[str] = []
+            seen_links: set[str] = set()
             for cfg in configs or []:
-                c_proto = (cfg.get("protocol") or "").lower()
-                if c_proto != proto:
-                    continue
-
-                name = cfg.get("name") or f"Config {index}"
-                link = cfg.get("link") or ""
+                c_proto = str(cfg.get("protocol") or "").strip().lower()
+                link = str(cfg.get("link") or "").strip()
                 if not link:
                     continue
 
-                items.append({"idx": index, "name": name, "link": link})
-                index += 1
+                link_l = link.lower()
+                if not c_proto:
+                    if link_l.startswith("vless://"):
+                        c_proto = "vless"
+                    elif link_l.startswith("vmess://"):
+                        c_proto = "vmess"
+                    elif link_l.startswith("trojan://"):
+                        c_proto = "trojan"
 
-            if not items:
+                normalized = c_proto.replace("-", "").replace("_", "")
+                if proto not in normalized and not link_l.startswith(f"{proto}://"):
+                    continue
+                if link in seen_links:
+                    continue
+                seen_links.add(link)
+                links.append(link)
+
+            if not links:
                 text = (
-                    f"کانفیگ مستقیم {proto.upper()}\n"
+                    f"❌ کانفیگ مستقیم {proto.upper()} یافت نشد.\n"
                     "برای این کاربر هیچ کانفیگ مناسبی یافت نشد."
                 )
                 kb = InlineKeyboardMarkup(
                     [
                         [
                             InlineKeyboardButton(
-                                "بازگشت به منوی کانفیگ‌ها",
+                                "🔙 بازگشت به منوی کانفیگ‌ها",
                                 callback_data=f"server:{server_id}:usercfg:{user_uuid}",
                             )
                         ]
@@ -4139,44 +4708,74 @@ async def handle_server_inline_callback(
                 await msg.edit_text(text, reply_markup=kb)
                 return
 
-            cfg_key = f"cfg_{server_id}_{user_uuid}_{proto}"
-            context.user_data[cfg_key] = items
-
-            lines = [
-                f"کانفیگ مستقیم {proto.upper()}",
-                "برای مشاهده / کپی هر کانفیگ روی دکمه‌ی آن بزنید:",
-                "",
-            ]
-            for item in items:
-                lines.append(f"{item['idx']}. {item['name']}")
-
-            text = "\n".join(lines)
-
-            rows: List[List[InlineKeyboardButton]] = []
-            for item in items:
-                label = f"{item['idx']}️⃣ {item['name'][:40]}"
-                rows.append(
+            header = f"🔗 کانفیگ‌های {proto.upper()}"
+            all_links_text = "\n".join(links)
+            one_block_text = (
+                f"{header}\n"
+                "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
+                f"<pre><code class=\"language-shell\">{escape(all_links_text)}</code></pre>"
+            )
+            back_kb = InlineKeyboardMarkup(
+                [
                     [
                         InlineKeyboardButton(
-                            label,
-                            callback_data=(
-                                f"cfgsend:{server_id}:{user_uuid}:{proto}:{item['idx']}"
-                            ),
+                            "🔙 بازگشت به منوی کانفیگ‌ها",
+                            callback_data=f"server:{server_id}:usercfg:{user_uuid}",
                         )
                     ]
-                )
-
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        "بازگشت به منوی کانفیگ‌ها",
-                        callback_data=f"server:{server_id}:usercfg:{user_uuid}",
-                    )
                 ]
             )
 
-            keyboard = InlineKeyboardMarkup(rows)
-            await msg.edit_text(text, reply_markup=keyboard)
+            if len(one_block_text) <= 3900:
+                await msg.edit_text(
+                    one_block_text,
+                    reply_markup=back_kb,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            max_payload = 2800
+            chunks: List[List[str]] = []
+            cur: List[str] = []
+            cur_len = 0
+            for link in links:
+                add = len(link) + 1
+                if cur and (cur_len + add > max_payload):
+                    chunks.append(cur)
+                    cur = [link]
+                    cur_len = add
+                else:
+                    cur.append(link)
+                    cur_len += add
+            if cur:
+                chunks.append(cur)
+
+            for idx, chunk in enumerate(chunks, start=1):
+                part_header = (
+                    header
+                    if len(chunks) == 1
+                    else f"{header} ({idx}/{len(chunks)})"
+                )
+                part_text = (
+                    f"{part_header}\n"
+                    "برای کپی، باکس زیر را کپی کنید:\n"
+                    f"<pre><code class=\"language-shell\">{escape(chr(10).join(chunk))}</code></pre>"
+                )
+                if idx == 1:
+                    await msg.edit_text(
+                        part_text,
+                        reply_markup=back_kb,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=part_text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
             return
 
         if action == "useredit" and len(parts) >= 4:

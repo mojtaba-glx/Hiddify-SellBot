@@ -302,12 +302,15 @@ def direct_configs_keyboard(
     *,
     show_vless: bool = True,
     show_vmess: bool = True,
+    show_trojan: bool = True,
 ):
     rows = []
     if show_vless:
         rows.append([InlineKeyboardButton("Vless", callback_data=f"status:directcfg:{service_id}:vless")])
     if show_vmess:
         rows.append([InlineKeyboardButton("Vmess", callback_data=f"status:directcfg:{service_id}:vmess")])
+    if show_trojan:
+        rows.append([InlineKeyboardButton("Trojan", callback_data=f"status:directcfg:{service_id}:trojan")])
     rows.append([InlineKeyboardButton("🔙بازگشت", callback_data=f"status:menu:{service_id}")])
     return InlineKeyboardMarkup(rows)
 
@@ -347,6 +350,7 @@ def guide_os_keyboard(back_token: str = "m"):
 def subscription_configs_keyboard(
     service_id=None,
     *,
+    show_direct_config: bool = True,
     show_sub_link: bool = True,
     show_auto_sub_link: bool = False,
     show_sub_link_b64: bool = False,
@@ -354,6 +358,8 @@ def subscription_configs_keyboard(
     show_multi_server_b64: bool = False,
 ):
     rows = []
+    if show_direct_config:
+        rows.append([InlineKeyboardButton("کانفیگ مستقیم", callback_data=f"status:direct:{service_id}")])
     if show_sub_link:
         rows.append([InlineKeyboardButton("لینک اشتراک", callback_data=f"status:sub_link:{service_id}")])
     if show_auto_sub_link:

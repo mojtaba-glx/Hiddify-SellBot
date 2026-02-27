@@ -60,6 +60,10 @@ class _SubHandler(BaseHTTPRequestHandler):
             if not sid:
                 self._write(404, "subscription token not found")
                 return
+            lock_reason = sub_aggregator.get_service_lock_reason(sid)
+            if lock_reason:
+                self._write(403, f"subscription is locked: {lock_reason}")
+                return
 
             if is_b64:
                 body = sub_aggregator.build_subscription_b64_for_service(sid)

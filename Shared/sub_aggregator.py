@@ -20,6 +20,48 @@ ALLOWED_CONFIG_SCHEMES = (
 )
 
 
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _service_lock_reason(service: dict) -> Optional[str]:
+    if not service:
+        return "service_not_found"
+
+    usage_current = _to_float(service.get("usage_current"), 0.0)
+    usage_limit = _to_float(service.get("usage_limit"), 0.0)
+    if usage_limit > 0 and usage_current >= usage_limit:
+        return "usage_limit_reached"
+
+    try:
+        days_left = int(service.get("days_left"))
+    except Exception:
+        days_left = None
+    if days_left is not None and days_left < 0:
+        return "time_expired"
+
+    try:
+        service_id = int(service.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    if service_id > 0:
+        mappings = userbot_db.get_service_nodes(service_id)
+        if mappings and not any(int((m or {}).get("is_active") or 0) == 1 for m in mappings):
+            return "nodes_inactive"
+
+    return None
+
+
+def get_service_lock_reason(service_id: int) -> Optional[str]:
+    service = userbot_db.get_service_by_id(int(service_id))
+    return _service_lock_reason(service or {})
+
+
 def _is_config_line(line: str) -> bool:
     low = str(line or "").strip().lower()
     return any(low.startswith(s) for s in ALLOWED_CONFIG_SCHEMES)
@@ -123,6 +165,12 @@ def _service_base_urls(service: dict) -> List[str]:
 
     service_id = int(service.get("id") or 0)
     mappings = userbot_db.get_service_nodes(service_id) if service_id > 0 else []
+    if mappings:
+        active_mappings = [m for m in mappings if int((m or {}).get("is_active") or 0) == 1]
+        if active_mappings:
+            mappings = active_mappings
+        else:
+            return []
     for m in mappings:
         sid = int(m.get("server_id") or 0)
         uuid = str(m.get("panel_user_uuid") or "").strip()
@@ -157,6 +205,12 @@ def _service_targets(service: dict) -> List[dict]:
 
     service_id = int(service.get("id") or 0)
     mappings = userbot_db.get_service_nodes(service_id) if service_id > 0 else []
+    if mappings:
+        active_mappings = [m for m in mappings if int((m or {}).get("is_active") or 0) == 1]
+        if active_mappings:
+            mappings = active_mappings
+        else:
+            return []
     for m in mappings:
         sid = int(m.get("server_id") or 0)
         uuid = str(m.get("panel_user_uuid") or "").strip()
@@ -216,6 +270,8 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str) -> List[str]:
 def build_subscription_text_for_service(service_id: int) -> str:
     service = userbot_db.get_service_by_id(int(service_id))
     if not service:
+        return ""
+    if _service_lock_reason(service):
         return ""
     lines: List[str] = []
     seen = set()

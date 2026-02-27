@@ -236,14 +236,15 @@ install_system_dependencies() {
   local need_install=0
   command -v python3 >/dev/null 2>&1 || need_install=1
   command -v pip3 >/dev/null 2>&1 || need_install=1
+  command -v rg >/dev/null 2>&1 || need_install=1
 
   if [ "$need_install" -eq 0 ]; then
     return 0
   fi
 
   if ! command -v apt-get >/dev/null 2>&1; then
-    _red "ERROR: python3/pip3 not found and apt-get is unavailable."
-    _yellow "Install manually: python3 python3-venv python3-pip git"
+    _red "ERROR: required system tools are missing and apt-get is unavailable."
+    _yellow "Install manually: python3 python3-venv python3-pip git ripgrep"
     return 1
   fi
 
@@ -259,7 +260,7 @@ install_system_dependencies() {
   fi
 
   ${apt_cmd[@]} update
-  ${apt_cmd[@]} install -y python3 python3-venv python3-pip git ca-certificates curl
+  ${apt_cmd[@]} install -y python3 python3-venv python3-pip git ca-certificates curl ripgrep
 }
 
 setup_venv_and_requirements() {
