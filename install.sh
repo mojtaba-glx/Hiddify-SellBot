@@ -46,6 +46,7 @@ Commands:
   install         First-time setup: dependencies + venv + db init + restart bots
   update          Safe backup + git update (if possible) + dependencies + restart bots
   menu            Interactive menu (install/update/start/stop/restart/...)
+  ssl             Configure Nginx + Let's Encrypt for Multi Server domain
   uninstall       Stop bots and remove runtime/data files from this folder
   start           Start AdminBot and UserBot
   stop            Stop AdminBot and UserBot
@@ -60,6 +61,7 @@ Notes:
   - Running ./install.sh with no args opens interactive menu (TTY mode)
   - install/update automatically install Python package dependencies from requirements.txt
   - Telegram library is installed automatically via requirements.txt
+  - ssl command requires root access (run with sudo)
   - uninstall removes .env, venv, logs, backups, receipts, and runtime DB/data files
 USAGE
 }
@@ -485,6 +487,133 @@ factory_reset() {
   _green "OK: factory reset completed."
 }
 
+setup_sub_ssl() {
+  local raw_domain="${1:-}"
+  local email="${2:-}"
+  local domain=""
+
+  if [ -z "$raw_domain" ]; then
+    _red "ERROR: domain is required."
+    _yellow "Usage: ./install.sh ssl <domain> [email]"
+    _yellow "Example: sudo ./install.sh ssl sell.example.com admin@example.com"
+    return 1
+  fi
+
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    _red "ERROR: ssl setup needs root privileges."
+    _yellow "Run: sudo ./install.sh ssl <domain> [email]"
+    return 1
+  fi
+
+  domain="$(printf '%s' "$raw_domain" | tr '[:upper:]' '[:lower:]')"
+  domain="${domain#http://}"
+  domain="${domain#https://}"
+  domain="${domain%%/*}"
+  domain="${domain%%\?*}"
+  domain="${domain%%#*}"
+  domain="${domain%%:*}"
+  domain="$(printf '%s' "$domain" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+
+  if [ -z "$domain" ] || [[ ! "$domain" =~ ^[a-z0-9.-]+$ ]] || [[ "$domain" != *.* ]]; then
+    _red "ERROR: invalid domain: $raw_domain"
+    _yellow "Use a valid FQDN like: sell.example.com"
+    return 1
+  fi
+  if [[ "$domain" =~ ^[0-9.]+$ ]]; then
+    _red "ERROR: IP address is not supported for Let's Encrypt SSL."
+    _yellow "Use a real domain and point DNS A/AAAA to this server."
+    return 1
+  fi
+
+  if command -v ss >/dev/null 2>&1; then
+    local l80 l443
+    l80="$(ss -ltnp 'sport = :80' 2>/dev/null | tail -n +2 || true)"
+    l443="$(ss -ltnp 'sport = :443' 2>/dev/null | tail -n +2 || true)"
+    if [ -n "$l80" ] && ! printf '%s\n' "$l80" | grep -qi "nginx"; then
+      _red "ERROR: port 80 is already in use by another service."
+      _yellow "Stop that service or terminate SSL on another reverse proxy."
+      return 1
+    fi
+    if [ -n "$l443" ] && ! printf '%s\n' "$l443" | grep -qi "nginx"; then
+      _red "ERROR: port 443 is already in use by another service."
+      _yellow "Stop that service or terminate SSL on another reverse proxy."
+      return 1
+    fi
+  fi
+
+  load_env_file "$ENV_FILE" || true
+  local sub_port="${SUB_SERVER_PORT:-8787}"
+  if ! [[ "$sub_port" =~ ^[0-9]+$ ]] || [ "$sub_port" -lt 1 ] || [ "$sub_port" -gt 65535 ]; then
+    sub_port=8787
+  fi
+
+  _blue "Installing nginx + certbot dependencies"
+  apt-get update
+  apt-get install -y nginx certbot python3-certbot-nginx
+
+  local nginx_conf="/etc/nginx/sites-available/hiddify-sellbot-sub.conf"
+  cat > "$nginx_conf" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+
+    client_max_body_size 20m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${sub_port};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+EOF
+
+  ln -sf "$nginx_conf" /etc/nginx/sites-enabled/hiddify-sellbot-sub.conf
+
+  nginx -t
+  systemctl enable --now nginx
+  systemctl reload nginx
+
+  local certbot_cmd=(
+    certbot --nginx
+    -d "$domain"
+    --agree-tos
+    --non-interactive
+    --no-eff-email
+    --redirect
+  )
+  if [ -n "$email" ]; then
+    certbot_cmd+=(--email "$email")
+  else
+    certbot_cmd+=(--register-unsafely-without-email)
+  fi
+
+  _blue "Requesting Let's Encrypt certificate for $domain"
+  "${certbot_cmd[@]}"
+
+  touch "$ENV_FILE"
+  set_env_var "SUB_SERVER_PUBLIC_HOST" "$domain" "$ENV_FILE"
+  set_env_var "SUB_SERVER_PUBLIC_SCHEME" "https" "$ENV_FILE"
+  set_env_var "SUB_SERVER_PUBLIC_PORT" "443" "$ENV_FILE"
+
+  if [ -x "$VENV_DIR/bin/python" ]; then
+    "$VENV_DIR/bin/python" - <<PY
+from Shared import userbot_db
+userbot_db.set_managed_sub_base_url("https://${domain}")
+print("managed-sub-base-url:ok")
+PY
+  fi
+
+  _green "OK: SSL configured successfully."
+  _green "Domain: https://${domain}"
+  _yellow "Next step: ./install.sh restart"
+}
+
 uninstall_all() {
   if [ ! -t 0 ]; then
     _red "ERROR: uninstall requires an interactive terminal."
@@ -561,12 +690,12 @@ interactive_menu() {
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
     echo "========================================="
-    echo "1) install        6) status"
-    echo "2) update         7) config"
-    echo "3) start          8) factory-reset"
-    echo "4) stop           9) version"
-    echo "5) restart        10) help"
-    echo "11) uninstall"
+    echo "1) install        7) config"
+    echo "2) update         8) factory-reset"
+    echo "3) start          9) version"
+    echo "4) stop           10) help"
+    echo "5) restart        11) uninstall"
+    echo "6) status         12) ssl (run manually with domain)"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -582,6 +711,12 @@ interactive_menu() {
       9) _run_menu_cmd version ;;
       10) _run_menu_cmd help ;;
       11) _run_menu_cmd uninstall ;;
+      12)
+        _yellow "Use command mode:"
+        _yellow "sudo ./install.sh ssl <domain> [email]"
+        echo "-----------------------------------------"
+        read -rp "Press Enter to return menu..." _
+        ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
@@ -594,7 +729,8 @@ interactive_menu() {
 }
 
 run_command() {
-  local cmd="$1"
+  local cmd="${1:-}"
+  shift || true
   case "$cmd" in
     install)
       install_all
@@ -634,6 +770,9 @@ run_command() {
     help|-h|--help)
       usage
       ;;
+    ssl)
+      setup_sub_ssl "$@"
+      ;;
     *)
       _red "ERROR: unknown command: $cmd"
       usage
@@ -643,15 +782,14 @@ run_command() {
 }
 
 main() {
-  local cmd="${1:-}"
-  if [ -z "$cmd" ]; then
+  if [ -z "${1:-}" ]; then
     if [ -t 0 ]; then
       interactive_menu
       return $?
     fi
-    cmd="install"
+    set -- install
   fi
-  run_command "$cmd"
+  run_command "$@"
 }
 
-main "${1:-}"
+main "$@"

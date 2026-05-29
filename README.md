@@ -36,10 +36,25 @@ cd ~/Hiddify-SellBot && ./install.sh update
 ./install.sh restart       # Restart bots
 ./install.sh status        # Check status
 ./install.sh config        # Configure .env interactively
+./install.sh ssl DOMAIN [EMAIL]  # Configure Nginx + Let's Encrypt SSL for Multi Server domain
 ./install.sh uninstall     # Remove bot runtime/data from this folder
 ./install.sh factory-reset # Reset bot data to factory defaults
 ./install.sh version       # Show current version
 ```
+
+## SSL for Multi Server Links
+
+If you want `https://` links for `Multi Server`, set DNS of your domain to this server IP, then run:
+
+```bash
+cd ~/Hiddify-SellBot && sudo ./install.sh ssl sell.example.com admin@example.com
+```
+
+This command:
+- installs `nginx` + `certbot`
+- issues Let's Encrypt certificate
+- configures reverse proxy to `SUB_SERVER_PORT`
+- sets `SUB_SERVER_PUBLIC_HOST/SCHEME/PORT` in `.env`
 
 ## Notes
 
@@ -49,6 +64,24 @@ cd ~/Hiddify-SellBot && ./install.sh update
 - `update` never asks for tokens and only updates code/dependencies then restarts bots.
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
+
+## Hiddify-SellBot v2.1.0
+
+این نسخه یک Minor Release برای پایداری عملیاتی، ابزار اشکال‌زدایی و رفع باگ‌های مهم مدیریت ربات است.
+
+## تغییرات اصلی در v2.1.0
+- اضافه شدن دستور `/debug` در AdminBot با گزارش کامل (وضعیت فایل‌ها، دیتابیس، jobها، شبکه و snapshot لاگ‌ها).
+- رفع باگ مسیر تنظیم دامنه `Multi Server` که باعث پیام «گزینه انتخاب‌شده معتبر نیست» می‌شد.
+- پشتیبانی کامل از ورود دامنه با و بدون `https://` در تنظیمات `Multi Server`.
+- اضافه شدن راهنمای SSL داخل منوی تنظیمات لینک اشتراک.
+- اضافه شدن دستور `./install.sh ssl DOMAIN [EMAIL]` برای راه‌اندازی SSL خودکار (Nginx + Certbot).
+- رفع باگ پاس نشدن آرگومان‌های دستور `install.sh ssl`.
+- رفع باگ حجم تست: پشتیبانی از مقادیر اعشاری زیر ۱ گیگ (`0.2`, `0.3`, `0.5`, `0.75`).
+- رفع باگ ماندگاری کارت‌ها/تنظیمات در `servers.json` هنگام ذخیره‌سازی سرورها.
+
+## نسخه
+- Version: `2.1.0`
+- نوع انتشار: Minor Release
 
 
 ## Hiddify-SellBot v2.0.0

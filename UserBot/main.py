@@ -1375,6 +1375,49 @@ def _to_float(value, default=0.0):
     except (TypeError, ValueError):
         return float(default)
 
+
+def _to_int(value, default=0) -> int:
+    try:
+        if value is None:
+            return int(default)
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _calc_dynamic_price(gb: int, months: int, dyn_settings: Optional[Dict[str, Any]]) -> tuple[int, int]:
+    """
+    Calculate dynamic plan final price and applied discount percent.
+    Discount model:
+      floor(gb / discount_step_gb) * discount_percent_step, capped by discount_percent_max
+    """
+    settings = dyn_settings or {}
+
+    gb_val = max(0, _to_int(gb, 0))
+    months_val = max(0, _to_int(months, 0))
+    price_per_gb = max(0, _to_int(settings.get("price_per_gb"), 2000))
+    price_per_month = max(0, _to_int(settings.get("price_per_month"), 30000))
+
+    base_price = (gb_val * price_per_gb) + (months_val * price_per_month)
+
+    discount_step_gb = max(0, _to_int(settings.get("discount_step_gb"), 0))
+    discount_percent_step = max(0, _to_int(settings.get("discount_percent_step"), 0))
+    discount_percent_max = max(0, _to_int(settings.get("discount_percent_max"), 0))
+
+    off_percent = 0
+    if discount_step_gb > 0 and discount_percent_step > 0 and gb_val >= discount_step_gb:
+        stages = gb_val // discount_step_gb
+        off_percent = stages * discount_percent_step
+        if discount_percent_max > 0:
+            off_percent = min(off_percent, discount_percent_max)
+        off_percent = max(0, min(off_percent, 100))
+
+    final_price = int(round(base_price * (100 - off_percent) / 100))
+    final_price = max(0, final_price)
+    return final_price, off_percent
+
 def _generate_order_id() -> int:
     """Generate unique order_id for userbot_orders table."""
     conn = userbot_db._get_conn()
@@ -3679,7 +3722,7 @@ async def show_main_buy_menu(query, sid, server_block, user_id, context):
     # مقادیر پیش‌فرض برای ویزارد داینامیک
     default_gb = dyn_settings.get("min_gb", 20)
     default_months = dyn_settings.get("min_month", 1)
-    price = (default_gb * dyn_settings.get("price_per_gb", 2000)) + (default_months * dyn_settings.get("price_per_month", 30000))
+    price, off_percent = _calc_dynamic_price(default_gb, default_months, dyn_settings)
     
     # ذخیره اطلاعات ویزارد
     context.user_data[f"wiz_{user_id}"] = {"gb": default_gb, "months": default_months}
@@ -3689,7 +3732,7 @@ async def show_main_buy_menu(query, sid, server_block, user_id, context):
         query,
         "🛒 **خرید اشتراک**\n\n🎛 **بسته دلخواه خود را بسازید یا از پلن‌های آماده استفاده کنید:**", 
         parse_mode="Markdown",
-        reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price)
+        reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent)
     )
 
 async def start_dynamic_wizard(query, context, sid, user_id, server_block):
@@ -3697,7 +3740,7 @@ async def start_dynamic_wizard(query, context, sid, user_id, server_block):
     # مقادیر پیش‌فرض
     default_gb = dyn_settings.get("min_gb", 20)
     default_months = dyn_settings.get("min_month", 1)
-    price = (default_gb * dyn_settings.get("price_per_gb", 2000)) + (default_months * dyn_settings.get("price_per_month", 30000))
+    price, off_percent = _calc_dynamic_price(default_gb, default_months, dyn_settings)
     
     context.user_data[f"wiz_{user_id}"] = {"gb": default_gb, "months": default_months}
     
@@ -3705,7 +3748,7 @@ async def start_dynamic_wizard(query, context, sid, user_id, server_block):
         query,
         "📦بسته مورد نیاز خود را جهت خرید تنظیم کنید", 
         parse_mode="Markdown",
-        reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price)
+        reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent)
     )
 
 
@@ -3734,13 +3777,13 @@ async def _send_buy_flow_for_server(
         dyn_settings = server_block.get("dynamic_settings", {})
         default_gb = dyn_settings.get("min_gb", 20)
         default_months = dyn_settings.get("min_month", 1)
-        price = (default_gb * dyn_settings.get("price_per_gb", 2000)) + (default_months * dyn_settings.get("price_per_month", 30000))
+        price, off_percent = _calc_dynamic_price(default_gb, default_months, dyn_settings)
         context.user_data[f"wiz_{user_id}"] = {"gb": default_gb, "months": default_months}
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"🛒 **{title}**\n\n🎛 **بسته دلخواه خود را بسازید یا از پلن‌های آماده استفاده کنید:**",
             parse_mode="Markdown",
-            reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price),
+            reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent),
         )
         return
 
@@ -3748,13 +3791,13 @@ async def _send_buy_flow_for_server(
         dyn_settings = server_block.get("dynamic_settings", {})
         default_gb = dyn_settings.get("min_gb", 20)
         default_months = dyn_settings.get("min_month", 1)
-        price = (default_gb * dyn_settings.get("price_per_gb", 2000)) + (default_months * dyn_settings.get("price_per_month", 30000))
+        price, off_percent = _calc_dynamic_price(default_gb, default_months, dyn_settings)
         context.user_data[f"wiz_{user_id}"] = {"gb": default_gb, "months": default_months}
         await context.bot.send_message(
             chat_id=chat_id,
             text="📦بسته مورد نیاز خود را جهت خرید تنظیم کنید",
             parse_mode="Markdown",
-            reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price),
+            reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent),
         )
         return
 
@@ -5949,11 +5992,11 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wiz_data['gb'], wiz_data['months'] = gb, months
         context.user_data[f"wiz_{user_id}"] = wiz_data
         
-        price = (gb * dyn_settings.get('price_per_gb', 2000)) + (months * dyn_settings.get('price_per_month', 30000))
+        price, off_percent = _calc_dynamic_price(gb, months, dyn_settings)
         if display_mode == "mixed":
-            markup = mixed_buy_keyboard(sid, gb, months, price)
+            markup = mixed_buy_keyboard(sid, gb, months, price, off_percent=off_percent)
         else:
-            markup = buy_wizard_keyboard(sid, gb, months, price)
+            markup = buy_wizard_keyboard(sid, gb, months, price, off_percent=off_percent)
         await _safe_edit_message_reply_markup(query, reply_markup=markup)
 
     # تایید نهایی و هدایت به پرداخت
@@ -5971,7 +6014,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gb = int(wiz_data.get('gb') or 0)
         days = int(wiz_data.get('months') or 0) * 30
         dyn_settings = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {}).get("dynamic_settings", {})
-        price = int((gb * dyn_settings.get('price_per_gb', 2000)) + (wiz_data['months'] * dyn_settings.get('price_per_month', 30000)))
+        price, off_percent = _calc_dynamic_price(gb, wiz_data.get("months"), dyn_settings)
 
         text = (
             "📄 اطلاعات پلن انتخاب شده\n\n"
@@ -5979,6 +6022,8 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏳ زمان: {days} روز\n"
             f"💰 قیمت: {price:,} تومان"
         )
+        if off_percent > 0:
+            text += f"\n🏷 تخفیف حجمی: {off_percent}٪"
         await _safe_edit_message_text(query, text, reply_markup=selected_plan_keyboard(sid, gb, days, price))
         return
 

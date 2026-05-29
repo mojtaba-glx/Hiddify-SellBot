@@ -1312,8 +1312,10 @@ def get_trial_spec_settings() -> Dict[str, Any]:
                 if isinstance(raw, dict):
                     if "enabled" in raw:
                         settings["enabled"] = bool(raw["enabled"])
+                    if "announce_enabled" in raw:
+                        settings["announce_enabled"] = bool(raw["announce_enabled"])
                     if "usage_gb" in raw:
-                        settings["usage_gb"] = max(1, int(raw["usage_gb"]))
+                        settings["usage_gb"] = max(0.1, float(raw["usage_gb"]))
                     if "days" in raw:
                         settings["days"] = max(1, int(raw["days"]))
             except Exception:
@@ -1328,8 +1330,10 @@ def set_trial_spec_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(settings, dict):
         if "enabled" in settings:
             current["enabled"] = bool(settings["enabled"])
+        if "announce_enabled" in settings:
+            current["announce_enabled"] = bool(settings["announce_enabled"])
         if "usage_gb" in settings:
-            current["usage_gb"] = max(1, int(settings["usage_gb"]))
+            current["usage_gb"] = max(0.1, float(settings["usage_gb"]))
         if "days" in settings:
             current["days"] = max(1, int(settings["days"]))
 
@@ -1531,12 +1535,29 @@ def search_users_by_telegram_id(telegram_id: int) -> List[Dict[str, Any]]:
 
 def search_users_by_name(query: str, limit: int = 50) -> List[Dict[str, Any]]:
     init_db()
-    like = f"%{query.strip()}%"
+    raw = str(query or "").strip()
+    for ch in ("\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u2066", "\u2067", "\u2068", "\u2069"):
+        raw = raw.replace(ch, "")
+    if not raw:
+        return []
+    normalized = raw.lstrip("@").strip() or raw
+
+    like_raw = f"%{raw}%"
+    like_normalized = f"%{normalized}%"
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT * FROM userbot_users WHERE (username LIKE ? OR full_name LIKE ?) ORDER BY id DESC LIMIT ?",
-        (like, like, limit),
+        """
+        SELECT * FROM userbot_users
+        WHERE
+            username LIKE ?
+            OR full_name LIKE ?
+            OR REPLACE(COALESCE(username, ''), '@', '') LIKE ?
+            OR REPLACE(COALESCE(full_name, ''), '@', '') LIKE ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (like_raw, like_raw, like_normalized, like_normalized, limit),
     )
     rows = cur.fetchall()
     conn.close()

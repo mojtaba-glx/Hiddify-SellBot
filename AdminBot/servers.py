@@ -17,7 +17,7 @@ from telegram import (
     InlineKeyboardMarkup,
 )
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError
 from pathlib import Path
 import sys
 from urllib.parse import urlparse
@@ -30,6 +30,7 @@ if str(ROOT_DIR) not in sys.path:
 from Shared import database, hiddify_api, userbot_db, plans_storage
 from AdminBot.keyboards import (
     admin_main_keyboard,
+    confirm_add_user_keyboard,
     BTN_SERVERS,
     BTN_SEARCH_USER,
     BTN_USERBOT,
@@ -53,6 +54,7 @@ from AdminBot.userbot import (
     handle_userbot_entry,
     handle_userbot_callback,
     handle_admin_text_input,
+    handle_user_search_message,
     make_bot_backup_zip,
     prune_full_backup_files,
     WALLET_EDIT_STATE,
@@ -83,6 +85,7 @@ from AdminBot.userbot import (
     SUB_TRACKING_STATE,
     TICKET_REPLY_STATE,
     BROADCAST_SEND_STATE,
+    SUB_BASE_URL_EDIT_STATE,
 )
 
 
@@ -123,6 +126,51 @@ def _is_cancel_text(text: str) -> bool:
         return True
     key = _menu_key(raw).lower()
     return key in {"لغو", "cancel"}
+
+
+def _is_confirm_text(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    key = _menu_key(raw).lower()
+    return key in {"تایید", "تائید", "تاييد", "confirm", "yes", "ok"}
+
+
+def _is_servers_button(text: str, text_key: str) -> bool:
+    return text in {BTN_SERVERS, "مدیریت سرورها🖥️"} or "مدیریتسرورها" in text_key
+
+
+def _is_search_button(text: str, text_key: str) -> bool:
+    return text in {BTN_SEARCH_USER, "جستجوی کاربر🔍"} or "جستجویکاربر" in text_key
+
+
+def _is_userbot_button(text: str, text_key: str) -> bool:
+    return text == BTN_USERBOT or "مدیریترباتکاربران" in text_key
+
+
+def _is_status_button(text: str, text_key: str) -> bool:
+    return text in {BTN_STATUS, "وضعیت سرور📈"} or "وضعیتسرور" in text_key
+
+
+def _is_backup_button(text: str, text_key: str) -> bool:
+    return text in {BTN_BACKUP, "دریافت بکاپ📬"} or "دریافتبکاپ" in text_key
+
+
+def _is_any_main_menu_button(text: str, text_key: str) -> bool:
+    return (
+        _is_servers_button(text, text_key)
+        or _is_search_button(text, text_key)
+        or _is_userbot_button(text, text_key)
+        or _is_status_button(text, text_key)
+        or _is_backup_button(text, text_key)
+    )
+
+
+def _clear_search_states(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("state", None)
+    context.user_data.pop("search_scope", None)
+    context.user_data.pop("smart_search_results", None)
+    context.user_data.pop(USER_SEARCH_STATE_KEY, None)
 
 
 def _backup_storage_dir() -> Path:
@@ -3208,7 +3256,7 @@ async def handle_add_user_flow(
 
     # مرحله تایید برای هر دو حالت
     if state in {ADD_USER_CONFIRM, ADD_USER_PLAN_CONFIRM}:
-        if text in {"تایید✅", "تایید"}:
+        if _is_confirm_text(text):
             server = database.get_server_by_id(server_id)
             if not server:
                 await message.reply_text(
@@ -3270,7 +3318,6 @@ async def handle_add_user_flow(
             await message.reply_text(
                 "✅ کاربر جدید با موفقیت ساخته شد.\n"
                 f"👤 نام: {name}\n"
-                f"🆔 UUID/ID: {uuid}\n"
                 f"📊 حجم: {format_gb(usage_gb)} گیگابایت\n"
                 f"📅 مدت: {days} روز",
                 reply_markup=admin_main_keyboard(),
@@ -3290,7 +3337,7 @@ async def handle_add_user_flow(
             return
 
         await message.reply_text(
-            "لطفاً با دکمه‌های «تایید✅» یا «لغو❌» پاسخ دهید.",
+            "لطفاً با دکمه‌های «✅تایید» یا «❌لغو» پاسخ دهید.",
             reply_markup=confirm_add_user_keyboard(),
         )
         return
@@ -3465,68 +3512,77 @@ async def handle_smart_search_input(
         )
         return
 
-    query_str = text.lower()
-    servers = database.get_servers()
+    try:
+        query_str = text.lower()
+        servers = database.get_servers()
 
-    scope = context.user_data.pop("search_scope", {"type": "all"})
-    only_server_id = None
-    if isinstance(scope, dict) and scope.get("type") == "server":
-        only_server_id = scope.get("server_id")
+        scope = context.user_data.get("search_scope", {"type": "all"})
+        only_server_id = None
+        if isinstance(scope, dict) and scope.get("type") == "server":
+            only_server_id = scope.get("server_id")
 
-    results: List[Dict[str, Any]] = []
+        results: List[Dict[str, Any]] = []
 
-    valid_servers: List[Dict[str, Any]] = []
-    for s in servers:
-        sid = s.get("id")
-        if sid is None:
-            continue
-        if only_server_id is not None and sid != only_server_id:
-            continue
-        valid_servers.append(s)
+        valid_servers: List[Dict[str, Any]] = []
+        for s in servers:
+            sid = s.get("id")
+            if sid is None:
+                continue
+            if only_server_id is not None and sid != only_server_id:
+                continue
+            valid_servers.append(s)
 
-    users_batches = await asyncio.gather(*[_list_server_users_fast(s) for s in valid_servers])
+        users_batches = await asyncio.gather(*[_list_server_users_fast(s) for s in valid_servers])
 
-    for s, users in zip(valid_servers, users_batches):
-        server_id = s.get("id")
-        server_title = s.get("title") or f"سرور #{server_id}"
+        for s, users in zip(valid_servers, users_batches):
+            server_id = s.get("id")
+            server_title = s.get("title") or f"سرور #{server_id}"
 
-        for u in users:
-            user_uuid = str(u.get("uuid") or u.get("id") or "")
-            name = u.get("name") or u.get("username") or f"User_{user_uuid}"
-            name_l = str(name).lower()
+            for u in users:
+                user_uuid = str(u.get("uuid") or u.get("id") or "")
+                name = u.get("name") or u.get("username") or f"User_{user_uuid}"
+                name_l = str(name).lower()
 
-            match = False
-            if query_str in name_l:
-                match = True
-            elif query_str == user_uuid.lower():
-                match = True
-            elif user_uuid and user_uuid.lower() in query_str:
-                match = True
+                match = False
+                if query_str in name_l:
+                    match = True
+                elif query_str == user_uuid.lower():
+                    match = True
+                elif user_uuid and user_uuid.lower() in query_str:
+                    match = True
 
-            if match:
-                results.append(
-                    {
-                        "server_id": server_id,
-                        "server_title": server_title,
-                        "user_uuid": user_uuid,
-                        "name": name,
-                        "status": classify_user_status(u),
-                    }
-                )
+                if match:
+                    results.append(
+                        {
+                            "server_id": server_id,
+                            "server_title": server_title,
+                            "user_uuid": user_uuid,
+                            "name": name,
+                            "status": classify_user_status(u),
+                        }
+                    )
 
-    context.user_data.pop("state", None)
+        context.user_data.pop("state", None)
+        context.user_data.pop("search_scope", None)
 
-    if not results:
-        context.user_data.pop("smart_search_results", None)
+        if not results:
+            context.user_data.pop("smart_search_results", None)
+            await message.reply_text(
+                "❌ کاربر یافت نشد.",
+                reply_markup=admin_main_keyboard(),
+            )
+            return
+
+        context.user_data["smart_search_results"] = results
+        await message.reply_text("✅ کاربر یافت شد", reply_markup=admin_main_keyboard())
+        await send_smart_search_results_page(message.chat_id, context, page=1)
+    except Exception as e:
+        logger.exception("Smart search failed: %s", e)
+        _clear_search_states(context)
         await message.reply_text(
-            "❌ کاربر یافت نشد.",
+            "❌ جستجو انجام نشد. لطفاً دوباره تلاش کنید.",
             reply_markup=admin_main_keyboard(),
         )
-        return
-
-    context.user_data["smart_search_results"] = results
-    await message.reply_text("✅ کاربر یافت شد", reply_markup=admin_main_keyboard())
-    await send_smart_search_results_page(message.chat_id, context, page=1)
 
 
 # ===============================
@@ -4865,6 +4921,24 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message:
         return
 
+    text = (message.text or "").strip()
+    text_key = _menu_key(text)
+    chat_id = update.effective_chat.id
+
+    # اگر وسط جستجو بودیم و کاربر دکمه‌های منوی اصلی را زد، state را آزاد کن.
+    if context.user_data.get(USER_SEARCH_STATE_KEY):
+        if _is_cancel_text(text):
+            context.user_data.pop(USER_SEARCH_STATE_KEY, None)
+            await message.reply_text("❌ جستجو لغو شد.", reply_markup=admin_main_keyboard())
+            return
+        if not _is_any_main_menu_button(text, text_key):
+            await handle_user_search_message(update, context)
+            return
+        context.user_data.pop(USER_SEARCH_STATE_KEY, None)
+
+    if context.user_data.get("state") == SEARCH_SMART_INPUT and _is_any_main_menu_button(text, text_key):
+        _clear_search_states(context)
+
     # مسیرهای ورودی متنی ادمین (ویزاردها)
     # NOTE: کلید متنی userbot_sub_reminder_edit هم عمداً چک می‌شود
     # تا در هر شرایطی ویزارد یادآور از دست نرود.
@@ -4893,24 +4967,17 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
        context.user_data.get(SUB_TRACKING_STATE) or \
        context.user_data.get(TICKET_REPLY_STATE) or \
        context.user_data.get(BROADCAST_SEND_STATE) or \
+       context.user_data.get(SUB_BASE_URL_EDIT_STATE) or \
        context.user_data.get("userbot_ticket_reply") or \
        context.user_data.get("userbot_sub_reminder_edit") or \
-       context.user_data.get(USER_SEARCH_STATE_KEY) or \
+       context.user_data.get("userbot_sub_base_url_edit") or \
        context.user_data.get(ORDERS_SEARCH_STATE_KEY) or \
        context.user_data.get(PAYMENT_SEARCH_STATE):
         
         await handle_admin_text_input(update, context)
         return
 
-    text = (message.text or "").strip()
-    text_key = _menu_key(text)
-    chat_id = update.effective_chat.id
-
-    if context.user_data.get("userbot_search_state"):
-        await handle_user_search_message(update, context)
-        return
-
-    if text in {BTN_STATUS, "وضعیت سرور📈"} or "وضعیتسرور" in text_key:
+    if _is_status_button(text, text_key):
         await send_status_servers_list(update.effective_chat.id, context, message)
         return
 
@@ -4924,19 +4991,19 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # اگر مدیر روی دکمه «مدیریت ربات کاربران🤖» کلیک کرد
-    if text == BTN_USERBOT or "مدیریترباتکاربران" in text_key:
+    if _is_userbot_button(text, text_key):
         # منوی اینلاین مدیریت ربات کاربران را نشان بده
         await handle_userbot_entry(update, context)
         return
 
-    if text in {BTN_BACKUP, "دریافت بکاپ📬"} or "دریافتبکاپ" in text_key:
+    if _is_backup_button(text, text_key):
         await send_admin_full_backup(chat_id, context, message=message)
         return
 
     # دکمه‌های منوی اصلی ادمین
-    if text in {BTN_SERVERS, "مدیریت سرورها🖥️"} or "مدیریتسرورها" in text_key:
+    if _is_servers_button(text, text_key):
         await send_servers_list(chat_id, context)
-    elif text in {BTN_SEARCH_USER, "جستجوی کاربر🔍"} or "جستجویکاربر" in text_key:
+    elif _is_search_button(text, text_key):
         await send_search_menu(chat_id, context)
     else:
         await message.reply_text(
@@ -4950,7 +5017,11 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ثبت خطاهای احتمالی برای لاگ‌ها"""
-    logger.error("Exception while handling an update:", exc_info=context.error)
+    err = context.error
+    if isinstance(err, NetworkError):
+        logger.warning("Telegram network error: %s", err)
+        return
+    logger.error("Exception while handling an update:", exc_info=err)
 
     try:
         if isinstance(update, Update) and update.effective_message:
@@ -4966,26 +5037,43 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def admin_inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data = query.data
-    # ...
-    
+    if not query:
+        return
+    data = (query.data or "").strip()
+    msg = query.message
+
     # --- هندلرهای وضعیت سرور ---
     if data == "status:back":
-        await query.message.delete()
-        # بازگشت به منوی اصلی ادمین (پیام خوش‌آمد)
-        await start(update, context) # فرض بر این است start در این فایل هست
+        await query.answer()
+        if msg:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=msg.chat_id,
+                text="به منوی اصلی برگشتید.",
+                reply_markup=admin_main_keyboard(),
+            )
         return
 
     if data == "status:back_to_list":
-        await send_status_servers_list(update.effective_chat.id, context, msg=query.message)
+        await query.answer()
+        if msg:
+            await send_status_servers_list(msg.chat_id, context, msg=msg)
         return
 
     if data.startswith("status_srv:"):
-        srv_id = int(data.split(":")[1])
-        await send_server_status_detail(update.effective_chat.id, context, srv_id, msg=query.message)
+        await query.answer()
+        if not msg:
+            return
+        try:
+            srv_id = int(data.split(":")[1])
+        except (IndexError, ValueError):
+            await msg.edit_text("❌ شناسه سرور نامعتبر است.")
+            return
+        await send_server_status_detail(msg.chat_id, context, srv_id, msg=msg)
         return
-    query = update.callback_query
-    data = (query.data or "").strip()
 
     # اگر callback مربوط به منوی «مدیریت ربات کاربران🤖» بود
     if data.startswith("userbot:"):

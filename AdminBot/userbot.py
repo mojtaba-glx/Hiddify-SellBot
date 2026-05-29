@@ -136,6 +136,33 @@ def _normalize_public_base_url(raw: str) -> str:
     return f"{scheme}://{netloc}"
 
 
+def _extract_host_only(raw_url: str) -> str:
+    raw = str(raw_url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"//{raw}")
+        host = (parsed.hostname or "").strip().lower()
+        return host
+    except Exception:
+        return ""
+
+
+def _guess_ssl_domain_hint() -> str:
+    custom = _extract_host_only(userbot_db.get_managed_sub_base_url())
+    if custom and "." in custom and custom != "localhost":
+        return custom
+    try:
+        servers = database.get_servers() or []
+    except Exception:
+        servers = []
+    for srv in servers:
+        panel = _extract_host_only(srv.get("panel_url") or "")
+        if panel and "." in panel and panel != "localhost":
+            return panel
+    return "site.example.com"
+
+
 def _format_gb(value: Any) -> str:
     if value is None:
         return "نامشخص"
@@ -693,7 +720,7 @@ def _display_safe_note(note_text: str) -> str:
         return "-"
     fa_digits = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
     # جلوگیری از لینک‌شدن خودکار شماره بعد از HiddifyBot:
-    # مثال: HiddifyBot:6119169885 -> HiddifyBot:۶۱۱۹۱۶۹۸۸۵
+    # مثال: HiddifyBot:123456789 -> HiddifyBot:۱۲۳۴۵۶۷۸۹
     raw = re.sub(
         r"(?i)\b(HiddifyBot:\s*[\u200c\u200d\u200e\u200f]*)([0-9]+)\b",
         lambda m: f"{m.group(1)}{m.group(2).translate(fa_digits)}",
@@ -1485,6 +1512,7 @@ def build_sub_link_status_menu_keyboard(settings: Dict[str, bool]) -> InlineKeyb
         [InlineKeyboardButton(f"Multi Server | {multi_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server")],
         [InlineKeyboardButton(f"Multi Server b64 | {multi_b64_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server_b64")],
         [InlineKeyboardButton("🌐 تنظیم دامنه Multi Server", callback_data="userbot:settings:sub_link_status:set_base_url")],
+        [InlineKeyboardButton("🔐 راهنمای SSL دامنه", callback_data="userbot:settings:sub_link_status:ssl_help")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:subscription")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -5203,7 +5231,8 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if text.strip() != "0" and not normalized:
             await msg.reply_text(
                 "❌ ورودی نامعتبر است.\n"
-                "نمونه صحیح:\n"
+                "نمونه‌های صحیح:\n"
+                "user.yourdomain.com\n"
                 "https://user.yourdomain.com\n"
                 "یا برای ریست: 0",
                 reply_markup=userbot_cancel_keyboard(),
@@ -5219,8 +5248,15 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
         if stored:
+            ssl_hint = ""
+            host_hint = _extract_host_only(stored)
+            if host_hint:
+                ssl_hint = (
+                    "\n\nاگر SSL این دامنه هنوز فعال نیست، اجرا کنید:\n"
+                    f"cd ~/Hiddify-SellBot && sudo ./install.sh ssl {host_hint} your-email@example.com"
+                )
             await msg.reply_text(
-                f"✅ دامنه Multi Server ذخیره شد:\n{stored}",
+                f"✅ دامنه Multi Server ذخیره شد:\n{stored}{ssl_hint}",
                 reply_markup=admin_main_keyboard(),
             )
         else:
@@ -6504,6 +6540,9 @@ async def handle_user_search_message(update: Update, context: ContextTypes.DEFAU
             return
         results = userbot_db.search_users_by_telegram_id(int(text))
     else:
+        if not text:
+            await message.reply_text("❌ لطفاً نام یا @یوزرنیم را وارد کنید.")
+            return
         # جستجو با نام
         results = userbot_db.search_users_by_name(text)
 
@@ -6514,6 +6553,7 @@ async def handle_user_search_message(update: Update, context: ContextTypes.DEFAU
         return
     
     if len(results) == 1:
+        await message.reply_text("✅ کاربر یافت شد", reply_markup=admin_main_keyboard())
         await send_user_profile(results[0]['id'], message.chat_id, context)
         return
 
@@ -6636,7 +6676,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         m = data.split(":")[2]
         context.user_data[USER_SEARCH_STATE_KEY] = "by_id" if m == "id" else "by_name"
         await msg.reply_text(
-            f"لطفاً {'شناسه عددی' if m=='id' else 'نام'} کاربر را وارد کنید:", 
+            f"لطفاً {'شناسه عددی' if m=='id' else 'نام یا @یوزرنیم'} کاربر را وارد کنید:", 
             reply_markup=userbot_cancel_keyboard()
         )
         return
@@ -7931,7 +7971,8 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer()
             prompt = (
                 "🌐 دامنه عمومی Multi Server را وارد کنید.\n"
-                "نمونه:\n"
+                "نمونه‌های معتبر:\n"
+                "site.example.com\n"
                 "https://site.example.com\n\n"
                 "مقدار فعلی:\n"
                 f"{current}\n\n"
@@ -7941,6 +7982,26 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
+            return
+        if action == "ssl_help":
+            await query.answer()
+            hint_domain = _guess_ssl_domain_hint()
+            guide = (
+                "🔐 راهنمای فعال‌سازی SSL برای لینک‌های Multi Server\n\n"
+                "1) DNS دامنه را روی IP همین سرور ست کنید.\n"
+                "2) روی سرور این دستور را اجرا کنید:\n"
+                f"`cd ~/Hiddify-SellBot && sudo ./install.sh ssl {hint_domain} your-email@example.com`\n\n"
+                "بعد از موفقیت، دامنه را در همین منو تنظیم کنید (با یا بدون https)."
+            )
+            try:
+                await msg.reply_text(guide, parse_mode="Markdown", reply_markup=userbot_cancel_keyboard())
+            except Exception:
+                await context.bot.send_message(
+                    chat_id=cid,
+                    text=guide,
+                    parse_mode="Markdown",
+                    reply_markup=userbot_cancel_keyboard(),
+                )
             return
         if action in {
             "show_direct_config",

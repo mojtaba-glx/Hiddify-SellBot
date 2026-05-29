@@ -6,11 +6,16 @@ import logging
 import os
 import sys
 import math
+import socket
+import time
 from types import SimpleNamespace
 from pathlib import Path
+from datetime import datetime, timezone
+from collections import deque
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from telegram import Update, Bot
+from telegram import Update, Bot, BotCommand, BotCommandScopeChat
 from telegram.error import Forbidden, BadRequest
 from telegram.ext import (
     ApplicationBuilder,
@@ -43,6 +48,7 @@ from AdminBot.userbot import handle_ticket_screenshot_start, run_userbot_auto_ba
 from Shared import service_enforcer  # noqa: E402
 from Shared import node_ops  # noqa: E402
 from Shared import userbot_db  # noqa: E402
+from Shared import database  # noqa: E402
 
 # ===============================
 #   تنظیمات عمومی
@@ -63,10 +69,300 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 _USER_NOTIFY_BOT: Bot | None = None
+BOT_START_TS = time.time()
+ADMIN_LOG_PATH = ROOT_DIR / "logs" / "adminbot.log"
+USER_LOG_PATH = ROOT_DIR / "logs" / "userbot.log"
+ENV_PATH = ROOT_DIR / ".env"
+DB_PATH = ROOT_DIR / "Shared" / "hiddify_sellbot.db"
+SERVERS_JSON_PATH = ROOT_DIR / "Shared" / "servers.json"
+PLANS_JSON_PATH = ROOT_DIR / "Shared" / "plans.json"
+VERSION_PATH = ROOT_DIR / "VERSION"
 
 # Reduce third-party HTTP verbosity to avoid leaking bot tokens in request URLs.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def _fmt_duration(seconds: float) -> str:
+    total = max(0, int(seconds or 0))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _mask_token(value: str) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return "—"
+    if len(token) <= 12:
+        return f"{token[:3]}***"
+    return f"{token[:6]}...{token[-4:]}"
+
+
+def _file_state(path: Path) -> str:
+    try:
+        if not path.exists():
+            return "❌ وجود ندارد"
+        st = path.stat()
+        mtime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        size_kb = st.st_size / 1024.0
+        return f"✅ {size_kb:.1f}KB | {mtime}"
+    except Exception as e:
+        return f"⚠️ خطا: {e}"
+
+
+def _tail_lines(path: Path, limit: int = 200) -> list[str]:
+    if not path.exists():
+        return []
+    buf: deque[str] = deque(maxlen=max(10, int(limit)))
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                buf.append(line.rstrip("\n"))
+    except Exception:
+        return []
+    return list(buf)
+
+
+def _extract_log_stats(lines: list[str]) -> tuple[int, int, list[str]]:
+    if not lines:
+        return 0, 0, []
+    err = 0
+    warn = 0
+    picked: list[str] = []
+    keywords = (" - ERROR - ", "Traceback", "NetworkError", "ConnectError", "timeout", "timed out")
+    for ln in lines:
+        low = ln.lower()
+        if " - error - " in low or "traceback" in low:
+            err += 1
+        if " - warning - " in low:
+            warn += 1
+    for ln in reversed(lines):
+        if any(k.lower() in ln.lower() for k in keywords):
+            picked.append(ln.strip())
+        if len(picked) >= 3:
+            break
+    picked.reverse()
+    return err, warn, picked
+
+
+def _tcp_probe(host: str, port: int, timeout: float = 1.8) -> tuple[bool, str]:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True, "ok"
+    except Exception as e:
+        return False, str(e)
+
+
+def _build_jobs_summary(context: ContextTypes.DEFAULT_TYPE) -> str:
+    app = context.application if context else None
+    if not app:
+        return "نامشخص"
+    jq = getattr(app, "job_queue", None)
+    if jq is None:
+        fallback_tasks = list(app.bot_data.get("_fallback_tasks") or [])
+        running = sum(1 for t in fallback_tasks if not t.done())
+        return f"fallback={running}/{len(fallback_tasks)}"
+
+    try:
+        jobs = list(jq.jobs())
+    except Exception:
+        jobs = []
+    if not jobs:
+        return "0 job"
+
+    parts: list[str] = []
+    for j in jobs[:8]:
+        name = str(getattr(j, "name", "job"))
+        next_t = getattr(j, "next_t", None)
+        if next_t is None:
+            parts.append(f"{name}=paused")
+            continue
+        try:
+            if isinstance(next_t, datetime):
+                ts = next_t.astimezone().strftime("%H:%M:%S")
+            else:
+                ts = str(next_t)
+        except Exception:
+            ts = str(next_t)
+        parts.append(f"{name}@{ts}")
+    if len(jobs) > 8:
+        parts.append(f"+{len(jobs)-8} more")
+    return " | ".join(parts)
+
+
+def _split_text(text: str, chunk_size: int = 3800) -> list[str]:
+    out: list[str] = []
+    current = ""
+    for line in text.splitlines():
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+        if current:
+            out.append(current)
+        current = line
+    if current:
+        out.append(current)
+    return out or [text]
+
+
+def _build_debug_report(context: ContextTypes.DEFAULT_TYPE) -> str:
+    now_local = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    uptime = _fmt_duration(time.time() - BOT_START_TS)
+
+    version = "dev"
+    try:
+        if VERSION_PATH.exists():
+            version = VERSION_PATH.read_text(encoding="utf-8").strip() or "dev"
+    except Exception:
+        pass
+
+    servers = database.get_servers() or []
+    servers_count = len(servers)
+    local_cached_users = sum(len(s.get("users") or []) for s in servers if isinstance(s, dict))
+    nodes_count = sum(len(s.get("nodes") or []) for s in servers if isinstance(s, dict))
+
+    users_count = services_count = orders_count = payments_count = tickets_count = vouchers_count = 0
+    try:
+        conn = userbot_db._get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM userbot_users")
+        users_count = _safe_int(cur.fetchone()[0], 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_services")
+        services_count = _safe_int(cur.fetchone()[0], 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_orders")
+        orders_count = _safe_int(cur.fetchone()[0], 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_payments")
+        payments_count = _safe_int(cur.fetchone()[0], 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_tickets")
+        tickets_count = _safe_int(cur.fetchone()[0], 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_zarin_vouchers")
+        vouchers_count = _safe_int(cur.fetchone()[0], 0)
+        conn.close()
+    except Exception as e:
+        logger.warning("Debug report db count failed: %s", e)
+
+    sub_base = ""
+    try:
+        sub_base = userbot_db.get_managed_sub_base_url() or "خودکار"
+    except Exception:
+        sub_base = "خطا"
+
+    reminder = userbot_db.get_sub_reminder_settings()
+    trial_spec = userbot_db.get_trial_spec_settings()
+    buy_renew = userbot_db.get_buy_renew_settings()
+
+    admin_tail = _tail_lines(ADMIN_LOG_PATH, 220)
+    user_tail = _tail_lines(USER_LOG_PATH, 220)
+    admin_err, admin_warn, admin_hot = _extract_log_stats(admin_tail)
+    user_err, user_warn, user_hot = _extract_log_stats(user_tail)
+
+    tg_ok, tg_msg = _tcp_probe("api.telegram.org", 443)
+
+    panel_checks: list[str] = []
+    for s in servers[:5]:
+        panel = str((s or {}).get("panel_url") or "").strip()
+        sid = _safe_int((s or {}).get("id"), 0)
+        if not panel:
+            continue
+        parsed = urlparse(panel)
+        host = (parsed.hostname or "").strip()
+        scheme = (parsed.scheme or "https").strip().lower()
+        port = parsed.port or (443 if scheme == "https" else 80)
+        if not host:
+            continue
+        ok, msg = _tcp_probe(host, port)
+        panel_checks.append(f"#{sid} {host}:{port} {'✅' if ok else '❌'} ({msg if not ok else 'ok'})")
+
+    lines = [
+        "🧪 Debug Report",
+        f"⏱ زمان محلی: {now_local}",
+        f"🌍 UTC: {now_utc}",
+        f"📦 نسخه: {version}",
+        f"🐍 Python: {sys.version.split()[0]}",
+        f"🆔 PID: {os.getpid()} | Uptime: {uptime}",
+        "",
+        "🔐 ENV",
+        f"- ADMIN_ID: {ADMIN_ID}",
+        f"- ADMIN_BOT_TOKEN: {_mask_token(ADMIN_BOT_TOKEN or '')}",
+        f"- USER_BOT_TOKEN: {_mask_token(USER_BOT_TOKEN or '')}",
+        f"- GLOBAL_ENFORCER_ENABLED: {GLOBAL_ENFORCER_ENABLED} ({GLOBAL_ENFORCER_INTERVAL}s)",
+        f"- NODE_MONITOR_ENABLED: {NODE_MONITOR_ENABLED} ({NODE_MONITOR_INTERVAL}s)",
+        f"- SUB_REMINDER_INTERVAL: {SUB_REMINDER_INTERVAL}s",
+        "",
+        "📁 Files",
+        f"- .env: {_file_state(ENV_PATH)}",
+        f"- Shared/hiddify_sellbot.db: {_file_state(DB_PATH)}",
+        f"- Shared/servers.json: {_file_state(SERVERS_JSON_PATH)}",
+        f"- Shared/plans.json: {_file_state(PLANS_JSON_PATH)}",
+        f"- logs/adminbot.log: {_file_state(ADMIN_LOG_PATH)}",
+        f"- logs/userbot.log: {_file_state(USER_LOG_PATH)}",
+        "",
+        "📊 Data",
+        f"- servers={servers_count} | nodes={nodes_count} | cached_users={local_cached_users}",
+        f"- db_users={users_count} | services={services_count} | orders={orders_count}",
+        f"- payments={payments_count} | tickets={tickets_count} | vouchers={vouchers_count}",
+        f"- managed_sub_base_url={sub_base}",
+        f"- trial_spec: enabled={bool(trial_spec.get('enabled', True))}, usage_gb={trial_spec.get('usage_gb')}, days={trial_spec.get('days')}",
+        f"- reminders: enabled={bool(reminder.get('enabled', True))}, usage_gb={reminder.get('usage_gb')}, days={reminder.get('days')}",
+        f"- buy/renew: buy={bool(buy_renew.get('enable_buy', True))}, renew={bool(buy_renew.get('enable_renew', True))}",
+        "",
+        "⚙️ Jobs",
+        f"- {_build_jobs_summary(context)}",
+        "",
+        "🌐 Network",
+        f"- Telegram api.telegram.org:443 => {'✅' if tg_ok else '❌'} ({tg_msg if not tg_ok else 'ok'})",
+    ]
+    if panel_checks:
+        lines.append("- Panel probes:")
+        for item in panel_checks:
+            lines.append(f"  {item}")
+
+    lines.extend(
+        [
+            "",
+            "📜 Log Snapshot",
+            f"- adminbot: errors={admin_err} warnings={admin_warn}",
+            f"- userbot: errors={user_err} warnings={user_warn}",
+        ]
+    )
+    if admin_hot:
+        lines.append("- adminbot recent issues:")
+        for ln in admin_hot:
+            lines.append(f"  {ln[:220]}")
+    if user_hot:
+        lines.append("- userbot recent issues:")
+        for ln in user_hot:
+            lines.append(f"  {ln[:220]}")
+
+    return "\n".join(lines)
+
+
+async def _set_admin_commands(application) -> None:
+    commands = [
+        BotCommand("start", "منوی اصلی ادمین"),
+        BotCommand("debug", "گزارش اشکال‌زدایی کامل"),
+        BotCommand("enforce_now", "اجرای فوری کنترل مصرف"),
+        BotCommand("nodes_health", "بررسی سلامت نودها"),
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+    except Exception as e:
+        logger.warning("Failed setting global bot commands: %s", e)
+    if ADMIN_ID > 0:
+        try:
+            await application.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+        except Exception as e:
+            logger.warning("Failed setting admin-scope commands: %s", e)
 
 
 def _to_float(value, default: float = 0.0) -> float:
@@ -327,6 +623,26 @@ async def nodes_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    message = update.message
+    if not user or not message:
+        return
+    if user.id != ADMIN_ID:
+        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        return
+    await message.reply_text("⏳ در حال جمع‌آوری گزارش اشکال‌زدایی...")
+    try:
+        report = _build_debug_report(context)
+    except Exception as e:
+        logger.exception("Debug report build failed: %s", e)
+        await message.reply_text(f"❌ خطا در تهیه گزارش: {e}")
+        return
+
+    for part in _split_text(report):
+        await message.reply_text(part)
+
+
 async def _node_monitor_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     summary = await node_ops.monitor_and_recover_nodes()
     logger.info(
@@ -371,6 +687,8 @@ async def _run_fallback_loop(
 
 
 async def _post_init(application) -> None:
+    await _set_admin_commands(application)
+
     if application.job_queue is not None:
         return
 
@@ -451,6 +769,7 @@ def main() -> None:
 
     # /start — همین فایل
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("debug", debug))
     application.add_handler(CommandHandler("enforce_now", enforce_now))
     application.add_handler(CommandHandler("nodes_health", nodes_health))
 

@@ -21,8 +21,10 @@ def _load_db() -> Dict[str, Any]:
     try:
         with open(DB_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-            if "servers" not in data or not isinstance(data["servers"], list):
+            if not isinstance(data, dict):
                 return {"servers": []}
+            if "servers" not in data or not isinstance(data.get("servers"), list):
+                data["servers"] = []
             return data
     except (json.JSONDecodeError, OSError):
         # اگر فایل خراب بود، از صفر شروع می‌کنیم
@@ -47,7 +49,10 @@ def get_servers() -> List[Dict[str, Any]]:
 
 
 def _save_servers(servers: List[Dict[str, Any]]) -> None:
-    db = {"servers": servers}
+    db = _load_db()
+    if not isinstance(db, dict):
+        db = {}
+    db["servers"] = servers if isinstance(servers, list) else []
     _save_db(db)
 
 
@@ -709,18 +714,16 @@ def add_card(owner: str, number: str, bank_name: str = "") -> None:
     _save_all_plans(data)
 
 def get_payment_settings() -> Dict[str, Any]:
-    """نسخه هماهنگ با database.py"""
-    db = _load_db() # فرض بر اینکه این تابع در database.py هست
-    if "settings" not in db:
-        db["settings"] = {
-            "cards": [
-                {"number": "6037991111111111", "owner": "ادمین اصلی", "bank": "Melli"}
-            ],
-            "card_active": True,
-            "gateway_active": False
-        }
-        _save_db(db)
-    return db["settings"]
+    """تنظیمات پرداخت (بدون تزریق کارت پیش‌فرض)"""
+    settings = get_settings()
+    cards = settings.get("cards", [])
+    if not isinstance(cards, list):
+        cards = []
+    return {
+        "cards": cards,
+        "card_active": bool(settings.get("card_active", True)),
+        "gateway_active": bool(settings.get("gateway_active", False)),
+    }
 
 def get_random_admin_card() -> Optional[Dict[str, str]]:
     settings = get_payment_settings()
