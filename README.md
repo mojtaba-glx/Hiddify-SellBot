@@ -17,7 +17,7 @@ cd ~/Hiddify-SellBot && sudo ./install.sh panel
 `./install.sh` with no command (or `panel`) opens the interactive menu:
 
 ```text
-install | update | restart | status | autostart manager
+install | update | restart | status | autostart manager | ssl setup wizard
 ```
 
 ## First-Time Install (Direct Command)
@@ -84,6 +84,18 @@ In same-host deployments, preferred approach is:
 - `update` never asks for tokens and only updates code/dependencies then restarts bots.
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
+
+## Hiddify-SellBot v2.1.8
+
+Patch Release برای بازگشت `SSL setup wizard` به منوی ساده `panel`.
+
+## تغییرات اصلی در v2.1.8
+- اضافه شدن گزینه `ssl setup wizard` داخل منوی اصلی `panel`.
+- حفظ سادگی منو همراه با دسترسی سریع به SSL.
+
+## نسخه
+- Version: `2.1.8`
+- نوع انتشار: Patch Release
 
 ## Hiddify-SellBot v2.1.7
 

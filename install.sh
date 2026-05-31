@@ -1117,6 +1117,32 @@ interactive_menu() {
     read -rp "Press Enter to return menu..." _
   }
 
+  _run_ssl_wizard() {
+    local domain=""
+    local email=""
+    _blue "SSL setup wizard"
+    _yellow "Domain example: sell.example.com (or https://sell.example.com)"
+    read -rp "Domain (empty = cancel): " domain
+    domain="$(printf '%s' "$domain" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    if [ -z "$domain" ]; then
+      _yellow "Cancelled."
+      echo "-----------------------------------------"
+      read -rp "Press Enter to return menu..." _
+      return 0
+    fi
+    read -rp "Email for Let's Encrypt (optional): " email
+    email="$(printf '%s' "$email" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+
+    if [ -n "$email" ]; then
+      run_command ssl "$domain" "$email"
+    else
+      run_command ssl "$domain"
+    fi
+
+    echo "-----------------------------------------"
+    read -rp "Press Enter to return menu..." _
+  }
+
   while true; do
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
@@ -1126,7 +1152,8 @@ interactive_menu() {
     echo "3) restart"
     echo "4) status"
     echo "5) autostart manager"
-    echo "6) help"
+    echo "6) ssl setup wizard"
+    echo "7) help"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -1136,7 +1163,8 @@ interactive_menu() {
       3) _run_menu_cmd restart ;;
       4) _run_menu_cmd status ;;
       5) autostart_menu ;;
-      6) _run_menu_cmd help ;;
+      6) _run_ssl_wizard ;;
+      7) _run_menu_cmd help ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
