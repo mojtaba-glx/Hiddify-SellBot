@@ -71,6 +71,19 @@ This command:
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
 
+## Hiddify-SellBot v2.1.4
+
+این نسخه یک Patch Release برای جلوگیری از از دست رفتن داده‌های runtime در زمان آپدیت است.
+
+## تغییرات اصلی در v2.1.4
+- اصلاح ریشه‌ای فرآیند آپدیت: قبل از عملیات git، فایل‌های runtime حساس (`Shared/servers.json` و `Shared/plans.json`) snapshot گرفته می‌شوند و بعد از sync مجدد restore می‌شوند.
+- اعمال همین حفاظت در `update` و `update-force` تا حتی در force-sync نیز داده‌های مدیریت‌شده ربات پاک نشوند.
+- کاهش ریسک پاک شدن تنظیمات/داده‌های پنلی پس از آپدیت.
+
+## نسخه
+- Version: `2.1.4`
+- نوع انتشار: Patch Release
+
 ## Hiddify-SellBot v2.1.3
 
 این نسخه یک Patch Release برای راحتی بیشتر نصب SSL از داخل منوی اسکریپت است.

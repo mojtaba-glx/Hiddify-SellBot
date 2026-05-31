@@ -321,6 +321,52 @@ list_local_change_paths() {
   } | sed '/^[[:space:]]*$/d' | sort -u
 }
 
+RUNTIME_GIT_PRESERVE_PATHS=(
+  "Shared/servers.json"
+  "Shared/plans.json"
+)
+
+create_runtime_git_preserve_snapshot() {
+  local snapshot_dir=""
+  snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/hsb-runtime-preserve.XXXXXX")"
+  local rel=""
+  local copied=0
+  for rel in "${RUNTIME_GIT_PRESERVE_PATHS[@]}"; do
+    if [ -f "$ROOT_DIR/$rel" ]; then
+      mkdir -p "$snapshot_dir/$(dirname "$rel")"
+      cp -a "$ROOT_DIR/$rel" "$snapshot_dir/$rel"
+      copied=1
+    fi
+  done
+  if [ "$copied" -eq 1 ]; then
+    printf '%s' "$snapshot_dir"
+  else
+    rm -rf "$snapshot_dir"
+    printf ''
+  fi
+}
+
+restore_runtime_git_preserve_snapshot() {
+  local snapshot_dir="${1:-}"
+  [ -n "$snapshot_dir" ] || return 0
+  [ -d "$snapshot_dir" ] || return 0
+
+  local rel=""
+  local restored=0
+  for rel in "${RUNTIME_GIT_PRESERVE_PATHS[@]}"; do
+    if [ -f "$snapshot_dir/$rel" ]; then
+      mkdir -p "$(dirname "$ROOT_DIR/$rel")"
+      cp -a "$snapshot_dir/$rel" "$ROOT_DIR/$rel"
+      restored=1
+    fi
+  done
+
+  rm -rf "$snapshot_dir"
+  if [ "$restored" -eq 1 ]; then
+    _blue "Runtime data restored after git sync (servers/plans)."
+  fi
+}
+
 is_runtime_local_path() {
   local path="$1"
   case "$path" in
@@ -388,6 +434,10 @@ update_source_if_git() {
     _blue "Runtime data changes detected; proceeding with code update."
   fi
 
+  local preserve_snapshot=""
+  preserve_snapshot="$(create_runtime_git_preserve_snapshot || true)"
+  [ -n "$preserve_snapshot" ] && _blue "Preserved runtime data files before git pull."
+
   local branch
   branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
   _blue "Updating source from git (branch: $branch)"
@@ -398,6 +448,7 @@ update_source_if_git() {
     _yellow "WARN: git pull failed; continuing with current source."
     _yellow "Hint: run ./install.sh update-force if you want to force-sync code."
   fi
+  restore_runtime_git_preserve_snapshot "$preserve_snapshot"
 }
 
 force_sync_source_if_git() {
@@ -415,6 +466,10 @@ force_sync_source_if_git() {
   branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
   target="origin/$branch"
 
+  local preserve_snapshot=""
+  preserve_snapshot="$(create_runtime_git_preserve_snapshot || true)"
+  [ -n "$preserve_snapshot" ] && _blue "Preserved runtime data files before force-sync."
+
   _blue "Force syncing source from git (branch: $branch)"
   git -C "$ROOT_DIR" fetch --all --prune
   if ! git -C "$ROOT_DIR" show-ref --verify --quiet "refs/remotes/$target"; then
@@ -422,6 +477,7 @@ force_sync_source_if_git() {
     target="origin/main"
   fi
   git -C "$ROOT_DIR" reset --hard "$target"
+  restore_runtime_git_preserve_snapshot "$preserve_snapshot"
   _green "OK: source force-synced to $target."
 }
 
