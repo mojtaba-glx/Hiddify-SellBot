@@ -45,7 +45,12 @@ Usage:
 Commands:
   install         First-time setup: dependencies + venv + db init + restart bots
   update          Safe backup + git update (if possible) + dependencies + restart bots
+  update-force    Force git sync to remote branch (discard local code edits) + restart bots
+  reinstall       Recreate venv + reinstall dependencies + restart bots
   menu            Interactive menu (install/update/start/stop/restart/...)
+  panel           Alias of menu
+  diag            Quick diagnostics (status/git/env/log snapshot)
+  logs            Live logs for AdminBot + UserBot
   ssl             Configure Nginx + Let's Encrypt for Multi Server domain
   uninstall       Stop bots and remove runtime/data files from this folder
   start           Start AdminBot and UserBot
@@ -59,6 +64,7 @@ Commands:
 
 Notes:
   - Running ./install.sh with no args opens interactive menu (TTY mode)
+  - You can also open panel explicitly: ./install.sh panel
   - install/update automatically install Python package dependencies from requirements.txt
   - Telegram library is installed automatically via requirements.txt
   - ssl command requires root access (run with sudo)
@@ -307,6 +313,52 @@ create_snapshot_backup() {
   fi
 }
 
+list_local_change_paths() {
+  {
+    git -C "$ROOT_DIR" diff --name-only || true
+    git -C "$ROOT_DIR" diff --cached --name-only || true
+    git -C "$ROOT_DIR" ls-files --others --exclude-standard || true
+  } | sed '/^[[:space:]]*$/d' | sort -u
+}
+
+is_runtime_local_path() {
+  local path="$1"
+  case "$path" in
+    .env|logs|logs/*|backups|backups/*|Receiptions|Receiptions/*)
+      return 0
+      ;;
+    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db)
+      return 0
+      ;;
+    *.pid|*.log|Backup_Bot_*|Backup_All_*|Pre*.tar.gz|Pre*.zip)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+list_non_runtime_local_changes() {
+  local path=""
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    if ! is_runtime_local_path "$path"; then
+      echo "$path"
+    fi
+  done < <(list_local_change_paths)
+}
+
+list_runtime_local_changes() {
+  local path=""
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    if is_runtime_local_path "$path"; then
+      echo "$path"
+    fi
+  done < <(list_local_change_paths)
+}
+
 update_source_if_git() {
   if ! command -v git >/dev/null 2>&1; then
     _yellow "WARN: git is not installed; skipping source update."
@@ -318,9 +370,22 @@ update_source_if_git() {
     return 0
   fi
 
-  if [ -n "$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)" ]; then
-    _yellow "WARN: local changes detected; skipping git pull for safety."
+  local non_runtime_changes runtime_changes
+  non_runtime_changes="$(list_non_runtime_local_changes || true)"
+  runtime_changes="$(list_runtime_local_changes || true)"
+
+  if [ -n "$non_runtime_changes" ]; then
+    _yellow "WARN: local code/config changes detected; skipping git pull for safety."
+    _yellow "Changed paths:"
+    while IFS= read -r path; do
+      [ -n "$path" ] && _yellow "  - $path"
+    done <<< "$non_runtime_changes"
+    _yellow "Hint: commit/stash your changes, or run ./install.sh update-force"
     return 0
+  fi
+
+  if [ -n "$runtime_changes" ]; then
+    _blue "Runtime data changes detected; proceeding with code update."
   fi
 
   local branch
@@ -331,7 +396,118 @@ update_source_if_git() {
     _green "OK: source updated."
   else
     _yellow "WARN: git pull failed; continuing with current source."
+    _yellow "Hint: run ./install.sh update-force if you want to force-sync code."
   fi
+}
+
+force_sync_source_if_git() {
+  if ! command -v git >/dev/null 2>&1; then
+    _yellow "WARN: git is not installed; skipping source force-sync."
+    return 0
+  fi
+
+  if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    _yellow "WARN: project is not a git repository; skipping source force-sync."
+    return 0
+  fi
+
+  local branch target
+  branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+  target="origin/$branch"
+
+  _blue "Force syncing source from git (branch: $branch)"
+  git -C "$ROOT_DIR" fetch --all --prune
+  if ! git -C "$ROOT_DIR" show-ref --verify --quiet "refs/remotes/$target"; then
+    _yellow "WARN: remote branch $target not found; fallback to origin/main."
+    target="origin/main"
+  fi
+  git -C "$ROOT_DIR" reset --hard "$target"
+  _green "OK: source force-synced to $target."
+}
+
+show_diagnostics() {
+  ensure_dirs
+  load_env_file "$ENV_FILE" || true
+
+  show_status
+  echo "-----------------------------------------"
+  echo "Diagnostics"
+  echo "-----------------------------------------"
+
+  local admin_env_state="❌"
+  local admin_token_state="❌"
+  local user_token_state="❌"
+  [ -n "${ADMIN_ID:-}" ] && admin_env_state="✅"
+  [ -n "${ADMIN_BOT_TOKEN:-}" ] && admin_token_state="✅"
+  [ -n "${USER_BOT_TOKEN:-}" ] && user_token_state="✅"
+
+  echo "Env keys: ADMIN_ID=$admin_env_state ADMIN_BOT_TOKEN=$admin_token_state USER_BOT_TOKEN=$user_token_state"
+
+  if command -v git >/dev/null 2>&1 && git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local branch commit
+    branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    commit="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "Git: branch=$branch commit=$commit"
+
+    local non_runtime_changes
+    non_runtime_changes="$(list_non_runtime_local_changes || true)"
+    if [ -n "$non_runtime_changes" ]; then
+      echo "Local code changes:"
+      while IFS= read -r path; do
+        [ -n "$path" ] && echo "  - $path"
+      done <<< "$non_runtime_changes"
+    else
+      echo "Local code changes: none"
+    fi
+  else
+    echo "Git: unavailable"
+  fi
+
+  local admin_err admin_warn user_err user_warn
+  admin_err="$(grep -Eci 'error|traceback|exception' "$ADMIN_LOG_FILE" 2>/dev/null || true)"
+  admin_warn="$(grep -Eci 'warn|warning' "$ADMIN_LOG_FILE" 2>/dev/null || true)"
+  user_err="$(grep -Eci 'error|traceback|exception' "$USER_LOG_FILE" 2>/dev/null || true)"
+  user_warn="$(grep -Eci 'warn|warning' "$USER_LOG_FILE" 2>/dev/null || true)"
+  admin_err="${admin_err:-0}"
+  admin_warn="${admin_warn:-0}"
+  user_err="${user_err:-0}"
+  user_warn="${user_warn:-0}"
+
+  echo "Logs: admin(error=$admin_err warn=$admin_warn) user(error=$user_err warn=$user_warn)"
+  echo "Recent AdminBot issues:"
+  (grep -Ein 'error|traceback|exception|warn|warning' "$ADMIN_LOG_FILE" | tail -n 12) || true
+  echo "Recent UserBot issues:"
+  (grep -Ein 'error|traceback|exception|warn|warning' "$USER_LOG_FILE" | tail -n 12) || true
+}
+
+show_live_logs() {
+  ensure_dirs
+  _blue "Streaming logs (Ctrl+C to stop)..."
+  tail -n 60 -F "$ADMIN_LOG_FILE" "$USER_LOG_FILE"
+}
+
+reinstall_all() {
+  create_snapshot_backup "PreReinstall"
+  stop_bots
+  rm -rf "$VENV_DIR"
+  setup_venv_and_requirements
+  check_required_env 0
+  init_database
+  start_bots
+  show_status
+  _green "OK: reinstall completed."
+}
+
+update_force_all() {
+  create_snapshot_backup "PreForceUpdate"
+  force_sync_source_if_git
+  setup_venv_and_requirements
+  check_required_env 0
+  init_database
+  stop_bots
+  start_bots
+  show_status
+  _green "OK: force update completed."
 }
 
 init_database() {
@@ -690,28 +866,34 @@ interactive_menu() {
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
     echo "========================================="
-    echo "1) install        7) config"
-    echo "2) update         8) factory-reset"
-    echo "3) start          9) version"
-    echo "4) stop           10) help"
-    echo "5) restart        11) uninstall"
-    echo "6) status         12) ssl (run manually with domain)"
+    echo "1) install         9) config"
+    echo "2) update         10) diag"
+    echo "3) update-force   11) logs"
+    echo "4) reinstall      12) factory-reset"
+    echo "5) start          13) uninstall"
+    echo "6) stop           14) version"
+    echo "7) restart        15) help"
+    echo "8) status         16) ssl (run manually with domain)"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
     case "${choice:-}" in
       1) _run_menu_cmd install ;;
       2) _run_menu_cmd update ;;
-      3) _run_menu_cmd start ;;
-      4) _run_menu_cmd stop ;;
-      5) _run_menu_cmd restart ;;
-      6) _run_menu_cmd status ;;
-      7) _run_menu_cmd config ;;
-      8) _run_menu_cmd factory-reset ;;
-      9) _run_menu_cmd version ;;
-      10) _run_menu_cmd help ;;
-      11) _run_menu_cmd uninstall ;;
-      12)
+      3) _run_menu_cmd update-force ;;
+      4) _run_menu_cmd reinstall ;;
+      5) _run_menu_cmd start ;;
+      6) _run_menu_cmd stop ;;
+      7) _run_menu_cmd restart ;;
+      8) _run_menu_cmd status ;;
+      9) _run_menu_cmd config ;;
+      10) _run_menu_cmd diag ;;
+      11) _run_menu_cmd logs ;;
+      12) _run_menu_cmd factory-reset ;;
+      13) _run_menu_cmd uninstall ;;
+      14) _run_menu_cmd version ;;
+      15) _run_menu_cmd help ;;
+      16)
         _yellow "Use command mode:"
         _yellow "sudo ./install.sh ssl <domain> [email]"
         echo "-----------------------------------------"
@@ -738,8 +920,20 @@ run_command() {
     update)
       update_all
       ;;
-    menu)
+    update-force)
+      update_force_all
+      ;;
+    reinstall)
+      reinstall_all
+      ;;
+    menu|panel)
       interactive_menu
+      ;;
+    diag)
+      show_diagnostics
+      ;;
+    logs)
+      show_live_logs
       ;;
     start)
       start_bots
