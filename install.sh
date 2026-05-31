@@ -18,6 +18,10 @@ ADMIN_PID_FILE="$LOG_DIR/adminbot.pid"
 USER_PID_FILE="$LOG_DIR/userbot.pid"
 ADMIN_LOG_FILE="$LOG_DIR/adminbot.log"
 USER_LOG_FILE="$LOG_DIR/userbot.log"
+SYSTEMD_ADMIN_UNIT="hiddify-sellbot-admin.service"
+SYSTEMD_USER_UNIT="hiddify-sellbot-user.service"
+SYSTEMD_ADMIN_UNIT_FILE="/etc/systemd/system/${SYSTEMD_ADMIN_UNIT}"
+SYSTEMD_USER_UNIT_FILE="/etc/systemd/system/${SYSTEMD_USER_UNIT}"
 
 APP_VERSION="dev"
 if [ -f "$VERSION_FILE" ]; then
@@ -49,9 +53,14 @@ Commands:
   reinstall       Recreate venv + reinstall dependencies + restart bots
   menu            Interactive menu (install/update/start/stop/restart/...)
   panel           Alias of menu
+  autostart       Interactive autostart manager
   diag            Quick diagnostics (status/git/env/log snapshot)
   logs            Live logs for AdminBot + UserBot
   ssl             Configure Nginx + Let's Encrypt for Multi Server domain
+  autostart-on    Install + enable systemd services for auto-start on reboot
+  autostart-off   Disable + stop systemd services (keep service files)
+  autostart-rm    Disable + remove systemd services
+  autostart-status Show systemd autostart status
   uninstall       Stop bots and remove runtime/data files from this folder
   start           Start AdminBot and UserBot
   stop            Stop AdminBot and UserBot
@@ -577,6 +586,177 @@ PY
   _green "OK: database initialized."
 }
 
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
+systemd_units_installed() {
+  [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && [ -f "$SYSTEMD_USER_UNIT_FILE" ]
+}
+
+require_root() {
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    _red "ERROR: this command requires root privileges."
+    _yellow "Run with sudo."
+    return 1
+  fi
+}
+
+write_systemd_units() {
+  cat > "$SYSTEMD_ADMIN_UNIT_FILE" <<EOF
+[Unit]
+Description=Hiddify SellBot AdminBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${ROOT_DIR}
+ExecStart=${VENV_DIR}/bin/python ${ADMIN_MAIN}
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$SYSTEMD_USER_UNIT_FILE" <<EOF
+[Unit]
+Description=Hiddify SellBot UserBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${ROOT_DIR}
+ExecStart=${VENV_DIR}/bin/python ${USER_MAIN}
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+autostart_on() {
+  require_root || return 1
+  if ! systemd_available; then
+    _red "ERROR: systemd is not available on this host."
+    return 1
+  fi
+  ensure_dirs
+  check_required_env 0
+  [ -x "$VENV_DIR/bin/python" ] || {
+    _red "ERROR: virtual environment is missing. Run ./install.sh install first."
+    return 1
+  }
+
+  _blue "Configuring systemd autostart"
+  stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot"
+  stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot"
+  write_systemd_units
+  systemctl daemon-reload
+  systemctl enable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
+  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+  _green "OK: autostart enabled."
+  autostart_status
+}
+
+autostart_off() {
+  require_root || return 1
+  if ! systemd_available; then
+    _red "ERROR: systemd is not available on this host."
+    return 1
+  fi
+  if ! systemd_units_installed; then
+    _yellow "WARN: autostart services are not installed."
+    return 0
+  fi
+
+  _blue "Stopping and disabling systemd autostart"
+  systemctl disable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" || true
+  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+  _green "OK: autostart disabled."
+}
+
+autostart_rm() {
+  require_root || return 1
+  if ! systemd_available; then
+    _red "ERROR: systemd is not available on this host."
+    return 1
+  fi
+
+  _blue "Removing systemd autostart services"
+  systemctl disable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" 2>/dev/null || true
+  rm -f "$SYSTEMD_ADMIN_UNIT_FILE" "$SYSTEMD_USER_UNIT_FILE"
+  systemctl daemon-reload
+  systemctl reset-failed 2>/dev/null || true
+  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+  _green "OK: autostart services removed."
+}
+
+autostart_status() {
+  if ! systemd_available; then
+    _yellow "systemd: unavailable"
+    return 0
+  fi
+  if ! systemd_units_installed; then
+    _yellow "autostart: not installed"
+    return 0
+  fi
+
+  local admin_active admin_enabled user_active user_enabled admin_pid user_pid
+  admin_active="$(systemctl is-active "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
+  admin_enabled="$(systemctl is-enabled "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
+  user_active="$(systemctl is-active "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
+  user_enabled="$(systemctl is-enabled "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
+  admin_pid="$(systemctl show -p MainPID --value "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
+  user_pid="$(systemctl show -p MainPID --value "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
+
+  admin_pid="${admin_pid:-0}"
+  user_pid="${user_pid:-0}"
+  echo "autostart(admin): active=${admin_active:-unknown} enabled=${admin_enabled:-unknown} pid=$admin_pid"
+  echo "autostart(user):  active=${user_active:-unknown} enabled=${user_enabled:-unknown} pid=$user_pid"
+}
+
+autostart_menu() {
+  if [ ! -t 0 ]; then
+    _red "ERROR: autostart menu requires an interactive terminal."
+    _yellow "Use direct commands:"
+    _yellow "./install.sh autostart-on | autostart-off | autostart-status | autostart-rm"
+    return 1
+  fi
+
+  while true; do
+    echo "========================================="
+    echo "AutoStart Manager (systemd)"
+    echo "========================================="
+    echo "1) Enable autostart (recommended)"
+    echo "2) Disable autostart"
+    echo "3) Show autostart status"
+    echo "4) Remove autostart services"
+    echo "0) Back"
+    echo "-----------------------------------------"
+    read -rp "Select option: " a_choice
+    case "${a_choice:-}" in
+      1) run_command autostart-on ;;
+      2) run_command autostart-off ;;
+      3) run_command autostart-status ;;
+      4) run_command autostart-rm ;;
+      0|q|Q|quit|exit)
+        return 0
+        ;;
+      *)
+        _yellow "WARN: invalid option."
+        ;;
+    esac
+    echo "-----------------------------------------"
+    read -rp "Press Enter to continue..." _
+  done
+}
+
 stop_single_bot() {
   local pid_file="$1"
   local main_py="$2"
@@ -601,6 +781,18 @@ stop_single_bot() {
 
 stop_bots() {
   ensure_dirs
+  if systemd_units_installed; then
+    if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+      _red "ERROR: systemd autostart is installed; use sudo to stop services."
+      return 1
+    fi
+    _blue "Stopping bots via systemd"
+    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
+    rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+    _green "OK: AdminBot stopped (systemd)."
+    _green "OK: UserBot stopped (systemd)."
+    return 0
+  fi
   _blue "Stopping bots"
   stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot"
   stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot"
@@ -656,6 +848,17 @@ start_bots() {
     _red "ERROR: virtual environment is missing. Run ./install.sh install first."
     return 1
   }
+  if systemd_units_installed; then
+    if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+      _red "ERROR: systemd autostart is installed; use sudo to start services."
+      return 1
+    fi
+    _blue "Starting bots via systemd"
+    systemctl start "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
+    _green "OK: AdminBot started (systemd)"
+    _green "OK: UserBot started (systemd)"
+    return 0
+  fi
 
   _blue "Starting bots"
   start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot"
@@ -686,6 +889,10 @@ show_status() {
   echo "Logs:    $LOG_DIR"
   echo "Backups: $BACKUP_DIR"
   echo "========================================="
+  if systemd_units_installed; then
+    autostart_status
+    return 0
+  fi
   status_single_bot "$ADMIN_PID_FILE" "AdminBot"
   status_single_bot "$USER_PID_FILE" "UserBot"
 }
@@ -863,6 +1070,11 @@ uninstall_all() {
     return 0
   fi
 
+  if systemd_units_installed; then
+    require_root || return 1
+    autostart_rm || true
+  fi
+
   stop_bots
   rm -rf "$VENV_DIR" "$LOG_DIR" "$BACKUP_DIR" "$RECEIPT_DIR"
   rm -f "$ENV_FILE"
@@ -956,6 +1168,7 @@ interactive_menu() {
     echo "6) stop           14) version"
     echo "7) restart        15) help"
     echo "8) status         16) ssl setup wizard"
+    echo "17) autostart manager"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -976,6 +1189,7 @@ interactive_menu() {
       14) _run_menu_cmd version ;;
       15) _run_menu_cmd help ;;
       16) _run_ssl_wizard ;;
+      17) autostart_menu ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
@@ -1005,6 +1219,9 @@ run_command() {
       ;;
     menu|panel)
       interactive_menu
+      ;;
+    autostart)
+      autostart_menu
       ;;
     diag)
       show_diagnostics
@@ -1043,6 +1260,18 @@ run_command() {
       ;;
     ssl)
       setup_sub_ssl "$@"
+      ;;
+    autostart-on)
+      autostart_on
+      ;;
+    autostart-off)
+      autostart_off
+      ;;
+    autostart-rm)
+      autostart_rm
+      ;;
+    autostart-status)
+      autostart_status
       ;;
     *)
       _red "ERROR: unknown command: $cmd"

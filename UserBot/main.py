@@ -7357,8 +7357,12 @@ async def _post_init_set_menu(application):
         logger.warning(f"Failed to prepare startup pending filter: {e}")
 
     try:
-        if not application.bot_data.get("_direct_buy_delivery_task"):
-            task = asyncio.create_task(_direct_buy_delivery_loop(application))
+        existing_task = application.bot_data.get("_direct_buy_delivery_task")
+        if existing_task is not None and existing_task.done():
+            application.bot_data.pop("_direct_buy_delivery_task", None)
+            existing_task = None
+        if existing_task is None:
+            task = application.create_task(_direct_buy_delivery_loop(application))
             application.bot_data["_direct_buy_delivery_task"] = task
     except Exception as e:
         logger.warning(f"Failed to start direct-buy delivery loop: {e}")
@@ -7380,6 +7384,22 @@ async def _post_init_set_menu(application):
                 )
         except Exception as e:
             logger.warning("Failed to schedule ticket auto-close job: %s", e)
+
+
+async def _post_shutdown_userbot(application):
+    try:
+        task = application.bot_data.pop("_direct_buy_delivery_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning("Direct-buy delivery loop shutdown error: %s", e)
+            logger.info("Direct-buy delivery loop stopped.")
+    except Exception as e:
+        logger.warning("UserBot post-shutdown cleanup failed: %s", e)
 
 
 async def _ticket_autoclose_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7460,6 +7480,7 @@ def main():
             .request(base_request)
             .get_updates_request(updates_request)
             .post_init(_post_init_set_menu)
+            .post_shutdown(_post_shutdown_userbot)
             .build()
         )
         _attach_userbot_handlers(app)

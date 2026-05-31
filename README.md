@@ -11,7 +11,7 @@ git clone https://github.com/mojtaba-glx/Hiddify-SellBot.git && cd Hiddify-SellB
 `./install.sh` with no command opens the interactive menu:
 
 ```text
-install | update | update-force | reinstall | start | stop | restart | status | diag | logs ...
+install | update | update-force | reinstall | start | stop | restart | status | diag | logs | autostart ...
 ```
 
 ## First-Time Install (Direct Command)
@@ -41,6 +41,11 @@ cd ~/Hiddify-SellBot && ./install.sh update
 ./install.sh panel         # Alias of menu
 ./install.sh diag          # Quick diagnostics (git/env/log snapshot)
 ./install.sh logs          # Live logs (AdminBot + UserBot)
+./install.sh autostart     # Open interactive AutoStart Manager
+./install.sh autostart-on      # Install/enable systemd services for reboot auto-start
+./install.sh autostart-off     # Disable/stop systemd services (keep unit files)
+./install.sh autostart-status  # Show systemd autostart status
+./install.sh autostart-rm      # Remove systemd services
 ./install.sh config        # Configure .env interactively
 ./install.sh ssl DOMAIN [EMAIL]  # Configure Nginx + Let's Encrypt SSL for Multi Server domain
 ./install.sh uninstall     # Remove bot runtime/data from this folder
@@ -62,6 +67,14 @@ This command:
 - configures reverse proxy to `SUB_SERVER_PORT`
 - sets `SUB_SERVER_PUBLIC_HOST/SCHEME/PORT` in `.env`
 
+### Important (when Hiddify is on same server)
+
+If Hiddify panel already uses `:80/:443` (e.g. `haproxy`), do **not** run `install.sh ssl` directly on that host unless you intentionally move TLS termination to nginx.  
+In same-host deployments, preferred approach is:
+- keep UserBot sub server on internal port (default `8787`)
+- terminate TLS on existing reverse proxy/haproxy
+- route bot subdomain traffic to `127.0.0.1:8787`
+
 ## Notes
 
 - Dependencies are installed automatically from `requirements.txt`.
@@ -70,6 +83,37 @@ This command:
 - `update` never asks for tokens and only updates code/dependencies then restarts bots.
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
+
+## Hiddify-SellBot v2.1.6
+
+این نسخه یک Patch Release برای ساده‌سازی کاربری منوی مدیریت AutoStart است.
+
+## تغییرات اصلی در v2.1.6
+- اضافه شدن گزینه یکپارچه `AutoStart Manager` داخل منوی `install.sh` برای کاربران مبتدی.
+- اضافه شدن دستور `./install.sh autostart` جهت باز کردن مستقیم منوی AutoStart.
+- تجمیع عملیات روشن/خاموش/وضعیت/حذف AutoStart داخل یک منوی مرحله‌ای.
+
+## نسخه
+- Version: `2.1.6`
+- نوع انتشار: Patch Release
+
+## Hiddify-SellBot v2.1.5
+
+این نسخه یک Patch Release برای پایداری سرویس در ریبوت سرور و کنترل بهتر lifecycle است.
+
+## تغییرات اصلی در v2.1.5
+- اضافه شدن AutoStart واقعی با `systemd`:
+  - `./install.sh autostart-on`
+  - `./install.sh autostart-off`
+  - `./install.sh autostart-status`
+  - `./install.sh autostart-rm`
+- اتصال دستورات `start/stop/restart/status` به `systemd` در صورت نصب شدن سرویس‌ها.
+- جلوگیری از رفتارهای متناقض `nohup` در زمانی که سرویس systemd فعال است.
+- افزودن راهنمای استقرار SSL در سناریوی «Hiddify + Bot روی یک سرور».
+
+## نسخه
+- Version: `2.1.5`
+- نوع انتشار: Patch Release
 
 ## Hiddify-SellBot v2.1.4
 
