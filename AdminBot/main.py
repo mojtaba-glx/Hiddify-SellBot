@@ -384,6 +384,25 @@ def _format_gb(value: float) -> str:
     return f"{v:.1f}"
 
 
+def _build_renewal_reminder_message(
+    service_name: str,
+    *,
+    days_left: int | None = None,
+    remaining_gb: float | None = None,
+) -> str:
+    title = str(service_name or "").strip() or "اشتراک شما"
+    lines = [
+        "🚨 یادآوری تمدید اشتراک",
+        f"🔹 اشتراک: «{title}»",
+    ]
+    if days_left is not None:
+        lines.append(f"📅 روز باقی‌مانده: {int(days_left)} روز")
+    elif remaining_gb is not None:
+        lines.append(f"🚥 حجم باقی‌مانده: {_format_gb(remaining_gb)} گیگ")
+    lines.append("لطفاً برای جلوگیری از قطع سرویس، اشتراک را تمدید کنید.")
+    return "\n".join(lines)
+
+
 def _is_unlimited_volume(limit_gb: float, br: dict) -> bool:
     if not bool(br.get("renew_unlimited_volume", False)):
         return False
@@ -428,8 +447,8 @@ async def _run_subscription_reminder_cycle() -> dict:
     days_threshold = max(1, int(br.get("renew_max_days") or 3))
     usage_threshold = max(0.1, float(br.get("renew_max_remaining_gb") or 3))
     services = userbot_db.get_services_for_reminder()
-    sent_days_keys: set[tuple[int, int]] = set()
-    sent_usage_keys: set[tuple[int, int]] = set()
+    sent_days_keys: set[tuple[int, int, int]] = set()
+    sent_usage_keys: set[tuple[int, int, int]] = set()
 
     for svc in services:
         summary["scanned"] += 1
@@ -438,6 +457,7 @@ async def _run_subscription_reminder_cycle() -> dict:
             telegram_id = int(svc.get("telegram_id") or 0)
             if service_id <= 0 or telegram_id <= 0:
                 continue
+            service_name = str(svc.get("name") or "").strip() or f"اشتراک #{service_id}"
 
             usage_current = _to_float(svc.get("usage_current"), 0.0)
             usage_limit = _to_float(svc.get("usage_limit"), 0.0)
@@ -468,14 +488,11 @@ async def _run_subscription_reminder_cycle() -> dict:
             new_usage_state = last_usage_notified
 
             if should_days and days_left != last_days_notified:
-                day_key = (telegram_id, days_left)
+                day_key = (telegram_id, service_id, days_left)
                 if day_key not in sent_days_keys:
                     await bot.send_message(
                         chat_id=telegram_id,
-                        text=(
-                            "🚨 مهلت اشتراک شما به زودی به اتمام میرسد، هرچه زودتر برای تمدید آن اقدام کنید.\n"
-                            f"📅 تعداد روز های باقی مانده: {days_left} روز"
-                        ),
+                        text=_build_renewal_reminder_message(service_name, days_left=days_left),
                     )
                     sent_days_keys.add(day_key)
                     summary["days_sent"] += 1
@@ -485,14 +502,11 @@ async def _run_subscription_reminder_cycle() -> dict:
                 new_days_state = -1
 
             if should_usage and remaining_bucket != last_usage_notified:
-                usage_key = (telegram_id, remaining_bucket)
+                usage_key = (telegram_id, service_id, remaining_bucket)
                 if usage_key not in sent_usage_keys:
                     await bot.send_message(
                         chat_id=telegram_id,
-                        text=(
-                            "🚨 مهلت اشتراک شما به زودی به اتمام میرسد، هرچه زودتر برای تمدید آن اقدام کنید.\n"
-                            f"🚥 حجم ترافیک باقی مانده کمتر: {remaining_bucket} گیگ"
-                        ),
+                        text=_build_renewal_reminder_message(service_name, remaining_gb=remaining_bucket),
                     )
                     sent_usage_keys.add(usage_key)
                     summary["usage_sent"] += 1

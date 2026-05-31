@@ -65,6 +65,19 @@ This command:
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
 
+## Hiddify-SellBot v2.1.1
+
+این نسخه یک Patch Release برای بهبود اعلان‌های یادآوری تمدید اشتراک است.
+
+## تغییرات اصلی در v2.1.1
+- اضافه شدن نام اشتراک داخل پیام یادآوری تمدید (روز و حجم).
+- یکدست‌سازی قالب پیام‌های یادآوری تمدید برای خوانایی بهتر.
+- تفکیک کلید ارسال یادآور برای هر اشتراک، تا در کاربران چنداشتراکی پیام هر سرویس جداگانه ارسال شود.
+
+## نسخه
+- Version: `2.1.1`
+- نوع انتشار: Patch Release
+
 ## Hiddify-SellBot v2.1.0
 
 این نسخه یک Minor Release برای پایداری عملیاتی، ابزار اشکال‌زدایی و رفع باگ‌های مهم مدیریت ربات است.
