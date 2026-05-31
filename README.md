@@ -71,6 +71,19 @@ This command:
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
 
+## Hiddify-SellBot v2.1.3
+
+این نسخه یک Patch Release برای راحتی بیشتر نصب SSL از داخل منوی اسکریپت است.
+
+## تغییرات اصلی در v2.1.3
+- اضافه شدن ویزارد `SSL` داخل پنل منویی `install.sh` (ورود دامنه/ایمیل از داخل منو).
+- حذف نیاز به اجرای دستی جداگانه برای وارد کردن پارامترهای `ssl` در اکثر سناریوهای کاربری.
+- بهبود تجربه کاربری پنل برای عملیات روزمره مدیر سرور.
+
+## نسخه
+- Version: `2.1.3`
+- نوع انتشار: Patch Release
+
 ## Hiddify-SellBot v2.1.2
 
 این نسخه یک Patch Release برای ساده‌سازی پنل مدیریت اسکریپت نصب/آپدیت است.

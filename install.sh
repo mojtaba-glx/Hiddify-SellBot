@@ -862,6 +862,32 @@ interactive_menu() {
     read -rp "Press Enter to return menu..." _
   }
 
+  _run_ssl_wizard() {
+    local domain=""
+    local email=""
+    _blue "SSL setup wizard"
+    _yellow "Domain example: sell.example.com (or https://sell.example.com)"
+    read -rp "Domain (empty = cancel): " domain
+    domain="$(printf '%s' "$domain" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    if [ -z "$domain" ]; then
+      _yellow "Cancelled."
+      echo "-----------------------------------------"
+      read -rp "Press Enter to return menu..." _
+      return 0
+    fi
+    read -rp "Email for Let's Encrypt (optional): " email
+    email="$(printf '%s' "$email" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+
+    if [ -n "$email" ]; then
+      run_command ssl "$domain" "$email"
+    else
+      run_command ssl "$domain"
+    fi
+
+    echo "-----------------------------------------"
+    read -rp "Press Enter to return menu..." _
+  }
+
   while true; do
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
@@ -873,7 +899,7 @@ interactive_menu() {
     echo "5) start          13) uninstall"
     echo "6) stop           14) version"
     echo "7) restart        15) help"
-    echo "8) status         16) ssl (run manually with domain)"
+    echo "8) status         16) ssl setup wizard"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -893,12 +919,7 @@ interactive_menu() {
       13) _run_menu_cmd uninstall ;;
       14) _run_menu_cmd version ;;
       15) _run_menu_cmd help ;;
-      16)
-        _yellow "Use command mode:"
-        _yellow "sudo ./install.sh ssl <domain> [email]"
-        echo "-----------------------------------------"
-        read -rp "Press Enter to return menu..." _
-        ;;
+      16) _run_ssl_wizard ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
