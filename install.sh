@@ -46,38 +46,25 @@ usage() {
 Usage:
   ./install.sh [command]
 
-Commands:
-  install         First-time setup: dependencies + venv + db init + restart bots
-  update          Safe backup + git update (if possible) + dependencies + restart bots
-  update-force    Force git sync to remote branch (discard local code edits) + restart bots
-  reinstall       Recreate venv + reinstall dependencies + restart bots
-  menu            Interactive menu (install/update/start/stop/restart/...)
-  panel           Alias of menu
-  autostart       Interactive autostart manager
-  diag            Quick diagnostics (status/git/env/log snapshot)
-  logs            Live logs for AdminBot + UserBot
-  ssl             Configure Nginx + Let's Encrypt for Multi Server domain
-  autostart-on    Install + enable systemd services for auto-start on reboot
-  autostart-off   Disable + stop systemd services (keep service files)
-  autostart-rm    Disable + remove systemd services
-  autostart-status Show systemd autostart status
-  uninstall       Stop bots and remove runtime/data files from this folder
-  start           Start AdminBot and UserBot
-  stop            Stop AdminBot and UserBot
-  restart         Restart AdminBot and UserBot
-  status          Show process status
-  config          Configure required .env values interactively
-  factory-reset   Reset bot data to factory defaults (keeps code and .env)
-  version         Show project version
+Main commands (recommended):
+  panel           Open interactive panel (recommended for daily use)
+  install         First-time setup
+  update          Update code + dependencies + restart bots
+  restart         Restart bots
+  status          Show bot status
+  autostart       Open interactive autostart manager
   help            Show this help
+
+Advanced commands:
+  menu, update-force, reinstall, start, stop, config
+  diag, logs, ssl, uninstall, factory-reset, version
+  autostart-on, autostart-off, autostart-status, autostart-rm
 
 Notes:
   - Running ./install.sh with no args opens interactive menu (TTY mode)
   - You can also open panel explicitly: ./install.sh panel
-  - install/update automatically install Python package dependencies from requirements.txt
-  - Telegram library is installed automatically via requirements.txt
-  - ssl command requires root access (run with sudo)
-  - uninstall removes .env, venv, logs, backups, receipts, and runtime DB/data files
+  - On server, use: sudo ./install.sh panel
+  - install/update automatically install dependencies from requirements.txt
 USAGE
 }
 
@@ -1130,66 +1117,26 @@ interactive_menu() {
     read -rp "Press Enter to return menu..." _
   }
 
-  _run_ssl_wizard() {
-    local domain=""
-    local email=""
-    _blue "SSL setup wizard"
-    _yellow "Domain example: sell.example.com (or https://sell.example.com)"
-    read -rp "Domain (empty = cancel): " domain
-    domain="$(printf '%s' "$domain" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-    if [ -z "$domain" ]; then
-      _yellow "Cancelled."
-      echo "-----------------------------------------"
-      read -rp "Press Enter to return menu..." _
-      return 0
-    fi
-    read -rp "Email for Let's Encrypt (optional): " email
-    email="$(printf '%s' "$email" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-
-    if [ -n "$email" ]; then
-      run_command ssl "$domain" "$email"
-    else
-      run_command ssl "$domain"
-    fi
-
-    echo "-----------------------------------------"
-    read -rp "Press Enter to return menu..." _
-  }
-
   while true; do
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
     echo "========================================="
-    echo "1) install         9) config"
-    echo "2) update         10) diag"
-    echo "3) update-force   11) logs"
-    echo "4) reinstall      12) factory-reset"
-    echo "5) start          13) uninstall"
-    echo "6) stop           14) version"
-    echo "7) restart        15) help"
-    echo "8) status         16) ssl setup wizard"
-    echo "17) autostart manager"
+    echo "1) install"
+    echo "2) update"
+    echo "3) restart"
+    echo "4) status"
+    echo "5) autostart manager"
+    echo "6) help"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
     case "${choice:-}" in
       1) _run_menu_cmd install ;;
       2) _run_menu_cmd update ;;
-      3) _run_menu_cmd update-force ;;
-      4) _run_menu_cmd reinstall ;;
-      5) _run_menu_cmd start ;;
-      6) _run_menu_cmd stop ;;
-      7) _run_menu_cmd restart ;;
-      8) _run_menu_cmd status ;;
-      9) _run_menu_cmd config ;;
-      10) _run_menu_cmd diag ;;
-      11) _run_menu_cmd logs ;;
-      12) _run_menu_cmd factory-reset ;;
-      13) _run_menu_cmd uninstall ;;
-      14) _run_menu_cmd version ;;
-      15) _run_menu_cmd help ;;
-      16) _run_ssl_wizard ;;
-      17) autostart_menu ;;
+      3) _run_menu_cmd restart ;;
+      4) _run_menu_cmd status ;;
+      5) autostart_menu ;;
+      6) _run_menu_cmd help ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0

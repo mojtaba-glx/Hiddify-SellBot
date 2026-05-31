@@ -8,10 +8,16 @@ Telegram AdminBot + UserBot for Hiddify sales workflows.
 git clone https://github.com/mojtaba-glx/Hiddify-SellBot.git && cd Hiddify-SellBot && chmod +x install.sh && ./install.sh
 ```
 
-`./install.sh` with no command opens the interactive menu:
+روی سرور، راه ساده پیشنهادی:
+
+```bash
+cd ~/Hiddify-SellBot && sudo ./install.sh panel
+```
+
+`./install.sh` with no command (or `panel`) opens the interactive menu:
 
 ```text
-install | update | update-force | reinstall | start | stop | restart | status | diag | logs | autostart ...
+install | update | restart | status | autostart manager
 ```
 
 ## First-Time Install (Direct Command)
@@ -31,26 +37,21 @@ cd ~/Hiddify-SellBot && ./install.sh update
 ```bash
 ./install.sh install       # First-time setup
 ./install.sh update        # Safe backup + git update + restart
-./install.sh update-force  # Force sync code to remote branch + restart
-./install.sh reinstall     # Recreate venv + reinstall dependencies + restart
-./install.sh start         # Start bots
-./install.sh stop          # Stop bots
 ./install.sh restart       # Restart bots
 ./install.sh status        # Check status
-./install.sh menu          # Open interactive panel menu
-./install.sh panel         # Alias of menu
-./install.sh diag          # Quick diagnostics (git/env/log snapshot)
-./install.sh logs          # Live logs (AdminBot + UserBot)
+./install.sh panel         # Open interactive panel menu (recommended)
 ./install.sh autostart     # Open interactive AutoStart Manager
-./install.sh autostart-on      # Install/enable systemd services for reboot auto-start
-./install.sh autostart-off     # Disable/stop systemd services (keep unit files)
-./install.sh autostart-status  # Show systemd autostart status
-./install.sh autostart-rm      # Remove systemd services
-./install.sh config        # Configure .env interactively
-./install.sh ssl DOMAIN [EMAIL]  # Configure Nginx + Let's Encrypt SSL for Multi Server domain
-./install.sh uninstall     # Remove bot runtime/data from this folder
-./install.sh factory-reset # Reset bot data to factory defaults
-./install.sh version       # Show current version
+```
+
+## Advanced Commands (Optional)
+
+```bash
+./install.sh menu | start | stop | config
+./install.sh diag | logs | version
+./install.sh update-force | reinstall
+./install.sh autostart-on | autostart-off | autostart-status | autostart-rm
+./install.sh ssl DOMAIN [EMAIL]
+./install.sh factory-reset | uninstall
 ```
 
 ## SSL for Multi Server Links
@@ -83,6 +84,19 @@ In same-host deployments, preferred approach is:
 - `update` never asks for tokens and only updates code/dependencies then restarts bots.
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
+
+## Hiddify-SellBot v2.1.7
+
+این نسخه یک Patch Release برای ساده‌سازی شدید منوی نصبی برای کاربران مبتدی است.
+
+## تغییرات اصلی در v2.1.7
+- ساده‌سازی منوی `panel` به گزینه‌های ضروری: `install`, `update`, `restart`, `status`, `autostart`.
+- سبک‌سازی خروجی `help` و نمایش دستورات اصلی در اولویت.
+- به‌روزرسانی README با مسیر کاربری ساده (`sudo ./install.sh panel`).
+
+## نسخه
+- Version: `2.1.7`
+- نوع انتشار: Patch Release
 
 ## Hiddify-SellBot v2.1.6
 
