@@ -445,6 +445,12 @@ def _get_buy_renew_settings() -> dict:
             if mode == "oversell":
                 mode = "default"
             settings["renew_policy"] = mode if mode in {"fair", "advanced", "default"} else "advanced"
+            fallback_volume_mode = "add" if settings["renew_policy"] in {"default", "fair"} else "reset"
+            fallback_time_mode = "add" if settings["renew_policy"] == "fair" else "reset"
+            volume_mode = str(settings.get("renew_volume_mode") or "").strip().lower()
+            time_mode = str(settings.get("renew_time_mode") or "").strip().lower()
+            settings["renew_volume_mode"] = volume_mode if volume_mode in {"add", "reset"} else fallback_volume_mode
+            settings["renew_time_mode"] = time_mode if time_mode in {"add", "reset"} else fallback_time_mode
             try:
                 settings["renew_max_days"] = max(1, int(settings.get("renew_max_days") or 3))
             except Exception:
@@ -483,6 +489,8 @@ def _get_buy_renew_settings() -> dict:
         "enable_renew": True,
         "show_renew_in_main_menu": True,
         "renew_policy": "advanced",
+        "renew_volume_mode": "reset",
+        "renew_time_mode": "reset",
         "renew_max_days": 3,
         "renew_max_remaining_gb": 3,
         "renew_unlimited_volume": False,
@@ -2305,6 +2313,12 @@ def _build_renew_patch_payload(service: dict, *, package_gb: float, package_days
     """
     br = _get_buy_renew_settings()
     policy = str(br.get("renew_policy") or "advanced").strip().lower()
+    volume_mode = str(br.get("renew_volume_mode") or "").strip().lower()
+    time_mode = str(br.get("renew_time_mode") or "").strip().lower()
+    if volume_mode not in {"add", "reset"}:
+        volume_mode = "add" if policy in {"default", "fair"} else "reset"
+    if time_mode not in {"add", "reset"}:
+        time_mode = "add" if policy == "fair" else "reset"
 
     usage_current = _to_float(service.get("usage_current"), 0.0)
     usage_limit_old = _to_float(service.get("usage_limit"), 0.0)
@@ -2315,16 +2329,8 @@ def _build_renew_patch_payload(service: dict, *, package_gb: float, package_days
         remaining_gb = max(usage_limit_old - usage_current, 0.0)
     remaining_days = max(days_left_old, 0)
 
-    if policy == "fair":
-        final_limit = float(package_gb + remaining_gb)
-        final_days = int(package_days + remaining_days)
-    elif policy == "default":
-        final_limit = float(package_gb + remaining_gb)
-        final_days = int(package_days)
-    else:
-        # advanced: سوخت کامل پکیج قبلی
-        final_limit = float(package_gb)
-        final_days = int(package_days)
+    final_limit = float(package_gb + remaining_gb) if volume_mode == "add" else float(package_gb)
+    final_days = int(package_days + remaining_days) if time_mode == "add" else int(package_days)
 
     now_date = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
     now_dt = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")

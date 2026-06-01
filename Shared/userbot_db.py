@@ -56,6 +56,8 @@ DEFAULT_BUY_RENEW_SETTINGS = {
     "plan_columns": 1,      # 1 | 2
     "server_columns": 1,    # 1 | 2 | 3
     "renew_policy": "advanced",  # advanced | default | fair
+    "renew_volume_mode": "reset",  # reset | add
+    "renew_time_mode": "reset",    # reset | add
     "renew_max_days": 3,
     "renew_max_remaining_gb": 3,
     "renew_unlimited_volume": False,
@@ -492,6 +494,20 @@ def toggle_subscription_setting(name: str) -> Dict[str, bool]:
     return set_subscription_settings(settings)
 
 
+def _renew_modes_from_policy(policy: str) -> Tuple[str, str]:
+    normalized = str(policy or "").strip().lower()
+    if normalized == "fair":
+        return "add", "add"
+    if normalized == "default":
+        return "add", "reset"
+    return "reset", "reset"
+
+
+def _normalize_renew_mode(value: Any, fallback: str) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in {"add", "reset"} else fallback
+
+
 def get_buy_renew_settings() -> Dict[str, Any]:
     init_db()
     conn = _get_conn()
@@ -531,6 +547,13 @@ def get_buy_renew_settings() -> Dict[str, Any]:
         if policy == "oversell":
             policy = "default"
         settings["renew_policy"] = policy if policy in {"fair", "advanced", "default"} else "advanced"
+        fallback_volume_mode, fallback_time_mode = _renew_modes_from_policy(settings["renew_policy"])
+        settings["renew_volume_mode"] = _normalize_renew_mode(
+            settings.get("renew_volume_mode"), fallback_volume_mode
+        )
+        settings["renew_time_mode"] = _normalize_renew_mode(
+            settings.get("renew_time_mode"), fallback_time_mode
+        )
         try:
             settings["renew_max_days"] = max(1, int(settings.get("renew_max_days") or 3))
         except Exception:
@@ -584,6 +607,13 @@ def set_buy_renew_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     if policy == "oversell":
         policy = "default"
     current["renew_policy"] = policy if policy in {"fair", "advanced", "default"} else "advanced"
+    fallback_volume_mode, fallback_time_mode = _renew_modes_from_policy(current["renew_policy"])
+    current["renew_volume_mode"] = _normalize_renew_mode(
+        current.get("renew_volume_mode"), fallback_volume_mode
+    )
+    current["renew_time_mode"] = _normalize_renew_mode(
+        current.get("renew_time_mode"), fallback_time_mode
+    )
     try:
         current["renew_max_days"] = max(1, int(current.get("renew_max_days") or 3))
     except Exception:
@@ -750,6 +780,22 @@ def set_buy_renew_policy(policy: str) -> Dict[str, Any]:
     if p == "oversell":
         p = "default"
     settings["renew_policy"] = p if p in {"fair", "advanced", "default"} else "advanced"
+    volume_mode, time_mode = _renew_modes_from_policy(settings["renew_policy"])
+    settings["renew_volume_mode"] = volume_mode
+    settings["renew_time_mode"] = time_mode
+    return set_buy_renew_settings(settings)
+
+
+def set_buy_renew_rollover_mode(kind: str, mode: str) -> Dict[str, Any]:
+    settings = get_buy_renew_settings()
+    kind_norm = str(kind or "").strip().lower()
+    mode_norm = str(mode or "").strip().lower()
+    if mode_norm not in {"add", "reset"}:
+        mode_norm = "reset"
+    if kind_norm == "volume":
+        settings["renew_volume_mode"] = mode_norm
+    elif kind_norm == "time":
+        settings["renew_time_mode"] = mode_norm
     return set_buy_renew_settings(settings)
 
 

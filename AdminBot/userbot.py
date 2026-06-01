@@ -1810,14 +1810,44 @@ def build_server_columns_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboa
 
 def build_renew_policy_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboardMarkup:
     policy = str(settings.get("renew_policy") or "advanced").strip().lower()
+    volume_mode = str(settings.get("renew_volume_mode") or "").strip().lower()
+    time_mode = str(settings.get("renew_time_mode") or "").strip().lower()
+    if volume_mode not in {"add", "reset"}:
+        volume_mode = "add" if policy in {"default", "fair"} else "reset"
+    if time_mode not in {"add", "reset"}:
+        time_mode = "add" if policy == "fair" else "reset"
     fair_icon = "✅" if policy == "fair" else "❌"
     advanced_icon = "✅" if policy == "advanced" else "❌"
     default_icon = "✅" if policy == "default" else "❌"
+    volume_add_icon = "✅" if volume_mode == "add" else "❌"
+    volume_reset_icon = "✅" if volume_mode == "reset" else "❌"
+    time_add_icon = "✅" if time_mode == "add" else "❌"
+    time_reset_icon = "✅" if time_mode == "reset" else "❌"
     rows = [
         [
             InlineKeyboardButton(f"پیشفرض | {default_icon}", callback_data="userbot:settings:buy_renew:renew_policy:default"),
             InlineKeyboardButton(f"پیشرفته | {advanced_icon}", callback_data="userbot:settings:buy_renew:renew_policy:advanced"),
             InlineKeyboardButton(f"منصفانه | {fair_icon}", callback_data="userbot:settings:buy_renew:renew_policy:fair"),
+        ],
+        [
+            InlineKeyboardButton(
+                f"حجم افزایشی | {volume_add_icon}",
+                callback_data="userbot:settings:buy_renew:renew_rollover:volume:add",
+            ),
+            InlineKeyboardButton(
+                f"حجم ریست | {volume_reset_icon}",
+                callback_data="userbot:settings:buy_renew:renew_rollover:volume:reset",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"زمان افزایشی | {time_add_icon}",
+                callback_data="userbot:settings:buy_renew:renew_rollover:time:add",
+            ),
+            InlineKeyboardButton(
+                f"زمان ریست | {time_reset_icon}",
+                callback_data="userbot:settings:buy_renew:renew_rollover:time:reset",
+            ),
         ],
         [InlineKeyboardButton("حداکثر زمان مجاز برای تمدید📊", callback_data="userbot:settings:buy_renew:renew_limit:days")],
         [InlineKeyboardButton("حداکثر مصرف مجاز برای تمدید📆", callback_data="userbot:settings:buy_renew:renew_limit:usage")],
@@ -1884,6 +1914,9 @@ def _get_buy_renew_settings() -> Dict[str, Any]:
             "renew_mode": "plans",
             "plan_columns": 1,
             "server_columns": 1,
+            "renew_policy": "advanced",
+            "renew_volume_mode": "reset",
+            "renew_time_mode": "reset",
             "renew_unlimited_volume": False,
             "renew_unlimited_time": False,
             "renew_unlimited_volume_from_gb": 1000,
@@ -2645,6 +2678,8 @@ def _legacy_build_userbot_settings(data: Dict[str, Any], money_scale: int) -> Di
             "plan_columns": max(1, min(2, i("plans_columns", buy_renew["plan_columns"]))),
             "server_columns": max(1, min(3, i("servers_columns", buy_renew["server_columns"]))),
             "renew_policy": renew_policy,
+            "renew_volume_mode": "add" if renew_policy in {"default", "fair"} else "reset",
+            "renew_time_mode": "add" if renew_policy == "fair" else "reset",
             "renew_max_days": max(1, i("advanced_renewal_days", buy_renew["renew_max_days"])),
             "renew_max_remaining_gb": max(
                 1, i("advanced_renewal_usage", buy_renew["renew_max_remaining_gb"])
@@ -6175,8 +6210,21 @@ async def send_renew_policy_menu(chat_id: int, context: ContextTypes.DEFAULT_TYP
     settings = _get_buy_renew_settings()
     days = int(settings.get("renew_max_days") or 3)
     usage = int(settings.get("renew_max_remaining_gb") or 3)
+    policy = str(settings.get("renew_policy") or "advanced").strip().lower()
+    policy_title = {"advanced": "پیشرفته", "default": "پیشفرض", "fair": "منصفانه"}.get(policy, "پیشرفته")
+    volume_mode = str(settings.get("renew_volume_mode") or "").strip().lower()
+    time_mode = str(settings.get("renew_time_mode") or "").strip().lower()
+    if volume_mode not in {"add", "reset"}:
+        volume_mode = "add" if policy in {"default", "fair"} else "reset"
+    if time_mode not in {"add", "reset"}:
+        time_mode = "add" if policy == "fair" else "reset"
+    volume_text = "افزایشی (باقیمانده + پلن جدید)" if volume_mode == "add" else "ریست (فقط پلن جدید)"
+    time_text = "افزایشی (باقیمانده + پلن جدید)" if time_mode == "add" else "ریست (فقط پلن جدید)"
     text = (
         "تنظیم شیوه تمدید\n"
+        f"⚙️ پروفایل فعلی: {policy_title}\n"
+        f"📦 حالت حجم در تمدید: {volume_text}\n"
+        f"⏳ حالت زمان در تمدید: {time_text}\n"
         f"📊 مقدار فعلی زمان: {days} روز\n"
         f"📆 مقدار فعلی مصرف: {usage} گیگابایت"
     )
@@ -7754,6 +7802,26 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
+            return
+        if ":renew_rollover:" in data:
+            tail = data.split(":renew_rollover:", 1)[-1]
+            try:
+                kind, mode = tail.split(":", 1)
+            except ValueError:
+                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                return
+            kind = str(kind or "").strip().lower()
+            mode = str(mode or "").strip().lower()
+            if kind not in {"volume", "time"} or mode not in {"add", "reset"}:
+                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                return
+            try:
+                userbot_db.set_buy_renew_rollover_mode(kind, mode)
+            except Exception as e:
+                await query.answer(f"خطا: {e}", show_alert=True)
+                return
+            await query.answer("✅ ذخیره شد")
+            await send_renew_policy_menu(cid, context, message=msg)
             return
         if ":renew_policy:" in data:
             policy = data.rsplit(":", 1)[-1].strip().lower()
