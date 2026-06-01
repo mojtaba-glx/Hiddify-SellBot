@@ -1180,29 +1180,45 @@ interactive_menu() {
     read -rp "Press Enter to return menu..." _
   }
 
+  _run_force_update_with_confirm() {
+    local confirm=""
+    _yellow "Force Update will hard-sync code from Git and restart bots."
+    _yellow "Runtime data (.env / database / servers / plans) is preserved."
+    read -rp "Type FORCE to continue (or anything else to cancel): " confirm
+    if [ "$confirm" != "FORCE" ]; then
+      _yellow "Cancelled."
+      echo "-----------------------------------------"
+      read -rp "Press Enter to return menu..." _
+      return 0
+    fi
+    _run_menu_cmd update-force
+  }
+
   while true; do
     refresh_app_version
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
     echo "========================================="
     echo "1) install"
-    echo "2) update"
-    echo "3) restart"
-    echo "4) status"
-    echo "5) autostart manager"
-    echo "6) ssl setup wizard"
-    echo "7) help"
+    echo "2) update (safe)"
+    echo "3) update-force (hard sync)"
+    echo "4) restart"
+    echo "5) status"
+    echo "6) autostart manager"
+    echo "7) ssl setup wizard"
+    echo "8) help"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
     case "${choice:-}" in
       1) _run_menu_cmd install ;;
       2) _run_menu_cmd update ;;
-      3) _run_menu_cmd restart ;;
-      4) _run_menu_cmd status ;;
-      5) autostart_menu ;;
-      6) _run_ssl_wizard ;;
-      7) _run_menu_cmd help ;;
+      3) _run_force_update_with_confirm ;;
+      4) _run_menu_cmd restart ;;
+      5) _run_menu_cmd status ;;
+      6) autostart_menu ;;
+      7) _run_ssl_wizard ;;
+      8) _run_menu_cmd help ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
