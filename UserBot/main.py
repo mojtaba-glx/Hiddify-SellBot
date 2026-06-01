@@ -1485,9 +1485,32 @@ def _build_panel_user_comment(user_id: int, *, is_test: bool = False) -> str:
     return base
 
 
+def _resolve_live_server_title(service: dict, default: str = "نامشخص") -> str:
+    stored_title = str(service.get("server_title") or "").strip()
+    try:
+        server_id = int(service.get("server_id") or 0)
+    except (TypeError, ValueError):
+        server_id = 0
+
+    if server_id > 0:
+        try:
+            server = database.get_server_by_id(server_id)
+        except Exception:
+            server = None
+        if server:
+            live_title = str(server.get("title") or "").strip()
+            if live_title:
+                return live_title
+        if stored_title:
+            return stored_title
+        return f"سرور #{server_id}"
+
+    return stored_title or default
+
+
 def _build_subscription_status_text(service):
     service_name = service.get('name') or 'سرویس'
-    server_title = service.get('server_title') or 'نامشخص'
+    server_title = _resolve_live_server_title(service, default='نامشخص')
     usage_current = _to_float(service.get('usage_current', 0))
     usage_limit = _to_float(service.get('usage_limit', 0))
     days_left = int(service.get('days_left') or 0)
@@ -2781,7 +2804,7 @@ async def _send_service_direct_configs_shell(
         )
         return
 
-    server_title = str(service.get("server_title") or "").strip()
+    server_title = _resolve_live_server_title(service, default="")
     header = "🔗 کانفیگ‌های مستقیم"
     if server_title:
         header = f"{header} | {server_title}"
@@ -3179,8 +3202,14 @@ def _build_subscription_created_caption(
     service_code: str,
     amount: Optional[int] = None,
     is_trial: bool = False,
+    is_renew: bool = False,
 ) -> str:
-    title = "📄 گزارش ایجاد اشتراک تستی" if is_trial else "📄 گزارش ایجاد اشتراک"
+    if is_trial:
+        title = "📄 گزارش ایجاد اشتراک تستی"
+    elif is_renew:
+        title = "📄 گزارش تمدید اشتراک"
+    else:
+        title = "📄 گزارش ایجاد اشتراک"
     lines = [
         title,
         "",
@@ -4271,6 +4300,7 @@ async def _process_wallet_purchase(
                     days=days,
                     amount=amount,
                     service_code=service_code,
+                    is_renew=is_renew_flow,
                 ),
                 reply_markup=kb,
             )

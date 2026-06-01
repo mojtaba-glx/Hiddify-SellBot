@@ -428,6 +428,89 @@ def _get_server_plans_block(data: dict, server_id: int) -> dict:
     return server
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _plans_container_to_list(raw_plans: Any) -> list[dict]:
+    if isinstance(raw_plans, list):
+        return [p for p in raw_plans if isinstance(p, dict)]
+    if isinstance(raw_plans, dict):
+        out: list[dict] = []
+        for raw_id, p in raw_plans.items():
+            if not isinstance(p, dict):
+                continue
+            item = dict(p)
+            item.setdefault("id", raw_id)
+            out.append(item)
+        return out
+    return []
+
+
+def _normalize_plan_record(raw_plan: dict, fallback_id: int) -> dict:
+    p = dict(raw_plan or {})
+    pid = _safe_int(p.get("id"), fallback_id)
+    if pid <= 0:
+        pid = max(1, int(fallback_id))
+    p["id"] = pid
+
+    if not str(p.get("title") or "").strip():
+        p["title"] = str(p.get("name") or f"پلن #{pid}").strip()
+
+    if p.get("days") in (None, "", 0):
+        for key in ("duration_days", "duration", "day", "package_days", "period_days"):
+            if p.get(key) not in (None, "", 0):
+                p["days"] = _safe_int(p.get(key), 0)
+                break
+    else:
+        p["days"] = _safe_int(p.get("days"), 0)
+
+    if p.get("gb") in (None, ""):
+        for key in ("usage_limit_GB", "volume_GB", "volume", "traffic_gb", "package_traffic"):
+            if p.get(key) not in (None, ""):
+                p["gb"] = _safe_float(p.get(key), 0.0)
+                break
+    else:
+        p["gb"] = _safe_float(p.get("gb"), 0.0)
+
+    if p.get("price") in (None, ""):
+        for key in ("price_toman", "amount", "toman_price"):
+            if p.get(key) not in (None, ""):
+                p["price"] = _safe_int(p.get(key), 0)
+                break
+    else:
+        p["price"] = _safe_int(p.get("price"), 0)
+
+    return p
+
+
+def _normalize_plans_for_server(server: dict) -> list[dict]:
+    plans_raw = _plans_container_to_list(server.get("plans", []))
+    normalized: list[dict] = []
+    for idx, p in enumerate(plans_raw, start=1):
+        normalized.append(_normalize_plan_record(p, idx))
+
+    seen: set[int] = set()
+    deduped: list[dict] = []
+    for p in sorted(normalized, key=lambda item: _safe_int(item.get("id"), 0)):
+        pid = _safe_int(p.get("id"), 0)
+        if pid <= 0 or pid in seen:
+            continue
+        seen.add(pid)
+        deduped.append(p)
+    return deduped
+
+
 # ---------- حالت نمایش پلن‌ها ----------
 def get_plan_mode(server_id: int, default: str = "dynamic") -> str:
     data = _load_plans_data()
@@ -514,7 +597,10 @@ def delete_plan_category(server_id: int, category_id: int) -> None:
 def get_plans(server_id: int, category_id: int | None = None) -> list[dict]:
     data = _load_plans_data()
     server = _get_server_plans_block(data, server_id)
-    plans = list(server.get("plans", []))
+    plans = _normalize_plans_for_server(server)
+    if not plans:
+        # fallback سازگار با بکاپ/ساختار قدیمی (servers.json)
+        plans = [_normalize_plan_record(p, idx) for idx, p in enumerate(_legacy_get_plans(server_id), start=1)]
     if category_id is not None:
         cid = int(category_id)
         plans = [p for p in plans if int(p.get("category_id", 0)) == cid]
@@ -522,11 +608,9 @@ def get_plans(server_id: int, category_id: int | None = None) -> list[dict]:
 
 
 def get_plan(server_id: int, plan_id: int) -> dict | None:
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
     pid = int(plan_id)
-    for p in server.get("plans", []):
-        if int(p.get("id", 0)) == pid:
+    for p in get_plans(server_id):
+        if _safe_int(p.get("id"), 0) == pid:
             return p
     return None
 

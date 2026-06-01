@@ -406,6 +406,11 @@ ADD_USER_NAME = "add_user_name"
 ADD_USER_USAGE = "add_user_usage"
 ADD_USER_DAYS = "add_user_days"
 ADD_USER_CONFIRM = "add_user_confirm"
+ADD_MULTI_USERS_INPUT = "add_user_multi_count"
+ADD_MULTI_USERS_BASE_NAME = "add_user_multi_base_name"
+ADD_MULTI_USERS_USAGE = "add_user_multi_usage"
+ADD_MULTI_USERS_DAYS = "add_user_multi_days"
+ADD_MULTI_USERS_CONFIRM = "add_user_multi_confirm"
 ADD_USER_PLAN_NAME = "add_user_plan_name"
 ADD_USER_PLAN_CONFIRM = "add_user_plan_confirm"
 
@@ -466,6 +471,90 @@ def _format_usage_current(value: Any) -> str:
     if text.endswith("0"):
         return text[:-1]
     return text
+
+
+_FA_DIGITS_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+
+
+def _normalize_num_token(raw: str) -> str:
+    token = str(raw or "").strip().translate(_FA_DIGITS_TRANS)
+    token = token.replace("٬", "").replace("٫", ".").replace(" ", "")
+    if token.count(",") > 0:
+        # 1,5 => 1.5
+        if "." not in token and token.count(",") == 1 and len(token.split(",")[-1]) <= 2:
+            token = token.replace(",", ".")
+        else:
+            token = token.replace(",", "")
+    return token
+
+
+def _parse_positive_float(raw: str) -> Optional[float]:
+    token = _normalize_num_token(raw)
+    try:
+        value = float(token)
+    except Exception:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _parse_positive_int(raw: str) -> Optional[int]:
+    token = _normalize_num_token(raw)
+    try:
+        value = int(token)
+    except Exception:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _parse_bulk_users_text(raw_text: str) -> tuple[List[Dict[str, Any]], List[str]]:
+    entries: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    lines = [ln.strip() for ln in str(raw_text or "").splitlines() if ln.strip()]
+
+    for idx, line in enumerate(lines, start=1):
+        name = ""
+        gb_raw = ""
+        days_raw = ""
+
+        parts = re.split(r"\s*[|,،;]\s*", line, maxsplit=2)
+        if len(parts) == 3:
+            name, gb_raw, days_raw = [p.strip() for p in parts]
+        else:
+            tokens = [t.strip() for t in line.split() if t.strip()]
+            if len(tokens) >= 3:
+                name = " ".join(tokens[:-2]).strip()
+                gb_raw = tokens[-2]
+                days_raw = tokens[-1]
+
+        if not name:
+            errors.append(f"خط {idx}: نام کاربر نامعتبر است.")
+            continue
+
+        gb = _parse_positive_float(gb_raw)
+        if gb is None:
+            errors.append(f"خط {idx}: حجم نامعتبر است («{gb_raw}»).")
+            continue
+
+        days = _parse_positive_int(days_raw)
+        if days is None:
+            errors.append(f"خط {idx}: روز نامعتبر است («{days_raw}»).")
+            continue
+
+        entries.append(
+            {
+                "name": name,
+                "usage_limit_GB": float(gb),
+                "package_days": int(days),
+            }
+        )
+
+    if not entries and not errors:
+        errors.append("هیچ خط معتبری دریافت نشد.")
+    return entries, errors
 
 
 def _format_usage_limit(value: Any) -> str:
@@ -1137,6 +1226,12 @@ def build_user_ops_keyboard(server_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
+                "افزودن چندین کاربر➕",
+                callback_data=f"userops:{server_id}:add_multi",
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 "افزودن کاربر با پلن➕",
                 callback_data=f"userops:{server_id}:add_with_plan",
             )
@@ -1689,6 +1784,7 @@ async def send_expired_user_detail(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    context.user_data["userdel_source"] = "expired"
     server = database.get_server_by_id(server_id)
     if not server:
         text = "❌ سرور پیدا نشد."
@@ -1763,6 +1859,7 @@ async def send_user_detail(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    context.user_data["userdel_source"] = "users"
     server = database.get_server_by_id(server_id)
     if not server:
         text = "❌ سرور پیدا نشد."
@@ -2484,32 +2581,7 @@ async def send_expired_users_list(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
-    servers = database.get_servers()
-    results: List[Dict[str, Any]] = []
-    online_count = 0
-
-    valid_servers = [s for s in servers if s.get("id") is not None]
-    users_batches = await asyncio.gather(*[_list_server_users_fast(s) for s in valid_servers])
-
-    for s, users in zip(valid_servers, users_batches):
-        server_id = s.get("id")
-        server_title = s.get("title") or f"سرور #{server_id}"
-
-        for u in users:
-            status = classify_user_status(u)
-            if status == "expired":
-                user_uuid = str(u.get("uuid") or u.get("id") or "")
-                name = u.get("name") or u.get("username") or f"User_{user_uuid}"
-                results.append(
-                    {
-                        "server_id": server_id,
-                        "server_title": server_title,
-                        "user_uuid": user_uuid,
-                        "name": name,
-                    }
-                )
-            if status == "online":
-                online_count += 1
+    results, online_count = await _collect_expired_users()
 
     if not results:
         text = (
@@ -2555,6 +2627,9 @@ async def send_expired_users_list(
         keyboard_rows.append(list(reversed(chunk)))
 
     keyboard_rows.append(
+        [InlineKeyboardButton("🗑 حذف همه کاربران منقضی", callback_data="expired:delall:ask")]
+    )
+    keyboard_rows.append(
         [InlineKeyboardButton("بازگشت🔙", callback_data="expired:back")]
     )
 
@@ -2570,6 +2645,127 @@ async def send_expired_users_list(
             raise
     else:
         await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def _collect_expired_users() -> tuple[List[Dict[str, Any]], int]:
+    servers = database.get_servers()
+    results: List[Dict[str, Any]] = []
+    online_count = 0
+
+    valid_servers = [s for s in servers if s.get("id") is not None]
+    users_batches = await asyncio.gather(*[_list_server_users_fast(s) for s in valid_servers])
+
+    for s, users in zip(valid_servers, users_batches):
+        server_id = s.get("id")
+        server_title = s.get("title") or f"سرور #{server_id}"
+
+        for u in users:
+            status = classify_user_status(u)
+            if status == "expired":
+                user_uuid = str(u.get("uuid") or u.get("id") or "")
+                name = u.get("name") or u.get("username") or f"User_{user_uuid}"
+                results.append(
+                    {
+                        "server_id": server_id,
+                        "server_title": server_title,
+                        "user_uuid": user_uuid,
+                        "name": name,
+                    }
+                )
+            if status == "online":
+                online_count += 1
+
+    return results, online_count
+
+
+def _dedupe_expired_targets(expired_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[tuple[tuple[int, ...], str]] = set()
+
+    for row in expired_rows:
+        try:
+            sid = int(row.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        uuid = str(row.get("user_uuid") or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+
+        related_ids: List[int] = []
+        for target in (_get_related_server_targets(sid) or []):
+            try:
+                tid = int(target.get("id") or 0)
+            except (TypeError, ValueError):
+                tid = 0
+            if tid > 0:
+                related_ids.append(tid)
+        if not related_ids:
+            related_ids = [sid]
+        cluster = tuple(sorted(set(related_ids)))
+        key = (cluster, uuid)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(
+            {
+                "server_id": sid,
+                "user_uuid": uuid,
+                "name": str(row.get("name") or uuid),
+            }
+        )
+    return deduped
+
+
+async def _delete_user_across_related_servers(
+    server_id: int,
+    user_uuid: str,
+) -> tuple[List[int], List[str]]:
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return [], [f"سرور #{server_id}: یافت نشد"]
+
+    related_servers = _get_related_server_targets(server_id)
+    if not related_servers:
+        related_servers = [server]
+
+    deleted_server_ids: List[int] = []
+    failed_servers: List[str] = []
+
+    for target in related_servers:
+        try:
+            target_id = int(target.get("id") or 0)
+        except (TypeError, ValueError):
+            target_id = 0
+        if target_id <= 0:
+            continue
+
+        target_title = (target.get("title") or f"سرور #{target_id}").strip()
+        try:
+            if hasattr(hiddify_api, "delete_user"):
+                await hiddify_api.delete_user(target, user_uuid)
+            else:
+                await hiddify_api.disable_user(target, user_uuid)
+        except Exception as e:
+            failed_servers.append(f"{target_title}: {e}")
+            continue
+
+        deleted_server_ids.append(target_id)
+
+        try:
+            local_id = int(user_uuid)
+            try:
+                database.delete_user(target_id, local_id)
+            except Exception:
+                pass
+        except ValueError:
+            pass
+
+        try:
+            userbot_db.delete_services_by_panel_user(target_id, user_uuid)
+        except Exception:
+            pass
+
+    return deleted_server_ids, failed_servers
 
 
 # ===============================
@@ -3114,6 +3310,7 @@ async def handle_add_user_flow(
         context.user_data.pop("state", None)
         context.user_data.pop("add_user_server_id", None)
         context.user_data.pop("add_user", None)
+        context.user_data.pop("add_multi_users", None)
         context.user_data.pop("add_user_plan_id", None)
         await message.reply_text(
             "❌ عملیات افزودن کاربر لغو شد.",
@@ -3194,7 +3391,103 @@ async def handle_add_user_flow(
         )
         return
 
-    # حالت معمولی: نام → حجم → روز
+    # حالت: افزودن چندین کاربر (مرحله‌ای)
+    if state == ADD_MULTI_USERS_INPUT:
+        count = _parse_positive_int(text)
+        if count is None:
+            await message.reply_text(
+                "❌ لطفاً تعداد معتبر وارد کنید.\nمثال: 5",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        if count > 100:
+            await message.reply_text(
+                "❌ حداکثر 100 کاربر را در هر مرحله می‌توانید اضافه کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        context.user_data["add_multi_users"] = {"count": int(count)}
+        context.user_data["state"] = ADD_MULTI_USERS_BASE_NAME
+        await message.reply_text(
+            "✅ تعداد کاربران ثبت شد.\n"
+            "📝 لطفاً نام پایه را وارد کنید.\n"
+            "مثال: تست",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == ADD_MULTI_USERS_BASE_NAME:
+        base_name = str(text or "").strip()
+        if not base_name:
+            await message.reply_text(
+                "❌ نام پایه نمی‌تواند خالی باشد.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        spec = context.user_data.get("add_multi_users") or {}
+        spec["base_name"] = base_name
+        context.user_data["add_multi_users"] = spec
+        context.user_data["state"] = ADD_MULTI_USERS_USAGE
+        await message.reply_text(
+            "📊 لطفاً حجم هر کاربر (GB) را وارد کنید:\n"
+            "مثال: 5 یا 0.5",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == ADD_MULTI_USERS_USAGE:
+        usage_gb = _parse_positive_float(text)
+        if usage_gb is None:
+            await message.reply_text(
+                "❌ لطفاً یک عدد معتبر بزرگ‌تر از صفر برای حجم وارد کنید.\nمثال: 5 یا 0.5",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        spec = context.user_data.get("add_multi_users") or {}
+        spec["usage_limit_GB"] = float(usage_gb)
+        context.user_data["add_multi_users"] = spec
+        context.user_data["state"] = ADD_MULTI_USERS_DAYS
+        await message.reply_text(
+            "📅 لطفاً مدت هر کاربر (روز) را وارد کنید:\n"
+            "مثال: 30",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == ADD_MULTI_USERS_DAYS:
+        days = _parse_positive_int(text)
+        if days is None:
+            await message.reply_text(
+                "❌ لطفاً یک عدد صحیح معتبر برای روز وارد کنید.\nمثال: 30",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        spec = context.user_data.get("add_multi_users") or {}
+        spec["package_days"] = int(days)
+        context.user_data["add_multi_users"] = spec
+        context.user_data["state"] = ADD_MULTI_USERS_CONFIRM
+
+        count = int(spec.get("count") or 0)
+        base_name = str(spec.get("base_name") or "").strip()
+        usage = float(spec.get("usage_limit_GB") or 0)
+        sample_names = [base_name if i == 0 else f"{base_name}{i}" for i in range(max(0, min(count, 6)))]
+        names_preview = "، ".join(sample_names) if sample_names else "-"
+        summary = (
+            "لطفاً اطلاعات را تایید کنید:\n"
+            f"👥 تعداد: {count} کاربر\n"
+            f"👤 نام پایه: {base_name}\n"
+            f"📊 حجم هر کاربر: {format_gb(usage)} گیگابایت\n"
+            f"📅 مدت هر کاربر: {days} روز\n"
+            f"🧾 نمونه نام‌ها: {names_preview}"
+        )
+        await message.reply_text(summary, reply_markup=confirm_add_user_keyboard())
+        return
+
     if state == ADD_USER_NAME:
         new_user["name"] = text
         context.user_data["add_user"] = new_user
@@ -3255,6 +3548,132 @@ async def handle_add_user_flow(
         return
 
     # مرحله تایید برای هر دو حالت
+    if state == ADD_MULTI_USERS_CONFIRM:
+        if _is_confirm_text(text):
+            server = database.get_server_by_id(server_id)
+            if not server:
+                await message.reply_text(
+                    "❌ سرور پیدا نشد.",
+                    reply_markup=admin_main_keyboard(),
+                )
+                context.user_data.pop("state", None)
+                context.user_data.pop("add_multi_users", None)
+                context.user_data.pop("add_user_server_id", None)
+                return
+
+            spec = context.user_data.get("add_multi_users") or {}
+            count = int(spec.get("count") or 0)
+            base_name = str(spec.get("base_name") or "").strip()
+            usage_gb = spec.get("usage_limit_GB")
+            days = spec.get("package_days")
+
+            if count <= 0 or not base_name or usage_gb is None or not days:
+                await message.reply_text(
+                    "❌ اطلاعات افزودن چندکاربره ناقص است. دوباره تلاش کنید.",
+                    reply_markup=admin_main_keyboard(),
+                )
+                context.user_data.pop("state", None)
+                context.user_data.pop("add_multi_users", None)
+                context.user_data.pop("add_user_server_id", None)
+                return
+
+            success: List[Dict[str, Any]] = []
+            failed: List[str] = []
+            now_date = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
+            now_dt = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+            for i in range(count):
+                user_name = base_name if i == 0 else f"{base_name}{i}"
+                payload = {
+                    "name": user_name,
+                    "usage_limit_GB": float(usage_gb),
+                    "package_days": int(days),
+                    "start_date": now_date,
+                    "current_usage_GB": 0,
+                    "last_reset_time": now_dt,
+                    "is_active": True,
+                }
+                try:
+                    created = await hiddify_api.create_user(server, payload)
+                    success.append(
+                        {
+                            "name": user_name,
+                            "uuid": str(created.get("uuid") or created.get("id") or "").strip(),
+                        }
+                    )
+                except Exception as e:
+                    err = str(e).strip().splitlines()[0] if str(e).strip() else "خطای نامشخص"
+                    failed.append(f"{user_name}: {err}")
+
+            context.user_data.pop("state", None)
+            context.user_data.pop("add_multi_users", None)
+            context.user_data.pop("add_user_server_id", None)
+            context.user_data.pop("add_user", None)
+            context.user_data.pop("add_user_plan_id", None)
+
+            lines = [
+                "📦 نتیجه افزودن چندین کاربر",
+                f"✅ موفق: {len(success)}",
+                f"❌ ناموفق: {len(failed)}",
+            ]
+            if success:
+                lines.append("")
+                lines.append("کاربران ساخته‌شده:")
+                for row in success[:12]:
+                    lines.append(f"• {row['name']}")
+                if len(success) > 12:
+                    lines.append(f"... و {len(success) - 12} کاربر دیگر")
+
+            if failed:
+                lines.append("")
+                lines.append("خطاها:")
+                for row in failed[:8]:
+                    lines.append(f"• {row}")
+                if len(failed) > 8:
+                    lines.append(f"... و {len(failed) - 8} خطای دیگر")
+
+            await message.reply_text(
+                "\n".join(lines),
+                reply_markup=admin_main_keyboard(),
+            )
+
+            # ارسال جزئیات + لینک QR برای کاربران ساخته‌شده
+            detail_limit = 20
+            if len(success) > detail_limit:
+                await context.bot.send_message(
+                    chat_id=message.chat_id,
+                    text=f"ℹ️ برای جلوگیری از شلوغی چت، جزئیات فقط برای {detail_limit} کاربر اول ارسال می‌شود.",
+                )
+
+            for idx, row in enumerate(success):
+                if idx >= detail_limit:
+                    break
+                row_uuid = str(row.get("uuid") or "").strip()
+                if not row_uuid:
+                    continue
+
+                await send_user_detail(server_id, row_uuid, message.chat_id, context)
+
+                base_url = _build_user_base_url(server, row_uuid)
+                if not base_url:
+                    continue
+                sub_url = f"{base_url}/all.txt"
+                qr_image = make_qr_image(sub_url)
+                await context.bot.send_photo(
+                    chat_id=message.chat_id,
+                    photo=qr_image,
+                    caption=f"🔗 لینک اشتراک {row.get('name')}:\n{sub_url}",
+                )
+
+            await send_user_list(server_id, message.chat_id, context)
+            return
+
+        await message.reply_text(
+            "لطفاً با دکمه‌های «✅تایید» یا «❌لغو» پاسخ دهید.",
+            reply_markup=confirm_add_user_keyboard(),
+        )
+        return
+
     if state in {ADD_USER_CONFIRM, ADD_USER_PLAN_CONFIRM}:
         if _is_confirm_text(text):
             server = database.get_server_by_id(server_id)
@@ -3697,6 +4116,90 @@ async def handle_server_inline_callback(
             await send_search_menu(chat_id=msg.chat_id, context=context, message=msg)
             return
 
+        if data == "expired:delall:ask":
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ بله، حذف همه کاربران منقضی",
+                            callback_data="expired:delall:yes",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "❌ لغو",
+                            callback_data="expired:delall:no",
+                        )
+                    ],
+                ]
+            )
+            await msg.edit_text(
+                "⚠️ آیا از حذف همزمان همه کاربران منقضی مطمئن هستید؟\n"
+                "این عملیات قابل بازگشت نیست.",
+                reply_markup=kb,
+            )
+            return
+
+        if data == "expired:delall:no":
+            await send_expired_users_list(chat_id=msg.chat_id, context=context, message=msg)
+            return
+
+        if data == "expired:delall:yes":
+            await msg.edit_text("⏳ در حال حذف کاربران منقضی...")
+            rows, _ = await _collect_expired_users()
+            targets = _dedupe_expired_targets(rows)
+
+            if not targets:
+                await msg.edit_text("ℹ️ کاربر منقضی برای حذف پیدا نشد.")
+                return
+
+            total = len(targets)
+            success_count = 0
+            partial_count = 0
+            failed_count = 0
+            failed_samples: List[str] = []
+
+            for target in targets:
+                sid = int(target.get("server_id") or 0)
+                user_uuid = str(target.get("user_uuid") or "").strip()
+                if sid <= 0 or not user_uuid:
+                    failed_count += 1
+                    continue
+
+                deleted_server_ids, failed_servers = await _delete_user_across_related_servers(
+                    sid, user_uuid
+                )
+
+                if deleted_server_ids and not failed_servers:
+                    success_count += 1
+                elif deleted_server_ids and failed_servers:
+                    partial_count += 1
+                    if len(failed_samples) < 3:
+                        failed_samples.append(f"uuid={user_uuid} ({len(failed_servers)} خطا)")
+                else:
+                    failed_count += 1
+                    if len(failed_samples) < 3:
+                        failed_samples.append(f"uuid={user_uuid} (عدم حذف)")
+
+            if success_count > 0 and partial_count == 0 and failed_count == 0:
+                await msg.edit_text(
+                    "✅ کاربران منقضی با موفقیت از سرور اصلی و نودهای مرتبط حذف شدند.\n"
+                    f"👤 تعداد حذف‌شده: {success_count}"
+                )
+                return
+
+            text = (
+                "✅ عملیات حذف گروهی کاربران منقضی انجام شد.\n"
+                f"👤 کل: {total}\n"
+                f"✅ موفق کامل: {success_count}\n"
+                f"⚠️ موفق ناقص: {partial_count}\n"
+                f"❌ ناموفق: {failed_count}"
+            )
+            if failed_samples:
+                text += "\n\nنمونه خطا:\n- " + "\n- ".join(failed_samples)
+            await msg.edit_text(text)
+            return
+
         parts = data.split(":")
         if len(parts) >= 4 and parts[1] == "sel":
             try:
@@ -3719,12 +4222,20 @@ async def handle_server_inline_callback(
     # ------ حذف کاربر (deluser:...) ------
     if data.startswith("deluser:"):
         await query.answer()
+        parts = data.split(":")
+        if len(parts) < 4:
+            await msg.edit_text("❌ داده‌ی دکمه حذف نامعتبر است.")
+            return
         try:
-            _, sid_str, user_uuid, choice = data.split(":", 3)
-            server_id = int(sid_str)
+            server_id = int(parts[1])
         except ValueError:
             await msg.edit_text("❌ داده‌ی دکمه حذف نامعتبر است.")
             return
+        user_uuid = parts[2]
+        choice = parts[3]
+        source = parts[4] if len(parts) >= 5 else "users"
+        if source not in {"users", "expired"}:
+            source = "users"
 
         try:
             await msg.edit_reply_markup(reply_markup=None)
@@ -3735,54 +4246,9 @@ async def handle_server_inline_callback(
             await msg.edit_text("❌ حذف کاربر لغو شد.")
             return
 
-        server = database.get_server_by_id(server_id)
-        if not server:
-            await msg.edit_text("❌ سرور پیدا نشد.")
-            return
-
-        related_servers = _get_related_server_targets(server_id)
-        if not related_servers:
-            related_servers = [server]
-
-        deleted_server_ids: List[int] = []
-        failed_servers: List[str] = []
-
-        for target in related_servers:
-            try:
-                target_id = int(target.get("id") or 0)
-            except (TypeError, ValueError):
-                target_id = 0
-            if target_id <= 0:
-                continue
-
-            target_title = (target.get("title") or f"سرور #{target_id}").strip()
-
-            try:
-                if hasattr(hiddify_api, "delete_user"):
-                    await hiddify_api.delete_user(target, user_uuid)
-                else:
-                    await hiddify_api.disable_user(target, user_uuid)
-            except Exception as e:
-                failed_servers.append(f"{target_title}: {e}")
-                continue
-
-            deleted_server_ids.append(target_id)
-
-            try:
-                local_id = int(user_uuid)
-                try:
-                    database.delete_user(target_id, local_id)
-                except Exception:
-                    pass
-            except ValueError:
-                pass
-
-            # همگام‌سازی با دیتابیس ربات کاربران:
-            # اگر کاربر روی پنل حذف شد، سرویس متناظر هم در userbot_services حذف شود.
-            try:
-                userbot_db.delete_services_by_panel_user(target_id, user_uuid)
-            except Exception:
-                pass
+        deleted_server_ids, failed_servers = await _delete_user_across_related_servers(
+            server_id, user_uuid
+        )
 
         if not deleted_server_ids:
             details = "\n".join(failed_servers[:3])
@@ -3799,7 +4265,8 @@ async def handle_server_inline_callback(
             )
         else:
             await msg.edit_text("✅ کاربر با موفقیت از سرور اصلی و نودهای مرتبط حذف شد.")
-        await send_user_list(server_id, chat_id, context)
+        if source != "expired":
+            await send_user_list(server_id, chat_id, context)
         return
 
     # ------ ارسال یک کانفیگ مستقیم انتخاب‌شده (cfgsend:...) ------
@@ -4129,6 +4596,26 @@ async def handle_server_inline_callback(
 
             await msg.reply_text(
                 "لطفاً نام کاربر را وارد کنید:",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        if action == "add_multi":
+            context.user_data["state"] = ADD_MULTI_USERS_INPUT
+            context.user_data["add_user_server_id"] = server_id
+            context.user_data.pop("add_user", None)
+            context.user_data.pop("add_user_plan_id", None)
+            context.user_data.pop("add_multi_users", None)
+
+            try:
+                await msg.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
+            await msg.reply_text(
+                "➕ افزودن چندین کاربر\n\n"
+                "👥 چند کاربر می‌خواهید اضافه کنید؟\n"
+                "مثال: 5",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4850,16 +5337,19 @@ async def handle_server_inline_callback(
 
         if action == "userdel" and len(parts) >= 4:
             user_uuid = parts[3]
+            userdel_source = str(context.user_data.get("userdel_source") or "users").strip().lower()
+            if userdel_source not in {"users", "expired"}:
+                userdel_source = "users"
             kb = InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
                             "✅ بله، حذف شود",
-                            callback_data=f"deluser:{server_id}:{user_uuid}:yes",
+                            callback_data=f"deluser:{server_id}:{user_uuid}:yes:{userdel_source}",
                         ),
                         InlineKeyboardButton(
                             "لغو❌",
-                            callback_data=f"deluser:{server_id}:{user_uuid}:no",
+                            callback_data=f"deluser:{server_id}:{user_uuid}:no:{userdel_source}",
                         ),
                     ]
                 ]

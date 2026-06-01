@@ -762,6 +762,29 @@ def _format_server_location_title(raw_title: str) -> str:
     return f"لوکیشن {flag} {title}"
 
 
+def _resolve_live_server_title(service: Dict[str, Any], default: str = "سرور") -> str:
+    stored_title = str(service.get("server_title") or "").strip()
+    try:
+        sid = int(service.get("server_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+
+    if sid > 0:
+        try:
+            srv = database.get_server_by_id(sid)
+        except Exception:
+            srv = None
+        if srv:
+            live_title = str(srv.get("title") or "").strip()
+            if live_title:
+                return live_title
+        if stored_title:
+            return stored_title
+        return f"سرور #{sid}"
+
+    return stored_title or default
+
+
 def _parse_service_comment_meta(raw_comment: str) -> Dict[str, str]:
     parsed: Dict[str, str] = {}
     raw = str(raw_comment or "").strip()
@@ -1104,11 +1127,7 @@ async def _resolve_service_note_text(service: Dict[str, Any]) -> str:
 
 def build_subscription_tracking_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> str:
     user_name = str(service.get("name") or "").strip() or str(user.get("full_name") or "").strip() or _display_name(user)
-    server_title = str(service.get("server_title") or "").strip()
-    if not server_title:
-        sid = service.get("server_id")
-        server_title = f"سرور #{sid}" if sid is not None else "سرور"
-    server_title = _format_server_location_title(server_title)
+    server_title = _format_server_location_title(_resolve_live_server_title(service, default="سرور"))
 
     usage_current = _to_float(service.get("usage_current"))
     usage_limit = _to_float(service.get("usage_limit"))
@@ -1149,14 +1168,7 @@ def build_subscription_tracking_detail_text(user: Dict[str, Any], service: Dict[
 def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> str:
     """متن جزئیات سرویس (برای منوی لیست سرویس‌ها)."""
     service_name = (service.get("name") or "سرویس").strip()
-    server_title = (service.get("server_title") or "").strip()
-    if not server_title:
-        server_id = service.get("server_id")
-        if server_id is not None:
-            server_title = f"سرور #{server_id}"
-        else:
-            server_title = "سرور"
-    server_title = _format_server_location_title(server_title)
+    server_title = _format_server_location_title(_resolve_live_server_title(service, default="سرور"))
 
     usage_current = _to_float(service.get("usage_current"))
     usage_limit = _to_float(service.get("usage_limit"))
