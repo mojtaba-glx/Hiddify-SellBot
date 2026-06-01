@@ -1664,15 +1664,66 @@ def _parse_panel_datetime(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
         return None
+
+    # ISO handling (with timezone / microseconds / trailing Z)
+    try:
+        iso_raw = raw.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_raw)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
+
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
             return datetime.strptime(raw, fmt)
         except ValueError:
             continue
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f",):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    if raw.endswith("Z"):
+        trimmed = raw[:-1]
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+            try:
+                return datetime.strptime(trimmed, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _optional_int_from_any(value: Any) -> Optional[int]:
+    raw = str(value or "").replace(",", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(float(raw))
+    except Exception:
+        return None
+
+
+def _usage_limit_from_panel_user(user: dict) -> Optional[float]:
+    for key in ("usage_limit_GB", "usage_limit_gb", "usage_limit", "package_traffic"):
+        if key not in user:
+            continue
+        raw = user.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        val = _to_float(raw, -1.0)
+        if val >= 0:
+            return float(val)
     return None
 
 
 def _days_left_from_panel_user(user: dict) -> Optional[int]:
+    for key in ("remaining_days", "remaining_day", "days_left"):
+        v = _optional_int_from_any(user.get(key))
+        if v is not None:
+            return v
+
     start_dt = _parse_panel_datetime(user.get("start_date"))
     package_days = user.get("package_days")
     if start_dt and package_days:
@@ -1747,7 +1798,13 @@ async def _sync_service_runtime_from_panels(service: dict) -> dict:
     total_usage = 0.0
     min_days_left: Optional[int] = None
     latest_last_online: Optional[datetime] = None
+    synced_usage_limit: Optional[float] = None
+    fallback_usage_limit: Optional[float] = None
     found_any = False
+    try:
+        primary_server_id = int(service.get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_server_id = 0
 
     for srv, uuid in targets:
         try:
@@ -1757,6 +1814,17 @@ async def _sync_service_runtime_from_panels(service: dict) -> dict:
 
         found_any = True
         total_usage += _to_float(panel_user.get("current_usage_GB"), 0.0)
+
+        panel_limit = _usage_limit_from_panel_user(panel_user)
+        if panel_limit is not None:
+            try:
+                sid = int(srv.get("id") or 0)
+            except (TypeError, ValueError):
+                sid = 0
+            if primary_server_id > 0 and sid == primary_server_id:
+                synced_usage_limit = panel_limit
+            elif fallback_usage_limit is None:
+                fallback_usage_limit = panel_limit
 
         days_left = _days_left_from_panel_user(panel_user)
         if days_left is not None:
@@ -1769,9 +1837,13 @@ async def _sync_service_runtime_from_panels(service: dict) -> dict:
     if not found_any:
         return service
 
+    if synced_usage_limit is None:
+        synced_usage_limit = fallback_usage_limit
+
     userbot_db.update_service_runtime(
         service_id=service_id,
         usage_current=total_usage,
+        usage_limit=synced_usage_limit,
         days_left=min_days_left,
         last_online=(latest_last_online.strftime("%Y-%m-%d %H:%M:%S") if latest_last_online else None),
     )
@@ -4548,8 +4620,16 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # سرویس‌هایی که روی پنل حذف شده‌اند نمایش داده نشوند.
             services, removed_count = await _filter_existing_services(services)
 
+            # قبل از نمایش وضعیت، runtime سرویس‌ها از پنل همگام شود
+            # تا تغییرات دستی حجم/زمان در پنل سریعاً داخل ربات کاربر دیده شود.
+            synced_services = await _gather_with_limit(
+                services,
+                _sync_service_runtime_from_panels,
+                limit=USERBOT_STATUS_SYNC_CONCURRENCY,
+            )
+
             # نمایش سرویس‌های فعال (با روزهای باقی‌مانده > 0)
-            active_services = [s for s in services if s.get('days_left', 0) > 0]
+            active_services = [s for s in synced_services if _to_int(s.get("days_left"), 0) > 0]
 
             if not active_services:
                 await update.message.reply_text(
@@ -4571,12 +4651,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 return
 
-            synced_services = await _gather_with_limit(
-                active_services,
-                _sync_service_runtime_from_panels,
-                limit=USERBOT_STATUS_SYNC_CONCURRENCY,
-            )
-            for service in synced_services:
+            for service in active_services:
                 msg = _build_subscription_status_text(service)
                 await update.message.reply_text(
                     msg,

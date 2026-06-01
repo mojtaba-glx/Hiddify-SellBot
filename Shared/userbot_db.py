@@ -2328,6 +2328,7 @@ def set_service_reminder_state(
 def update_service_runtime(
     service_id: int,
     usage_current: Optional[float] = None,
+    usage_limit: Optional[float] = None,
     days_left: Optional[int] = None,
     last_online: Optional[str] = None,
 ) -> None:
@@ -2337,6 +2338,9 @@ def update_service_runtime(
     if usage_current is not None:
         parts.append("usage_current = ?")
         params.append(float(usage_current))
+    if usage_limit is not None:
+        parts.append("usage_limit = ?")
+        params.append(float(usage_limit))
     if days_left is not None:
         parts.append("days_left = ?")
         params.append(int(days_left))

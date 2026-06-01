@@ -60,9 +60,22 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
     if not dt_str:
         return None
+    try:
+        iso_raw = str(dt_str).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_raw)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
             return datetime.strptime(dt_str, fmt)
+        except ValueError:
+            continue
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f",):
+        try:
+            return datetime.strptime(str(dt_str), fmt)
         except ValueError:
             continue
     return None
@@ -76,8 +89,36 @@ def _extract_uuid_from_comment(comment: Optional[str]) -> str:
     return m.group(1).strip()
 
 
+def _optional_int_from_any(value: Any) -> Optional[int]:
+    raw = str(value or "").replace(",", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(float(raw))
+    except Exception:
+        return None
+
+
+def _usage_limit_from_panel_user(user: Dict[str, Any]) -> Optional[float]:
+    for key in ("usage_limit_GB", "usage_limit_gb", "usage_limit", "package_traffic"):
+        if key not in user:
+            continue
+        raw = user.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        val = _to_float(raw, -1.0)
+        if val >= 0:
+            return float(val)
+    return None
+
+
 def _days_left_from_panel_user(user: Dict[str, Any]) -> Optional[int]:
     today_utc = datetime.now(timezone.utc).date()
+    for key in ("remaining_days", "remaining_day", "days_left"):
+        remaining = _optional_int_from_any(user.get(key))
+        if remaining is not None:
+            return remaining
+
     start_dt = _parse_dt(user.get("start_date"))
     package_days = user.get("package_days")
     if start_dt and package_days:
@@ -334,10 +375,16 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
             total_usage = 0.0
             min_days_left: Optional[int] = None
             latest_last_online: Optional[datetime] = None
+            synced_usage_limit: Optional[float] = None
+            fallback_usage_limit: Optional[float] = None
             got_any_panel_data = False
             fetched_nodes = 0
             total_nodes = 0
             not_found_nodes = 0
+            try:
+                primary_server_id = int(service.get("server_id") or 0)
+            except (TypeError, ValueError):
+                primary_server_id = 0
 
             fetch_tasks = [
                 _fetch_service_node_usage(service_id=service_id, node=node)
@@ -356,6 +403,13 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
                     got_any_panel_data = True
                     fetched_nodes += 1
                     total_usage += _to_float(panel_user.get("current_usage_GB"), 0.0)
+
+                    panel_limit = _usage_limit_from_panel_user(panel_user)
+                    if panel_limit is not None:
+                        if primary_server_id > 0 and server_id == primary_server_id:
+                            synced_usage_limit = panel_limit
+                        elif fallback_usage_limit is None:
+                            fallback_usage_limit = panel_limit
 
                     days_left = _days_left_from_panel_user(panel_user)
                     if days_left is not None:
@@ -410,9 +464,13 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
                 else:
                     min_days_left = min(min_days_left, previous_days_left)
 
+            if synced_usage_limit is None:
+                synced_usage_limit = fallback_usage_limit
+
             userbot_db.update_service_runtime(
                 service_id=service_id,
                 usage_current=total_usage,
+                usage_limit=synced_usage_limit,
                 days_left=min_days_left,
                 last_online=(
                     latest_last_online.strftime("%Y-%m-%d %H:%M:%S")
@@ -422,7 +480,11 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
             )
             summary["services_synced"] += 1
 
-            limit_gb = _to_float(service.get("usage_limit"), 0.0)
+            limit_gb = (
+                float(synced_usage_limit)
+                if synced_usage_limit is not None
+                else _to_float(service.get("usage_limit"), 0.0)
+            )
             expired_by_usage = limit_gb > 0 and total_usage >= limit_gb
             expired_by_time = min_days_left is not None and min_days_left < 0
 
