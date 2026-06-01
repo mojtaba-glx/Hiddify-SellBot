@@ -1622,6 +1622,41 @@ def _service_local_lock_text(reason: Optional[str]) -> str:
     return "⛔ دسترسی این اشتراک موقتاً محدود شده است."
 
 
+async def _resolve_service_access_lock(service: dict) -> tuple[dict, Optional[str]]:
+    """
+    قفل دسترسی مؤثر برای اکشن‌های کانفیگ/لینک.
+    - usage/time: فوری و قطعی
+    - nodes_inactive: قبل از بلاک، یک بار با پنل همگام‌سازی می‌شود
+    """
+    reason = _service_local_lock_reason(service)
+    if reason != "nodes_inactive":
+        return service, reason
+
+    try:
+        probe = await _service_probe_state(service)
+    except Exception:
+        return service, reason
+
+    if probe != "exists":
+        return service, reason
+
+    try:
+        service_id = int(service.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    if service_id > 0:
+        try:
+            userbot_db.set_service_nodes_active(service_id, 1)
+        except Exception:
+            pass
+
+    refreshed = await _sync_service_runtime_from_panels(service)
+    refreshed_reason = _service_local_lock_reason(refreshed)
+    if refreshed_reason == "nodes_inactive":
+        return refreshed, None
+    return refreshed, refreshed_reason
+
+
 async def _find_panel_user_targets_by_uuid(user_uuid: str) -> list[tuple[dict, dict]]:
     """
     جستجوی UUID روی همه سرورهای ثبت‌شده:
@@ -2762,7 +2797,7 @@ async def _send_service_direct_configs_shell(
     service_id: int,
     service: dict,
 ) -> None:
-    lock_reason = _service_local_lock_reason(service)
+    service, lock_reason = await _resolve_service_access_lock(service)
     if lock_reason:
         await context.bot.send_message(
             chat_id=user_id,
@@ -5405,8 +5440,8 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        lock_reason = _service_local_lock_reason(service)
         if action in {"configs", "direct", "directcfg", "sub_link", "auto_sub", "sub_b64", "multi", "multi_b64"}:
+            service, lock_reason = await _resolve_service_access_lock(service)
             if lock_reason:
                 await context.bot.send_message(
                     chat_id=user_id,
