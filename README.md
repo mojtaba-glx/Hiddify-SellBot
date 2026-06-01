@@ -10,11 +10,14 @@ Telegram AdminBot + UserBot for Hiddify sales workflows.
 bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh)
 ```
 
+> نکته: اجرای بدون آرگومان، به‌صورت پیش‌فرض `install` را اجرا می‌کند.
+
 برای اجرای مستقیم یک فرمان:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh) install
 bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh) update
+bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh) panel
 ```
 
 ## Quick Start (Menu Mode - Git Clone)
@@ -99,6 +102,19 @@ In same-host deployments, preferred approach is:
 - `update` never asks for tokens and only updates code/dependencies then restarts bots.
 - `factory-reset` does not modify code or `.env`; it only resets runtime data.
 - `uninstall` removes runtime/data files (`.env`, `venv`, `logs`, `backups`, `Receiptions`, DB/data files) and keeps source code.
+
+## Hiddify-SellBot v2.1.14
+
+Patch Release برای بهبود تجربه نصب تک‌دستوری.
+
+## تغییرات اصلی در v2.1.14
+- اجرای `bootstrap.sh` بدون آرگومان اکنون به‌صورت پیش‌فرض `install` را اجرا می‌کند (نه `panel`).
+- اضافه شدن مثال اجرای `panel` در bootstrap برای مدیریت دستی.
+- شفاف‌سازی توضیحات Quick Start در README.
+
+## نسخه
+- Version: `2.1.14`
+- نوع انتشار: Patch Release
 
 ## Hiddify-SellBot v2.1.13
 

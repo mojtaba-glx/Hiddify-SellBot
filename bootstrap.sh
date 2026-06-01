@@ -23,6 +23,7 @@ Usage:
   bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh)
   bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh) install
   bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh) update
+  bash <(curl -fsSL https://raw.githubusercontent.com/mojtaba-glx/Hiddify-SellBot/main/bootstrap.sh) panel
 
 Environment overrides:
   HSB_INSTALL_DIR   Target install directory (default: /root/Hiddify-SellBot or ~/Hiddify-SellBot)
@@ -104,7 +105,7 @@ run_installer() {
 
   local args=("$@")
   if [ "${#args[@]}" -eq 0 ]; then
-    args=("panel")
+    args=("install")
   fi
 
   _green "Running installer: $INSTALL_DIR/install.sh ${args[*]}"
