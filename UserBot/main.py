@@ -1339,10 +1339,41 @@ def _resolve_sub_service_base_url(service: Optional[dict] = None) -> str:
     return f"{scheme}://{detected_ip}:{SUB_SERVER_PUBLIC_PORT}"
 
 
+def _resolve_service_uuid_for_managed_sub_link(service_id: int, service: Optional[dict] = None) -> str:
+    service_obj = service or {}
+    uuid = _extract_uuid_from_comment(service_obj.get("comment") or "")
+    if uuid:
+        return str(uuid).strip()
+
+    try:
+        sid = int(service_id or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid <= 0:
+        return ""
+
+    try:
+        mappings = userbot_db.get_service_nodes(sid) or []
+    except Exception:
+        mappings = []
+
+    for m in mappings:
+        candidate = str((m or {}).get("panel_user_uuid") or "").strip()
+        if candidate:
+            return candidate
+    return ""
+
+
 def _get_or_create_bot_sub_links(service_id: int, service: Optional[dict] = None) -> tuple[str, str]:
-    token = userbot_db.ensure_service_sub_token(int(service_id))
     base = _resolve_sub_service_base_url(service)
-    return f"{base}/sub/{token}/hiddify.txt", f"{base}/sub/{token}/hiddify.b64"
+    service_uuid = _resolve_service_uuid_for_managed_sub_link(int(service_id), service=service)
+    if service_uuid:
+        return (
+            f"{base}/sub/{service_uuid}/all.txt",
+            f"{base}/sub/{service_uuid}/all.b64",
+        )
+    token = userbot_db.ensure_service_sub_token(int(service_id))
+    return f"{base}/sub/{token}/all.txt", f"{base}/sub/{token}/all.b64"
 
 
 def _should_show_configs_button(settings: dict) -> bool:

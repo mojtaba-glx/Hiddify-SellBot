@@ -27,19 +27,42 @@ class _SubHandler(BaseHTTPRequestHandler):
                 return
 
             token = ""
+            uuid_hint = ""
             is_b64 = False
 
-            # New format: /sub/{token}/hiddify.txt | /sub/{token}/hiddify.b64
-            if len(parts) == 3:
+            def _detect_file_format(file_part: str):
+                file_lower = str(file_part or "").strip().lower()
+                if file_lower in {"all.txt", "hiddify.txt"}:
+                    return False
+                if file_lower in {"all.b64", "hiddify.b64"}:
+                    return True
+                return None
+
+            # New formats:
+            # /sub/{token}/{uuid}/all.txt
+            # /sub/{token}/{uuid}/all.b64
+            if len(parts) == 4:
                 token = parts[1].strip()
-                file_part = parts[2].strip().lower()
-                if file_part == "hiddify.txt":
-                    is_b64 = False
-                elif file_part == "hiddify.b64":
-                    is_b64 = True
-                else:
+                uuid_hint = parts[2].strip()
+                if not token or not uuid_hint:
                     self._write(404, "not found")
                     return
+                detected = _detect_file_format(parts[3])
+                if detected is None:
+                    self._write(404, "not found")
+                    return
+                is_b64 = detected
+            # New formats:
+            # /sub/{token}/all.txt | /sub/{token}/all.b64
+            # backward compat:
+            # /sub/{token}/hiddify.txt | /sub/{token}/hiddify.b64
+            elif len(parts) == 3:
+                token = parts[1].strip()
+                detected = _detect_file_format(parts[2])
+                if detected is None:
+                    self._write(404, "not found")
+                    return
+                is_b64 = detected
             # Backward-compatible format: /sub/{token}.txt | /sub/{token}.b64
             elif len(parts) == 2:
                 file_part = parts[1]
@@ -57,6 +80,14 @@ class _SubHandler(BaseHTTPRequestHandler):
                 return
 
             sid = userbot_db.get_service_id_by_sub_token(token)
+            if not sid and uuid_hint:
+                owner = userbot_db.get_service_owner_by_panel_uuid(uuid_hint)
+                if owner and owner.get("service_id"):
+                    sid = int(owner["service_id"])
+            if not sid:
+                owner = userbot_db.get_service_owner_by_panel_uuid(token)
+                if owner and owner.get("service_id"):
+                    sid = int(owner["service_id"])
             if not sid:
                 self._write(404, "subscription token not found")
                 return
