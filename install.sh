@@ -24,10 +24,16 @@ SYSTEMD_ADMIN_UNIT_FILE="/etc/systemd/system/${SYSTEMD_ADMIN_UNIT}"
 SYSTEMD_USER_UNIT_FILE="/etc/systemd/system/${SYSTEMD_USER_UNIT}"
 
 APP_VERSION="dev"
-if [ -f "$VERSION_FILE" ]; then
-  APP_VERSION="$(tr -d ' \t\r\n' < "$VERSION_FILE")"
-  [ -n "$APP_VERSION" ] || APP_VERSION="dev"
-fi
+UPDATE_SOURCE_STATUS="not-run"
+
+refresh_app_version() {
+  APP_VERSION="dev"
+  if [ -f "$VERSION_FILE" ]; then
+    APP_VERSION="$(tr -d ' \t\r\n' < "$VERSION_FILE")"
+    [ -n "$APP_VERSION" ] || APP_VERSION="dev"
+  fi
+}
+refresh_app_version
 
 ADMIN_ID=""
 ADMIN_BOT_TOKEN=""
@@ -366,13 +372,13 @@ restore_runtime_git_preserve_snapshot() {
 is_runtime_local_path() {
   local path="$1"
   case "$path" in
-    .env|logs|logs/*|backups|backups/*|Receiptions|Receiptions/*)
+    .env|.env.bak*|.env.*.bak|logs|logs/*|backups|backups/*|Receiptions|Receiptions/*)
       return 0
       ;;
-    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db)
+    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db|Shared/*.db-*)
       return 0
       ;;
-    *.pid|*.log|Backup_Bot_*|Backup_All_*|Pre*.tar.gz|Pre*.zip)
+    *.pid|*.log|*.bak|*.tmp|Backup_Bot_*|Backup_All_*|Pre*.tar.gz|Pre*.zip)
       return 0
       ;;
     *)
@@ -402,13 +408,17 @@ list_runtime_local_changes() {
 }
 
 update_source_if_git() {
+  UPDATE_SOURCE_STATUS="not-run"
+
   if ! command -v git >/dev/null 2>&1; then
     _yellow "WARN: git is not installed; skipping source update."
+    UPDATE_SOURCE_STATUS="skipped-no-git"
     return 0
   fi
 
   if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     _yellow "WARN: project is not a git repository; skipping source update."
+    UPDATE_SOURCE_STATUS="skipped-not-repo"
     return 0
   fi
 
@@ -423,6 +433,7 @@ update_source_if_git() {
       [ -n "$path" ] && _yellow "  - $path"
     done <<< "$non_runtime_changes"
     _yellow "Hint: commit/stash your changes, or run ./install.sh update-force"
+    UPDATE_SOURCE_STATUS="skipped-local-changes"
     return 0
   fi
 
@@ -434,17 +445,27 @@ update_source_if_git() {
   preserve_snapshot="$(create_runtime_git_preserve_snapshot || true)"
   [ -n "$preserve_snapshot" ] && _blue "Preserved runtime data files before git pull."
 
-  local branch
+  local branch before_head after_head
   branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+  before_head="$(git -C "$ROOT_DIR" rev-parse --verify HEAD 2>/dev/null || echo "")"
   _blue "Updating source from git (branch: $branch)"
   git -C "$ROOT_DIR" fetch --all --prune
   if git -C "$ROOT_DIR" pull --ff-only; then
-    _green "OK: source updated."
+    after_head="$(git -C "$ROOT_DIR" rev-parse --verify HEAD 2>/dev/null || echo "")"
+    if [ -n "$before_head" ] && [ "$before_head" = "$after_head" ]; then
+      UPDATE_SOURCE_STATUS="already-latest"
+      _blue "Source is already up-to-date."
+    else
+      UPDATE_SOURCE_STATUS="updated"
+      _green "OK: source updated."
+    fi
   else
+    UPDATE_SOURCE_STATUS="pull-failed"
     _yellow "WARN: git pull failed; continuing with current source."
     _yellow "Hint: run ./install.sh update-force if you want to force-sync code."
   fi
   restore_runtime_git_preserve_snapshot "$preserve_snapshot"
+  refresh_app_version
 }
 
 force_sync_source_if_git() {
@@ -868,6 +889,7 @@ status_single_bot() {
 
 show_status() {
   ensure_dirs
+  refresh_app_version
   echo "========================================="
   echo "Hiddify-SellBot"
   echo "Version: $APP_VERSION"
@@ -1096,6 +1118,21 @@ install_all() {
 update_all() {
   create_snapshot_backup "PreUpdate"
   update_source_if_git
+  case "$UPDATE_SOURCE_STATUS" in
+    skipped-local-changes)
+      _yellow "WARN: source code update skipped due to local code changes."
+      _yellow "If this server should track GitHub exactly, run: ./install.sh update-force"
+      ;;
+    pull-failed)
+      _yellow "WARN: source update failed (git pull). Runtime restart will continue."
+      ;;
+    already-latest)
+      _blue "Source already latest. Reinstalling deps/restarting services..."
+      ;;
+    updated)
+      _green "Source sync done. Continuing update pipeline..."
+      ;;
+  esac
   setup_venv_and_requirements
   check_required_env 0
   init_database
@@ -1144,6 +1181,7 @@ interactive_menu() {
   }
 
   while true; do
+    refresh_app_version
     echo "========================================="
     echo "Hiddify-SellBot | Version: $APP_VERSION"
     echo "========================================="
