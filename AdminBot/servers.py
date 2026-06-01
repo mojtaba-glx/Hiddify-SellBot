@@ -3665,7 +3665,6 @@ async def handle_add_user_flow(
                     caption=f"🔗 لینک اشتراک {row.get('name')}:\n{sub_url}",
                 )
 
-            await send_user_list(server_id, message.chat_id, context)
             return
 
         await message.reply_text(
@@ -4566,10 +4565,33 @@ async def handle_server_inline_callback(
         context.user_data["add_user_server_id"] = server_id
         context.user_data["add_user_plan_id"] = plan_id
         context.user_data["add_user"] = {}
+        context.user_data.pop("add_multi_users", None)
         context.user_data["state"] = ADD_USER_PLAN_NAME
 
-        await msg.edit_text(
-            "لطفاً نام کاربر را وارد کنید:",
+        plan_title = f"پلن #{plan_id}"
+        get_plan = getattr(database, "get_plan", None)
+        if callable(get_plan):
+            try:
+                selected_plan = get_plan(server_id, plan_id) or {}
+                plan_title = (
+                    str(
+                        selected_plan.get("title")
+                        or selected_plan.get("name")
+                        or plan_title
+                    ).strip()
+                    or plan_title
+                )
+            except Exception:
+                pass
+
+        try:
+            await msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await msg.reply_text(
+            f"✅ {plan_title} انتخاب شد.\n"
+            "📝 لطفاً نام کاربر را وارد کنید:",
             reply_markup=cancel_keyboard(),
         )
         return
