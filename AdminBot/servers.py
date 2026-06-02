@@ -1789,6 +1789,7 @@ async def send_user_list(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
     page: int = 1,
+    back_callback: Optional[str] = None,
 ) -> None:
     server = database.get_server_by_id(server_id)
     if not server:
@@ -1798,6 +1799,11 @@ async def send_user_list(
         else:
             await context.bot.send_message(chat_id, text)
         return
+
+    if back_callback:
+        context.user_data[f"user_list_back:{server_id}"] = back_callback
+    else:
+        back_callback = context.user_data.get(f"user_list_back:{server_id}") or f"server:{server_id}"
 
     users: List[Dict[str, Any]] = []
     source = "api"
@@ -1834,7 +1840,7 @@ async def send_user_list(
             f"🔴 منقضی شده: {expired_users}"
         )
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("بازگشت", callback_data=f"server:{server_id}")]]
+            [[InlineKeyboardButton("بازگشت", callback_data=back_callback)]]
         )
         if message is not None:
             await message.edit_text(text, reply_markup=kb)
@@ -1897,7 +1903,7 @@ async def send_user_list(
     keyboard_rows.append(nav_row)
 
     keyboard_rows.append(
-        [InlineKeyboardButton("بازگشت", callback_data=f"server:{server_id}")]
+        [InlineKeyboardButton("بازگشت", callback_data=back_callback)]
     )
 
     extra = ""
@@ -3665,6 +3671,7 @@ async def handle_add_user_flow(
         context.user_data.pop("add_user", None)
         context.user_data.pop("add_multi_users", None)
         context.user_data.pop("add_user_plan_id", None)
+        context.user_data.pop("add_user_plan_source_server_id", None)
         await message.reply_text(
             "❌ عملیات افزودن کاربر لغو شد.",
             reply_markup=admin_main_keyboard(),
@@ -3678,6 +3685,7 @@ async def handle_add_user_flow(
         plan_id = context.user_data.get("add_user_plan_id")
         if plan_id is None:
             context.user_data.pop("state", None)
+            context.user_data.pop("add_user_plan_source_server_id", None)
             await message.reply_text(
                 "❌ پلن انتخاب‌شده نامعتبر است. دوباره از منوی «افزودن کاربر با پلن➕» اقدام کنید.",
                 reply_markup=admin_main_keyboard(),
@@ -3688,6 +3696,7 @@ async def handle_add_user_flow(
         if not callable(get_plan):
             context.user_data.pop("state", None)
             context.user_data.pop("add_user_plan_id", None)
+            context.user_data.pop("add_user_plan_source_server_id", None)
             await message.reply_text(
                 "❌ تابع get_plan در دیتابیس پیاده‌سازی نشده است، "
                 "بخش افزودن کاربر با پلن هنوز کامل نشده.",
@@ -3695,10 +3704,12 @@ async def handle_add_user_flow(
             )
             return
 
-        plan = get_plan(server_id, plan_id)
+        plan_source_server_id = int(context.user_data.get("add_user_plan_source_server_id") or server_id)
+        plan = get_plan(plan_source_server_id, plan_id)
         if not plan:
             context.user_data.pop("state", None)
             context.user_data.pop("add_user_plan_id", None)
+            context.user_data.pop("add_user_plan_source_server_id", None)
             await message.reply_text(
                 "❌ پلن انتخاب‌شده پیدا نشد.",
                 reply_markup=build_user_ops_keyboard(server_id),
@@ -3712,6 +3723,7 @@ async def handle_add_user_flow(
         if not days:
             context.user_data.pop("state", None)
             context.user_data.pop("add_user_plan_id", None)
+            context.user_data.pop("add_user_plan_source_server_id", None)
             await message.reply_text(
                 "❌ این پلن مدت (روز) مشخصی ندارد. لطفاً ابتدا پلن را اصلاح کنید.",
                 reply_markup=build_user_ops_keyboard(server_id),
@@ -3963,6 +3975,7 @@ async def handle_add_user_flow(
             context.user_data.pop("add_user_server_id", None)
             context.user_data.pop("add_user", None)
             context.user_data.pop("add_user_plan_id", None)
+            context.user_data.pop("add_user_plan_source_server_id", None)
 
             lines = [
                 "📦 نتیجه افزودن چندین کاربر",
@@ -4098,6 +4111,7 @@ async def handle_add_user_flow(
             context.user_data.pop("add_user", None)
             context.user_data.pop("add_user_server_id", None)
             context.user_data.pop("add_user_plan_id", None)
+            context.user_data.pop("add_user_plan_source_server_id", None)
 
             if uuid:
                 await send_user_detail(
@@ -4415,7 +4429,7 @@ async def handle_server_inline_callback(
         return
 
     # ------ دکمه‌های مربوط به نودها ------
-    if data.startswith("nodes:") or data.startswith("delnode:") or data.startswith("nodeinfo:") or data.startswith("nodeedit:"):
+    if data.startswith("nodes:") or data.startswith("delnode:") or data.startswith("nodeinfo:") or data.startswith("nodeedit:") or data.startswith("nodeact:"):
         await handle_nodes_inline_callback(update, context)
         return
 
@@ -4905,6 +4919,52 @@ async def handle_server_inline_callback(
         return
 
     # ------ انتخاب پلن برای افزودن کاربر جدید (addplan:SERVER_ID:PLAN_ID) ------
+    if data.startswith("nodeaddplan:"):
+        await query.answer()
+        try:
+            _, target_sid_str, source_sid_str, pid_str = data.split(":", 3)
+            server_id = int(target_sid_str)
+            plan_source_server_id = int(source_sid_str)
+            plan_id = int(pid_str)
+        except ValueError:
+            await msg.edit_text("❌ داده‌ی دکمه پلن نود نامعتبر است.")
+            return
+
+        context.user_data["add_user_server_id"] = server_id
+        context.user_data["add_user_plan_source_server_id"] = plan_source_server_id
+        context.user_data["add_user_plan_id"] = plan_id
+        context.user_data["add_user"] = {}
+        context.user_data.pop("add_multi_users", None)
+        context.user_data["state"] = ADD_USER_PLAN_NAME
+
+        plan_title = f"پلن #{plan_id}"
+        get_plan = getattr(database, "get_plan", None)
+        if callable(get_plan):
+            try:
+                selected_plan = get_plan(plan_source_server_id, plan_id) or {}
+                plan_title = (
+                    str(
+                        selected_plan.get("title")
+                        or selected_plan.get("name")
+                        or plan_title
+                    ).strip()
+                    or plan_title
+                )
+            except Exception:
+                pass
+
+        try:
+            await msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await msg.reply_text(
+            f"✅ {plan_title} برای نود انتخاب شد.\n"
+            "📝 لطفاً نام کاربر را وارد کنید:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
     if data.startswith("addplan:"):
         await query.answer()
         try:
@@ -4916,6 +4976,7 @@ async def handle_server_inline_callback(
             return
 
         context.user_data["add_user_server_id"] = server_id
+        context.user_data.pop("add_user_plan_source_server_id", None)
         context.user_data["add_user_plan_id"] = plan_id
         context.user_data["add_user"] = {}
         context.user_data.pop("add_multi_users", None)
@@ -4963,6 +5024,7 @@ async def handle_server_inline_callback(
             context.user_data["state"] = ADD_USER_NAME
             context.user_data["add_user_server_id"] = server_id
             context.user_data["add_user"] = {}
+            context.user_data.pop("add_user_plan_source_server_id", None)
 
             try:
                 await msg.edit_reply_markup(reply_markup=None)
@@ -4980,6 +5042,7 @@ async def handle_server_inline_callback(
             context.user_data["add_user_server_id"] = server_id
             context.user_data.pop("add_user", None)
             context.user_data.pop("add_user_plan_id", None)
+            context.user_data.pop("add_user_plan_source_server_id", None)
             context.user_data.pop("add_multi_users", None)
 
             try:

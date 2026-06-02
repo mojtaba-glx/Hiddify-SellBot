@@ -1,7 +1,9 @@
 import base64
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from Shared import database, userbot_db, hiddify_api
@@ -19,6 +21,10 @@ ALLOWED_CONFIG_SCHEMES = (
     "hy2://",
     "wireguard://",
 )
+STATUS_CONFIG_ENABLED_ENV = "SUB_STATUS_CONFIG_ENABLED"
+STATUS_CONFIG_HOST_ENV = "SUB_STATUS_CONFIG_HOST"
+STATUS_CONFIG_SNI_ENV = "SUB_STATUS_CONFIG_SNI"
+STATUS_CONFIG_PORT_ENV = "SUB_STATUS_CONFIG_PORT"
 
 
 def _to_float(value, default: float = 0.0) -> float:
@@ -28,6 +34,82 @@ def _to_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = str(os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "true", "yes", "on", "enable", "enabled", "y"}:
+        return True
+    if raw in {"0", "false", "no", "off", "disable", "disabled", "n"}:
+        return False
+    return bool(default)
+
+
+def _format_status_number(value: float) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        number = 0.0
+    if abs(number) < 1:
+        text = f"{number:.3f}"
+    elif abs(number) < 100:
+        text = f"{number:.1f}"
+    else:
+        text = f"{number:.0f}"
+    return text.rstrip("0").rstrip(".") or "0"
+
+
+def _clean_status_host(raw: str, default: str) -> str:
+    value = str(raw or "").strip() or default
+    if value.startswith(("http://", "https://")):
+        parsed = urlparse(value)
+        value = parsed.netloc or parsed.path or default
+    value = value.strip().strip("/").split("/", 1)[0].strip()
+    if ":" in value:
+        value = value.split(":", 1)[0].strip()
+    return value or default
+
+
+def _status_config_name(service: dict) -> str:
+    service_name = str((service or {}).get("name") or "اشتراک").strip() or "اشتراک"
+    usage_current = max(_to_float((service or {}).get("usage_current"), 0.0), 0.0)
+    usage_limit = max(_to_float((service or {}).get("usage_limit"), 0.0), 0.0)
+
+    if usage_limit > 0:
+        usage_text = f"{_format_status_number(usage_current)}/{_format_status_number(usage_limit)}GB"
+    else:
+        usage_text = f"{_format_status_number(usage_current)}GB/نامحدود"
+
+    try:
+        days_left = int((service or {}).get("days_left"))
+    except Exception:
+        days_left = None
+    days_text = f"{days_left} روز" if days_left is not None else "نامشخص"
+
+    return f"📊 {service_name} | ⏳ {usage_text} | 📅 {days_text}"
+
+
+def _build_status_config_line(service: dict) -> str:
+    if not _env_bool(STATUS_CONFIG_ENABLED_ENV, True):
+        return ""
+
+    default_host = "status.hiddify-sellbot.invalid"
+    host = _clean_status_host(os.getenv(STATUS_CONFIG_HOST_ENV, default_host), default_host)
+    sni = _clean_status_host(os.getenv(STATUS_CONFIG_SNI_ENV, host), host)
+    try:
+        port = int(os.getenv(STATUS_CONFIG_PORT_ENV, "443") or "443")
+        if port <= 0 or port > 65535:
+            port = 443
+    except Exception:
+        port = 443
+
+    return (
+        f"trojan://1@{host}:{port}"
+        f"?security=tls&sni={quote(sni, safe='')}&insecure=0&allowInsecure=0&type=tcp&headerType=none"
+        f"#{quote(_status_config_name(service), safe='')}"
+    )
 
 
 def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
@@ -457,6 +539,9 @@ def build_subscription_text_for_service(service_id: int) -> str:
                 continue
             seen.add(ln)
             lines.append(ln)
+    status_line = _build_status_config_line(service)
+    if status_line and lines:
+        lines.insert(0, status_line)
     return "\n".join(lines)
 
 

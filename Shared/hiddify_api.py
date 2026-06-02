@@ -1,3 +1,4 @@
+import asyncio
 import ssl
 import os
 import logging
@@ -869,6 +870,30 @@ async def create_user(
     data = await _request("POST", url, server, json=payload)
     if not isinstance(data, dict):
         raise HiddifyApiError("پاسخ create_user شکل دیکشنری ندارد.")
+
+    user_uuid = str(data.get("uuid") or payload.get("uuid") or "").strip()
+    if not user_uuid:
+        logger.warning(
+            "Created Hiddify user cannot be stabilized because panel response has no uuid: %s",
+            data,
+        )
+        return data
+
+    last_error: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            await patch_user(server, user_uuid, dict(payload))
+            return data
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                await asyncio.sleep(0.35)
+
+    logger.warning(
+        "Post-create Hiddify user stabilization failed for uuid=%s: %s",
+        user_uuid,
+        last_error,
+    )
     return data
 
 

@@ -1,5 +1,6 @@
 # AdminBot/nodes.py
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,7 +19,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, node_ops
+from Shared import database, hiddify_api, node_ops, plans_storage
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import admin_main_keyboard, cancel_keyboard
 
@@ -171,7 +172,20 @@ def _find_node(server_id: int, node_id: int) -> tuple[List[Dict[str, Any]], Opti
     return nodes, None, -1
 
 
-def _build_node_edit_text(server_id: int, node: Dict[str, Any]) -> str:
+def _get_node_plans_count(server_id: int) -> int:
+    try:
+        mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
+        return 0 if mode == "dynamic" else len(plans_storage.get_plans(server_id) or [])
+    except Exception:
+        return 0
+
+
+def _build_node_edit_text(
+    server_id: int,
+    node: Dict[str, Any],
+    *,
+    users_count_override: Optional[int] = None,
+) -> str:
     target_sid = int(node.get("target_server_id") or 0)
     child = database.get_server_by_id(target_sid) if target_sid > 0 else None
     panel_url = (child or {}).get("panel_url") or ""
@@ -179,14 +193,15 @@ def _build_node_edit_text(server_id: int, node: Dict[str, Any]) -> str:
     admin_uuid = (child or {}).get("admin_uuid") or ""
     users_limit = (child or {}).get("users_limit")
     users_limit_text = str(users_limit) if users_limit not in (None, "") else "—"
-    domains = (child or {}).get("domains") or []
-    domain = "—"
-    if domains:
-        first = domains[0]
-        if isinstance(first, dict):
-            domain = str(first.get("domain") or first.get("host") or first.get("url") or "—")
-        else:
-            domain = str(first)
+    users_count = int(users_count_override) if users_count_override is not None else 0
+    if users_count_override is None:
+        try:
+            users_count = len(database.get_users(target_sid) or [])
+        except Exception:
+            users_count = len((child or {}).get("users") or [])
+    plans_count = _get_node_plans_count(server_id)
+    priority = int((child or {}).get("priority") or 0)
+    version_text = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,12").strip()
 
     def _to_clickable_url(raw: Any) -> str:
         value = str(raw or "").strip()
@@ -217,19 +232,15 @@ def _build_node_edit_text(server_id: int, node: Dict[str, Any]) -> str:
         server_line = f'🖥 سرور: <a href="{escape(server_panel_link, quote=True)}">{server_title}</a>'
     else:
         server_line = f"🖥 سرور: {server_title}"
-    node_id_text = f"\u200e{int(node.get('id') or 0)}\u200e"
-    server_id_text = f"\u200e{target_sid or '—'}\u200e"
-    domain_text = str(domain or "").strip().rstrip("/") or "—"
-    panel_text = str(panel_url or "").strip().rstrip("/") or "—"
 
     return (
         "✏️ ویرایش نود\n"
-        "❖⬩──────────────⬩❖\n"
         f"{server_line}\n"
-        f"🗄️ سرور: {escape(server_id_text)} | 🆔 نود: {escape(node_id_text)}\n"
-        f"🔗 دامنه ساب: {_safe_text(domain_text)}\n"
-        f"📡 آدرس پنل: {_safe_text(panel_text)}\n"
-        f"👤 محدودیت کاربران: {_safe_text(users_limit_text)}\n\n"
+        "❖ • -------------------------- • ❖\n"
+        f"👤 تعداد کاربران: {users_count} از {_safe_text(users_limit_text)}\n"
+        f"📋 تعداد پلن ها: {plans_count}\n"
+        f"🟩 اولویت: {priority}\n"
+        f"📦 نسخه: {_safe_text(version_text)}\n\n"
         "فیلد موردنظر را انتخاب کنید:"
     )
 
@@ -237,6 +248,8 @@ def _build_node_edit_text(server_id: int, node: Dict[str, Any]) -> str:
 def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],
+            [InlineKeyboardButton("🛡️ عملیات کاربری نود", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")],
             [InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"nodeedit:{server_id}:{node_id}:title")],
             [InlineKeyboardButton("📚 لیست دامنه‌ها", callback_data=f"nodeedit:{server_id}:{node_id}:domains")],
             [InlineKeyboardButton("🔐 ویرایش Proxy کاربر", callback_data=f"nodeedit:{server_id}:{node_id}:user_proxy")],
@@ -247,6 +260,127 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
             [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
         ]
     )
+
+
+async def _build_node_edit_text_live(server_id: int, node: Dict[str, Any]) -> str:
+    target_sid = int(node.get("target_server_id") or 0)
+    child = database.get_server_by_id(target_sid) if target_sid > 0 else None
+    users_count = 0
+    if child:
+        try:
+            users_count = len(await hiddify_api.list_users(child))
+        except Exception as e:
+            logger.warning("Failed reading node users count from panel (server_id=%s): %s", target_sid, e)
+            try:
+                users_count = len(database.get_users(target_sid) or [])
+            except Exception:
+                users_count = len(child.get("users") or [])
+    return _build_node_edit_text(
+        server_id,
+        node,
+        users_count_override=users_count,
+    )
+
+
+async def send_node_user_ops_menu(
+    server_id: int,
+    node_id: int,
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    message=None,
+) -> None:
+    _, node, _ = _find_node(server_id, node_id)
+    target_sid = int((node or {}).get("target_server_id") or 0)
+    child = database.get_server_by_id(target_sid) if target_sid > 0 else None
+    if not node or not child:
+        text = "❌ سرور نود پیدا نشد."
+        if message is not None:
+            await message.edit_text(text)
+        else:
+            await context.bot.send_message(chat_id, text)
+        return
+
+    title = escape(str(node.get("title") or child.get("title") or "نود"))
+    text = (
+        "🛡️ عملیات کاربری نود\n"
+        f"🖥 سرور: {title}\n"
+        "❖ • -------------------------- • ❖\n"
+        "عملیات موردنظر را انتخاب کنید:"
+    )
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],
+            [InlineKeyboardButton("افزودن کاربر➕", callback_data=f"userops:{target_sid}:add")],
+            [InlineKeyboardButton("افزودن چندین کاربر➕", callback_data=f"userops:{target_sid}:add_multi")],
+            [InlineKeyboardButton("افزودن کاربر با پلن➕", callback_data=f"nodeact:{server_id}:{node_id}:add_with_plan")],
+            [InlineKeyboardButton("جستجوی کاربر🔍", callback_data=f"userops:{target_sid}:search")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodeinfo:{server_id}:{node_id}")],
+        ]
+    )
+    if message is not None:
+        await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def send_node_add_with_plan_menu(
+    server_id: int,
+    node_id: int,
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    message=None,
+) -> None:
+    _, node, _ = _find_node(server_id, node_id)
+    target_sid = int((node or {}).get("target_server_id") or 0)
+    if not node or target_sid <= 0 or not database.get_server_by_id(target_sid):
+        text = "❌ سرور نود پیدا نشد."
+        if message is not None:
+            await message.edit_text(text)
+        else:
+            await context.bot.send_message(chat_id, text)
+        return
+
+    get_plans = getattr(database, "get_plans", None)
+    plans = (get_plans(server_id) or []) if callable(get_plans) else []
+    if not plans:
+        text = "❌ برای سرور مادر هنوز هیچ پلنی ثبت نشده است."
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")]]
+        )
+        if message is not None:
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+        return
+
+    lines = ["📋 لیست پلن های سرور مادر", ""]
+    rows: List[List[InlineKeyboardButton]] = []
+    for plan in plans:
+        plan_id = plan.get("id")
+        title = plan.get("title") or plan.get("name") or f"پلن #{plan_id}"
+        days = plan.get("days") or plan.get("duration_days") or "-"
+        usage_gb = plan.get("gb") or plan.get("usage_limit_GB") or plan.get("volume_GB")
+        price = plan.get("price") or plan.get("price_toman") or "-"
+        usage_text = "نامحدود" if usage_gb in (None, "", 0) else f"{usage_gb} گیگابایت"
+        lines.append(f"• {title} | {price} تومان | {days} روز | {usage_text}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{title} | {days} روز",
+                    callback_data=f"nodeaddplan:{target_sid}:{server_id}:{plan_id}",
+                )
+            ]
+        )
+
+    rows.append(
+        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")]
+    )
+    keyboard = InlineKeyboardMarkup(rows)
+    text = "\n".join(lines)
+    if message is not None:
+        await message.edit_text(text, reply_markup=keyboard)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=keyboard)
 
 
 async def send_node_edit_menu(
@@ -264,7 +398,7 @@ async def send_node_edit_menu(
         else:
             await context.bot.send_message(chat_id, text)
         return
-    text = _build_node_edit_text(server_id, node)
+    text = await _build_node_edit_text_live(server_id, node)
     kb = _build_node_edit_keyboard(server_id, node_id)
     if message is not None:
         await message.edit_text(
@@ -1104,7 +1238,7 @@ async def handle_nodes_inline_callback(
 ) -> None:
     """
     این تابع فقط دکمه‌های مربوط به نودها را مدیریت می‌کند:
-    nodes:..., delnode:..., nodeinfo:..., nodeedit:...
+    nodes:..., delnode:..., nodeinfo:..., nodeedit:..., nodeact:...
     """
     query = update.callback_query
     if not query:
@@ -1113,6 +1247,45 @@ async def handle_nodes_inline_callback(
     data = (query.data or "").strip()
     msg = query.message
     chat_id = msg.chat_id
+
+    # ------ عملیات کاربران یک نود (nodeact:SERVER_ID:NODE_ID:ACTION) ------
+    if data.startswith("nodeact:"):
+        await query.answer()
+        try:
+            _, sid_str, nid_str, action = data.split(":", 3)
+            server_id = int(sid_str)
+            node_id = int(nid_str)
+        except ValueError:
+            await msg.edit_text("❌ داده‌ی عملیات نود نامعتبر است.")
+            return
+
+        _, node, _ = _find_node(server_id, node_id)
+        target_sid = int((node or {}).get("target_server_id") or 0)
+        if not node or target_sid <= 0 or not database.get_server_by_id(target_sid):
+            await msg.edit_text("❌ سرور نود پیدا نشد.")
+            return
+
+        if action == "users":
+            from AdminBot.servers import send_user_list  # import lazy to avoid circular import at module load
+            await send_user_list(
+                target_sid,
+                chat_id,
+                context,
+                message=msg,
+                back_callback=f"nodeinfo:{server_id}:{node_id}",
+            )
+            return
+
+        if action == "user_ops":
+            await send_node_user_ops_menu(server_id, node_id, chat_id, context, message=msg)
+            return
+
+        if action == "add_with_plan":
+            await send_node_add_with_plan_menu(server_id, node_id, chat_id, context, message=msg)
+            return
+
+        await msg.edit_text("❌ گزینه‌ی عملیات نود نامعتبر است.")
+        return
 
     # ------ نمایش منوی ویرایش نود (nodeinfo:SERVER_ID:NODE_ID) ------
     if data.startswith("nodeinfo:"):
