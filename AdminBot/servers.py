@@ -1914,12 +1914,11 @@ async def send_user_list(
             )
         )
 
-    # چیدمان 3 ستونه (راست‌به‌چپ) و نمایش ردیف‌ها از پایین به بالا
+    # چیدمان 3 ستونه (راست‌به‌چپ) و نمایش ردیف‌ها از بالا به پایین
     keyboard_rows: List[List[InlineKeyboardButton]] = []
     for i in range(0, len(page_buttons), 3):
         row = page_buttons[i:i + 3]
         keyboard_rows.append(list(reversed(row)))
-    keyboard_rows = list(reversed(keyboard_rows))
 
     # ناوبری صفحه
     nav_row: List[InlineKeyboardButton] = []
