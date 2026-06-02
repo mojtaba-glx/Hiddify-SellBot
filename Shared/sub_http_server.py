@@ -1,7 +1,9 @@
+import base64
 import logging
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from Shared import sub_aggregator, userbot_db
 
@@ -9,14 +11,35 @@ logger = logging.getLogger(__name__)
 
 
 class _SubHandler(BaseHTTPRequestHandler):
-    def _write(self, status: int, body: str, content_type: str = "text/plain; charset=utf-8") -> None:
+    def _write(
+        self,
+        status: int,
+        body: str,
+        content_type: str = "text/plain; charset=utf-8",
+        headers: dict | None = None,
+    ) -> None:
         encoded = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in (headers or {}).items():
+            if key and value is not None:
+                self.send_header(str(key), str(value))
         self.end_headers()
         self.wfile.write(encoded)
+
+    @staticmethod
+    def _subscription_headers(service: dict, is_b64: bool) -> dict:
+        title = str((service or {}).get("name") or "subscription").strip() or "subscription"
+        encoded_title = base64.b64encode(title.encode("utf-8")).decode("ascii")
+        ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", title).strip("._-") or "subscription"
+        ext = "b64" if is_b64 else "txt"
+        utf8_filename = quote(f"{title}.{ext}")
+        return {
+            "profile-title": f"base64:{encoded_title}",
+            "Content-Disposition": f"inline; filename=\"{ascii_name}.{ext}\"; filename*=UTF-8''{utf8_filename}",
+        }
 
     def do_GET(self) -> None:  # noqa: N802
         try:
@@ -91,6 +114,7 @@ class _SubHandler(BaseHTTPRequestHandler):
             if not sid:
                 self._write(404, "subscription token not found")
                 return
+            service = userbot_db.get_service_by_id(int(sid)) or {}
             lock_reason = sub_aggregator.get_service_lock_reason(sid)
             if lock_reason:
                 self._write(403, f"subscription is locked: {lock_reason}")
@@ -103,7 +127,7 @@ class _SubHandler(BaseHTTPRequestHandler):
             if not body:
                 self._write(404, "subscription is empty")
                 return
-            self._write(200, body)
+            self._write(200, body, headers=self._subscription_headers(service, is_b64))
         except Exception as e:
             logger.exception("sub server request failed: %s", e)
             self._write(500, "internal error")
