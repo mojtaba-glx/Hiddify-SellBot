@@ -2,7 +2,9 @@ import unittest
 
 from Shared.sub_http_server import (
     _detect_file_format,
+    _file_requests_no_status,
     _is_hiddify_client_user_agent,
+    _query_requests_no_status,
     _query_requests_base64,
 )
 
@@ -21,6 +23,16 @@ class TestSubHttpServer(unittest.TestCase):
     def test_b64_endpoint_still_works(self):
         self.assertTrue(_detect_file_format("all.b64"))
         self.assertTrue(_detect_file_format("hiddify.b64"))
+
+    def test_hiddify_endpoint_hides_status_config(self):
+        self.assertFalse(_file_requests_no_status("all.txt"))
+        self.assertTrue(_file_requests_no_status("hiddify.txt"))
+        self.assertTrue(_file_requests_no_status("hiddify.b64"))
+
+    def test_query_can_hide_status_config(self):
+        for query in ("no_status=1", "hide_status=true", "hiddify=1", "status=0", "status_config=off"):
+            with self.subTest(query=query):
+                self.assertTrue(_query_requests_no_status(query))
 
     def test_hiddify_client_user_agent_is_detected(self):
         self.assertTrue(_is_hiddify_client_user_agent("HiddifyNext/2.5.7"))
