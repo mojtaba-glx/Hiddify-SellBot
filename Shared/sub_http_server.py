@@ -140,7 +140,11 @@ class _SubHandler(BaseHTTPRequestHandler):
             if not sid:
                 self._write(404, "subscription token not found")
                 return
-            service = userbot_db.get_service_by_id(int(sid)) or {}
+            service = (
+                sub_aggregator.sync_service_runtime_from_panels(int(sid))
+                or userbot_db.get_service_by_id(int(sid))
+                or {}
+            )
             lock_reason = sub_aggregator.get_service_lock_reason(sid)
             if lock_reason:
                 self._write(403, f"subscription is locked: {lock_reason}")

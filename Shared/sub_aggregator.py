@@ -1,6 +1,7 @@
 import base64
 import asyncio
-from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 from urllib.request import Request, urlopen
 
 from Shared import database, userbot_db, hiddify_api
@@ -27,6 +28,76 @@ def _to_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
+    if not dt_str:
+        return None
+    try:
+        iso_raw = str(dt_str).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_raw)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(dt_str), fmt)
+        except ValueError:
+            continue
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f",):
+        try:
+            return datetime.strptime(str(dt_str), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _optional_int_from_any(value: Any) -> Optional[int]:
+    raw = str(value or "").replace(",", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(float(raw))
+    except Exception:
+        return None
+
+
+def _usage_limit_from_panel_user(user: Dict[str, Any]) -> Optional[float]:
+    for key in ("usage_limit_GB", "usage_limit_gb", "usage_limit", "package_traffic"):
+        if key not in user:
+            continue
+        raw = user.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        val = _to_float(raw, -1.0)
+        if val >= 0:
+            return float(val)
+    return None
+
+
+def _days_left_from_panel_user(user: Dict[str, Any]) -> Optional[int]:
+    today_utc = datetime.now(timezone.utc).date()
+    for key in ("remaining_days", "remaining_day", "days_left"):
+        remaining = _optional_int_from_any(user.get(key))
+        if remaining is not None:
+            return remaining
+
+    start_dt = _parse_dt(user.get("start_date"))
+    package_days = user.get("package_days")
+    if start_dt and package_days:
+        try:
+            end_dt = start_dt + timedelta(days=int(package_days))
+            return (end_dt.date() - today_utc).days
+        except Exception:
+            pass
+
+    for key in ("expire", "expire_date", "end_date", "expiration_date", "expires_at"):
+        end_dt = _parse_dt(user.get(key))
+        if end_dt:
+            return (end_dt.date() - today_utc).days
+    return None
 
 
 def _service_lock_reason(service: dict) -> Optional[str]:
@@ -60,6 +131,100 @@ def _service_lock_reason(service: dict) -> Optional[str]:
 def get_service_lock_reason(service_id: int) -> Optional[str]:
     service = userbot_db.get_service_by_id(int(service_id))
     return _service_lock_reason(service or {})
+
+
+async def _fetch_target_runtime(target: dict) -> dict:
+    server = target.get("server") or {}
+    user_uuid = str(target.get("uuid") or "").strip()
+    server_id = int(target.get("server_id") or 0)
+    if not server or not user_uuid:
+        return {"ok": False, "server_id": server_id, "panel_user": None}
+    try:
+        return {
+            "ok": True,
+            "server_id": server_id,
+            "panel_user": await hiddify_api.get_user_by_uuid(server, user_uuid),
+        }
+    except Exception:
+        return {"ok": False, "server_id": server_id, "panel_user": None}
+
+
+async def _sync_service_runtime_from_panels_async(service_id: int) -> dict:
+    service = userbot_db.get_service_by_id(int(service_id)) or {}
+    if not service:
+        return {}
+
+    targets = _service_targets(service)
+    if not targets:
+        return service
+
+    try:
+        primary_server_id = int(service.get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_server_id = 0
+
+    results = await asyncio.gather(*[_fetch_target_runtime(target) for target in targets])
+    total_nodes = len(results)
+    fetched_nodes = 0
+    total_usage = 0.0
+    min_days_left: Optional[int] = None
+    latest_last_online: Optional[datetime] = None
+    synced_usage_limit: Optional[float] = None
+    fallback_usage_limit: Optional[float] = None
+
+    for result in results:
+        if not result.get("ok"):
+            continue
+        panel_user = result.get("panel_user") or {}
+        fetched_nodes += 1
+        total_usage += _to_float(panel_user.get("current_usage_GB"), 0.0)
+
+        panel_limit = _usage_limit_from_panel_user(panel_user)
+        if panel_limit is not None:
+            server_id = int(result.get("server_id") or 0)
+            if primary_server_id > 0 and server_id == primary_server_id:
+                synced_usage_limit = panel_limit
+            elif fallback_usage_limit is None:
+                fallback_usage_limit = panel_limit
+
+        days_left = _days_left_from_panel_user(panel_user)
+        if days_left is not None:
+            min_days_left = days_left if min_days_left is None else min(min_days_left, days_left)
+
+        dt = _parse_dt(panel_user.get("last_online"))
+        if dt and (latest_last_online is None or dt > latest_last_online):
+            latest_last_online = dt
+
+    if fetched_nodes <= 0:
+        return service
+
+    if fetched_nodes < max(total_nodes, 1):
+        total_usage = max(total_usage, _to_float(service.get("usage_current"), 0.0))
+        try:
+            previous_days_left = int(service.get("days_left"))
+        except Exception:
+            previous_days_left = None
+        if previous_days_left is not None:
+            min_days_left = previous_days_left if min_days_left is None else min(min_days_left, previous_days_left)
+
+    if synced_usage_limit is None:
+        synced_usage_limit = fallback_usage_limit
+
+    userbot_db.update_service_runtime(
+        int(service_id),
+        usage_current=total_usage,
+        usage_limit=synced_usage_limit,
+        days_left=min_days_left,
+        last_online=latest_last_online.isoformat(sep=" ") if latest_last_online else None,
+    )
+    return userbot_db.get_service_by_id(int(service_id)) or service
+
+
+def sync_service_runtime_from_panels(service_id: int) -> dict:
+    try:
+        return asyncio.run(_sync_service_runtime_from_panels_async(int(service_id)))
+    except Exception:
+        return userbot_db.get_service_by_id(int(service_id)) or {}
 
 
 def _is_config_line(line: str) -> bool:
