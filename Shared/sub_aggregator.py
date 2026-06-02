@@ -25,6 +25,11 @@ STATUS_CONFIG_ENABLED_ENV = "SUB_STATUS_CONFIG_ENABLED"
 STATUS_CONFIG_HOST_ENV = "SUB_STATUS_CONFIG_HOST"
 STATUS_CONFIG_SNI_ENV = "SUB_STATUS_CONFIG_SNI"
 STATUS_CONFIG_PORT_ENV = "SUB_STATUS_CONFIG_PORT"
+SUB_AGGREGATOR_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 
 
 def _to_float(value, default: float = 0.0) -> float:
@@ -362,8 +367,11 @@ def _fetch_lines(url: str) -> List[str]:
         req = Request(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 (HiddifySellBot-SubAggregator)",
-                "Accept": "*/*",
+                "User-Agent": SUB_AGGREGATOR_USER_AGENT,
+                "Accept": "text/plain,*/*;q=0.9",
+                "Accept-Language": "en-US,en;q=0.8",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
             },
         )
         with urlopen(req, timeout=12) as resp:
