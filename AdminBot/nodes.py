@@ -8,7 +8,6 @@ from html import escape
 
 from telegram import (
     Update,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
 from telegram.ext import ContextTypes
@@ -20,6 +19,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from Shared import database, hiddify_api, node_ops
+from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import admin_main_keyboard, cancel_keyboard
 
 logger = logging.getLogger(__name__)

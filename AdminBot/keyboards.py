@@ -1,5 +1,7 @@
 # AdminBot/keyboards.py
-from telegram import ReplyKeyboardMarkup, KeyboardButton
+from telegram import ReplyKeyboardMarkup
+
+from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
 # متن دکمه‌ها
 BTN_SERVERS = "🖥️مدیریت سرورها"

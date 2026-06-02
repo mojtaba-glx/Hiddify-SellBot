@@ -1,6 +1,9 @@
 # UserBot/keyboards.py
 
-from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup
+
+from Shared.tg_button_styles import inline_button as InlineKeyboardButton
+from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
 # --- منوی اصلی (Reply Keyboard) ---
 def main_menu_keyboard(show_renew: bool = True, show_invite: bool = True):

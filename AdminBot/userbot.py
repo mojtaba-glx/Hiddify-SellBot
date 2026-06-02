@@ -19,10 +19,8 @@ from urllib.parse import urlparse
 
 from telegram import (
     Update,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
-    KeyboardButton,
     Bot 
 )
 from telegram.ext import ContextTypes
@@ -30,6 +28,8 @@ from telegram.error import BadRequest
 from dotenv import load_dotenv
 
 from AdminBot.keyboards import admin_main_keyboard
+from Shared.tg_button_styles import inline_button as InlineKeyboardButton
+from Shared.tg_button_styles import keyboard_button as KeyboardButton
 from Shared import userbot_db, database, hiddify_api
 
 load_dotenv()

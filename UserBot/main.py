@@ -74,7 +74,8 @@ def _safe_import_with_validation():
                 raise ImportError(f"{package} version {min_version} required")
         
         from dotenv import load_dotenv
-        from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Bot, BotCommand, MenuButtonCommands
+        from telegram import Update, InlineKeyboardMarkup, Bot, BotCommand, MenuButtonCommands
+        from Shared.tg_button_styles import inline_button as InlineKeyboardButton
         from telegram.ext import (
             ApplicationBuilder, CommandHandler, MessageHandler, 
             CallbackQueryHandler, ContextTypes, filters

@@ -4,15 +4,15 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from telegram import (
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
-    KeyboardButton,
     ReplyKeyboardMarkup,
 )
 from telegram.ext import ContextTypes
 
 from Shared import database, plans_storage
+from Shared.tg_button_styles import inline_button as InlineKeyboardButton
+from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
 logger = logging.getLogger(__name__)
 

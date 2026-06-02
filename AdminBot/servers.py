@@ -13,7 +13,6 @@ import qrcode
 from dotenv import load_dotenv
 from telegram import (
     Update,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
 from telegram.ext import ContextTypes
@@ -28,6 +27,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from Shared import database, hiddify_api, userbot_db, plans_storage
+from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import (
     admin_main_keyboard,
     confirm_add_user_keyboard,
