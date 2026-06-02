@@ -367,9 +367,9 @@ def subscription_configs_keyboard(
     if show_sub_link_b64:
         rows.append([InlineKeyboardButton("لینک اشتراک b64", callback_data=f"status:sub_b64:{service_id}")])
     if show_multi_server:
-        rows.append([InlineKeyboardButton("Multi Server", callback_data=f"status:multi:{service_id}")])
+        rows.append([InlineKeyboardButton("🌐 لینک اشتراک هوشمند", callback_data=f"status:multi:{service_id}")])
     if show_multi_server_b64:
-        rows.append([InlineKeyboardButton("Multi Server b64", callback_data=f"status:multi_b64:{service_id}")])
+        rows.append([InlineKeyboardButton("🌐 لینک اشتراک هوشمند b64", callback_data=f"status:multi_b64:{service_id}")])
 
     rows.append([InlineKeyboardButton("🔙بازگشت", callback_data=f"status:menu:{service_id}")])
     return InlineKeyboardMarkup(rows)

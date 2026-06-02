@@ -5603,16 +5603,16 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
             elif action == "multi":
                 if not settings.get("show_multi_server", False):
-                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش Multi Server خاموش است.", reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک هوشمند خاموش است.", reply_markup=_main_menu_keyboard())
                     return
                 managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
-                config_items.append(("🌐 Multi Server:", managed_link))
+                config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
             elif action == "multi_b64":
                 if not settings.get("show_multi_server_b64", False):
-                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش Multi Server b64 خاموش است.", reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک هوشمند b64 خاموش است.", reply_markup=_main_menu_keyboard())
                     return
                 _, managed_link_b64 = _get_or_create_bot_sub_links(int(service_id), service=service)
-                config_items.append(("🌐 Multi Server b64:", managed_link_b64))
+                config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
 
             if not config_items:
                 await context.bot.send_message(

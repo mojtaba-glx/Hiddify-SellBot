@@ -2,7 +2,7 @@
 
 ## Hiddify-SellBot v2.2.0
 
-Minor Release برای تکمیل لینک‌های Multi Server Subscription و مرتب‌سازی صفحه اصلی پروژه.
+Minor Release برای تکمیل لینک اشتراک هوشمند و مرتب‌سازی صفحه اصلی پروژه.
 
 ### تغییرات اصلی
 
@@ -76,7 +76,7 @@ Minor Release برای تکمیل لینک‌های Multi Server Subscription و
 ## Hiddify-SellBot v2.1.3
 
 - اضافه شدن ویزارد SSL داخل منوی `install.sh`.
-- ساده‌تر شدن گرفتن SSL برای لینک‌های Multi Server.
+- ساده‌تر شدن گرفتن SSL برای لینک‌های اشتراک هوشمند.
 
 ## Hiddify-SellBot v2.1.2
 
@@ -93,7 +93,7 @@ Minor Release برای تکمیل لینک‌های Multi Server Subscription و
 ## Hiddify-SellBot v2.1.0
 
 - اضافه شدن دستور `/debug` در AdminBot.
-- رفع مشکل تنظیم دامنه Multi Server.
+- رفع مشکل تنظیم دامنه لینک اشتراک هوشمند.
 - پشتیبانی از دامنه با و بدون `https://`.
 - اضافه شدن دستور `./install.sh ssl DOMAIN [EMAIL]`.
 - پشتیبانی از حجم تست اعشاری مثل `0.2` و `0.5` گیگ.

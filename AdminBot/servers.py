@@ -2038,13 +2038,13 @@ async def send_user_configs_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "Multi Server 🌐",
+                    "لینک اشتراک هوشمند 🌐",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "Multi Server b64 🌐",
+                    "لینک اشتراک هوشمند b64 🌐",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi_b64",
                 )
             ],
@@ -5154,10 +5154,10 @@ async def handle_server_inline_callback(
                     caption_title = "لینک اشتراک b64"
                 elif cfg_type == "multi":
                     url = f"{base}/hidybot.txt"
-                    caption_title = "Multi Server"
+                    caption_title = "لینک اشتراک هوشمند"
                 elif cfg_type == "multi_b64":
                     url = f"{base}/hidybot.txt?base64=True"
-                    caption_title = "Multi Server b64"
+                    caption_title = "لینک اشتراک هوشمند b64"
                 elif cfg_type == "bot_link":
                     if not SUB_BOT_USERNAME:
                         await msg.edit_text(

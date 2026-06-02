@@ -1521,9 +1521,9 @@ def build_sub_link_status_menu_keyboard(settings: Dict[str, bool]) -> InlineKeyb
         [InlineKeyboardButton(f"لینک اشتراک خودکار | {auto_icon}", callback_data="userbot:settings:sub_link_status:show_auto_sub_link")],
         [InlineKeyboardButton(f"لینک اشتراک | {sub_icon}", callback_data="userbot:settings:sub_link_status:show_sub_link")],
         [InlineKeyboardButton(f"لینک اشتراک b64 | {sub_b64_icon}", callback_data="userbot:settings:sub_link_status:show_sub_link_b64")],
-        [InlineKeyboardButton(f"Multi Server | {multi_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server")],
-        [InlineKeyboardButton(f"Multi Server b64 | {multi_b64_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server_b64")],
-        [InlineKeyboardButton("🌐 تنظیم دامنه Multi Server", callback_data="userbot:settings:sub_link_status:set_base_url")],
+        [InlineKeyboardButton(f"لینک اشتراک هوشمند | {multi_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server")],
+        [InlineKeyboardButton(f"لینک اشتراک هوشمند b64 | {multi_b64_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server_b64")],
+        [InlineKeyboardButton("🌐 تنظیم دامنه لینک اشتراک هوشمند", callback_data="userbot:settings:sub_link_status:set_base_url")],
         [InlineKeyboardButton("🔐 راهنمای SSL دامنه", callback_data="userbot:settings:sub_link_status:ssl_help")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:subscription")],
     ]
@@ -5303,12 +5303,12 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                     f"cd ~/Hiddify-SellBot && sudo ./install.sh ssl {host_hint} your-email@example.com"
                 )
             await msg.reply_text(
-                f"✅ دامنه Multi Server ذخیره شد:\n{stored}{ssl_hint}",
+                f"✅ دامنه لینک اشتراک هوشمند ذخیره شد:\n{stored}{ssl_hint}",
                 reply_markup=admin_main_keyboard(),
             )
         else:
             await msg.reply_text(
-                "✅ دامنه Multi Server به حالت خودکار برگشت.",
+                "✅ دامنه لینک اشتراک هوشمند به حالت خودکار برگشت.",
                 reply_markup=admin_main_keyboard(),
             )
         await send_sub_link_status_menu(msg.chat_id, context)
@@ -5914,7 +5914,7 @@ async def send_sub_link_status_menu(chat_id: int, context: ContextTypes.DEFAULT_
     current_base_text = current_base if current_base else "خودکار (بر اساس دامنه سرور/ENV)"
     text = (
         "📁وضعیت نمایش لینک اشتراک\n\n"
-        f"🌐 دامنه فعلی Multi Server:\n{current_base_text}"
+        f"🌐 دامنه فعلی لینک اشتراک هوشمند:\n{current_base_text}"
     )
     settings = _get_subscription_settings(context)
     kb = build_sub_link_status_menu_keyboard(settings)
@@ -8050,7 +8050,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             current = userbot_db.get_managed_sub_base_url() or "خودکار"
             await query.answer()
             prompt = (
-                "🌐 دامنه عمومی Multi Server را وارد کنید.\n"
+                "🌐 دامنه عمومی لینک اشتراک هوشمند را وارد کنید.\n"
                 "نمونه‌های معتبر:\n"
                 "site.example.com\n"
                 "https://site.example.com\n\n"
@@ -8067,7 +8067,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer()
             hint_domain = _guess_ssl_domain_hint()
             guide = (
-                "🔐 راهنمای فعال‌سازی SSL برای لینک‌های Multi Server\n\n"
+                "🔐 راهنمای فعال‌سازی SSL برای لینک‌های اشتراک هوشمند\n\n"
                 "1) DNS دامنه را روی IP همین سرور ست کنید.\n"
                 "2) روی سرور این دستور را اجرا کنید:\n"
                 f"`cd ~/Hiddify-SellBot && sudo ./install.sh ssl {hint_domain} your-email@example.com`\n\n"
