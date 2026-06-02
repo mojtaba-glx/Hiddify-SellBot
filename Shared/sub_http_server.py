@@ -36,25 +36,6 @@ def _detect_file_format(file_part: str, query: str = ""):
     return None
 
 
-def _query_requests_no_status(query: str) -> bool:
-    params = parse_qs(str(query or ""), keep_blank_values=True)
-    for key, values in params.items():
-        key_lower = str(key or "").strip().lower()
-        value_set = {str(v or "").strip().lower() for v in (values or [])}
-        if key_lower in {"no_status", "nostatus", "hide_status", "hiddify"} and (
-            not value_set or value_set & {"", "1", "true", "yes", "y", "on"}
-        ):
-            return True
-        if key_lower in {"status", "status_config"} and value_set & {"0", "false", "no", "off", "disable", "disabled"}:
-            return True
-    return False
-
-
-def _file_requests_no_status(file_part: str, query: str = "") -> bool:
-    file_lower = str(file_part or "").strip().lower()
-    return file_lower in {"hiddify.txt", "hiddify.b64"} or _query_requests_no_status(query)
-
-
 def _is_hiddify_client_user_agent(user_agent: str) -> bool:
     return "hiddify" in str(user_agent or "").strip().lower()
 
@@ -127,7 +108,6 @@ class _SubHandler(BaseHTTPRequestHandler):
             token = ""
             uuid_hint = ""
             is_b64 = False
-            no_status_config = False
 
             # New formats:
             # /sub/{token}/{uuid}/all.txt
@@ -144,7 +124,6 @@ class _SubHandler(BaseHTTPRequestHandler):
                     self._write(404, "not found")
                     return
                 is_b64 = detected
-                no_status_config = _file_requests_no_status(parts[3], query)
             # New formats:
             # /sub/{token}/all.txt | /sub/{token}/all.txt?base64=1 | /sub/{token}/all.b64
             # backward compat:
@@ -156,18 +135,15 @@ class _SubHandler(BaseHTTPRequestHandler):
                     self._write(404, "not found")
                     return
                 is_b64 = detected
-                no_status_config = _file_requests_no_status(parts[2], query)
             # Backward-compatible format: /sub/{token}.txt | /sub/{token}.txt?base64=1 | /sub/{token}.b64
             elif len(parts) == 2:
                 file_part = parts[1]
                 if file_part.endswith(".txt"):
                     token = file_part[:-4]
                     is_b64 = _query_requests_base64(query)
-                    no_status_config = _query_requests_no_status(query)
                 elif file_part.endswith(".b64"):
                     token = file_part[:-4]
                     is_b64 = True
-                    no_status_config = _query_requests_no_status(query)
                 else:
                     self._write(404, "not found")
                     return
@@ -197,9 +173,8 @@ class _SubHandler(BaseHTTPRequestHandler):
                 self._write(403, f"subscription is locked: {lock_reason}")
                 return
 
-            include_status_config = (
-                not no_status_config
-                and not _is_hiddify_client_user_agent(self.headers.get("User-Agent", ""))
+            include_status_config = not _is_hiddify_client_user_agent(
+                self.headers.get("User-Agent", "")
             )
             if is_b64:
                 body = sub_aggregator.build_subscription_b64_for_service(

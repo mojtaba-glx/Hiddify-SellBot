@@ -1367,20 +1367,15 @@ def _resolve_service_uuid_for_managed_sub_link(service_id: int, service: Optiona
 
 
 def _get_or_create_bot_sub_links(service_id: int, service: Optional[dict] = None) -> tuple[str, str]:
-    links = _get_or_create_bot_sub_client_links(service_id, service=service)
-    return links["all"], links["all_b64"]
-
-
-def _get_or_create_bot_sub_client_links(service_id: int, service: Optional[dict] = None) -> dict[str, str]:
     base = _resolve_sub_service_base_url(service)
     service_uuid = _resolve_service_uuid_for_managed_sub_link(int(service_id), service=service)
-    token = service_uuid or userbot_db.ensure_service_sub_token(int(service_id))
-    return {
-        "all": f"{base}/sub/{token}/all.txt",
-        "all_b64": f"{base}/sub/{token}/all.txt?base64=1",
-        "hiddify": f"{base}/sub/{token}/hiddify.txt",
-        "hiddify_b64": f"{base}/sub/{token}/hiddify.txt?base64=1",
-    }
+    if service_uuid:
+        return (
+            f"{base}/sub/{service_uuid}/all.txt",
+            f"{base}/sub/{service_uuid}/all.txt?base64=1",
+        )
+    token = userbot_db.ensure_service_sub_token(int(service_id))
+    return f"{base}/sub/{token}/all.txt", f"{base}/sub/{token}/all.txt?base64=1"
 
 
 def _should_show_configs_button(settings: dict) -> bool:
@@ -5612,16 +5607,14 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not settings.get("show_multi_server", False):
                     await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک هوشمند خاموش است.", reply_markup=_main_menu_keyboard())
                     return
-                managed_links = _get_or_create_bot_sub_client_links(int(service_id), service=service)
-                config_items.append(("📱 لینک اشتراک هوشمند مخصوص Hiddify:", managed_links["hiddify"]))
-                config_items.append(("🌐 لینک اشتراک هوشمند سایر برنامه‌ها:", managed_links["all"]))
+                managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
+                config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
             elif action == "multi_b64":
                 if not settings.get("show_multi_server_b64", False):
                     await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک هوشمند b64 خاموش است.", reply_markup=_main_menu_keyboard())
                     return
-                managed_links = _get_or_create_bot_sub_client_links(int(service_id), service=service)
-                config_items.append(("📱 لینک اشتراک هوشمند b64 مخصوص Hiddify:", managed_links["hiddify_b64"]))
-                config_items.append(("🌐 لینک اشتراک هوشمند b64 سایر برنامه‌ها:", managed_links["all_b64"]))
+                _, managed_link_b64 = _get_or_create_bot_sub_links(int(service_id), service=service)
+                config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
 
             if not config_items:
                 await context.bot.send_message(
