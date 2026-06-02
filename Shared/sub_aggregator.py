@@ -319,6 +319,15 @@ def _is_config_line(line: str) -> bool:
     return any(low.startswith(s) for s in ALLOWED_CONFIG_SCHEMES)
 
 
+def _is_panel_status_config_line(line: str) -> bool:
+    raw = str(line or "").strip().lower()
+    if not raw.startswith("trojan://"):
+        return False
+    if "status.hiddify-sellbot.invalid" in raw:
+        return False
+    return "fake_ip_for_sub_link" in raw
+
+
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
@@ -542,6 +551,8 @@ def build_subscription_text_for_service(service_id: int) -> str:
             )
         for ln in fetched:
             if not _is_config_line(ln):
+                continue
+            if _is_panel_status_config_line(ln):
                 continue
             if ln in seen:
                 continue
