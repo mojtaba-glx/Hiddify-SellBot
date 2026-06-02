@@ -1657,18 +1657,27 @@ async def send_domains_menu(
                 continue
             domains.append({"id": idx, "title": title, "domain": dom})
 
+    def _plain_domain(raw: Any) -> str:
+        value = str(raw or "").strip().rstrip("/")
+        value = re.sub(r"^https?://", "", value, flags=re.IGNORECASE)
+        return escape(value or "—")
+
     lines = [
-        "✏️ لیست دامنه‌ها",
-        "📌 در این قسمت شما میتوانید دامنه‌های خود را اضافه کنید تا لینک و کانفیگ‌های دریافتی توسط شما و کاربران به جای استفاده از آدرس مستقیم پنل، از این دامنه(ها) استفاده کنند.",
+        "🔗 مدیریت دامنه‌ها",
+        "❖ • -------------------------- • ❖",
+        "دامنه‌هایی که اینجا ثبت می‌کنی برای لینک‌های اشتراک و کانفیگ‌ها استفاده می‌شوند.",
         "",
     ]
 
     if not domains:
         lines.append("در حال حاضر هیچ دامنه‌ای ثبت نشده است.")
     else:
-        lines.append("دامنه‌های ثبت‌شده:")
-        for d in domains:
-            lines.append(f"• {d['title']} → {d['domain']}")
+        lines.append("📌 دامنه‌های ثبت‌شده:")
+        for idx, d in enumerate(domains, start=1):
+            title = escape(str(d.get("title") or f"دامنه {idx}"))
+            domain = _plain_domain(d.get("domain"))
+            lines.append(f"{idx}) {title}")
+            lines.append(f"   🌐 {domain}")
 
     keyboard_rows: List[List[InlineKeyboardButton]] = []
 
@@ -1700,9 +1709,20 @@ async def send_domains_menu(
     text = "\n".join(lines)
 
     if message is not None:
-        await message.edit_text(text, reply_markup=kb)
+        await message.edit_text(
+            text,
+            reply_markup=kb,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
     else:
-        await context.bot.send_message(chat_id, text, reply_markup=kb)
+        await context.bot.send_message(
+            chat_id,
+            text,
+            reply_markup=kb,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 async def send_domains_delete_menu(
@@ -1748,15 +1768,22 @@ async def send_domains_delete_menu(
             await context.bot.send_message(chat_id, text, reply_markup=kb)
         return
 
+    def _plain_domain(raw: Any) -> str:
+        value = str(raw or "").strip().rstrip("/")
+        value = re.sub(r"^https?://", "", value, flags=re.IGNORECASE)
+        return escape(value or "—")
+
     lines = [
         "🗑 حذف دامنه",
+        "❖ • -------------------------- • ❖",
         "یکی از دامنه‌های زیر را برای حذف انتخاب کنید:",
         "",
     ]
 
     rows: List[List[InlineKeyboardButton]] = []
     for d in domains:
-        lines.append(f"• {d['title']} → {d['domain']}")
+        title = escape(str(d.get("title") or f"دامنه {d.get('id')}"))
+        lines.append(f"• {title} — {_plain_domain(d.get('domain'))}")
         rows.append(
             [
                 InlineKeyboardButton(
@@ -1774,9 +1801,20 @@ async def send_domains_delete_menu(
     text = "\n".join(lines)
 
     if message is not None:
-        await message.edit_text(text, reply_markup=kb)
+        await message.edit_text(
+            text,
+            reply_markup=kb,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
     else:
-        await context.bot.send_message(chat_id, text, reply_markup=kb)
+        await context.bot.send_message(
+            chat_id,
+            text,
+            reply_markup=kb,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 # ===============================
