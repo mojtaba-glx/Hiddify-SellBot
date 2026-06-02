@@ -1469,10 +1469,12 @@ def build_zarin_coupon_detail_keyboard(code: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_userbot_settings_menu_keyboard() -> InlineKeyboardMarkup:
+def build_userbot_settings_menu_keyboard(ui_settings: Optional[Dict[str, Any]] = None) -> InlineKeyboardMarkup:
+    colored_icon = "✅" if (ui_settings or {}).get("colored_buttons", True) else "❌"
     rows = [
         [InlineKeyboardButton("🛍تنظیمات اشتراک", callback_data="userbot:settings:subscription")],
         [InlineKeyboardButton("📁وضعیت نمایش لینک اشتراک", callback_data="userbot:settings:sub_link_status")],
+        [InlineKeyboardButton(f"🎨 دکمه‌های رنگی | {colored_icon}", callback_data="userbot:settings:ui:colored_buttons")],
         [InlineKeyboardButton("🛒تنظیمات خرید و تمدید", callback_data="userbot:settings:buy_renew")],
         [InlineKeyboardButton("🧮تنظیمات تراکنشات و پلن ها", callback_data="userbot:settings:tx_plans")],
         [InlineKeyboardButton("🧾تنظیمات متون", callback_data="userbot:settings:texts")],
@@ -1887,6 +1889,14 @@ def _get_subscription_settings(context: ContextTypes.DEFAULT_TYPE) -> Dict[str, 
     except Exception as e:
         logger.warning(f"Failed to load subscription settings from DB: {e}")
     return settings
+
+
+def _get_ui_settings() -> Dict[str, Any]:
+    try:
+        return userbot_db.get_ui_settings()
+    except Exception as e:
+        logger.warning(f"Failed to load UI settings from DB: {e}")
+        return dict(userbot_db.DEFAULT_UI_SETTINGS)
 
 
 def _toggle_subscription_setting(context: ContextTypes.DEFAULT_TYPE, key: str) -> Dict[str, bool]:
@@ -5882,7 +5892,7 @@ async def send_zarin_coupon_detail(
 
 async def send_userbot_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     text = "⚙️تنظیمات ربات کاربران"
-    kb = build_userbot_settings_menu_keyboard()
+    kb = build_userbot_settings_menu_keyboard(_get_ui_settings())
     if message:
         try:
             await message.edit_text(text, reply_markup=kb)
@@ -7567,6 +7577,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "userbot:settings:sub_link_status":
         await query.answer()
         await send_sub_link_status_menu(cid, context, message=msg)
+        return
+
+    if data == "userbot:settings:ui:colored_buttons":
+        settings = userbot_db.toggle_ui_setting("colored_buttons")
+        status = "فعال شد" if settings.get("colored_buttons", True) else "غیرفعال شد"
+        await query.answer(f"🎨 دکمه‌های رنگی {status}.")
+        await send_userbot_settings_menu(cid, context, message=msg)
         return
 
     if data == "userbot:settings:buy_renew":

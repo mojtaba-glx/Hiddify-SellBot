@@ -111,6 +111,9 @@ DEFAULT_BACKUP_RESTORE_SETTINGS = {
     "event_channel_enabled": False,
     "event_channel_id": "",
 }
+DEFAULT_UI_SETTINGS = {
+    "colored_buttons": True,
+}
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -431,6 +434,60 @@ def generate_tx_code() -> str:
         return f"{random.randint(0, 9999999):07d}"
     finally:
         conn.close()
+
+
+def get_ui_settings() -> Dict[str, Any]:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT value FROM userbot_settings WHERE key = 'ui_settings' LIMIT 1")
+        row = cur.fetchone()
+        settings = dict(DEFAULT_UI_SETTINGS)
+        if row and row["value"]:
+            try:
+                raw = json.loads(row["value"])
+                if isinstance(raw, dict):
+                    for key in DEFAULT_UI_SETTINGS.keys():
+                        if key in raw:
+                            settings[key] = _as_bool(raw.get(key), bool(DEFAULT_UI_SETTINGS[key]))
+            except Exception:
+                pass
+        return settings
+    finally:
+        conn.close()
+
+
+def set_ui_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    current = dict(DEFAULT_UI_SETTINGS)
+    if isinstance(settings, dict):
+        for key in DEFAULT_UI_SETTINGS.keys():
+            if key in settings:
+                current[key] = _as_bool(settings.get(key), bool(DEFAULT_UI_SETTINGS[key]))
+
+    payload = json.dumps(current, ensure_ascii=False)
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO userbot_settings (key, value) VALUES ('ui_settings', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (payload,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return current
+
+
+def toggle_ui_setting(name: str) -> Dict[str, Any]:
+    settings = get_ui_settings()
+    if name in DEFAULT_UI_SETTINGS:
+        settings[name] = not bool(settings.get(name))
+    return set_ui_settings(settings)
 
 
 def get_subscription_settings() -> Dict[str, bool]:

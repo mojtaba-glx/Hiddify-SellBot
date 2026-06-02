@@ -11,6 +11,15 @@ VALID_BUTTON_STYLES = {"primary", "success", "danger"}
 
 
 def _styles_enabled() -> bool:
+    try:
+        from Shared import userbot_db
+
+        settings = userbot_db.get_ui_settings()
+        if "colored_buttons" in settings:
+            return bool(settings.get("colored_buttons"))
+    except Exception:
+        pass
+
     value = str(os.getenv("TG_BUTTON_STYLES_ENABLED", "true")).strip().lower()
     return value not in {"0", "false", "no", "off", "disable", "disabled"}
 
