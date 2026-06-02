@@ -4517,7 +4517,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "وضعیت اشتراک" in normalized_text:
         menu_cd = 8.0
     elif "خرید اشتراک" in normalized_text:
-        menu_cd = 6.0
+        menu_cd = 8.0
     else:
         menu_cd = USERBOT_ACTION_COOLDOWN_SECONDS
     limited, wait_s = _check_action_rate_limit(
