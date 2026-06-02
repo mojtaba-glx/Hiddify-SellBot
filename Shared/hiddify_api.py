@@ -15,6 +15,10 @@ SSL_MODE_AUTO = "auto"
 SSL_MODE_SECURE = "secure"
 SSL_MODE_INSECURE = "insecure"
 API_TIMEOUT_ENV = "HIDDIFY_API_TIMEOUT_SECONDS"
+CREATE_USER_STABILIZE_ENV = "HIDDIFY_CREATE_USER_STABILIZE_MODE"
+CREATE_USER_STABILIZE_OFF = "off"
+CREATE_USER_STABILIZE_UPDATE = "update"
+CREATE_USER_STABILIZE_TOGGLE = "toggle"
 
 
 class HiddifyApiError(Exception):
@@ -186,6 +190,31 @@ def _get_api_timeout_seconds() -> float:
     except Exception:
         return 8.0
     return min(max(val, 2.0), 60.0)
+
+
+def _get_create_user_stabilize_mode() -> str:
+    raw = str(os.getenv(CREATE_USER_STABILIZE_ENV, CREATE_USER_STABILIZE_TOGGLE) or "").strip().lower()
+    aliases = {
+        "0": CREATE_USER_STABILIZE_OFF,
+        "false": CREATE_USER_STABILIZE_OFF,
+        "no": CREATE_USER_STABILIZE_OFF,
+        "disable": CREATE_USER_STABILIZE_OFF,
+        "disabled": CREATE_USER_STABILIZE_OFF,
+        "1": CREATE_USER_STABILIZE_TOGGLE,
+        "true": CREATE_USER_STABILIZE_TOGGLE,
+        "yes": CREATE_USER_STABILIZE_TOGGLE,
+        "enable": CREATE_USER_STABILIZE_TOGGLE,
+        "enabled": CREATE_USER_STABILIZE_TOGGLE,
+        "patch": CREATE_USER_STABILIZE_UPDATE,
+    }
+    mode = aliases.get(raw, raw)
+    if mode not in {
+        CREATE_USER_STABILIZE_OFF,
+        CREATE_USER_STABILIZE_UPDATE,
+        CREATE_USER_STABILIZE_TOGGLE,
+    }:
+        return CREATE_USER_STABILIZE_TOGGLE
+    return mode
 
 
 async def _request(
@@ -879,21 +908,86 @@ async def create_user(
         )
         return data
 
+    mode = _get_create_user_stabilize_mode()
+    if mode == CREATE_USER_STABILIZE_OFF:
+        return data
+
+    update_payload = dict(payload)
+    update_payload["is_active"] = True
     last_error: Optional[Exception] = None
     for attempt in range(2):
         try:
-            await patch_user(server, user_uuid, dict(payload))
-            return data
+            await patch_user(server, user_uuid, update_payload)
+            last_error = None
+            break
         except Exception as exc:
             last_error = exc
             if attempt == 0:
                 await asyncio.sleep(0.35)
 
-    logger.warning(
-        "Post-create Hiddify user stabilization failed for uuid=%s: %s",
-        user_uuid,
-        last_error,
+    if last_error is not None:
+        logger.warning(
+            "Post-create Hiddify user stabilization update failed for uuid=%s: %s",
+            user_uuid,
+            last_error,
+        )
+        return data
+
+    if mode != CREATE_USER_STABILIZE_TOGGLE:
+        return data
+
+    await asyncio.sleep(0.2)
+    disable_payloads = (
+        {"is_active": False, "enable": "n", "mode": "disable", "status": "disable"},
+        {"is_active": False},
+        {"mode": "disable"},
     )
+    enable_payload = dict(payload)
+    enable_payload.update(
+        {
+            "is_active": True,
+            "enable": "y",
+            "mode": "no_reset",
+            "status": "active",
+        }
+    )
+    enable_payloads = (
+        enable_payload,
+        {"is_active": True, "enable": "y", "mode": "no_reset", "status": "active"},
+        {"is_active": True},
+        {"mode": "no_reset"},
+    )
+
+    def _payload_error(exc: Exception) -> str:
+        return str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
+
+    async def _try_patch_payloads(payloads: tuple[Dict[str, Any], ...]) -> Optional[str]:
+        last: Optional[Exception] = None
+        for patch_payload in payloads:
+            try:
+                await patch_user(server, user_uuid, patch_payload)
+                return None
+            except Exception as exc:
+                last = exc
+        return _payload_error(last) if last is not None else "unknown"
+
+    disable_error = await _try_patch_payloads(disable_payloads)
+    if disable_error:
+        logger.warning(
+            "Post-create Hiddify user activation refresh disable step failed for uuid=%s: %s",
+            user_uuid,
+            disable_error,
+        )
+        return data
+
+    await asyncio.sleep(0.25)
+    enable_error = await _try_patch_payloads(enable_payloads)
+    if enable_error:
+        logger.warning(
+            "Post-create Hiddify user activation refresh enable step failed for uuid=%s: %s",
+            user_uuid,
+            enable_error,
+        )
     return data
 
 
