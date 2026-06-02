@@ -1073,6 +1073,359 @@ def _get_related_server_targets(server_id: int) -> List[Dict[str, Any]]:
     return result
 
 
+def _panel_user_uuid(user: Dict[str, Any]) -> str:
+    return str((user or {}).get("uuid") or (user or {}).get("id") or "").strip()
+
+
+def _node_sync_targets(server_id: int) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    source = database.get_server_by_id(server_id)
+    if not source:
+        return None, [], ["سرور اصلی پیدا نشد."]
+
+    targets: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    seen: set[int] = {int(server_id)}
+    for node in (source.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        try:
+            target_sid = int(node.get("target_server_id") or 0)
+        except (TypeError, ValueError):
+            target_sid = 0
+        title = str(node.get("title") or node.get("host") or f"نود #{node.get('id') or '?'}").strip()
+        if target_sid <= 0:
+            warnings.append(f"{title}: سرور مقصد وصل نشده است.")
+            continue
+        if target_sid in seen:
+            continue
+        target = database.get_server_by_id(target_sid)
+        if not target:
+            warnings.append(f"{title}: سرور مقصد #{target_sid} پیدا نشد.")
+            continue
+        targets.append(target)
+        seen.add(target_sid)
+
+    return source, targets, warnings
+
+
+def build_node_sync_menu_keyboard(server_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📊 فقط بررسی و گزارش", callback_data=f"server:{server_id}:sync_nodes_report")],
+            [InlineKeyboardButton("🧩 ساخت کاربران جاافتاده", callback_data=f"server:{server_id}:sync_nodes_missing")],
+            [InlineKeyboardButton("🔁 همسان‌سازی مشخصات موجودها", callback_data=f"server:{server_id}:sync_nodes_details")],
+            [InlineKeyboardButton("✅ اجرای کامل امن", callback_data=f"server:{server_id}:sync_nodes_full")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")],
+        ]
+    )
+
+
+def _build_node_sync_payload(source_user: Dict[str, Any], *, for_create: bool) -> Dict[str, Any]:
+    """
+    Build a safe copy payload from main server to node.
+    Important: current_usage_GB is never copied to a new node, otherwise total
+    multi-node usage would be counted twice.
+    """
+    payload: Dict[str, Any] = {}
+    source_uuid = _panel_user_uuid(source_user)
+    if for_create and source_uuid:
+        payload["uuid"] = source_uuid
+
+    name = str(source_user.get("name") or source_user.get("username") or source_uuid or "user").strip()
+    payload["name"] = name
+
+    usage_limit = _to_float(source_user.get("usage_limit_GB"))
+    if usage_limit is not None:
+        payload["usage_limit_GB"] = float(usage_limit)
+
+    try:
+        package_days = int(source_user.get("package_days") or 0)
+    except (TypeError, ValueError):
+        package_days = 0
+    if package_days > 0:
+        payload["package_days"] = int(package_days)
+
+    start_date = str(source_user.get("start_date") or "").strip()
+    payload["start_date"] = start_date or datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
+
+    last_reset = str(source_user.get("last_reset_time") or "").strip()
+    if last_reset:
+        payload["last_reset_time"] = last_reset
+
+    comment = str(source_user.get("comment") or "").strip()
+    if comment:
+        payload["comment"] = comment
+
+    payload["is_active"] = _panel_user_is_active(source_user)
+    if for_create:
+        payload["current_usage_GB"] = 0
+    return payload
+
+
+def _node_sync_service_owner(source_uuid: str) -> Optional[Dict[str, Any]]:
+    try:
+        return userbot_db.get_service_owner_by_panel_uuid(source_uuid)
+    except Exception as e:
+        logger.warning("Failed resolving service owner for node sync uuid=%s: %s", source_uuid, e)
+        return None
+
+
+def _record_node_sync_mapping(
+    *,
+    source_uuid: str,
+    target: Dict[str, Any],
+    target_uuid: str,
+    target_user_id: Any = None,
+    is_active: bool = True,
+) -> bool:
+    owner = _node_sync_service_owner(source_uuid)
+    if not owner:
+        return False
+    try:
+        service_id = int(owner.get("service_id") or 0)
+        target_sid = int(target.get("id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if service_id <= 0 or target_sid <= 0 or not target_uuid:
+        return False
+    userbot_db.add_service_node(
+        service_id=service_id,
+        server_id=target_sid,
+        server_title=str(target.get("title") or f"سرور #{target_sid}"),
+        panel_user_uuid=target_uuid,
+        panel_user_id=(str(target_user_id).strip() if target_user_id is not None else None),
+        is_active=1 if is_active else 0,
+    )
+    return True
+
+
+async def _run_node_sync(
+    server_id: int,
+    *,
+    create_missing: bool = False,
+    patch_existing: bool = False,
+) -> Dict[str, Any]:
+    source, targets, warnings = _node_sync_targets(server_id)
+    result: Dict[str, Any] = {
+        "source_title": str((source or {}).get("title") or f"سرور #{server_id}"),
+        "source_count": 0,
+        "targets": [],
+        "warnings": list(warnings),
+        "created": 0,
+        "patched": 0,
+        "missing": 0,
+        "existing": 0,
+        "extra": 0,
+        "mapped": 0,
+        "skipped": 0,
+        "errors": [],
+        "mode": "report",
+    }
+    if create_missing and patch_existing:
+        result["mode"] = "full"
+    elif create_missing:
+        result["mode"] = "missing"
+    elif patch_existing:
+        result["mode"] = "details"
+
+    if not source:
+        return result
+    if not targets:
+        result["warnings"].append("برای این سرور هیچ نود متصل‌شده‌ای پیدا نشد.")
+        return result
+
+    try:
+        source_users_raw = await hiddify_api.list_users(source)
+    except Exception as e:
+        result["errors"].append(f"{result['source_title']}: {_short_error(e)}")
+        return result
+
+    source_by_uuid: Dict[str, Dict[str, Any]] = {}
+    for user in source_users_raw or []:
+        if not isinstance(user, dict):
+            continue
+        uuid = _panel_user_uuid(user)
+        if not uuid:
+            result["skipped"] += 1
+            continue
+        source_by_uuid[uuid] = user
+    result["source_count"] = len(source_by_uuid)
+
+    for target in targets:
+        target_sid = int(target.get("id") or 0)
+        target_title = str(target.get("title") or f"سرور #{target_sid or '?'}")
+        target_summary = {
+            "title": target_title,
+            "total": 0,
+            "missing": 0,
+            "existing": 0,
+            "extra": 0,
+            "created": 0,
+            "patched": 0,
+            "mapped": 0,
+            "errors": [],
+        }
+        try:
+            target_users_raw = await hiddify_api.list_users(target)
+        except Exception as e:
+            err = f"{target_title}: {_short_error(e)}"
+            target_summary["errors"].append(err)
+            result["errors"].append(err)
+            result["targets"].append(target_summary)
+            continue
+
+        target_by_uuid: Dict[str, Dict[str, Any]] = {}
+        for user in target_users_raw or []:
+            if not isinstance(user, dict):
+                continue
+            uuid = _panel_user_uuid(user)
+            if uuid:
+                target_by_uuid[uuid] = user
+        target_summary["total"] = len(target_by_uuid)
+
+        missing_uuids = [uuid for uuid in source_by_uuid.keys() if uuid not in target_by_uuid]
+        existing_uuids = [uuid for uuid in source_by_uuid.keys() if uuid in target_by_uuid]
+        extra_uuids = [uuid for uuid in target_by_uuid.keys() if uuid not in source_by_uuid]
+        target_summary["missing"] = len(missing_uuids)
+        target_summary["existing"] = len(existing_uuids)
+        target_summary["extra"] = len(extra_uuids)
+        result["missing"] += len(missing_uuids)
+        result["existing"] += len(existing_uuids)
+        result["extra"] += len(extra_uuids)
+
+        if create_missing:
+            for uuid in missing_uuids:
+                source_user = source_by_uuid[uuid]
+                payload = _build_node_sync_payload(source_user, for_create=True)
+                try:
+                    created = await hiddify_api.create_user(target, payload)
+                    created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
+                    target_summary["created"] += 1
+                    result["created"] += 1
+                    mapped = _record_node_sync_mapping(
+                        source_uuid=uuid,
+                        target=target,
+                        target_uuid=created_uuid,
+                        target_user_id=created.get("id"),
+                        is_active=_panel_user_is_active(source_user),
+                    )
+                    if mapped:
+                        target_summary["mapped"] += 1
+                        result["mapped"] += 1
+                except Exception as e:
+                    err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
+                    target_summary["errors"].append(err)
+                    result["errors"].append(err)
+
+        if patch_existing:
+            for uuid in existing_uuids:
+                source_user = source_by_uuid[uuid]
+                target_user = target_by_uuid[uuid]
+                payload = _build_node_sync_payload(source_user, for_create=False)
+                try:
+                    patched = await hiddify_api.patch_user(target, uuid, payload)
+                    if _panel_user_is_active(source_user):
+                        await hiddify_api.enable_user(target, uuid)
+                    else:
+                        await hiddify_api.disable_user(target, uuid)
+                    target_summary["patched"] += 1
+                    result["patched"] += 1
+                    mapped = _record_node_sync_mapping(
+                        source_uuid=uuid,
+                        target=target,
+                        target_uuid=str(patched.get("uuid") or uuid).strip(),
+                        target_user_id=patched.get("id") or target_user.get("id"),
+                        is_active=_panel_user_is_active(source_user),
+                    )
+                    if mapped:
+                        target_summary["mapped"] += 1
+                        result["mapped"] += 1
+                except Exception as e:
+                    err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
+                    target_summary["errors"].append(err)
+                    result["errors"].append(err)
+
+        result["targets"].append(target_summary)
+
+    return result
+
+
+def _format_node_sync_report(summary: Dict[str, Any]) -> str:
+    mode_titles = {
+        "report": "📊 گزارش همگام‌سازی نودها",
+        "missing": "🧩 نتیجه ساخت کاربران جاافتاده",
+        "details": "🔁 نتیجه همسان‌سازی مشخصات",
+        "full": "✅ نتیجه اجرای کامل امن",
+    }
+    mode = str(summary.get("mode") or "report")
+    lines = [
+        mode_titles.get(mode, "🔄 همگام‌سازی نودها"),
+        "❖⬩──────────────⬩❖",
+        f"🖥 سرور اصلی: {summary.get('source_title')}",
+        f"👤 کاربران سرور اصلی: {int(summary.get('source_count') or 0)}",
+        "",
+        "نکته: مصرف فعلی روی نود جدید از صفر شروع می‌شود تا مصرف کل دوبار حساب نشود.",
+        "",
+    ]
+    warnings = summary.get("warnings") or []
+    if warnings:
+        lines.append("⚠️ هشدارها:")
+        for item in warnings[:5]:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    targets = summary.get("targets") or []
+    if not targets:
+        lines.append("❌ هیچ نودی برای بررسی پیدا نشد.")
+    else:
+        lines.append("📡 وضعیت نودها:")
+        for target in targets:
+            lines.append(
+                f"• {target.get('title')}: "
+                f"موجود={int(target.get('existing') or 0)} | "
+                f"جاافتاده={int(target.get('missing') or 0)} | "
+                f"اضافی={int(target.get('extra') or 0)}"
+            )
+            if mode != "report":
+                created = int(target.get("created") or 0)
+                patched = int(target.get("patched") or 0)
+                mapped = int(target.get("mapped") or 0)
+                lines.append(f"  انجام‌شده: ساخت={created} | بروزرسانی={patched} | نگاشت={mapped}")
+            errors = target.get("errors") or []
+            if errors:
+                lines.append(f"  ❌ خطا: {len(errors)} مورد")
+
+    lines.extend(
+        [
+            "",
+            "جمع کل:",
+            f"🧩 کاربران جاافتاده: {int(summary.get('missing') or 0)}",
+            f"🔁 کاربران موجود: {int(summary.get('existing') or 0)}",
+            f"🧹 کاربران اضافه روی نودها: {int(summary.get('extra') or 0)}",
+        ]
+    )
+    if mode != "report":
+        lines.extend(
+            [
+                f"✅ ساخته‌شده: {int(summary.get('created') or 0)}",
+                f"🔄 بروزرسانی‌شده: {int(summary.get('patched') or 0)}",
+                f"🧷 نگاشت دیتابیس: {int(summary.get('mapped') or 0)}",
+            ]
+        )
+
+    errors = summary.get("errors") or []
+    if errors:
+        lines.append("")
+        lines.append("نمونه خطاها:")
+        for err in errors[:5]:
+            lines.append(f"- {err}")
+
+    text = "\n".join(lines)
+    if len(text) > 3900:
+        text = text[:3890] + "\n..."
+    return text
+
+
 def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
     servers = database.get_servers()
     child_ids = _get_child_server_ids()
@@ -5416,11 +5769,32 @@ async def handle_server_inline_callback(
             return
 
         if action == "sync_nodes":
-            # فاز ۱: فقط پیام اطلاع‌رسانی – منطق واقعی Sync را می‌گذاریم برای فاز ۲
             await msg.edit_text(
-                "🔄 بخش «همگام‌سازی نودها» برای فاز بعدی (مولتی‌سرور هوشمند) در نظر گرفته شده است.\n"
-                "فعلاً فقط می‌توانید نودها را از منوی «لیست نودها» مدیریت کنید. ✅",
-                reply_markup=build_server_detail_keyboard(server_id),
+                "🔄 همگام‌سازی نودها\n\n"
+                "از این بخش می‌توانید بعد از اضافه کردن نود جدید، کاربران موجود سرور اصلی را روی نودها بسازید "
+                "و مشخصات حجم/زمان/وضعیت را همسان کنید.\n\n"
+                "برای امنیت، کاربران اضافه روی نودها حذف نمی‌شوند و فقط گزارش داده می‌شوند.",
+                reply_markup=build_node_sync_menu_keyboard(server_id),
+            )
+            return
+
+        if action in {"sync_nodes_report", "sync_nodes_missing", "sync_nodes_details", "sync_nodes_full"}:
+            mode_text = {
+                "sync_nodes_report": "📊 در حال بررسی نودها...",
+                "sync_nodes_missing": "🧩 در حال ساخت کاربران جاافتاده روی نودها...",
+                "sync_nodes_details": "🔁 در حال همسان‌سازی مشخصات کاربران موجود...",
+                "sync_nodes_full": "✅ در حال اجرای کامل امن همگام‌سازی...",
+            }.get(action, "🔄 در حال همگام‌سازی...")
+            await msg.edit_text(mode_text)
+
+            summary = await _run_node_sync(
+                server_id,
+                create_missing=action in {"sync_nodes_missing", "sync_nodes_full"},
+                patch_existing=action in {"sync_nodes_details", "sync_nodes_full"},
+            )
+            await msg.edit_text(
+                _format_node_sync_report(summary),
+                reply_markup=build_node_sync_menu_keyboard(server_id),
             )
             return
 
