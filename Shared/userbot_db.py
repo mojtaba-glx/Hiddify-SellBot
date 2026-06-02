@@ -113,6 +113,7 @@ DEFAULT_BACKUP_RESTORE_SETTINGS = {
 }
 DEFAULT_UI_SETTINGS = {
     "colored_buttons": True,
+    "button_theme": "smart",
 }
 
 
@@ -450,7 +451,10 @@ def get_ui_settings() -> Dict[str, Any]:
                 if isinstance(raw, dict):
                     for key in DEFAULT_UI_SETTINGS.keys():
                         if key in raw:
-                            settings[key] = _as_bool(raw.get(key), bool(DEFAULT_UI_SETTINGS[key]))
+                            if isinstance(DEFAULT_UI_SETTINGS[key], bool):
+                                settings[key] = _as_bool(raw.get(key), bool(DEFAULT_UI_SETTINGS[key]))
+                            else:
+                                settings[key] = str(raw.get(key) or DEFAULT_UI_SETTINGS[key]).strip()
             except Exception:
                 pass
         return settings
@@ -463,7 +467,10 @@ def set_ui_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(settings, dict):
         for key in DEFAULT_UI_SETTINGS.keys():
             if key in settings:
-                current[key] = _as_bool(settings.get(key), bool(DEFAULT_UI_SETTINGS[key]))
+                if isinstance(DEFAULT_UI_SETTINGS[key], bool):
+                    current[key] = _as_bool(settings.get(key), bool(DEFAULT_UI_SETTINGS[key]))
+                else:
+                    current[key] = str(settings.get(key) or DEFAULT_UI_SETTINGS[key]).strip()
 
     payload = json.dumps(current, ensure_ascii=False)
     init_db()
@@ -487,6 +494,13 @@ def toggle_ui_setting(name: str) -> Dict[str, Any]:
     settings = get_ui_settings()
     if name in DEFAULT_UI_SETTINGS:
         settings[name] = not bool(settings.get(name))
+    return set_ui_settings(settings)
+
+
+def set_ui_setting(name: str, value: Any) -> Dict[str, Any]:
+    settings = get_ui_settings()
+    if name in DEFAULT_UI_SETTINGS:
+        settings[name] = value
     return set_ui_settings(settings)
 
 

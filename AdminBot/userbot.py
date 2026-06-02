@@ -28,6 +28,7 @@ from telegram.error import BadRequest
 from dotenv import load_dotenv
 
 from AdminBot.keyboards import admin_main_keyboard
+from Shared.tg_button_styles import BUTTON_STYLE_THEMES, normalize_button_theme
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
 from Shared import userbot_db, database, hiddify_api
@@ -1470,11 +1471,12 @@ def build_zarin_coupon_detail_keyboard(code: str) -> InlineKeyboardMarkup:
 
 
 def build_userbot_settings_menu_keyboard(ui_settings: Optional[Dict[str, Any]] = None) -> InlineKeyboardMarkup:
-    colored_icon = "✅" if (ui_settings or {}).get("colored_buttons", True) else "❌"
+    theme = normalize_button_theme((ui_settings or {}).get("button_theme"))
+    theme_title = BUTTON_STYLE_THEMES.get(theme, BUTTON_STYLE_THEMES["smart"])["title"]
     rows = [
         [InlineKeyboardButton("🛍تنظیمات اشتراک", callback_data="userbot:settings:subscription")],
         [InlineKeyboardButton("📁وضعیت نمایش لینک اشتراک", callback_data="userbot:settings:sub_link_status")],
-        [InlineKeyboardButton(f"🎨 دکمه‌های رنگی | {colored_icon}", callback_data="userbot:settings:ui:colored_buttons")],
+        [InlineKeyboardButton(f"🎨 دکمه‌های رنگی | {theme_title}", callback_data="userbot:settings:ui")],
         [InlineKeyboardButton("🛒تنظیمات خرید و تمدید", callback_data="userbot:settings:buy_renew")],
         [InlineKeyboardButton("🧮تنظیمات تراکنشات و پلن ها", callback_data="userbot:settings:tx_plans")],
         [InlineKeyboardButton("🧾تنظیمات متون", callback_data="userbot:settings:texts")],
@@ -1485,6 +1487,27 @@ def build_userbot_settings_menu_keyboard(ui_settings: Optional[Dict[str, Any]] =
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
+
+
+def build_colored_buttons_settings_keyboard(ui_settings: Dict[str, Any]) -> InlineKeyboardMarkup:
+    enabled = bool(ui_settings.get("colored_buttons", True))
+    current_theme = normalize_button_theme(ui_settings.get("button_theme"))
+    enabled_icon = "✅" if enabled else "❌"
+    rows = [
+        [InlineKeyboardButton(f"رنگی بودن دکمه‌ها | {enabled_icon}", callback_data="userbot:settings:ui:colored_buttons")],
+        [InlineKeyboardButton("🎛 انتخاب طرح رنگی", callback_data="userbot:noop")],
+    ]
+    for theme_key, meta in BUTTON_STYLE_THEMES.items():
+        selected_icon = "✅" if theme_key == current_theme else "▫️"
+        rows.append([
+            InlineKeyboardButton(
+                f"{selected_icon} {meta['title']}",
+                callback_data=f"userbot:settings:ui:theme:{theme_key}",
+            )
+        ])
+    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")])
+    return InlineKeyboardMarkup(rows)
+
 
 def build_subscription_settings_menu_keyboard(
     show_user_page_link: bool = True,
@@ -5901,6 +5924,34 @@ async def send_userbot_settings_menu(chat_id: int, context: ContextTypes.DEFAULT
     else:
         await context.bot.send_message(chat_id, text, reply_markup=kb)
 
+
+async def send_colored_buttons_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    settings = _get_ui_settings()
+    enabled = bool(settings.get("colored_buttons", True))
+    theme = normalize_button_theme(settings.get("button_theme"))
+    theme_meta = BUTTON_STYLE_THEMES.get(theme, BUTTON_STYLE_THEMES["smart"])
+    status = "روشن ✅" if enabled else "خاموش ❌"
+    descriptions = "\n".join(
+        f"{'✅' if key == theme else '▫️'} {meta['title']}: {meta['description']}"
+        for key, meta in BUTTON_STYLE_THEMES.items()
+    )
+    text = (
+        "🎨 تنظیمات دکمه‌های رنگی\n\n"
+        f"وضعیت فعلی: {status}\n"
+        f"طرح فعلی: {theme_meta['title']}\n\n"
+        f"{descriptions}\n\n"
+        "هر طرح فقط ظاهر دکمه‌ها را تغییر می‌دهد و روی عملکرد ربات اثری ندارد."
+    )
+    kb = build_colored_buttons_settings_keyboard(settings)
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
 async def send_subscription_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     text = "🛍تنظیمات اشتراک"
     settings = _get_subscription_settings(context)
@@ -7579,11 +7630,24 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         await send_sub_link_status_menu(cid, context, message=msg)
         return
 
+    if data == "userbot:settings:ui":
+        await query.answer()
+        await send_colored_buttons_settings_menu(cid, context, message=msg)
+        return
+
     if data == "userbot:settings:ui:colored_buttons":
         settings = userbot_db.toggle_ui_setting("colored_buttons")
         status = "فعال شد" if settings.get("colored_buttons", True) else "غیرفعال شد"
         await query.answer(f"🎨 دکمه‌های رنگی {status}.")
-        await send_userbot_settings_menu(cid, context, message=msg)
+        await send_colored_buttons_settings_menu(cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:settings:ui:theme:"):
+        theme = normalize_button_theme(data.rsplit(":", 1)[-1])
+        userbot_db.set_ui_setting("button_theme", theme)
+        theme_title = BUTTON_STYLE_THEMES.get(theme, BUTTON_STYLE_THEMES["smart"])["title"]
+        await query.answer(f"طرح {theme_title} انتخاب شد.")
+        await send_colored_buttons_settings_menu(cid, context, message=msg)
         return
 
     if data == "userbot:settings:buy_renew":
