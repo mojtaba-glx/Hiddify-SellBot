@@ -1472,6 +1472,7 @@ def build_zarin_coupon_detail_keyboard(code: str) -> InlineKeyboardMarkup:
 def build_userbot_settings_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("🛍تنظیمات اشتراک", callback_data="userbot:settings:subscription")],
+        [InlineKeyboardButton("📁وضعیت نمایش لینک اشتراک", callback_data="userbot:settings:sub_link_status")],
         [InlineKeyboardButton("🛒تنظیمات خرید و تمدید", callback_data="userbot:settings:buy_renew")],
         [InlineKeyboardButton("🧮تنظیمات تراکنشات و پلن ها", callback_data="userbot:settings:tx_plans")],
         [InlineKeyboardButton("🧾تنظیمات متون", callback_data="userbot:settings:texts")],
@@ -1501,7 +1502,6 @@ def build_subscription_settings_menu_keyboard(
         [InlineKeyboardButton(f"تصادفی کردن کانفیگ‌ها | {shuffle_icon}", callback_data="userbot:settings:subscription:shuffle_configs")],
         [InlineKeyboardButton(f"تصادفی کردن چینش سرورها | {shuffle_server_icon}", callback_data="userbot:settings:subscription:shuffle_server_layout")],
         [InlineKeyboardButton(f"تصادفی کردن چینش کانفیگ‌ها | {shuffle_config_icon}", callback_data="userbot:settings:subscription:shuffle_config_layout")],
-        [InlineKeyboardButton("📁وضعیت نمایش لینک اشتراک", callback_data="userbot:settings:subscription:show_sub_link_status")],
         [InlineKeyboardButton("🔔یادآور وضعیت اشتراک", callback_data="userbot:settings:subscription:sub_status_reminder")],
         [InlineKeyboardButton("🎊مشخصات اشتراک تستی", callback_data="userbot:settings:subscription:trial_spec")],
         [InlineKeyboardButton("🔄بازنشانی تست رایگان", callback_data="userbot:settings:subscription:reset_free_trial")],
@@ -1525,7 +1525,7 @@ def build_sub_link_status_menu_keyboard(settings: Dict[str, bool]) -> InlineKeyb
         [InlineKeyboardButton(f"لینک اشتراک هوشمند b64 | {multi_b64_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server_b64")],
         [InlineKeyboardButton("🌐 تنظیم دامنه لینک اشتراک هوشمند", callback_data="userbot:settings:sub_link_status:set_base_url")],
         [InlineKeyboardButton("🔐 راهنمای SSL دامنه", callback_data="userbot:settings:sub_link_status:ssl_help")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:subscription")],
+        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -7562,6 +7562,11 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "userbot:settings:subscription":
         await query.answer()
         await send_subscription_settings_menu(cid, context, message=msg)
+        return
+
+    if data == "userbot:settings:sub_link_status":
+        await query.answer()
+        await send_sub_link_status_menu(cid, context, message=msg)
         return
 
     if data == "userbot:settings:buy_renew":
