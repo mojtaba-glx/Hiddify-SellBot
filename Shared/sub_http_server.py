@@ -36,6 +36,10 @@ def _detect_file_format(file_part: str, query: str = ""):
     return None
 
 
+def _is_hiddify_client_user_agent(user_agent: str) -> bool:
+    return "hiddify" in str(user_agent or "").strip().lower()
+
+
 class _SubHandler(BaseHTTPRequestHandler):
     def _write(
         self,
@@ -169,10 +173,19 @@ class _SubHandler(BaseHTTPRequestHandler):
                 self._write(403, f"subscription is locked: {lock_reason}")
                 return
 
+            include_status_config = not _is_hiddify_client_user_agent(
+                self.headers.get("User-Agent", "")
+            )
             if is_b64:
-                body = sub_aggregator.build_subscription_b64_for_service(sid)
+                body = sub_aggregator.build_subscription_b64_for_service(
+                    sid,
+                    include_status_config=include_status_config,
+                )
             else:
-                body = sub_aggregator.build_subscription_text_for_service(sid)
+                body = sub_aggregator.build_subscription_text_for_service(
+                    sid,
+                    include_status_config=include_status_config,
+                )
             if not body:
                 self._write(404, "subscription is empty")
                 return
