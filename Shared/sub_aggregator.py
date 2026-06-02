@@ -522,11 +522,7 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str) -> List[str]:
     return lines
 
 
-def build_subscription_text_for_service(
-    service_id: int,
-    *,
-    include_status_config: bool = True,
-) -> str:
+def build_subscription_text_for_service(service_id: int) -> str:
     service = userbot_db.get_service_by_id(int(service_id))
     if not service:
         return ""
@@ -551,21 +547,14 @@ def build_subscription_text_for_service(
                 continue
             seen.add(ln)
             lines.append(ln)
-    status_line = _build_status_config_line(service) if include_status_config else ""
+    status_line = _build_status_config_line(service)
     if status_line and lines:
         lines.insert(0, status_line)
     return "\n".join(lines)
 
 
-def build_subscription_b64_for_service(
-    service_id: int,
-    *,
-    include_status_config: bool = True,
-) -> str:
-    txt = build_subscription_text_for_service(
-        service_id,
-        include_status_config=include_status_config,
-    )
+def build_subscription_b64_for_service(service_id: int) -> str:
+    txt = build_subscription_text_for_service(service_id)
     if not txt:
         return ""
     return base64.b64encode(txt.encode("utf-8")).decode("ascii")
