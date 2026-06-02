@@ -2,12 +2,14 @@ import base64
 import logging
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, urlparse
 
 from Shared import sub_aggregator, userbot_db
 
 logger = logging.getLogger(__name__)
+BYTES_PER_GB = 1024 ** 3
 
 
 class _SubHandler(BaseHTTPRequestHandler):
@@ -36,8 +38,32 @@ class _SubHandler(BaseHTTPRequestHandler):
         ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", title).strip("._-") or "subscription"
         ext = "b64" if is_b64 else "txt"
         utf8_filename = quote(f"{title}.{ext}")
+
+        try:
+            usage_current_gb = max(float((service or {}).get("usage_current") or 0), 0.0)
+        except (TypeError, ValueError):
+            usage_current_gb = 0.0
+        try:
+            usage_limit_gb = max(float((service or {}).get("usage_limit") or 0), 0.0)
+        except (TypeError, ValueError):
+            usage_limit_gb = 0.0
+        try:
+            days_left = int((service or {}).get("days_left"))
+        except (TypeError, ValueError):
+            days_left = None
+
+        userinfo_parts = [
+            "upload=0",
+            f"download={int(usage_current_gb * BYTES_PER_GB)}",
+            f"total={int(usage_limit_gb * BYTES_PER_GB)}",
+        ]
+        if days_left is not None:
+            userinfo_parts.append(f"expire={int(time.time()) + max(days_left, 0) * 86400}")
+
         return {
             "profile-title": f"base64:{encoded_title}",
+            "profile-update-interval": "24",
+            "subscription-userinfo": "; ".join(userinfo_parts),
             "Content-Disposition": f"inline; filename=\"{ascii_name}.{ext}\"; filename*=UTF-8''{utf8_filename}",
         }
 
