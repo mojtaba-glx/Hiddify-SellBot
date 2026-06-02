@@ -4,12 +4,36 @@ import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from Shared import sub_aggregator, userbot_db
 
 logger = logging.getLogger(__name__)
 BYTES_PER_GB = 1024 ** 3
+
+
+def _query_requests_base64(query: str) -> bool:
+    params = parse_qs(str(query or ""), keep_blank_values=True)
+    for key, values in params.items():
+        key_lower = str(key or "").strip().lower()
+        value_set = {str(v or "").strip().lower() for v in (values or [])}
+        if key_lower in {"base64", "b64"} and (
+            not value_set or value_set & {"", "1", "true", "yes", "y", "on", "base64", "b64"}
+        ):
+            return True
+        if key_lower in {"format", "type"} and value_set & {"base64", "b64"}:
+            return True
+    return False
+
+
+def _detect_file_format(file_part: str, query: str = ""):
+    file_lower = str(file_part or "").strip().lower()
+    query_is_b64 = _query_requests_base64(query)
+    if file_lower in {"all.txt", "hiddify.txt"}:
+        return True if query_is_b64 else False
+    if file_lower in {"all.b64", "hiddify.b64"}:
+        return True
+    return None
 
 
 class _SubHandler(BaseHTTPRequestHandler):
@@ -69,7 +93,9 @@ class _SubHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         try:
-            p = urlparse(self.path).path.strip("/")
+            parsed = urlparse(self.path)
+            p = parsed.path.strip("/")
+            query = parsed.query
             parts = p.split("/")
             if not parts or parts[0] != "sub":
                 self._write(404, "not found")
@@ -79,16 +105,9 @@ class _SubHandler(BaseHTTPRequestHandler):
             uuid_hint = ""
             is_b64 = False
 
-            def _detect_file_format(file_part: str):
-                file_lower = str(file_part or "").strip().lower()
-                if file_lower in {"all.txt", "hiddify.txt"}:
-                    return False
-                if file_lower in {"all.b64", "hiddify.b64"}:
-                    return True
-                return None
-
             # New formats:
             # /sub/{token}/{uuid}/all.txt
+            # /sub/{token}/{uuid}/all.txt?base64=1
             # /sub/{token}/{uuid}/all.b64
             if len(parts) == 4:
                 token = parts[1].strip()
@@ -96,28 +115,28 @@ class _SubHandler(BaseHTTPRequestHandler):
                 if not token or not uuid_hint:
                     self._write(404, "not found")
                     return
-                detected = _detect_file_format(parts[3])
+                detected = _detect_file_format(parts[3], query)
                 if detected is None:
                     self._write(404, "not found")
                     return
                 is_b64 = detected
             # New formats:
-            # /sub/{token}/all.txt | /sub/{token}/all.b64
+            # /sub/{token}/all.txt | /sub/{token}/all.txt?base64=1 | /sub/{token}/all.b64
             # backward compat:
             # /sub/{token}/hiddify.txt | /sub/{token}/hiddify.b64
             elif len(parts) == 3:
                 token = parts[1].strip()
-                detected = _detect_file_format(parts[2])
+                detected = _detect_file_format(parts[2], query)
                 if detected is None:
                     self._write(404, "not found")
                     return
                 is_b64 = detected
-            # Backward-compatible format: /sub/{token}.txt | /sub/{token}.b64
+            # Backward-compatible format: /sub/{token}.txt | /sub/{token}.txt?base64=1 | /sub/{token}.b64
             elif len(parts) == 2:
                 file_part = parts[1]
                 if file_part.endswith(".txt"):
                     token = file_part[:-4]
-                    is_b64 = False
+                    is_b64 = _query_requests_base64(query)
                 elif file_part.endswith(".b64"):
                     token = file_part[:-4]
                     is_b64 = True

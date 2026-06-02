@@ -1372,10 +1372,10 @@ def _get_or_create_bot_sub_links(service_id: int, service: Optional[dict] = None
     if service_uuid:
         return (
             f"{base}/sub/{service_uuid}/all.txt",
-            f"{base}/sub/{service_uuid}/all.b64",
+            f"{base}/sub/{service_uuid}/all.txt?base64=1",
         )
     token = userbot_db.ensure_service_sub_token(int(service_id))
-    return f"{base}/sub/{token}/all.txt", f"{base}/sub/{token}/all.b64"
+    return f"{base}/sub/{token}/all.txt", f"{base}/sub/{token}/all.txt?base64=1"
 
 
 def _should_show_configs_button(settings: dict) -> bool:
