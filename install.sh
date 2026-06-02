@@ -22,6 +22,7 @@ SYSTEMD_ADMIN_UNIT="hiddify-sellbot-admin.service"
 SYSTEMD_USER_UNIT="hiddify-sellbot-user.service"
 SYSTEMD_ADMIN_UNIT_FILE="/etc/systemd/system/${SYSTEMD_ADMIN_UNIT}"
 SYSTEMD_USER_UNIT_FILE="/etc/systemd/system/${SYSTEMD_USER_UNIT}"
+HIDDIFY_STABILIZER_ENV_KEY="HIDDIFY_CREATE_USER_STABILIZE_MODE"
 
 APP_VERSION="dev"
 UPDATE_SOURCE_STATUS="not-run"
@@ -63,8 +64,9 @@ Main commands (recommended):
 
 Advanced commands:
   menu, update-force, reinstall, start, stop, config
-  diag, logs, ssl, uninstall, factory-reset, version
+  diag, logs, ssl, stabilizer, uninstall, factory-reset, version
   autostart-on, autostart-off, autostart-status, autostart-rm
+  stabilizer-toggle, stabilizer-update, stabilizer-off, stabilizer-status
 
 Notes:
   - Running ./install.sh with no args opens interactive menu (TTY mode)
@@ -765,6 +767,140 @@ autostart_menu() {
   done
 }
 
+normalize_stabilizer_mode() {
+  local mode="${1:-}"
+  mode="$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
+  mode="$(printf '%s' "$mode" | sed -E 's/^[[:space:]"\047]+|[[:space:]"\047]+$//g')"
+
+  case "$mode" in
+    ""|toggle|1|true|yes|enable|enabled|on)
+      printf 'toggle'
+      ;;
+    update|patch)
+      printf 'update'
+      ;;
+    off|0|false|no|disable|disabled)
+      printf 'off'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+get_stabilizer_mode() {
+  local raw=""
+  if [ -f "$ENV_FILE" ]; then
+    raw="$(grep -E "^${HIDDIFY_STABILIZER_ENV_KEY}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+  fi
+  normalize_stabilizer_mode "${raw:-toggle}" || printf 'toggle'
+}
+
+stabilizer_mode_label() {
+  case "${1:-}" in
+    toggle)
+      printf 'toggle / کامل و پیشنهادی'
+      ;;
+    update)
+      printf 'update / فقط ذخیره مجدد'
+      ;;
+    off)
+      printf 'off / خاموش'
+      ;;
+    *)
+      printf 'unknown'
+      ;;
+  esac
+}
+
+show_stabilizer_status() {
+  local mode
+  mode="$(get_stabilizer_mode)"
+  echo "========================================="
+  echo "Hiddify User Stabilizer"
+  echo "========================================="
+  echo "Current: $(stabilizer_mode_label "$mode")"
+  echo "Env:     ${HIDDIFY_STABILIZER_ENV_KEY}=${mode}"
+  echo "File:    $ENV_FILE"
+  echo "-----------------------------------------"
+  echo "toggle: create -> save -> disable briefly -> enable"
+  echo "update: create -> save only"
+  echo "off:    no workaround"
+}
+
+set_stabilizer_mode() {
+  local requested="${1:-}"
+  local mode=""
+  if ! mode="$(normalize_stabilizer_mode "$requested")"; then
+    _red "ERROR: invalid stabilizer mode: $requested"
+    _yellow "Allowed values: toggle, update, off"
+    return 1
+  fi
+
+  ensure_dirs
+  touch "$ENV_FILE"
+  set_env_var "$HIDDIFY_STABILIZER_ENV_KEY" "$mode" "$ENV_FILE"
+  _green "OK: Hiddify user stabilizer set to: $mode"
+  _yellow "Restart is required to apply this setting."
+}
+
+stabilizer_menu() {
+  if [ ! -t 0 ]; then
+    _red "ERROR: stabilizer menu requires an interactive terminal."
+    _yellow "Use direct commands:"
+    _yellow "./install.sh stabilizer-toggle | stabilizer-update | stabilizer-off | stabilizer-status"
+    return 1
+  fi
+
+  while true; do
+    local mode
+    mode="$(get_stabilizer_mode)"
+    echo "========================================="
+    echo "Hiddify User Stabilizer"
+    echo "========================================="
+    echo "Current: $(stabilizer_mode_label "$mode")"
+    echo "-----------------------------------------"
+    echo "1) Enable full toggle workaround (recommended)"
+    echo "2) Enable save/update only"
+    echo "3) Disable workaround"
+    echo "4) Show status"
+    echo "0) Back"
+    echo "-----------------------------------------"
+    read -rp "Select option: " s_choice
+    case "${s_choice:-}" in
+      1)
+        set_stabilizer_mode toggle
+        ;;
+      2)
+        set_stabilizer_mode update
+        ;;
+      3)
+        set_stabilizer_mode off
+        ;;
+      4)
+        show_stabilizer_status
+        ;;
+      0|q|Q|quit|exit)
+        return 0
+        ;;
+      *)
+        _yellow "WARN: invalid option."
+        ;;
+    esac
+
+    if [[ "${s_choice:-}" =~ ^[123]$ ]]; then
+      local restart_choice=""
+      read -rp "Restart bots now? [Y/n]: " restart_choice
+      if [[ ! "$restart_choice" =~ ^[Nn]$ ]]; then
+        run_command restart || true
+      fi
+    fi
+
+    echo "-----------------------------------------"
+    read -rp "Press Enter to continue..." _
+  done
+}
+
 stop_single_bot() {
   local pid_file="$1"
   local main_py="$2"
@@ -1206,7 +1342,8 @@ interactive_menu() {
     echo "5) status"
     echo "6) autostart manager"
     echo "7) ssl setup wizard"
-    echo "8) help"
+    echo "8) hiddify user stabilizer"
+    echo "9) help"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -1218,7 +1355,8 @@ interactive_menu() {
       5) _run_menu_cmd status ;;
       6) autostart_menu ;;
       7) _run_ssl_wizard ;;
-      8) _run_menu_cmd help ;;
+      8) stabilizer_menu ;;
+      9) _run_menu_cmd help ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
@@ -1251,6 +1389,21 @@ run_command() {
       ;;
     autostart)
       autostart_menu
+      ;;
+    stabilizer)
+      stabilizer_menu
+      ;;
+    stabilizer-status)
+      show_stabilizer_status
+      ;;
+    stabilizer-toggle)
+      set_stabilizer_mode toggle
+      ;;
+    stabilizer-update)
+      set_stabilizer_mode update
+      ;;
+    stabilizer-off)
+      set_stabilizer_mode off
       ;;
     diag)
       show_diagnostics

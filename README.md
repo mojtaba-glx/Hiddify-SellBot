@@ -49,7 +49,8 @@ sudo ./install.sh panel
 5) status
 6) autostart manager
 7) ssl setup wizard
-8) help
+8) hiddify user stabilizer
+9) help
 0) exit
 ```
 
@@ -156,10 +157,25 @@ sudo ./install.sh ssl sell.example.com admin@example.com
 ./install.sh status        # نمایش وضعیت
 ./install.sh panel         # منوی مدیریت نصب
 ./install.sh autostart     # مدیریت اجرای خودکار بعد از ریبوت
+./install.sh stabilizer    # مدیریت فیکس موقت ساخت کاربر در Hiddify
 ./install.sh logs          # نمایش لاگ‌ها
 ./install.sh diag          # گزارش تشخیصی نصب
 ./install.sh ssl DOMAIN EMAIL
 ```
+
+## Hiddify User Stabilizer
+
+برای بعضی نسخه‌های پنل Hiddify ممکن است کاربر تازه‌ساخته‌شده بعد از چند دقیقه قطع شود. این بخش یک فیکس موقت قابل خاموش/روشن دارد:
+
+```bash
+./install.sh stabilizer
+```
+
+حالت‌ها:
+
+- `toggle`: ساخت کاربر، ذخیره مجدد، غیرفعال‌سازی کوتاه و فعال‌سازی دوباره؛ حالت پیشنهادی
+- `update`: فقط ذخیره/آپدیت دوباره بعد از ساخت
+- `off`: خاموش کردن کامل فیکس موقت
 
 ## بکاپ و داده‌ها
 
