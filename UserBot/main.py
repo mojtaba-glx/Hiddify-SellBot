@@ -11,7 +11,7 @@ import re
 import asyncio
 import socket
 from html import escape
-from urllib.parse import quote, urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 from pathlib import Path
@@ -158,6 +158,7 @@ def _validate_internal_modules():
 
 try:
     from Shared import database, plans_storage, userbot_db, hiddify_api, sub_http_server
+    from Shared.qr_utils import make_qr_image
     from UserBot.keyboards import (
         main_menu_keyboard, cancel_keyboard, location_keyboard, 
         confirm_payment_keyboard, category_keyboard, plans_keyboard, 
@@ -5624,7 +5625,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             primary_link = config_items[0][1]
-            qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=800x800&data={quote(primary_link, safe='')}"
+            qr_image = make_qr_image(primary_link)
             qr_caption = (
                 "📄 جهت کپی شدن لینک اشتراک کافیست یک بار لینک زیر را لمس کنید 👇\n\n"
                 f"<code>{escape(primary_link)}</code>"
@@ -5632,7 +5633,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_photo(
                     chat_id=user_id,
-                    photo=qr_url,
+                    photo=qr_image,
                     caption=qr_caption,
                     parse_mode="HTML",
                     reply_markup=subscription_links_keyboard(service_id),
