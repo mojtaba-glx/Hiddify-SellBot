@@ -6,6 +6,7 @@ import logging
 import re
 import asyncio
 import json
+import secrets
 import tempfile
 import zipfile
 import shutil
@@ -35,6 +36,8 @@ from Shared import userbot_db, database, hiddify_api
 
 load_dotenv()
 USER_BOT_TOKEN = os.getenv("USER_BOT_TOKEN")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_FILE = PROJECT_ROOT / ".env"
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +165,104 @@ def _guess_ssl_domain_hint() -> str:
         if panel and "." in panel and panel != "localhost":
             return panel
     return "site.example.com"
+
+
+def _env_bool_value(raw: Any, default: bool = False) -> bool:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return bool(default)
+    if text in {"1", "true", "yes", "on", "enable", "enabled", "y"}:
+        return True
+    if text in {"0", "false", "no", "off", "disable", "disabled", "n"}:
+        return False
+    return bool(default)
+
+
+def _read_env_values() -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    try:
+        if not ENV_FILE.exists():
+            return values
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#") or "=" not in raw:
+                continue
+            key, value = raw.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if (
+                len(value) >= 2
+                and ((value[0] == value[-1] == '"') or (value[0] == value[-1] == "'"))
+            ):
+                value = value[1:-1]
+            values[key] = value
+    except Exception as e:
+        logger.warning("Failed reading env file %s: %s", ENV_FILE, e)
+    return values
+
+
+def _write_env_values(updates: Dict[str, Any]) -> None:
+    clean_updates = {str(k): str(v) for k, v in (updates or {}).items() if str(k or "").strip()}
+    if not clean_updates:
+        return
+
+    lines: List[str] = []
+    seen: Set[str] = set()
+    if ENV_FILE.exists():
+        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+
+    out: List[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in clean_updates:
+                out.append(f"{key}={clean_updates[key]}")
+                seen.add(key)
+                continue
+        out.append(line)
+
+    for key, value in clean_updates.items():
+        if key not in seen:
+            out.append(f"{key}={value}")
+    ENV_FILE.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+
+    for key, value in clean_updates.items():
+        os.environ[key] = value
+    load_dotenv(dotenv_path=ENV_FILE, override=True)
+
+
+def _mask_secret(secret: str) -> str:
+    text = str(secret or "").strip()
+    if not text:
+        return "تنظیم نشده"
+    if len(text) <= 12:
+        return text[:3] + "..." + text[-3:]
+    return text[:8] + "..." + text[-6:]
+
+
+def _sms_webhook_status() -> Dict[str, Any]:
+    env = _read_env_values()
+    enabled_raw = env.get("SMS_WEBHOOK_ENABLED", os.getenv("SMS_WEBHOOK_ENABLED", "false"))
+    secret = env.get("SMS_WEBHOOK_SECRET", os.getenv("SMS_WEBHOOK_SECRET", ""))
+    age = env.get("SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES", os.getenv("SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES", "360"))
+
+    base_url = str(userbot_db.get_managed_sub_base_url() or "").strip().rstrip("/")
+    if not base_url:
+        host = env.get("SUB_SERVER_PUBLIC_HOST", os.getenv("SUB_SERVER_PUBLIC_HOST", "")).strip()
+        scheme = env.get("SUB_SERVER_PUBLIC_SCHEME", os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https")).strip() or "https"
+        port = env.get("SUB_SERVER_PUBLIC_PORT", os.getenv("SUB_SERVER_PUBLIC_PORT", "443")).strip()
+        if host:
+            default_port = (scheme == "https" and port == "443") or (scheme == "http" and port == "80")
+            base_url = f"{scheme}://{host}" if default_port else f"{scheme}://{host}:{port}"
+    endpoint = f"{base_url}/payment/sms-webhook" if base_url else "https://YOUR_SUB_DOMAIN/payment/sms-webhook"
+    return {
+        "enabled": _env_bool_value(enabled_raw, False),
+        "secret": str(secret or "").strip(),
+        "age": str(age or "360").strip() or "360",
+        "endpoint": endpoint,
+        "env_file": str(ENV_FILE),
+    }
 
 
 def _format_gb(value: Any) -> str:
@@ -1738,6 +1839,7 @@ def build_payment_method_menu_keyboard(method: str, enabled: bool) -> InlineKeyb
             [InlineKeyboardButton(f"پرداخت کارت به کارت | {icon}", callback_data="userbot:settings:payment:toggle:card")],
             [InlineKeyboardButton(f"🔐 الزام ۴ رقم آخر کارت | {last4_icon}", callback_data="userbot:settings:payment:card:require_last4")],
             [InlineKeyboardButton(f"🔢مشخصه تصادفی تراکنش | {random_icon}", callback_data="userbot:settings:payment:card:random_tx_spec")],
+            [InlineKeyboardButton("🤖 تایید خودکار SMS بانک", callback_data="userbot:settings:payment:card:sms")],
             [InlineKeyboardButton("💳لیست کارت‌ها", callback_data="userbot:settings:payment:card:list")],
             [InlineKeyboardButton("📝تنظیم متن کارت به کارت", callback_data="userbot:settings:payment:card:text")],
             [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment")],
@@ -1776,6 +1878,19 @@ def build_payment_card_item_keyboard(number: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("💳ویرایش شماره کارت", callback_data=f"userbot:settings:payment:card:edit_number:{n}")],
         [InlineKeyboardButton("🧑ویرایش نام صاحب کارت", callback_data=f"userbot:settings:payment:card:edit_owner:{n}")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment:card:list")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def build_sms_webhook_settings_keyboard() -> InlineKeyboardMarkup:
+    status = _sms_webhook_status()
+    enabled_icon = "✅" if status.get("enabled") else "❌"
+    rows = [
+        [InlineKeyboardButton(f"تایید خودکار SMS | {enabled_icon}", callback_data="userbot:settings:payment:card:sms:toggle")],
+        [InlineKeyboardButton("🔑 ساخت / تعویض Secret", callback_data="userbot:settings:payment:card:sms:regen")],
+        [InlineKeyboardButton("👁 نمایش Secret برای اپ", callback_data="userbot:settings:payment:card:sms:show")],
+        [InlineKeyboardButton("📱 راهنمای اتصال اپ", callback_data="userbot:settings:payment:card:sms:help")],
+        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment:card")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -6175,6 +6290,32 @@ async def send_payment_method_menu(
         await context.bot.send_message(chat_id, text, reply_markup=kb)
 
 
+async def send_sms_webhook_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    status = _sms_webhook_status()
+    enabled = "✅ روشن" if status.get("enabled") else "❌ خاموش"
+    secret = str(status.get("secret") or "")
+    secret_status = _mask_secret(secret)
+    text = (
+        "🤖 تایید خودکار کارت‌به‌کارت با SMS بانک\n\n"
+        f"وضعیت: {enabled}\n"
+        f"Secret Key: {secret_status}\n"
+        f"مهلت تطبیق پرداخت: {status.get('age')} دقیقه\n\n"
+        "آدرس Webhook برای اپ اندروید:\n"
+        f"<code>{html_escape(str(status.get('endpoint') or ''))}</code>\n\n"
+        "Secret و وضعیت روشن/خاموش از همین منو ساخته و در فایل .env ذخیره می‌شود."
+    )
+    kb = build_sms_webhook_settings_keyboard()
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+        except BadRequest as e:
+            if "message is not modified" in str(e).lower():
+                return
+            await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
+
 async def send_payment_cards_list_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     cards = database.get_cards()
     text = "💳لیست کارت‌ها"
@@ -8283,6 +8424,68 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 return
             await query.answer()
             await send_payment_method_menu(cid, context, method=method, message=msg)
+            return
+        if data == "userbot:settings:payment:card:sms":
+            await query.answer()
+            await send_sms_webhook_settings_menu(cid, context, message=msg)
+            return
+        if data == "userbot:settings:payment:card:sms:toggle":
+            status = _sms_webhook_status()
+            new_enabled = not bool(status.get("enabled"))
+            updates = {"SMS_WEBHOOK_ENABLED": "true" if new_enabled else "false"}
+            if new_enabled and not str(status.get("secret") or "").strip():
+                updates["SMS_WEBHOOK_SECRET"] = secrets.token_hex(32)
+            if new_enabled:
+                updates["SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES"] = "360"
+            try:
+                _write_env_values(updates)
+            except Exception as e:
+                await query.answer(f"خطا در ذخیره .env: {e}", show_alert=True)
+                return
+            await query.answer("ذخیره شد.", show_alert=True)
+            await send_sms_webhook_settings_menu(cid, context, message=msg)
+            return
+        if data == "userbot:settings:payment:card:sms:regen":
+            try:
+                _write_env_values(
+                    {
+                        "SMS_WEBHOOK_ENABLED": "true",
+                        "SMS_WEBHOOK_SECRET": secrets.token_hex(32),
+                        "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES": "360",
+                    }
+                )
+            except Exception as e:
+                await query.answer(f"خطا در ذخیره .env: {e}", show_alert=True)
+                return
+            await query.answer("Secret جدید ساخته شد. حتماً داخل اپ هم جایگزین کنید.", show_alert=True)
+            await send_sms_webhook_settings_menu(cid, context, message=msg)
+            return
+        if data == "userbot:settings:payment:card:sms:show":
+            status = _sms_webhook_status()
+            secret = str(status.get("secret") or "").strip()
+            if not secret:
+                await query.answer("Secret هنوز ساخته نشده است. اول «ساخت Secret» را بزنید.", show_alert=True)
+                return
+            await query.answer(f"Secret Key اپ:\n{secret}", show_alert=True)
+            return
+        if data == "userbot:settings:payment:card:sms:help":
+            status = _sms_webhook_status()
+            text = (
+                "📱 راهنمای اتصال اپ SMS Verifier\n\n"
+                "داخل اپ این مقدارها را وارد کنید:\n\n"
+                "Webhook URL:\n"
+                f"<code>{html_escape(str(status.get('endpoint') or ''))}</code>\n\n"
+                "Secret Key:\n"
+                "از دکمه «👁 نمایش Secret برای اپ» کپی کنید.\n\n"
+                "سرشماره بانک:\n"
+                "مثلاً برای نمونه‌های فعلی: <code>20004861</code>\n\n"
+                "اگر بانک چهار رقم کارت را داخل SMS می‌فرستد، فیلتر چهار رقم کارت را روشن کنید؛ اگر نمی‌فرستد خاموش بگذارید."
+            )
+            await query.answer()
+            try:
+                await msg.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+            except Exception:
+                await context.bot.send_message(chat_id=cid, text=text, parse_mode="HTML", disable_web_page_preview=True)
             return
         if data.startswith("userbot:settings:payment:card:item:"):
             raw = data.rsplit(":", 1)[-1].strip()

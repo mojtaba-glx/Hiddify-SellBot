@@ -7,6 +7,7 @@ import threading
 import time
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 from Shared import sub_aggregator, userbot_db
@@ -16,10 +17,36 @@ BYTES_PER_GB = 1024 ** 3
 SMS_WEBHOOK_SECRET_ENV = "SMS_WEBHOOK_SECRET"
 SMS_WEBHOOK_ENABLED_ENV = "SMS_WEBHOOK_ENABLED"
 SMS_WEBHOOK_MAX_PENDING_AGE_ENV = "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES"
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+def _dotenv_get(name: str, default: str = "") -> str:
+    key = str(name or "").strip()
+    if not key:
+        return str(default or "")
+    try:
+        if ENV_FILE.exists():
+            for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+                raw = line.strip()
+                if not raw or raw.startswith("#") or "=" not in raw:
+                    continue
+                env_key, value = raw.split("=", 1)
+                if env_key.strip() != key:
+                    continue
+                value = value.strip()
+                if (
+                    len(value) >= 2
+                    and ((value[0] == value[-1] == '"') or (value[0] == value[-1] == "'"))
+                ):
+                    value = value[1:-1]
+                return value
+    except Exception as e:
+        logger.warning("Failed reading env value %s from %s: %s", key, ENV_FILE, e)
+    return str(os.getenv(key, default) or default or "")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
-    raw = str(os.getenv(name, "") or "").strip().lower()
+    raw = str(_dotenv_get(name, "") or "").strip().lower()
     if not raw:
         return bool(default)
     if raw in {"1", "true", "yes", "on", "enable", "enabled", "y"}:
@@ -67,11 +94,11 @@ def _sms_amount_candidates_toman(amount_raw: int, currency_raw: str) -> list[int
 
 
 def _sms_webhook_secret() -> str:
-    return str(os.getenv(SMS_WEBHOOK_SECRET_ENV, "") or "").strip()
+    return str(_dotenv_get(SMS_WEBHOOK_SECRET_ENV, "") or "").strip()
 
 
 def _sms_webhook_max_pending_age_minutes() -> int:
-    return max(5, _to_int(os.getenv(SMS_WEBHOOK_MAX_PENDING_AGE_ENV, "360"), 360))
+    return max(5, _to_int(_dotenv_get(SMS_WEBHOOK_MAX_PENDING_AGE_ENV, "360"), 360))
 
 
 def _query_requests_base64(query: str) -> bool:
