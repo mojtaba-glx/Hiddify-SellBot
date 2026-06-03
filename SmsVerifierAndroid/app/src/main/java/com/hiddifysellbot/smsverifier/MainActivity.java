@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
         scrollView.addView(root);
 
         TextView title = new TextView(this);
-        title.setText("SellBot SMS Verifier");
+        title.setText("SellBot SMS Verifier v" + BuildConfig.VERSION_NAME);
         title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.CENTER);
