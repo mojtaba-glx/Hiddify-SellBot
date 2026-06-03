@@ -6,7 +6,6 @@ import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
-import android.text.InputFilter;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -30,7 +29,8 @@ public class MainActivity extends Activity {
     private EditText secretInput;
     private EditText senderInput;
     private CheckBox cardLast4Box;
-    private EditText cardLast4Input;
+    private EditText manualSenderInput;
+    private EditText manualBodyInput;
     private TextView historyView;
 
     @Override
@@ -76,12 +76,8 @@ public class MainActivity extends Activity {
         senderInput = addInput(root, "سرشماره‌های مجاز بانک", "مثال: BankMellat, 30001234", false, 3);
 
         cardLast4Box = new CheckBox(this);
-        cardLast4Box.setText("فیلتر چهار رقم کارت داخل SMS فعال باشد");
+        cardLast4Box.setText("اگر SMS چهار رقم کارت مشتری داشت، به ربات ارسال شود");
         root.addView(cardLast4Box, matchWrap());
-
-        cardLast4Input = addInput(root, "چهار رقم کارت مورد انتظار", "1234", false, 1);
-        cardLast4Input.setInputType(InputType.TYPE_CLASS_NUMBER);
-        cardLast4Input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(4)});
 
         Button saveButton = new Button(this);
         saveButton.setText("ذخیره تنظیمات");
@@ -112,6 +108,20 @@ public class MainActivity extends Activity {
             public void onClick(View v) {
                 saveSettings();
                 scanInboxNow();
+            }
+        });
+
+        manualSenderInput = addInput(root, "تست دستی: سرشماره SMS", "مثال: 20004861", false, 1);
+        manualBodyInput = addInput(root, "تست دستی: متن SMS بانک", "متن پیامک بانک را برای تست اینجا paste کن", false, 5);
+
+        Button manualSmsButton = new Button(this);
+        manualSmsButton.setText("بررسی متن SMS تستی");
+        root.addView(manualSmsButton, matchWrap());
+        manualSmsButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                saveSettings();
+                sendManualSmsTest();
             }
         });
 
@@ -183,7 +193,6 @@ public class MainActivity extends Activity {
         secretInput.setText(settings.getSecret());
         senderInput.setText(settings.getSenderFiltersRaw());
         cardLast4Box.setChecked(settings.isCardLast4Enabled());
-        cardLast4Input.setText(settings.getCardLast4());
         refreshHistory();
     }
 
@@ -194,8 +203,7 @@ public class MainActivity extends Activity {
                 text(webhookInput),
                 text(secretInput),
                 text(senderInput),
-                cardLast4Box.isChecked(),
-                text(cardLast4Input)
+                cardLast4Box.isChecked()
         );
         Toast.makeText(this, "تنظیمات ذخیره شد", Toast.LENGTH_SHORT).show();
     }
@@ -217,8 +225,8 @@ public class MainActivity extends Activity {
                 event.amount = 0;
                 event.currency = "test";
                 event.reference = "";
-                event.cardLast4 = settings.getCardLast4();
-                event.cardLast4Required = settings.isCardLast4Enabled();
+                event.cardLast4 = "";
+                event.cardLast4Required = false;
                 event.receivedAt = System.currentTimeMillis();
                 event.deviceTime = System.currentTimeMillis();
                 event.test = true;
@@ -282,6 +290,30 @@ public class MainActivity extends Activity {
                                 "بررسی تمام شد: " + scanned + " پیامک",
                                 Toast.LENGTH_LONG
                         ).show();
+                    }
+                });
+            }
+        });
+    }
+
+    private void sendManualSmsTest() {
+        final String sender = text(manualSenderInput);
+        final String body = text(manualBodyInput);
+        if (sender.isEmpty() || body.isEmpty()) {
+            Toast.makeText(this, "سرشماره و متن SMS تستی را وارد کن", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        Toast.makeText(this, "در حال بررسی متن SMS تستی...", Toast.LENGTH_SHORT).show();
+        executor.execute(new Runnable() {
+            @Override
+            public void run() {
+                SmsProcessor.handleIncomingSms(MainActivity.this, sender, body, System.currentTimeMillis());
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        refreshHistory();
+                        Toast.makeText(MainActivity.this, "تست دستی انجام شد", Toast.LENGTH_LONG).show();
                     }
                 });
             }

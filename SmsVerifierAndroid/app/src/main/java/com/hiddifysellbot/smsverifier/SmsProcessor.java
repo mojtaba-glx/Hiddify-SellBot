@@ -16,13 +16,6 @@ public final class SmsProcessor {
             return;
         }
         if (!settings.matchesSender(sender)) {
-            HistoryStore.add(
-                    context,
-                    "SKIPPED_SENDER",
-                    "Sender did not match filters."
-                            + "\nSender=" + (sender == null ? "" : sender)
-                            + "\nFilters=" + settings.getSenderFiltersRaw()
-            );
             return;
         }
         if (!settings.canSendWebhook()) {
@@ -30,17 +23,6 @@ public final class SmsProcessor {
             return;
         }
 
-        String cardLast4 = settings.getCardLast4();
-        if (settings.isCardLast4Enabled()) {
-            if (cardLast4.length() != 4) {
-                HistoryStore.add(context, "SKIPPED", "Card last 4 is enabled but not configured.");
-                return;
-            }
-            if (!PaymentSmsParser.containsCardLast4(body, cardLast4)) {
-                HistoryStore.add(context, "SKIPPED", "Card last 4 not found. Sender=" + sender);
-                return;
-            }
-        }
         if (!PaymentSmsParser.isIncomingPayment(body)) {
             HistoryStore.add(context, "SKIPPED", "SMS is not an incoming payment. Sender=" + sender);
             return;
@@ -59,8 +41,8 @@ public final class SmsProcessor {
         event.amount = amount;
         event.currency = PaymentSmsParser.extractCurrency(body);
         event.reference = PaymentSmsParser.extractReference(body);
-        event.cardLast4 = detectedCardLast4.length() == 4 ? detectedCardLast4 : cardLast4;
-        event.cardLast4Required = settings.isCardLast4Enabled();
+        event.cardLast4 = settings.isCardLast4Enabled() && detectedCardLast4.length() == 4 ? detectedCardLast4 : "";
+        event.cardLast4Required = false;
         event.receivedAt = receivedAt;
         event.deviceTime = System.currentTimeMillis();
         event.test = false;

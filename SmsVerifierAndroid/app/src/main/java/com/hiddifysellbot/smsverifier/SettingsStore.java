@@ -18,7 +18,6 @@ public final class SettingsStore {
     private static final String KEY_SECRET = "secret";
     private static final String KEY_SENDER_FILTERS = "sender_filters";
     private static final String KEY_CARD_LAST4_ENABLED = "card_last4_enabled";
-    private static final String KEY_CARD_LAST4 = "card_last4";
 
     private final SharedPreferences prefs;
 
@@ -46,17 +45,12 @@ public final class SettingsStore {
         return prefs.getBoolean(KEY_CARD_LAST4_ENABLED, false);
     }
 
-    public String getCardLast4() {
-        return PaymentSmsParser.normalizeDigits(prefs.getString(KEY_CARD_LAST4, "")).replaceAll("[^0-9]", "");
-    }
-
     public void save(
             boolean enabled,
             String webhookUrl,
             String secret,
             String senderFilters,
-            boolean cardLast4Enabled,
-            String cardLast4
+            boolean cardLast4Enabled
     ) {
         prefs.edit()
                 .putBoolean(KEY_ENABLED, enabled)
@@ -64,7 +58,6 @@ public final class SettingsStore {
                 .putString(KEY_SECRET, normalizeSecret(secret))
                 .putString(KEY_SENDER_FILTERS, safe(senderFilters))
                 .putBoolean(KEY_CARD_LAST4_ENABLED, cardLast4Enabled)
-                .putString(KEY_CARD_LAST4, PaymentSmsParser.normalizeDigits(safe(cardLast4)).replaceAll("[^0-9]", ""))
                 .apply();
     }
 
