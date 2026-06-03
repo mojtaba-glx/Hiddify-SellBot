@@ -143,9 +143,11 @@ public final class PaymentSmsParser {
                 || text.contains("خريد")
                 || text.contains("کسر")
                 || text.contains("انتقال به")
+                || text.contains("-")
+                || text.contains("−")
                 || text.contains("debit")
                 || text.contains("purchase");
-        return credit || !debit;
+        return credit && !debit;
     }
 
     public static boolean containsCardLast4(String body, String last4) {
