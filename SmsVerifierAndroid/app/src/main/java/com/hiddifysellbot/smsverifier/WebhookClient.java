@@ -62,4 +62,27 @@ public final class WebhookClient {
         }
         return result;
     }
+
+    public static String statusLabel(Result result) {
+        if (result == null) {
+            return "FAILED";
+        }
+        String body = result.body == null ? "" : result.body.toLowerCase();
+        if (body.contains("\"status\":\"approved\"") || body.contains("\"matched\":true")) {
+            if (body.contains("\"duplicate\":true")) {
+                return "APPROVED_DUPLICATE";
+            }
+            return "APPROVED";
+        }
+        if (body.contains("\"status\":\"no_pending_match\"")) {
+            return "NO_PENDING_MATCH";
+        }
+        if (body.contains("\"error\":\"ambiguous_pending_payments\"")) {
+            return "AMBIGUOUS";
+        }
+        if (result.ok) {
+            return "SENT";
+        }
+        return "FAILED";
+    }
 }

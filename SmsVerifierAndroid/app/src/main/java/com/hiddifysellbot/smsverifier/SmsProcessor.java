@@ -56,6 +56,6 @@ public final class SmsProcessor {
                 + "\nHTTP=" + result.statusCode
                 + "\nResponse=" + (result.body == null ? "" : result.body)
                 + "\nError=" + (result.error == null ? "" : result.error);
-        HistoryStore.add(context, result.ok ? "SENT" : "FAILED", detail);
+        HistoryStore.add(context, WebhookClient.statusLabel(result), detail);
     }
 }

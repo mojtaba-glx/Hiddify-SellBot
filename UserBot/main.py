@@ -3339,6 +3339,51 @@ async def _send_event_channel_subscription_report(
     except Exception as e:
         logger.warning("Failed to send event-channel report (target=%s): %s", target, e)
 
+
+async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "") -> None:
+    if not (ADMIN_ID and ADMIN_BOT_TOKEN and payment):
+        return
+    try:
+        payment_id = int(payment.get("id") or 0)
+        amount = int(payment.get("amount") or 0)
+        tx_code = str(payment.get("tx_code") or "").strip()
+        uid = int(payment.get("user_id") or 0)
+        username = str(payment.get("username") or "").strip()
+        full_name = str(payment.get("full_name") or "").strip()
+        telegram_id = str(payment.get("telegram_id") or "").strip()
+        user_label = (full_name or (f"@{username}" if username else telegram_id) or str(uid) or "نامشخص").strip()
+        meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
+        sms_sender = str(meta.get("sms_sender") or "").strip()
+        sms_reference = str(meta.get("sms_reference") or "").strip()
+        sms_amount_raw = str(meta.get("sms_amount_raw") or "").strip()
+        sms_currency = str(meta.get("sms_currency") or "").strip()
+        flow_label = {
+            "wallet_topup": "شارژ کیف پول",
+            "direct_buy": "خرید مستقیم",
+            "renew": "تمدید",
+        }.get(str(flow or "").strip().lower(), str(flow or "").strip() or "پرداخت")
+
+        text = (
+            "✅ پرداخت با SMS بانک تایید شد\n"
+            f"🔖 نوع: {flow_label}\n"
+            f"👤 کاربر: {user_label}\n"
+            f"💰 مبلغ: {amount:,} تومان\n"
+            f"🧾 کد تراکنش: {tx_code or '-'}\n"
+            f"🆔 شناسه پرداخت: {payment_id or '-'}\n"
+            f"📨 سرشماره SMS: {sms_sender or '-'}\n"
+            f"🏦 مبلغ خام SMS: {sms_amount_raw or '-'} {sms_currency or ''}\n"
+            f"🔖 پیگیری SMS: {sms_reference or '-'}"
+        )
+        kb = None
+        if uid > 0:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"👤 {user_label}", callback_data=f"userbot:user:{uid}")]
+            ])
+        bot = Bot(token=ADMIN_BOT_TOKEN)
+        await bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=kb)
+    except Exception as e:
+        logger.warning("Failed to send admin SMS auto approval report: %s", e)
+
 async def _safe_edit_message_text(query, text: str, **kwargs):
     """Ignore Telegram 'Message is not modified' errors for edit_message_text."""
     try:
@@ -3649,12 +3694,19 @@ async def _finalize_pending_card_payment(
     )
 
     auto_approved = False
+    auto_payment = None
     if payment_id:
         try:
-            auto_approved, _auto_msg, _auto_payment = userbot_db.try_approve_payment_from_unmatched_sms(payment_id)
+            auto_approved, _auto_msg, auto_payment = userbot_db.try_approve_payment_from_unmatched_sms(payment_id)
         except Exception as e:
             logger.warning("Failed auto-approving payment %s from unmatched SMS: %s", payment_id, e)
             auto_approved = False
+
+    if is_new_payment and auto_approved:
+        await _send_admin_sms_auto_approval_report(
+            auto_payment or userbot_db.get_payment_by_id(int(payment_id)) or {},
+            flow=flow,
+        )
 
     if is_new_payment and (not auto_approved) and ADMIN_ID and payment_id and ADMIN_BOT_TOKEN:
         try:
