@@ -19,7 +19,7 @@ public final class SmsInboxScanner {
         HistoryStore.add(
                 appContext,
                 "INBOX_SCAN_START",
-                "Scanning last " + DEFAULT_LIMIT + " inbox SMS from recent 7 days."
+                "در حال بررسی آخرین " + DEFAULT_LIMIT + " پیامک inbox از ۷ روز اخیر."
         );
 
         Cursor cursor = null;
@@ -32,7 +32,7 @@ public final class SmsInboxScanner {
                     "date DESC"
             );
             if (cursor == null) {
-                HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "SMS inbox cursor is null.");
+                HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "امکان خواندن صندوق پیامک وجود ندارد.");
                 return 0;
             }
 
@@ -47,13 +47,13 @@ public final class SmsInboxScanner {
                 scanned++;
             }
 
-            HistoryStore.add(appContext, "INBOX_SCAN_DONE", "Scanned=" + scanned);
+            HistoryStore.add(appContext, "INBOX_SCAN_DONE", "تعداد پیامک‌های بررسی‌شده: " + scanned);
             return scanned;
         } catch (SecurityException e) {
-            HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "READ_SMS permission denied.");
+            HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "اجازه READ_SMS داده نشده است. از تنظیمات گوشی مجوز خواندن SMS را فعال کن.");
             return scanned;
         } catch (Exception e) {
-            HistoryStore.add(appContext, "INBOX_SCAN_FAILED", e.getClass().getSimpleName() + ": " + e.getMessage());
+            HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "خطا هنگام خواندن پیامک‌ها: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return scanned;
         } finally {
             if (cursor != null) {

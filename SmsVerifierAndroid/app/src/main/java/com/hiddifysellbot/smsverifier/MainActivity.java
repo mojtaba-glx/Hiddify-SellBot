@@ -3,7 +3,9 @@ package com.hiddifysellbot.smsverifier;
 import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
@@ -31,6 +33,7 @@ public class MainActivity extends Activity {
     private CheckBox cardLast4Box;
     private EditText manualSenderInput;
     private EditText manualBodyInput;
+    private TextView approvedHistoryView;
     private TextView historyView;
 
     @Override
@@ -51,24 +54,27 @@ public class MainActivity extends Activity {
         ScrollView scrollView = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(24));
+        root.setPadding(dp(12), dp(12), dp(12), dp(20));
         scrollView.addView(root);
 
         TextView title = new TextView(this);
-        title.setText("SellBot SMS Verifier v" + BuildConfig.VERSION_NAME);
-        title.setTextSize(22);
+        title.setText("🛡️ SellBot SMS Verifier v" + BuildConfig.VERSION_NAME);
+        title.setTextSize(20);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.CENTER);
         root.addView(title, matchWrap());
 
         TextView desc = new TextView(this);
-        desc.setText("این اپ فقط SMS سرشماره‌های مشخص‌شده را بررسی می‌کند و نتیجه را به Webhook ربات می‌فرستد.");
-        desc.setTextSize(14);
+        desc.setText("SMSهای بانکی را می‌خواند، واریزها را به ربات می‌فرستد و نتیجه تایید را همین‌جا گزارش می‌کند.");
+        desc.setTextSize(12);
         desc.setPadding(0, dp(8), 0, dp(12));
         root.addView(desc, matchWrap());
 
+        addSectionTitle(root, "⚙️ تنظیمات اتصال");
+
         enabledBox = new CheckBox(this);
         enabledBox.setText("فعال‌سازی پردازش خودکار SMS");
+        enabledBox.setTextSize(13);
         root.addView(enabledBox, matchWrap());
 
         webhookInput = addInput(root, "Webhook URL ربات", "https://example.com/payment/sms-webhook", false, 1);
@@ -77,10 +83,12 @@ public class MainActivity extends Activity {
 
         cardLast4Box = new CheckBox(this);
         cardLast4Box.setText("اگر SMS چهار رقم کارت مشتری داشت، به ربات ارسال شود");
+        cardLast4Box.setTextSize(13);
         root.addView(cardLast4Box, matchWrap());
 
         Button saveButton = new Button(this);
         saveButton.setText("ذخیره تنظیمات");
+        styleButton(saveButton);
         root.addView(saveButton, matchWrap());
         saveButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -89,8 +97,11 @@ public class MainActivity extends Activity {
             }
         });
 
+        addSectionTitle(root, "🧪 تست و ابزارها");
+
         Button testButton = new Button(this);
         testButton.setText("ارسال تست به Webhook");
+        styleButton(testButton);
         root.addView(testButton, matchWrap());
         testButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -102,6 +113,7 @@ public class MainActivity extends Activity {
 
         Button scanInboxButton = new Button(this);
         scanInboxButton.setText("بررسی پیامک‌های قبلی و ارسال دوباره");
+        styleButton(scanInboxButton);
         root.addView(scanInboxButton, matchWrap());
         scanInboxButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -116,6 +128,7 @@ public class MainActivity extends Activity {
 
         Button manualSmsButton = new Button(this);
         manualSmsButton.setText("بررسی متن SMS تستی");
+        styleButton(manualSmsButton);
         root.addView(manualSmsButton, matchWrap());
         manualSmsButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -131,6 +144,7 @@ public class MainActivity extends Activity {
 
         Button refreshButton = new Button(this);
         refreshButton.setText("بروزرسانی گزارش");
+        styleButton(refreshButton);
         row.addView(refreshButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         refreshButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -141,6 +155,7 @@ public class MainActivity extends Activity {
 
         Button clearButton = new Button(this);
         clearButton.setText("پاک کردن گزارش");
+        styleButton(clearButton);
         row.addView(clearButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         clearButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -150,18 +165,22 @@ public class MainActivity extends Activity {
             }
         });
 
-        TextView historyTitle = new TextView(this);
-        historyTitle.setText("گزارش SMSهای پردازش‌شده");
-        historyTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        historyTitle.setTextSize(16);
-        historyTitle.setPadding(0, dp(18), 0, dp(6));
-        root.addView(historyTitle, matchWrap());
+        addSectionTitle(root, "✅ واریزی‌های تاییدشده");
+
+        approvedHistoryView = new TextView(this);
+        approvedHistoryView.setTextSize(12);
+        approvedHistoryView.setTextIsSelectable(true);
+        approvedHistoryView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        styleBox(approvedHistoryView, "#ECFDF5", "#86EFAC");
+        root.addView(approvedHistoryView, matchWrap());
+
+        addSectionTitle(root, "📋 گزارش کامل پردازش SMS");
 
         historyView = new TextView(this);
         historyView.setTextSize(12);
-        historyView.setTypeface(Typeface.MONOSPACE);
         historyView.setTextIsSelectable(true);
-        historyView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        historyView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        styleBox(historyView, "#F8FAFC", "#CBD5E1");
         root.addView(historyView, matchWrap());
 
         setContentView(scrollView);
@@ -171,6 +190,7 @@ public class MainActivity extends Activity {
         TextView labelView = new TextView(this);
         labelView.setText(label);
         labelView.setTypeface(Typeface.DEFAULT_BOLD);
+        labelView.setTextSize(12);
         labelView.setPadding(0, dp(10), 0, dp(2));
         root.addView(labelView, matchWrap());
 
@@ -179,6 +199,7 @@ public class MainActivity extends Activity {
         input.setSingleLine(minLines <= 1);
         input.setMinLines(minLines);
         input.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        input.setTextSize(13);
         input.setInputType(secret
                 ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD
                 : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
@@ -236,9 +257,10 @@ public class MainActivity extends Activity {
                 HistoryStore.add(
                         MainActivity.this,
                         result.ok ? "TEST_SENT" : "TEST_FAILED",
-                        "HTTP=" + result.statusCode
-                                + "\nResponse=" + (result.body == null ? "" : result.body)
-                                + "\nError=" + (result.error == null ? "" : result.error)
+                        "📨 نتیجه تست: " + WebhookClient.persianStatus(result)
+                                + "\n🌐 کد HTTP: " + result.statusCode
+                                + "\n🧾 پاسخ ربات: " + (result.body == null || result.body.trim().isEmpty() ? "-" : result.body)
+                                + "\n⚠️ خطا: " + (result.error == null || result.error.trim().isEmpty() ? "-" : result.error)
                 );
                 runOnUiThread(new Runnable() {
                     @Override
@@ -325,7 +347,15 @@ public class MainActivity extends Activity {
             return;
         }
         String history = HistoryStore.get(this);
-        historyView.setText(history == null || history.trim().isEmpty() ? "هنوز گزارشی ثبت نشده است." : history);
+        String approved = HistoryStore.getApproved(this);
+        if (approvedHistoryView != null) {
+            approvedHistoryView.setText(approved == null || approved.trim().isEmpty()
+                    ? "هنوز واریزی تاییدشده‌ای ثبت نشده است."
+                    : approved);
+        }
+        historyView.setText(history == null || history.trim().isEmpty()
+                ? "هنوز گزارشی ثبت نشده است."
+                : history);
     }
 
     private static String text(EditText editText) {
@@ -337,6 +367,31 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
+    }
+
+    private void addSectionTitle(LinearLayout root, String text) {
+        TextView section = new TextView(this);
+        section.setText(text);
+        section.setTypeface(Typeface.DEFAULT_BOLD);
+        section.setTextSize(15);
+        section.setPadding(0, dp(16), 0, dp(6));
+        root.addView(section, matchWrap());
+    }
+
+    private void styleButton(Button button) {
+        button.setAllCaps(false);
+        button.setTextSize(12);
+        button.setMinHeight(dp(38));
+        button.setMinWidth(0);
+        button.setPadding(dp(8), dp(4), dp(8), dp(4));
+    }
+
+    private void styleBox(TextView view, String fill, String stroke) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor(fill));
+        bg.setStroke(dp(1), Color.parseColor(stroke));
+        bg.setCornerRadius(dp(10));
+        view.setBackground(bg);
     }
 
     private int dp(int value) {
