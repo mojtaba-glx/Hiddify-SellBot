@@ -49,6 +49,10 @@ public final class HistoryStore {
                 .getString(KEY_BANK_SMS_HISTORY, "");
     }
 
+    public static Entry[] getBankSmsEntries(Context context) {
+        return parseEntries(getBankSms(context));
+    }
+
     public static void clear(Context context) {
         context.getApplicationContext()
                 .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -77,6 +81,18 @@ public final class HistoryStore {
             limited.append(parts[i]);
         }
         prefs.edit().putString(key, limited.toString()).apply();
+    }
+
+    private static Entry[] parseEntries(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return new Entry[0];
+        }
+        String[] parts = raw.split(SEP);
+        Entry[] entries = new Entry[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            entries[i] = Entry.fromRaw(parts[i]);
+        }
+        return entries;
     }
 
     private static String trim(String text, int max) {
@@ -133,5 +149,34 @@ public final class HistoryStore {
             return "🔴 بررسی پیامک‌های قبلی ناموفق بود";
         }
         return "ℹ️ " + (status == null ? "گزارش" : status);
+    }
+
+    public static final class Entry {
+        public final String raw;
+        public final String time;
+        public final String title;
+        public final String detail;
+        public final boolean approved;
+        public final boolean rejected;
+
+        private Entry(String raw, String time, String title, String detail, boolean approved, boolean rejected) {
+            this.raw = raw;
+            this.time = time;
+            this.title = title;
+            this.detail = detail;
+            this.approved = approved;
+            this.rejected = rejected;
+        }
+
+        private static Entry fromRaw(String rawValue) {
+            String raw = rawValue == null ? "" : rawValue.trim();
+            String[] lines = raw.split("\\n", 3);
+            String time = lines.length > 0 ? lines[0].replace("🕒", "").trim() : "";
+            String title = lines.length > 1 ? lines[1].trim() : "گزارش";
+            String detail = lines.length > 2 ? lines[2].trim() : "";
+            boolean approved = title.contains("✅");
+            boolean rejected = title.contains("❌") || title.contains("🔴");
+            return new Entry(raw, time, title, detail, approved, rejected);
+        }
     }
 }

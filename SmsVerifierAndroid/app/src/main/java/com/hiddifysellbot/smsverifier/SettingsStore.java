@@ -18,6 +18,10 @@ public final class SettingsStore {
     private static final String KEY_SECRET = "secret";
     private static final String KEY_SENDER_FILTERS = "sender_filters";
     private static final String KEY_CARD_LAST4_ENABLED = "card_last4_enabled";
+    private static final String KEY_THEME_MODE = "theme_mode";
+    public static final String THEME_SYSTEM = "system";
+    public static final String THEME_LIGHT = "light";
+    public static final String THEME_DARK = "dark";
     private static final String[] BANK_IDS = {
             "blu",
             "middle_east",
@@ -61,6 +65,14 @@ public final class SettingsStore {
         return prefs.getBoolean(KEY_CARD_LAST4_ENABLED, false);
     }
 
+    public String getThemeMode() {
+        String mode = prefs.getString(KEY_THEME_MODE, THEME_SYSTEM);
+        if (THEME_LIGHT.equals(mode) || THEME_DARK.equals(mode) || THEME_SYSTEM.equals(mode)) {
+            return mode;
+        }
+        return THEME_SYSTEM;
+    }
+
     public void save(
             boolean enabled,
             String webhookUrl,
@@ -75,6 +87,11 @@ public final class SettingsStore {
                 .putString(KEY_SENDER_FILTERS, safe(senderFilters))
                 .putBoolean(KEY_CARD_LAST4_ENABLED, cardLast4Enabled)
                 .apply();
+    }
+
+    public void saveThemeMode(String mode) {
+        String selected = THEME_LIGHT.equals(mode) || THEME_DARK.equals(mode) ? mode : THEME_SYSTEM;
+        prefs.edit().putString(KEY_THEME_MODE, selected).apply();
     }
 
     public int getBankCount() {
