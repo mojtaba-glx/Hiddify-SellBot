@@ -20,6 +20,7 @@ public final class SettingsStore {
     private static final String KEY_CARD_LAST4_ENABLED = "card_last4_enabled";
     private static final String KEY_THEME_MODE = "theme_mode";
     private static final String KEY_CUSTOM_BANK_COUNT = "custom_bank_count";
+    private static final int MAX_CUSTOM_BANKS = 5;
     public static final String THEME_SYSTEM = "system";
     public static final String THEME_LIGHT = "light";
     public static final String THEME_DARK = "dark";
@@ -122,6 +123,9 @@ public final class SettingsStore {
 
     public int addCustomBank(String name, boolean enabled, String senderFilters, String sampleSms) {
         int count = getCustomBankCount();
+        if (count >= MAX_CUSTOM_BANKS) {
+            return -1;
+        }
         String prefix = customBankPrefix(count);
         prefs.edit()
                 .putInt(KEY_CUSTOM_BANK_COUNT, count + 1)

@@ -23,6 +23,8 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -33,6 +35,7 @@ public class MainActivity extends Activity {
     private ScrollView scrollView;
     private LinearLayout mainContent;
     private LinearLayout smsContent;
+    private LinearLayout topMenuPanel;
     private CheckBox enabledBox;
     private EditText webhookInput;
     private EditText secretInput;
@@ -116,13 +119,29 @@ public class MainActivity extends Activity {
     }
 
     private void buildMainContent() {
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        mainContent.addView(topRow, matchWrap());
+
+        Button menuButton = new Button(this);
+        menuButton.setText("⋮");
+        styleButton(menuButton, false);
+        topRow.addView(menuButton, new LinearLayout.LayoutParams(dp(46), LinearLayout.LayoutParams.WRAP_CONTENT));
+        menuButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                topMenuPanel.setVisibility(topMenuPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+            }
+        });
+
         TextView title = new TextView(this);
-        title.setText("🛡️ SellBot SMS Verifier v" + BuildConfig.VERSION_NAME);
+        title.setText("🛡️ SellBot SMS Verifier");
         title.setTextSize(20);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         title.setTextColor(textColor);
         title.setGravity(Gravity.CENTER);
-        mainContent.addView(title, matchWrap());
+        topRow.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         TextView desc = new TextView(this);
         desc.setText("پردازش SMS بانک، تایید خودکار پرداخت و گزارش شفاف برای فروشگاه شما.");
@@ -131,6 +150,36 @@ public class MainActivity extends Activity {
         desc.setGravity(Gravity.CENTER);
         desc.setPadding(0, dp(6), 0, dp(10));
         mainContent.addView(desc, matchWrap());
+
+        topMenuPanel = addCard(mainContent);
+        topMenuPanel.setVisibility(View.GONE);
+        addSectionTitle(topMenuPanel, "⋮ منوی برنامه");
+        TextView versionText = new TextView(this);
+        versionText.setText("نسخه برنامه: " + BuildConfig.VERSION_NAME + "\nتنظیمات بیشتر در نسخه‌های بعدی اینجا اضافه می‌شود.");
+        versionText.setTextSize(12);
+        versionText.setTextColor(mutedColor);
+        versionText.setPadding(0, 0, 0, dp(8));
+        topMenuPanel.addView(versionText, matchWrap());
+        themeSpinner = addSpinner(topMenuPanel, "🎨 تم برنامه", new String[]{"سیستم گوشی", "روشن", "تاریک"});
+        themeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressThemeChange) {
+                    return;
+                }
+                SettingsStore settings = new SettingsStore(MainActivity.this);
+                String oldMode = settings.getThemeMode();
+                String newMode = selectedThemeMode();
+                if (!oldMode.equals(newMode)) {
+                    settings.saveThemeMode(newMode);
+                    recreate();
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
 
         LinearLayout dashboard = addCard(mainContent);
         addSectionTitle(dashboard, "⚡ دسترسی سریع");
@@ -180,27 +229,6 @@ public class MainActivity extends Activity {
         enabledBox.setText("پردازش خودکار SMS فعال باشد");
         styleCheckBox(enabledBox);
         connectionCard.addView(enabledBox, matchWrap());
-
-        themeSpinner = addSpinner(connectionCard, "🎨 تم برنامه", new String[]{"سیستم گوشی", "روشن", "تاریک"});
-        themeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (suppressThemeChange) {
-                    return;
-                }
-                SettingsStore settings = new SettingsStore(MainActivity.this);
-                String oldMode = settings.getThemeMode();
-                String newMode = selectedThemeMode();
-                if (!oldMode.equals(newMode)) {
-                    settings.saveThemeMode(newMode);
-                    recreate();
-                }
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
 
         webhookInput = addInput(connectionCard, "Webhook URL ربات", "https://example.com/payment/sms-webhook", false, 1);
         secretInput = addInput(connectionCard, "Secret Key اتصال", "کلید امنیتی مشترک با ربات", true, 1);
@@ -255,17 +283,6 @@ public class MainActivity extends Activity {
             }
         });
 
-        Button addBankButton = new Button(this);
-        addBankButton.setText("➕ افزودن بانک جدید");
-        styleButton(addBankButton, false);
-        bankCard.addView(addBankButton, matchWrap());
-        addBankButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startAddCustomBank();
-            }
-        });
-
         customBankNameInput = addInput(bankCard, "نام بانک جدید", new SettingsStore(this).getCustomBankNameHint(), false, 1);
 
         bankEnabledBox = new CheckBox(this);
@@ -284,6 +301,17 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 saveSelectedBank();
+            }
+        });
+
+        Button addBankButton = new Button(this);
+        addBankButton.setText("➕ ثبت بانک جدید با همین فرم");
+        styleButton(addBankButton, false);
+        bankCard.addView(addBankButton, matchWrap());
+        addBankButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startAddCustomBank();
             }
         });
 
@@ -532,6 +560,10 @@ public class MainActivity extends Activity {
         int selectedIndex;
         if (addingCustomBank) {
             selectedIndex = settings.addCustomBank(name, bankEnabled, senders, sample);
+            if (selectedIndex < 0) {
+                Toast.makeText(this, "فعلاً حداکثر ۵ بانک سفارشی قابل ثبت است", Toast.LENGTH_LONG).show();
+                return;
+            }
             addingCustomBank = false;
             rebuildBankSpinner(selectedIndex);
         } else {
@@ -725,9 +757,44 @@ public class MainActivity extends Activity {
             bankSmsListView.addView(empty, matchWrap());
             return;
         }
+        Map<String, LinearLayout> groups = new LinkedHashMap<>();
         for (HistoryStore.Entry entry : entries) {
-            addSmsBubble(bankSmsListView, entry);
+            String bank = extractDetailLine(entry.detail, "🏦 بانک:");
+            String sender = extractDetailLine(entry.detail, "👤 سرشماره:");
+            if (bank.isEmpty() && entry.title.contains("بررسی")) {
+                bank = "وضعیت بررسی پیامک‌ها";
+                sender = "سیستم";
+            }
+            if (bank.isEmpty()) {
+                bank = "پیامک‌های بانکی";
+            }
+            if (sender.isEmpty()) {
+                sender = "بدون سرشماره";
+            }
+            String key = bank + "|" + sender;
+            LinearLayout group = groups.get(key);
+            if (group == null) {
+                group = addSmsGroup(bankSmsListView, bank, sender);
+                groups.put(key, group);
+            }
+            addSmsBubble(group, entry);
         }
+    }
+
+    private LinearLayout addSmsGroup(LinearLayout parent, String bank, String sender) {
+        LinearLayout groupCard = addCard(parent);
+        TextView header = new TextView(this);
+        header.setText("🏦 " + bank + "\n📨 سرشماره: " + sender);
+        header.setTextSize(13);
+        header.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        header.setTextColor(textColor);
+        header.setPadding(dp(4), dp(2), dp(4), dp(8));
+        groupCard.addView(header, matchWrap());
+
+        LinearLayout messages = new LinearLayout(this);
+        messages.setOrientation(LinearLayout.VERTICAL);
+        groupCard.addView(messages, matchWrap());
+        return messages;
     }
 
     private void addSmsBubble(LinearLayout parent, HistoryStore.Entry entry) {
@@ -765,6 +832,20 @@ public class MainActivity extends Activity {
             return text.substring(0, 520) + "...";
         }
         return text;
+    }
+
+    private String extractDetailLine(String detail, String prefix) {
+        if (detail == null || detail.trim().isEmpty()) {
+            return "";
+        }
+        String[] lines = detail.split("\\n");
+        for (String line : lines) {
+            String text = line == null ? "" : line.trim();
+            if (text.startsWith(prefix)) {
+                return text.substring(prefix.length()).trim();
+            }
+        }
+        return "";
     }
 
     private String makeLogReadable(String history) {

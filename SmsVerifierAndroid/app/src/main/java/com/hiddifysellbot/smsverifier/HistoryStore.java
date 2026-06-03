@@ -22,11 +22,13 @@ public final class HistoryStore {
 
     public static void add(Context context, String status, String detail) {
         String entry = buildEntry(status, detail);
-        save(context, KEY_HISTORY, entry, MAX_ITEMS);
+        if (!isBankSmsStatus(status) && !isInboxScanStatus(status)) {
+            save(context, KEY_HISTORY, entry, MAX_ITEMS);
+        }
         if ("APPROVED".equals(status) || "APPROVED_DUPLICATE".equals(status)) {
             save(context, KEY_APPROVED_HISTORY, entry, MAX_APPROVED_ITEMS);
         }
-        if (isBankSmsStatus(status)) {
+        if (isBankSmsStatus(status) || isInboxScanStatus(status)) {
             save(context, KEY_BANK_SMS_HISTORY, entry, MAX_BANK_SMS_ITEMS);
         }
     }
@@ -109,6 +111,12 @@ public final class HistoryStore {
                 || "AMBIGUOUS".equals(status)
                 || "FAILED".equals(status)
                 || "BANK_SKIPPED".equals(status);
+    }
+
+    private static boolean isInboxScanStatus(String status) {
+        return "INBOX_SCAN_START".equals(status)
+                || "INBOX_SCAN_DONE".equals(status)
+                || "INBOX_SCAN_FAILED".equals(status);
     }
 
     private static String statusTitle(String status) {
