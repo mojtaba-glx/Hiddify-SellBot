@@ -30,19 +30,26 @@ public class MainActivity extends Activity {
     private static final int REQ_SMS_PERMISSION = 1001;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private ScrollView scrollView;
+    private LinearLayout mainContent;
+    private LinearLayout smsContent;
     private CheckBox enabledBox;
     private EditText webhookInput;
     private EditText secretInput;
     private CheckBox cardLast4Box;
     private Spinner themeSpinner;
+    private Button editSettingsButton;
+    private Button saveSettingsButton;
     private Spinner bankSpinner;
     private CheckBox bankEnabledBox;
+    private EditText customBankNameInput;
     private EditText bankSenderInput;
     private EditText bankSampleInput;
     private TextView bankSummaryView;
+    private TextView bankEditTitleView;
     private EditText manualSenderInput;
     private EditText manualBodyInput;
-    private LinearLayout bankSmsPanel;
+    private TextView connectionStatusView;
     private LinearLayout bankSmsListView;
     private TextView historyView;
 
@@ -56,7 +63,10 @@ public class MainActivity extends Activity {
     private int approvedColor;
     private int rejectedColor;
     private int neutralColor;
-    private boolean bankSmsPanelVisible = false;
+    private boolean editSettingsMode = false;
+    private boolean addingCustomBank = false;
+    private boolean suppressThemeChange = false;
+    private boolean suppressBankSelection = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -73,8 +83,17 @@ public class MainActivity extends Activity {
         refreshHistory();
     }
 
+    @Override
+    public void onBackPressed() {
+        if (smsContent != null && smsContent.getVisibility() == View.VISIBLE) {
+            showMainScreen();
+            return;
+        }
+        super.onBackPressed();
+    }
+
     private void buildUi() {
-        ScrollView scrollView = new ScrollView(this);
+        scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(bgColor);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -82,13 +101,28 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(bgColor);
         scrollView.addView(root);
 
+        mainContent = new LinearLayout(this);
+        mainContent.setOrientation(LinearLayout.VERTICAL);
+        root.addView(mainContent, matchWrap());
+
+        smsContent = new LinearLayout(this);
+        smsContent.setOrientation(LinearLayout.VERTICAL);
+        smsContent.setVisibility(View.GONE);
+        root.addView(smsContent, matchWrap());
+
+        buildMainContent();
+        buildSmsContent();
+        setContentView(scrollView);
+    }
+
+    private void buildMainContent() {
         TextView title = new TextView(this);
         title.setText("🛡️ SellBot SMS Verifier v" + BuildConfig.VERSION_NAME);
         title.setTextSize(20);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         title.setTextColor(textColor);
         title.setGravity(Gravity.CENTER);
-        root.addView(title, matchWrap());
+        mainContent.addView(title, matchWrap());
 
         TextView desc = new TextView(this);
         desc.setText("پردازش SMS بانک، تایید خودکار پرداخت و گزارش شفاف برای فروشگاه شما.");
@@ -96,47 +130,51 @@ public class MainActivity extends Activity {
         desc.setTextColor(mutedColor);
         desc.setGravity(Gravity.CENTER);
         desc.setPadding(0, dp(6), 0, dp(10));
-        root.addView(desc, matchWrap());
+        mainContent.addView(desc, matchWrap());
 
-        LinearLayout dashboard = addCard(root);
+        LinearLayout dashboard = addCard(mainContent);
         addSectionTitle(dashboard, "⚡ دسترسی سریع");
         addButtonRow(dashboard,
-                new String[]{"📩 پیامک‌های بانکی", "🔎 بررسی پیامک‌ها"},
+                new String[]{"📩 پیامک‌های بانکی", "🧪 تست اتصال"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
-                                toggleBankSmsPanel();
+                                showSmsScreen();
                             }
                         },
-                        new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                saveSettings(false);
-                                scanInboxNow();
-                            }
-                        }
-                });
-        addButtonRow(dashboard,
-                new String[]{"🧪 تست اتصال", "🔄 بروزرسانی"},
-                new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 saveSettings(false);
                                 sendTestWebhook();
                             }
-                        },
-                        new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                refreshHistory();
-                            }
                         }
                 });
 
-        LinearLayout connectionCard = addCard(root);
+        connectionStatusView = new TextView(this);
+        connectionStatusView.setText("وضعیت اتصال هنوز تست نشده است.");
+        connectionStatusView.setTextSize(12);
+        connectionStatusView.setTextColor(mutedColor);
+        connectionStatusView.setGravity(Gravity.CENTER);
+        connectionStatusView.setPadding(dp(10), dp(8), dp(10), dp(8));
+        styleRounded(connectionStatusView, inputColor, strokeColor, dp(12));
+        dashboard.addView(connectionStatusView, matchWrap());
+
+        LinearLayout connectionCard = addCard(mainContent);
         addSectionTitle(connectionCard, "⚙️ تنظیمات اصلی");
+
+        editSettingsButton = new Button(this);
+        editSettingsButton.setText("🔒 تنظیمات قفل است؛ برای تغییر بزن");
+        styleButton(editSettingsButton, false);
+        connectionCard.addView(editSettingsButton, matchWrap());
+        editSettingsButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                editSettingsMode = !editSettingsMode;
+                applySettingsEditMode();
+            }
+        });
 
         enabledBox = new CheckBox(this);
         enabledBox.setText("پردازش خودکار SMS فعال باشد");
@@ -144,6 +182,26 @@ public class MainActivity extends Activity {
         connectionCard.addView(enabledBox, matchWrap());
 
         themeSpinner = addSpinner(connectionCard, "🎨 تم برنامه", new String[]{"سیستم گوشی", "روشن", "تاریک"});
+        themeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressThemeChange) {
+                    return;
+                }
+                SettingsStore settings = new SettingsStore(MainActivity.this);
+                String oldMode = settings.getThemeMode();
+                String newMode = selectedThemeMode();
+                if (!oldMode.equals(newMode)) {
+                    settings.saveThemeMode(newMode);
+                    recreate();
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+
         webhookInput = addInput(connectionCard, "Webhook URL ربات", "https://example.com/payment/sms-webhook", false, 1);
         secretInput = addInput(connectionCard, "Secret Key اتصال", "کلید امنیتی مشترک با ربات", true, 1);
 
@@ -152,32 +210,63 @@ public class MainActivity extends Activity {
         styleCheckBox(cardLast4Box);
         connectionCard.addView(cardLast4Box, matchWrap());
 
-        Button saveButton = new Button(this);
-        saveButton.setText("💾 ذخیره تنظیمات اصلی");
-        styleButton(saveButton, true);
-        connectionCard.addView(saveButton, matchWrap());
-        saveButton.setOnClickListener(new View.OnClickListener() {
+        saveSettingsButton = new Button(this);
+        saveSettingsButton.setText("💾 ذخیره تنظیمات اصلی");
+        styleButton(saveSettingsButton, true);
+        connectionCard.addView(saveSettingsButton, matchWrap());
+        saveSettingsButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 saveSettings(true);
+                editSettingsMode = false;
+                applySettingsEditMode();
             }
         });
 
-        LinearLayout bankCard = addCard(root);
+        LinearLayout bankCard = addCard(mainContent);
         addSectionTitle(bankCard, "🏦 بانک‌ها و نمونه SMS");
         TextView bankHelp = new TextView(this);
-        bankHelp.setText("هر بانک را جدا فعال کن؛ برای هرکدام ۲ تا ۳ سرشماره یا بیشتر و یک نمونه SMS واقعی ذخیره کن.");
+        bankHelp.setText("بانک را انتخاب کن یا با دکمه + بانک جدید بساز؛ هر بانک چند سرشماره جدا و نمونه SMS خودش را دارد.");
         bankHelp.setTextSize(12);
         bankHelp.setTextColor(mutedColor);
         bankHelp.setPadding(0, 0, 0, dp(8));
         bankCard.addView(bankHelp, matchWrap());
 
-        SettingsStore bankSettings = new SettingsStore(this);
-        String[] bankNames = new String[bankSettings.getBankCount()];
-        for (int i = 0; i < bankNames.length; i++) {
-            bankNames[i] = bankSettings.getBankName(i);
-        }
-        bankSpinner = addSpinner(bankCard, "انتخاب بانک", bankNames);
+        bankEditTitleView = new TextView(this);
+        bankEditTitleView.setTextSize(12);
+        bankEditTitleView.setTextColor(mutedColor);
+        bankEditTitleView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        bankEditTitleView.setPadding(0, dp(2), 0, dp(4));
+        bankCard.addView(bankEditTitleView, matchWrap());
+
+        bankSpinner = addSpinner(bankCard, "انتخاب/ویرایش بانک", new SettingsStore(this).getBankNames());
+        bankSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (suppressBankSelection) {
+                    return;
+                }
+                addingCustomBank = false;
+                loadSelectedBank();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+
+        Button addBankButton = new Button(this);
+        addBankButton.setText("➕ افزودن بانک جدید");
+        styleButton(addBankButton, false);
+        bankCard.addView(addBankButton, matchWrap());
+        addBankButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startAddCustomBank();
+            }
+        });
+
+        customBankNameInput = addInput(bankCard, "نام بانک جدید", new SettingsStore(this).getCustomBankNameHint(), false, 1);
 
         bankEnabledBox = new CheckBox(this);
         bankEnabledBox.setText("این بانک فعال باشد");
@@ -188,7 +277,7 @@ public class MainActivity extends Activity {
         bankSampleInput = addInput(bankCard, "نمونه SMS همین بانک", "نمونه پیامک واریز همین بانک را اینجا paste کن", false, 4);
 
         Button saveBankButton = new Button(this);
-        saveBankButton.setText("✅ ذخیره بانک انتخاب‌شده");
+        saveBankButton.setText("✅ ذخیره بانک");
         styleButton(saveBankButton, true);
         bankCard.addView(saveBankButton, matchWrap());
         saveBankButton.setOnClickListener(new View.OnClickListener() {
@@ -206,18 +295,7 @@ public class MainActivity extends Activity {
         styleRounded(bankSummaryView, inputColor, strokeColor, dp(12));
         bankCard.addView(bankSummaryView, matchWrap());
 
-        bankSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                loadSelectedBank();
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
-
-        LinearLayout testCard = addCard(root);
+        LinearLayout testCard = addCard(mainContent);
         addSectionTitle(testCard, "🧪 تست دستی SMS");
         manualSenderInput = addInput(testCard, "سرشماره SMS", "مثال: 20004861", false, 1);
         manualBodyInput = addInput(testCard, "متن SMS بانک", "متن پیامک بانک را برای تست اینجا paste کن", false, 4);
@@ -234,23 +312,10 @@ public class MainActivity extends Activity {
             }
         });
 
-        bankSmsPanel = addCard(root);
-        addSectionTitle(bankSmsPanel, "📩 پیامک‌های بانکی");
-        TextView smsHelp = new TextView(this);
-        smsHelp.setText("پیامک‌های تاییدشده با ✅ و پیامک‌های تاییدنشد‌ه با ❌ نمایش داده می‌شوند.");
-        smsHelp.setTextColor(mutedColor);
-        smsHelp.setTextSize(12);
-        smsHelp.setPadding(0, 0, 0, dp(8));
-        bankSmsPanel.addView(smsHelp, matchWrap());
-        bankSmsListView = new LinearLayout(this);
-        bankSmsListView.setOrientation(LinearLayout.VERTICAL);
-        bankSmsPanel.addView(bankSmsListView, matchWrap());
-        bankSmsPanel.setVisibility(View.GONE);
-
-        LinearLayout logCard = addCard(root);
+        LinearLayout logCard = addCard(mainContent);
         addSectionTitle(logCard, "📋 لاگ کامل برنامه");
         TextView logHelp = new TextView(this);
-        logHelp.setText("لاگ‌های فنی و خطاها این پایین می‌مانند؛ بخش پیامک‌ها از دکمه بالا باز می‌شود.");
+        logHelp.setText("اینجا فقط لاگ فنی و خطاهاست؛ پیامک‌های بانکی از دکمه بالای صفحه باز می‌شوند.");
         logHelp.setTextColor(mutedColor);
         logHelp.setTextSize(12);
         logHelp.setPadding(0, 0, 0, dp(8));
@@ -263,7 +328,7 @@ public class MainActivity extends Activity {
         Button refreshButton = new Button(this);
         refreshButton.setText("بروزرسانی لاگ");
         styleButton(refreshButton, false);
-        logRow.addView(refreshButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        logRow.addView(refreshButton, weightedButtonLp());
         refreshButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -274,7 +339,7 @@ public class MainActivity extends Activity {
         Button clearButton = new Button(this);
         clearButton.setText("پاک کردن لاگ");
         styleButton(clearButton, false);
-        logRow.addView(clearButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        logRow.addView(clearButton, weightedButtonLp());
         clearButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -291,8 +356,59 @@ public class MainActivity extends Activity {
         historyView.setPadding(dp(10), dp(10), dp(10), dp(10));
         styleRounded(historyView, inputColor, strokeColor, dp(12));
         logCard.addView(historyView, matchWrap());
+    }
 
-        setContentView(scrollView);
+    private void buildSmsContent() {
+        LinearLayout smsCard = addCard(smsContent);
+        TextView title = new TextView(this);
+        title.setText("📩 پیامک‌های بانکی");
+        title.setTextSize(19);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        title.setTextColor(textColor);
+        title.setGravity(Gravity.CENTER);
+        smsCard.addView(title, matchWrap());
+
+        TextView hint = new TextView(this);
+        hint.setText("مثل برنامه پیامک: تاییدشده‌ها ✅ و تاییدنشد‌ه‌ها ❌ نمایش داده می‌شوند. پیام‌ها ذخیره می‌شوند و لازم نیست هر بار دوباره اسکن کنی.");
+        hint.setTextColor(mutedColor);
+        hint.setTextSize(12);
+        hint.setGravity(Gravity.CENTER);
+        hint.setPadding(0, dp(6), 0, dp(10));
+        smsCard.addView(hint, matchWrap());
+
+        addButtonRow(smsCard,
+                new String[]{"⬅️ برگشت", "🔎 بررسی پیامک‌ها"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showMainScreen();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                saveSettings(false);
+                                scanInboxNow();
+                            }
+                        }
+                });
+
+        Button refreshSmsButton = new Button(this);
+        refreshSmsButton.setText("🔄 بروزرسانی نمایش پیامک‌ها");
+        styleButton(refreshSmsButton, false);
+        smsCard.addView(refreshSmsButton, matchWrap());
+        refreshSmsButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                refreshHistory();
+                Toast.makeText(MainActivity.this, "پیامک‌ها بروزرسانی شد", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        bankSmsListView = new LinearLayout(this);
+        bankSmsListView.setOrientation(LinearLayout.VERTICAL);
+        smsCard.addView(bankSmsListView, matchWrap());
     }
 
     private void loadSettings() {
@@ -301,9 +417,13 @@ public class MainActivity extends Activity {
         webhookInput.setText(settings.getWebhookUrl());
         secretInput.setText(settings.getSecret());
         cardLast4Box.setChecked(settings.isCardLast4Enabled());
+        suppressThemeChange = true;
         themeSpinner.setSelection(themeIndex(settings.getThemeMode()));
-        loadSelectedBank();
+        suppressThemeChange = false;
+        rebuildBankSpinner(0);
         refreshBankSummary();
+        editSettingsMode = false;
+        applySettingsEditMode();
         refreshHistory();
     }
 
@@ -327,24 +447,78 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void applySettingsEditMode() {
+        enabledBox.setEnabled(editSettingsMode);
+        webhookInput.setEnabled(editSettingsMode);
+        secretInput.setEnabled(editSettingsMode);
+        cardLast4Box.setEnabled(editSettingsMode);
+        saveSettingsButton.setEnabled(editSettingsMode);
+        saveSettingsButton.setAlpha(editSettingsMode ? 1f : 0.45f);
+        editSettingsButton.setText(editSettingsMode
+                ? "✏️ حالت ویرایش فعال است؛ بعد از تغییر ذخیره کن"
+                : "🔒 تنظیمات قفل است؛ برای تغییر بزن");
+    }
+
+    private void rebuildBankSpinner(int selectedIndex) {
+        if (bankSpinner == null) {
+            return;
+        }
+        SettingsStore settings = new SettingsStore(this);
+        suppressBankSelection = true;
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                settings.getBankNames()
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        bankSpinner.setAdapter(adapter);
+        int safeIndex = Math.max(0, Math.min(selectedIndex, settings.getBankCount() - 1));
+        bankSpinner.setSelection(safeIndex);
+        suppressBankSelection = false;
+        loadSelectedBank();
+    }
+
     private void loadSelectedBank() {
-        if (bankSpinner == null || bankEnabledBox == null || bankSenderInput == null || bankSampleInput == null) {
+        if (addingCustomBank
+                || bankSpinner == null
+                || bankEditTitleView == null
+                || customBankNameInput == null
+                || bankEnabledBox == null
+                || bankSenderInput == null
+                || bankSampleInput == null) {
             return;
         }
         SettingsStore settings = new SettingsStore(this);
         SettingsStore.BankConfig bank = settings.getBank(bankSpinner.getSelectedItemPosition());
+        bankEditTitleView.setText(settings.getBankTitleForEdit(bankSpinner.getSelectedItemPosition()));
+        customBankNameInput.setVisibility(bank.custom ? View.VISIBLE : View.GONE);
+        customBankNameInput.setText(bank.custom ? bank.name : "");
         bankEnabledBox.setChecked(bank.enabled);
         bankSenderInput.setText(bank.senderFilters);
         bankSampleInput.setText(bank.sampleSms);
     }
 
+    private void startAddCustomBank() {
+        addingCustomBank = true;
+        bankEditTitleView.setText("➕ افزودن بانک جدید");
+        customBankNameInput.setVisibility(View.VISIBLE);
+        customBankNameInput.setText("");
+        bankEnabledBox.setChecked(true);
+        bankSenderInput.setText("");
+        bankSampleInput.setText("");
+        customBankNameInput.requestFocus();
+        Toast.makeText(this, "نام بانک، سرشماره و نمونه SMS را وارد کن", Toast.LENGTH_LONG).show();
+    }
+
     private void saveSelectedBank() {
-        if (bankSpinner == null) {
-            return;
-        }
         boolean bankEnabled = bankEnabledBox.isChecked();
+        String name = text(customBankNameInput);
         String senders = text(bankSenderInput);
         String sample = text(bankSampleInput);
+        if (addingCustomBank && name.isEmpty()) {
+            Toast.makeText(this, "نام بانک جدید را وارد کن", Toast.LENGTH_LONG).show();
+            return;
+        }
         if (bankEnabled && senders.isEmpty()) {
             Toast.makeText(this, "برای فعال کردن بانک، حداقل یک سرشماره SMS وارد کن", Toast.LENGTH_LONG).show();
             return;
@@ -355,12 +529,16 @@ public class MainActivity extends Activity {
         }
 
         SettingsStore settings = new SettingsStore(this);
-        settings.saveBank(
-                bankSpinner.getSelectedItemPosition(),
-                bankEnabled,
-                senders,
-                sample
-        );
+        int selectedIndex;
+        if (addingCustomBank) {
+            selectedIndex = settings.addCustomBank(name, bankEnabled, senders, sample);
+            addingCustomBank = false;
+            rebuildBankSpinner(selectedIndex);
+        } else {
+            selectedIndex = bankSpinner.getSelectedItemPosition();
+            settings.saveBank(selectedIndex, name, bankEnabled, senders, sample);
+            loadSelectedBank();
+        }
         refreshBankSummary();
         Toast.makeText(this, "تنظیمات بانک ذخیره شد", Toast.LENGTH_SHORT).show();
     }
@@ -376,11 +554,12 @@ public class MainActivity extends Activity {
     private void sendTestWebhook() {
         final SettingsStore settings = new SettingsStore(this);
         if (settings.getWebhookUrl().trim().isEmpty() || settings.getSecret().trim().isEmpty()) {
+            showConnectionStatus(false, "Webhook URL و Secret را وارد کن.");
             Toast.makeText(this, "Webhook URL و Secret را وارد کن", Toast.LENGTH_LONG).show();
             return;
         }
 
-        Toast.makeText(this, "در حال ارسال تست...", Toast.LENGTH_SHORT).show();
+        showConnectionStatus(false, "در حال تست اتصال به ربات...");
         executor.execute(new Runnable() {
             @Override
             public void run() {
@@ -410,15 +589,26 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         refreshHistory();
-                        Toast.makeText(
-                                MainActivity.this,
-                                result.ok ? "تست ارسال شد" : "تست ناموفق بود",
-                                Toast.LENGTH_LONG
-                        ).show();
+                        if (result.ok) {
+                            showConnectionStatus(true, "✅ اتصال با موفقیت انجام شد. Webhook و Secret درست هستند.");
+                            Toast.makeText(MainActivity.this, "اتصال با موفقیت انجام شد", Toast.LENGTH_LONG).show();
+                        } else {
+                            showConnectionStatus(false, "❌ اتصال برقرار نشد: " + WebhookClient.friendlyError(result));
+                            Toast.makeText(MainActivity.this, "اتصال ناموفق بود", Toast.LENGTH_LONG).show();
+                        }
                     }
                 });
             }
         });
+    }
+
+    private void showConnectionStatus(boolean ok, String text) {
+        if (connectionStatusView == null) {
+            return;
+        }
+        connectionStatusView.setText(text);
+        connectionStatusView.setTextColor(ok ? Color.parseColor("#16A34A") : mutedColor);
+        styleRounded(connectionStatusView, ok ? approvedColor : inputColor, ok ? Color.parseColor("#22C55E") : strokeColor, dp(12));
     }
 
     private void requestSmsPermission() {
@@ -451,13 +641,8 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         refreshHistory();
-                        bankSmsPanelVisible = true;
-                        bankSmsPanel.setVisibility(View.VISIBLE);
-                        Toast.makeText(
-                                MainActivity.this,
-                                "بررسی تمام شد: " + scanned + " پیامک",
-                                Toast.LENGTH_LONG
-                        ).show();
+                        showSmsScreen();
+                        Toast.makeText(MainActivity.this, "بررسی تمام شد: " + scanned + " پیامک", Toast.LENGTH_LONG).show();
                     }
                 });
             }
@@ -481,8 +666,7 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         refreshHistory();
-                        bankSmsPanelVisible = true;
-                        bankSmsPanel.setVisibility(View.VISIBLE);
+                        showSmsScreen();
                         Toast.makeText(MainActivity.this, "تست دستی انجام شد", Toast.LENGTH_LONG).show();
                     }
                 });
@@ -499,13 +683,30 @@ public class MainActivity extends Activity {
         String history = HistoryStore.get(this);
         historyView.setText(history == null || history.trim().isEmpty()
                 ? "هنوز لاگی ثبت نشده است."
-                : history);
+                : makeLogReadable(history));
     }
 
-    private void toggleBankSmsPanel() {
-        bankSmsPanelVisible = !bankSmsPanelVisible;
-        bankSmsPanel.setVisibility(bankSmsPanelVisible ? View.VISIBLE : View.GONE);
+    private void showSmsScreen() {
+        mainContent.setVisibility(View.GONE);
+        smsContent.setVisibility(View.VISIBLE);
         refreshHistory();
+        scrollView.post(new Runnable() {
+            @Override
+            public void run() {
+                scrollView.smoothScrollTo(0, 0);
+            }
+        });
+    }
+
+    private void showMainScreen() {
+        smsContent.setVisibility(View.GONE);
+        mainContent.setVisibility(View.VISIBLE);
+        scrollView.post(new Runnable() {
+            @Override
+            public void run() {
+                scrollView.smoothScrollTo(0, 0);
+            }
+        });
     }
 
     private void renderBankSmsBubbles() {
@@ -520,7 +721,7 @@ public class MainActivity extends Activity {
             empty.setTextColor(mutedColor);
             empty.setTextSize(12);
             empty.setGravity(Gravity.CENTER);
-            empty.setPadding(dp(10), dp(14), dp(10), dp(14));
+            empty.setPadding(dp(10), dp(20), dp(10), dp(20));
             bankSmsListView.addView(empty, matchWrap());
             return;
         }
@@ -559,10 +760,19 @@ public class MainActivity extends Activity {
         }
         String text = detail.trim();
         text = text.replace("\n🌐 کد HTTP:", "\nکد HTTP:");
+        text = text.replace("\n🧾 پاسخ ربات:", "\nپاسخ ربات:");
         if (text.length() > 520) {
             return text.substring(0, 520) + "...";
         }
         return text;
+    }
+
+    private String makeLogReadable(String history) {
+        return history
+                .replace("\n---\n", "\n\n━━━━━━━━━━━━━━━━\n\n")
+                .replace("NO_PENDING_MATCH", "پرداخت پیدا نشد")
+                .replace("APPROVED_DUPLICATE", "قبلاً تایید شده")
+                .replace("APPROVED", "تایید شده");
     }
 
     private Spinner addSpinner(LinearLayout root, String label, String[] items) {
@@ -630,9 +840,7 @@ public class MainActivity extends Activity {
             button.setText(labels[i]);
             styleButton(button, i == 0);
             button.setOnClickListener(listeners[i]);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
-            lp.setMargins(dp(3), 0, dp(3), 0);
-            row.addView(button, lp);
+            row.addView(button, weightedButtonLp());
         }
     }
 
@@ -689,6 +897,21 @@ public class MainActivity extends Activity {
             getWindow().setStatusBarColor(bgColor);
             getWindow().setNavigationBarColor(bgColor);
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            int flags = getWindow().getDecorView().getSystemUiVisibility();
+            if (dark) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                }
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                }
+            }
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
     }
 
     private boolean isDarkMode(String mode) {
@@ -732,6 +955,12 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
+    }
+
+    private LinearLayout.LayoutParams weightedButtonLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        lp.setMargins(dp(3), 0, dp(3), 0);
+        return lp;
     }
 
     private int dp(int value) {

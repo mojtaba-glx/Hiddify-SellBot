@@ -19,6 +19,7 @@ public final class SettingsStore {
     private static final String KEY_SENDER_FILTERS = "sender_filters";
     private static final String KEY_CARD_LAST4_ENABLED = "card_last4_enabled";
     private static final String KEY_THEME_MODE = "theme_mode";
+    private static final String KEY_CUSTOM_BANK_COUNT = "custom_bank_count";
     public static final String THEME_SYSTEM = "system";
     public static final String THEME_LIGHT = "light";
     public static final String THEME_DARK = "dark";
@@ -95,33 +96,99 @@ public final class SettingsStore {
     }
 
     public int getBankCount() {
-        return BANK_IDS.length;
+        return BANK_IDS.length + getCustomBankCount();
     }
 
     public String getBankName(int index) {
-        if (index < 0 || index >= BANK_NAMES.length) {
+        BankConfig bank = getBank(index);
+        return bank.name;
+    }
+
+    public String[] getBankNames() {
+        String[] out = new String[getBankCount()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = getBankName(i);
+        }
+        return out;
+    }
+
+    public int getCustomBankCount() {
+        return Math.max(0, prefs.getInt(KEY_CUSTOM_BANK_COUNT, 0));
+    }
+
+    public boolean isCustomBankIndex(int index) {
+        return index >= BANK_IDS.length && index < getBankCount();
+    }
+
+    public int addCustomBank(String name, boolean enabled, String senderFilters, String sampleSms) {
+        int count = getCustomBankCount();
+        String prefix = customBankPrefix(count);
+        prefs.edit()
+                .putInt(KEY_CUSTOM_BANK_COUNT, count + 1)
+                .putString(prefix + "_name", safe(name).isEmpty() ? "بانک جدید" : safe(name))
+                .putBoolean(prefix + "_enabled", enabled)
+                .putString(prefix + "_senders", safe(senderFilters))
+                .putString(prefix + "_sample", safe(sampleSms))
+                .apply();
+        return BANK_IDS.length + count;
+    }
+
+    public String getCustomBankNameHint() {
+        return "مثال: سامان، رسالت، تجارت";
+    }
+
+    public String getBankTitleForEdit(int index) {
+        BankConfig bank = getBank(index);
+        if (bank.name.isEmpty()) {
             return "";
         }
-        return BANK_NAMES[index];
+        return bank.custom ? "بانک سفارشی: " + bank.name : "بانک آماده: " + bank.name;
     }
 
     public BankConfig getBank(int index) {
-        if (index < 0 || index >= BANK_IDS.length) {
-            return new BankConfig("", "", false, "", "");
+        if (index < 0 || index >= getBankCount()) {
+            return new BankConfig("", "", false, "", "", false);
         }
-        String id = BANK_IDS[index];
-        String prefix = bankPrefix(id);
+        if (index >= BANK_IDS.length) {
+            int customIndex = index - BANK_IDS.length;
+            String prefix = customBankPrefix(customIndex);
+            return new BankConfig(
+                    "custom_" + customIndex,
+                    prefs.getString(prefix + "_name", "بانک سفارشی " + (customIndex + 1)),
+                    prefs.getBoolean(prefix + "_enabled", false),
+                    prefs.getString(prefix + "_senders", ""),
+                    prefs.getString(prefix + "_sample", ""),
+                    true
+            );
+        }
+        String prefix = bankPrefix(BANK_IDS[index]);
         return new BankConfig(
-                id,
+                BANK_IDS[index],
                 BANK_NAMES[index],
                 prefs.getBoolean(prefix + "_enabled", false),
                 prefs.getString(prefix + "_senders", ""),
-                prefs.getString(prefix + "_sample", "")
+                prefs.getString(prefix + "_sample", ""),
+                false
         );
     }
 
     public void saveBank(int index, boolean enabled, String senderFilters, String sampleSms) {
+        saveBank(index, getBank(index).name, enabled, senderFilters, sampleSms);
+    }
+
+    public void saveBank(int index, String name, boolean enabled, String senderFilters, String sampleSms) {
         if (index < 0 || index >= BANK_IDS.length) {
+            if (!isCustomBankIndex(index)) {
+                return;
+            }
+            int customIndex = index - BANK_IDS.length;
+            String prefix = customBankPrefix(customIndex);
+            prefs.edit()
+                    .putString(prefix + "_name", safe(name).isEmpty() ? "بانک سفارشی " + (customIndex + 1) : safe(name))
+                    .putBoolean(prefix + "_enabled", enabled)
+                    .putString(prefix + "_senders", safe(senderFilters))
+                    .putString(prefix + "_sample", safe(sampleSms))
+                    .apply();
             return;
         }
         String prefix = bankPrefix(BANK_IDS[index]);
@@ -237,6 +304,10 @@ public final class SettingsStore {
         return "bank_" + id;
     }
 
+    private static String customBankPrefix(int index) {
+        return "custom_bank_" + index;
+    }
+
     private static String safe(String value) {
         return value == null ? "" : value.trim();
     }
@@ -280,13 +351,15 @@ public final class SettingsStore {
         public final boolean enabled;
         public final String senderFilters;
         public final String sampleSms;
+        public final boolean custom;
 
-        private BankConfig(String id, String name, boolean enabled, String senderFilters, String sampleSms) {
+        private BankConfig(String id, String name, boolean enabled, String senderFilters, String sampleSms, boolean custom) {
             this.id = id;
             this.name = name;
             this.enabled = enabled;
             this.senderFilters = senderFilters == null ? "" : senderFilters;
             this.sampleSms = sampleSms == null ? "" : sampleSms;
+            this.custom = custom;
         }
     }
 }
