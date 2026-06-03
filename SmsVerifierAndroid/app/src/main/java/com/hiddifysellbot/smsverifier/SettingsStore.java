@@ -5,8 +5,13 @@ import android.content.SharedPreferences;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class SettingsStore {
+    private static final Pattern URL_PATTERN = Pattern.compile("(https?://[^\\s<>\"']+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HEX_SECRET_PATTERN = Pattern.compile("(?i)([a-f0-9]{32,128})");
+
     private static final String PREF_NAME = "sellbot_sms_verifier";
     private static final String KEY_ENABLED = "enabled";
     private static final String KEY_WEBHOOK_URL = "webhook_url";
@@ -26,11 +31,11 @@ public final class SettingsStore {
     }
 
     public String getWebhookUrl() {
-        return prefs.getString(KEY_WEBHOOK_URL, "");
+        return normalizeWebhookUrl(prefs.getString(KEY_WEBHOOK_URL, ""));
     }
 
     public String getSecret() {
-        return prefs.getString(KEY_SECRET, "");
+        return normalizeSecret(prefs.getString(KEY_SECRET, ""));
     }
 
     public String getSenderFiltersRaw() {
@@ -55,8 +60,8 @@ public final class SettingsStore {
     ) {
         prefs.edit()
                 .putBoolean(KEY_ENABLED, enabled)
-                .putString(KEY_WEBHOOK_URL, safe(webhookUrl))
-                .putString(KEY_SECRET, safe(secret))
+                .putString(KEY_WEBHOOK_URL, normalizeWebhookUrl(webhookUrl))
+                .putString(KEY_SECRET, normalizeSecret(secret))
                 .putString(KEY_SENDER_FILTERS, safe(senderFilters))
                 .putBoolean(KEY_CARD_LAST4_ENABLED, cardLast4Enabled)
                 .putString(KEY_CARD_LAST4, PaymentSmsParser.normalizeDigits(safe(cardLast4)).replaceAll("[^0-9]", ""))
@@ -103,5 +108,38 @@ public final class SettingsStore {
 
     private static String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    public static String normalizeWebhookUrl(String value) {
+        String text = safe(value);
+        Matcher matcher = URL_PATTERN.matcher(text);
+        if (matcher.find()) {
+            return trimUrlTail(matcher.group(1));
+        }
+        return trimUrlTail(text);
+    }
+
+    public static String normalizeSecret(String value) {
+        String text = safe(value);
+        Matcher matcher = HEX_SECRET_PATTERN.matcher(text);
+        String best = "";
+        while (matcher.find()) {
+            String candidate = matcher.group(1);
+            if (candidate.length() > best.length()) {
+                best = candidate;
+            }
+        }
+        if (!best.isEmpty()) {
+            return best;
+        }
+        return text.replaceAll("\\s+", "");
+    }
+
+    private static String trimUrlTail(String value) {
+        String text = safe(value);
+        while (text.endsWith(".") || text.endsWith(",") || text.endsWith(")") || text.endsWith("]")) {
+            text = text.substring(0, text.length() - 1).trim();
+        }
+        return text;
     }
 }

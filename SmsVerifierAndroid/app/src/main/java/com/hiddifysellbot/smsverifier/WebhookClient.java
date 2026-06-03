@@ -23,7 +23,7 @@ public final class WebhookClient {
         HttpURLConnection connection = null;
         try {
             byte[] payload = event.toJson().getBytes(StandardCharsets.UTF_8);
-            URL url = new URL(webhookUrl);
+            URL url = new URL(SettingsStore.normalizeWebhookUrl(webhookUrl));
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setConnectTimeout(15000);
@@ -32,7 +32,7 @@ public final class WebhookClient {
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             connection.setRequestProperty("Accept", "application/json,text/plain,*/*");
             connection.setRequestProperty("User-Agent", "SellBotSmsVerifier/1.0");
-            connection.setRequestProperty("X-SellBot-Sms-Secret", secret == null ? "" : secret);
+            connection.setRequestProperty("X-SellBot-Sms-Secret", SettingsStore.normalizeSecret(secret));
             connection.setRequestProperty("X-SellBot-Event-Id", event.eventId == null ? "" : event.eventId);
             try (OutputStream os = connection.getOutputStream()) {
                 os.write(payload);
