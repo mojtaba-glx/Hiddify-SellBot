@@ -6,6 +6,8 @@ import re
 import threading
 import time
 import hmac
+import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -99,6 +101,47 @@ def _sms_webhook_secret() -> str:
 
 def _sms_webhook_max_pending_age_minutes() -> int:
     return max(5, _to_int(_dotenv_get(SMS_WEBHOOK_MAX_PENDING_AGE_ENV, "360"), 360))
+
+
+def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str, reference: str) -> None:
+    token = str(_dotenv_get("ADMIN_BOT_TOKEN", "") or "").strip()
+    admin_id = _to_int(_dotenv_get("ADMIN_ID", "0"), 0)
+    if not token or admin_id <= 0:
+        return
+
+    tx_code = str((payment or {}).get("tx_code") or "").strip()
+    payment_id = int((payment or {}).get("id") or 0)
+    username = str((payment or {}).get("username") or "").strip()
+    full_name = str((payment or {}).get("full_name") or "").strip()
+    telegram_id = str((payment or {}).get("telegram_id") or "").strip()
+    user_label = full_name or (f"@{username}" if username else telegram_id) or "نامشخص"
+
+    text = (
+        "✅ پرداخت کارت‌به‌کارت با SMS تایید شد.\n"
+        f"👤 کاربر: {user_label}\n"
+        f"💰 مبلغ: {int(amount_toman or 0):,} تومان\n"
+        f"🧾 کد تراکنش: {tx_code or '-'}\n"
+        f"🆔 شناسه پرداخت: {payment_id or '-'}\n"
+        f"📨 سرشماره: {sender or '-'}\n"
+        f"🔖 پیگیری SMS: {reference or '-'}"
+    )
+    data = urllib.parse.urlencode(
+        {
+            "chat_id": str(admin_id),
+            "text": text,
+            "disable_web_page_preview": "true",
+        }
+    ).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            resp.read(512)
+    except Exception as e:
+        logger.warning("Failed sending SMS payment admin report payment_id=%s: %s", payment_id, e)
 
 
 def _query_requests_base64(query: str) -> bool:
@@ -502,6 +545,8 @@ class _SubHandler(BaseHTTPRequestHandler):
             message=message,
             amount_toman=matched_amount,
         )
+        if ok:
+            _send_admin_sms_payment_report(updated or payment, matched_amount, sender, reference)
         return 200 if ok else 500, {
             "ok": bool(ok),
             "matched": bool(ok),
