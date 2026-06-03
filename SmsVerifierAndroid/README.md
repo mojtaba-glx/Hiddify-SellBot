@@ -85,6 +85,15 @@ X-SellBot-Event-Id: <EVENT_ID>
 
 با ترمینال روی سیستمی که Java و Android SDK دارد:
 
+در ویندوز، ساده‌ترین راه:
+
+```powershell
+cd C:\Users\mojte\OneDrive\Desktop\SmsVerifierAndroid
+powershell -ExecutionPolicy Bypass -File .\build-debug-apk.ps1
+```
+
+یا با Gradle مستقیم:
+
 ```bash
 cd SmsVerifierAndroid
 gradle assembleDebug
