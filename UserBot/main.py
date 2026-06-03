@@ -3353,6 +3353,8 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
         telegram_id = str(payment.get("telegram_id") or "").strip()
         user_label = (full_name or (f"@{username}" if username else telegram_id) or str(uid) or "نامشخص").strip()
         meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
+        if str(meta.get("sms_auto_admin_report_at") or "").strip():
+            return
         sms_sender = str(meta.get("sms_sender") or "").strip()
         sms_reference = str(meta.get("sms_reference") or "").strip()
         sms_amount_raw = str(meta.get("sms_amount_raw") or "").strip()
@@ -3381,8 +3383,25 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
             ])
         bot = Bot(token=ADMIN_BOT_TOKEN)
         await bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=kb)
+        if payment_id > 0:
+            _update_payment_receipt_meta(
+                payment_id,
+                {
+                    "sms_auto_admin_report_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
     except Exception as e:
         logger.warning("Failed to send admin SMS auto approval report: %s", e)
+
+
+def _sms_auto_approval_user_text(amount: int, *, direct_note: bool = False) -> str:
+    text = (
+        "✅ پرداخت شما به‌صورت خودکار با SMS بانک تایید شد.\n"
+        f"💰 مبلغ تاییدشده: {int(amount or 0):,} تومان"
+    )
+    if direct_note:
+        text += "\n⏳ اگر خرید مستقیم بوده، اشتراک تا چند لحظه دیگر ساخته و ارسال می‌شود."
+    return text
 
 async def _safe_edit_message_text(query, text: str, **kwargs):
     """Ignore Telegram 'Message is not modified' errors for edit_message_text."""
@@ -3460,6 +3479,9 @@ def _build_receipt_meta(meta: dict) -> str:
         "direct_done",
         "direct_done_at",
         "direct_error",
+        "admin_notified_at",
+        "admin_notify_flow",
+        "sms_auto_admin_report_at",
     ]
     seen = set()
     parts = []
@@ -3630,6 +3652,71 @@ async def _save_receipt_local_copy(
     return str(local_path), code
 
 
+async def _send_admin_pending_card_payment_report(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    payment_id: int,
+    tx_code: str,
+    amount: int,
+    photo_file_id: str,
+    user_btn_title: str,
+    internal_user_id: int,
+    payer_last4: str = "",
+    flow: str = "",
+) -> bool:
+    if not (ADMIN_ID and ADMIN_BOT_TOKEN and payment_id):
+        return False
+    try:
+        payment = userbot_db.get_payment_by_id(int(payment_id)) or {}
+        if str(payment.get("status") or "").strip().lower() != "pending":
+            return False
+        meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
+        if str(meta.get("admin_fid") or "").strip() or str(meta.get("admin_notified_at") or "").strip():
+            return False
+
+        caption = _build_payment_report_caption(
+            tx_code or str(payment.get("tx_code") or ""),
+            int(amount or payment.get("amount") or 0),
+            payer_last4,
+        )
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("رد ❌", callback_data=f"userbot:pay:act:reject:{payment_id}"),
+                InlineKeyboardButton("تایید ✅", callback_data=f"userbot:pay:act:approve:{payment_id}"),
+            ],
+            [InlineKeyboardButton("📩 ارسال پیام", callback_data=f"userbot:pay:msg:{payment_id}")],
+            [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")],
+        ])
+
+        admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        try:
+            f = await context.bot.get_file(photo_file_id)
+            data = await f.download_as_bytearray()
+            bio = io.BytesIO(data)
+            bio.name = "receipt.jpg"
+            sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=caption, reply_markup=kb)
+            try:
+                admin_file_id = (sent.photo[-1].file_id if sent and sent.photo else None)
+            except Exception:
+                admin_file_id = None
+            if admin_file_id:
+                _save_admin_receipt_file_id(int(payment_id), admin_file_id)
+        except Exception:
+            await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
+
+        _update_payment_receipt_meta(
+            int(payment_id),
+            {
+                "admin_notified_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                "admin_notify_flow": str(flow or "").strip(),
+            },
+        )
+        return True
+    except Exception as e:
+        logger.warning("Failed to notify admin (AdminBot) for payment %s: %s", payment_id, e)
+        return False
+
+
 async def _finalize_pending_card_payment(
     *,
     update: Update,
@@ -3693,6 +3780,10 @@ async def _finalize_pending_card_payment(
         now=now,
     )
 
+    existing_payment = userbot_db.get_payment_by_id(int(payment_id)) if payment_id else None
+    if (not is_new_payment) and str((existing_payment or {}).get("status") or "").strip().lower() == "approved":
+        return True
+
     auto_approved = False
     auto_payment = None
     if payment_id:
@@ -3702,44 +3793,27 @@ async def _finalize_pending_card_payment(
             logger.warning("Failed auto-approving payment %s from unmatched SMS: %s", payment_id, e)
             auto_approved = False
 
-    if is_new_payment and auto_approved:
+    if auto_approved:
         await _send_admin_sms_auto_approval_report(
             auto_payment or userbot_db.get_payment_by_id(int(payment_id)) or {},
             flow=flow,
         )
 
-    if is_new_payment and (not auto_approved) and ADMIN_ID and payment_id and ADMIN_BOT_TOKEN:
-        try:
-            uname = update.effective_user.username
-            full_name = update.effective_user.full_name
-            user_btn_title = (full_name or uname or str(user_id)).strip()
-            caption = _build_payment_report_caption(tx_code, int(amount), clean_last4)
-            kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("رد ❌", callback_data=f"userbot:pay:act:reject:{payment_id}"),
-                    InlineKeyboardButton("تایید ✅", callback_data=f"userbot:pay:act:approve:{payment_id}"),
-                ],
-                [InlineKeyboardButton("📩 ارسال پیام", callback_data=f"userbot:pay:msg:{payment_id}")],
-                [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")],
-            ])
-
-            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
-            try:
-                f = await context.bot.get_file(photo_file_id)
-                data = await f.download_as_bytearray()
-                bio = io.BytesIO(data)
-                bio.name = "receipt.jpg"
-                sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=caption, reply_markup=kb)
-                try:
-                    admin_file_id = (sent.photo[-1].file_id if sent and sent.photo else None)
-                except Exception:
-                    admin_file_id = None
-                if admin_file_id:
-                    _save_admin_receipt_file_id(payment_id, admin_file_id)
-            except Exception:
-                await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
-        except Exception as e:
-            logger.warning("Failed to notify admin (AdminBot) for payment %s: %s", payment_id, e)
+    if (not auto_approved) and payment_id:
+        uname = update.effective_user.username
+        full_name = update.effective_user.full_name
+        user_btn_title = (full_name or uname or str(user_id)).strip()
+        await _send_admin_pending_card_payment_report(
+            context=context,
+            payment_id=int(payment_id),
+            tx_code=tx_code,
+            amount=int(amount),
+            photo_file_id=photo_file_id,
+            user_btn_title=user_btn_title,
+            internal_user_id=int(internal_user_id),
+            payer_last4=clean_last4,
+            flow=flow,
+        )
     return bool(auto_approved)
 
 
@@ -7351,7 +7425,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_text(
                 (
-                    "✅ پرداخت شما به‌صورت خودکار با SMS بانک تایید شد."
+                    _sms_auto_approval_user_text(amount)
                     if auto_approved
                     else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
                 ),
@@ -7396,7 +7470,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(
             (
-                "✅ پرداخت شما به‌صورت خودکار با SMS بانک تایید شد."
+                _sms_auto_approval_user_text(amount)
                 if auto_approved
                 else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
             ),
@@ -7512,7 +7586,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await update.message.reply_text(
                 (
-                    "✅ پرداخت شما به‌صورت خودکار با SMS بانک تایید شد.\n⏳ اگر خرید مستقیم بوده، اشتراک تا چند لحظه دیگر ساخته و ارسال می‌شود."
+                    _sms_auto_approval_user_text(amount, direct_note=True)
                     if auto_approved
                     else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
                 ),
@@ -7570,7 +7644,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(
             (
-                "✅ پرداخت شما به‌صورت خودکار با SMS بانک تایید شد.\n⏳ اگر خرید مستقیم بوده، اشتراک تا چند لحظه دیگر ساخته و ارسال می‌شود."
+                _sms_auto_approval_user_text(amount, direct_note=True)
                 if auto_approved
                 else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
             ),
