@@ -6301,7 +6301,7 @@ async def send_sms_webhook_settings_menu(chat_id: int, context: ContextTypes.DEF
         f"Secret Key: {secret_status}\n"
         f"مهلت تطبیق پرداخت: {status.get('age')} دقیقه\n\n"
         "آدرس Webhook برای اپ اندروید:\n"
-        f"<code>{html_escape(str(status.get('endpoint') or ''))}</code>\n\n"
+        f"<pre><code>{html_escape(str(status.get('endpoint') or ''))}</code></pre>\n\n"
         "Secret و وضعیت روشن/خاموش از همین منو ساخته و در فایل .env ذخیره می‌شود."
     )
     kb = build_sms_webhook_settings_keyboard()
@@ -8446,19 +8446,29 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await send_sms_webhook_settings_menu(cid, context, message=msg)
             return
         if data == "userbot:settings:payment:card:sms:regen":
+            new_secret = secrets.token_hex(32)
             try:
                 _write_env_values(
                     {
                         "SMS_WEBHOOK_ENABLED": "true",
-                        "SMS_WEBHOOK_SECRET": secrets.token_hex(32),
+                        "SMS_WEBHOOK_SECRET": new_secret,
                         "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES": "360",
                     }
                 )
             except Exception as e:
                 await query.answer(f"خطا در ذخیره .env: {e}", show_alert=True)
                 return
-            await query.answer("Secret جدید ساخته شد. حتماً داخل اپ هم جایگزین کنید.", show_alert=True)
+            await query.answer("Secret جدید ساخته شد.")
             await send_sms_webhook_settings_menu(cid, context, message=msg)
+            copy_text = (
+                "🔐 Secret Key جدید اپ\n"
+                "برای کپی، متن داخل کادر را انتخاب کنید:\n\n"
+                f"<pre><code>{html_escape(new_secret)}</code></pre>"
+            )
+            try:
+                await msg.reply_text(copy_text, parse_mode="HTML")
+            except Exception:
+                await context.bot.send_message(chat_id=cid, text=copy_text, parse_mode="HTML")
             return
         if data == "userbot:settings:payment:card:sms:show":
             status = _sms_webhook_status()
@@ -8466,7 +8476,18 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             if not secret:
                 await query.answer("Secret هنوز ساخته نشده است. اول «ساخت Secret» را بزنید.", show_alert=True)
                 return
-            await query.answer(f"Secret Key اپ:\n{secret}", show_alert=True)
+            text = (
+                "🔐 Secret Key اپ\n"
+                "برای کپی، متن داخل کادر را انتخاب کنید:\n\n"
+                f"<pre><code>{html_escape(secret)}</code></pre>\n\n"
+                "Webhook URL:\n"
+                f"<pre><code>{html_escape(str(status.get('endpoint') or ''))}</code></pre>"
+            )
+            await query.answer()
+            try:
+                await msg.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+            except Exception:
+                await context.bot.send_message(chat_id=cid, text=text, parse_mode="HTML", disable_web_page_preview=True)
             return
         if data == "userbot:settings:payment:card:sms:help":
             status = _sms_webhook_status()
@@ -8474,7 +8495,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 "📱 راهنمای اتصال اپ SMS Verifier\n\n"
                 "داخل اپ این مقدارها را وارد کنید:\n\n"
                 "Webhook URL:\n"
-                f"<code>{html_escape(str(status.get('endpoint') or ''))}</code>\n\n"
+                f"<pre><code>{html_escape(str(status.get('endpoint') or ''))}</code></pre>\n\n"
                 "Secret Key:\n"
                 "از دکمه «👁 نمایش Secret برای اپ» کپی کنید.\n\n"
                 "سرشماره بانک:\n"
