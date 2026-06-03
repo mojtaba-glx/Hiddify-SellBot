@@ -34,12 +34,17 @@ public final class SmsProcessor {
                 return;
             }
         }
+        if (!PaymentSmsParser.isIncomingPayment(body)) {
+            HistoryStore.add(context, "SKIPPED", "SMS is not an incoming payment. Sender=" + sender);
+            return;
+        }
 
         long amount = PaymentSmsParser.extractAmount(body);
         if (amount <= 0) {
             HistoryStore.add(context, "SKIPPED", "Amount not found. Sender=" + sender + "\nSMS: " + body);
             return;
         }
+        String detectedCardLast4 = PaymentSmsParser.extractCardLast4(body);
 
         SmsEvent event = new SmsEvent();
         event.sender = sender == null ? "" : sender;
@@ -47,7 +52,7 @@ public final class SmsProcessor {
         event.amount = amount;
         event.currency = PaymentSmsParser.extractCurrency(body);
         event.reference = PaymentSmsParser.extractReference(body);
-        event.cardLast4 = cardLast4;
+        event.cardLast4 = detectedCardLast4.length() == 4 ? detectedCardLast4 : cardLast4;
         event.cardLast4Required = settings.isCardLast4Enabled();
         event.receivedAt = receivedAt;
         event.deviceTime = System.currentTimeMillis();

@@ -76,10 +76,10 @@ public class MainActivity extends Activity {
         senderInput = addInput(root, "سرشماره‌های مجاز بانک", "مثال: BankMellat, 30001234", false, 3);
 
         cardLast4Box = new CheckBox(this);
-        cardLast4Box.setText("فیلتر چهار رقم آخر کارت فعال باشد");
+        cardLast4Box.setText("فیلتر چهار رقم کارت داخل SMS فعال باشد");
         root.addView(cardLast4Box, matchWrap());
 
-        cardLast4Input = addInput(root, "چهار رقم آخر کارت", "1234", false, 1);
+        cardLast4Input = addInput(root, "چهار رقم کارت مورد انتظار", "1234", false, 1);
         cardLast4Input.setInputType(InputType.TYPE_CLASS_NUMBER);
         cardLast4Input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(4)});
 
