@@ -24,6 +24,8 @@ pdf/pages/
 
 # Android build artifacts
 SmsVerifierAndroid/.gradle/
+SmsVerifierAndroid/.idea/
+SmsVerifierAndroid/local.properties
 SmsVerifierAndroid/build/
 SmsVerifierAndroid/app/build/
 *.apk

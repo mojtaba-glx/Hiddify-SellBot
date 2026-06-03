@@ -1,8 +1,11 @@
 import base64
+import json
 import logging
+import os
 import re
 import threading
 import time
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -10,6 +13,65 @@ from Shared import sub_aggregator, userbot_db
 
 logger = logging.getLogger(__name__)
 BYTES_PER_GB = 1024 ** 3
+SMS_WEBHOOK_SECRET_ENV = "SMS_WEBHOOK_SECRET"
+SMS_WEBHOOK_ENABLED_ENV = "SMS_WEBHOOK_ENABLED"
+SMS_WEBHOOK_MAX_PENDING_AGE_ENV = "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "true", "yes", "on", "enable", "enabled", "y"}:
+        return True
+    if raw in {"0", "false", "no", "off", "disable", "disabled", "n"}:
+        return False
+    return bool(default)
+
+
+def _to_int(value, default: int = 0) -> int:
+    try:
+        return int(float(str(value or "").replace(",", "").strip()))
+    except Exception:
+        return int(default)
+
+
+def _normalize_sms_currency(raw: str) -> str:
+    text = str(raw or "").strip().lower()
+    if text in {"rial", "irr", "ریال", "ريال"}:
+        return "rial"
+    if text in {"toman", "تومان"}:
+        return "toman"
+    return "unknown"
+
+
+def _sms_amount_candidates_toman(amount_raw: int, currency_raw: str) -> list[int]:
+    amount = int(amount_raw or 0)
+    if amount <= 0:
+        return []
+    currency = _normalize_sms_currency(currency_raw)
+    candidates: list[int] = []
+    if currency == "rial":
+        candidates.append(int(round(amount / 10)))
+    elif currency == "toman":
+        candidates.append(amount)
+    else:
+        candidates.append(amount)
+        if amount >= 10:
+            candidates.append(int(round(amount / 10)))
+    out: list[int] = []
+    for item in candidates:
+        if item > 0 and item not in out:
+            out.append(item)
+    return out
+
+
+def _sms_webhook_secret() -> str:
+    return str(os.getenv(SMS_WEBHOOK_SECRET_ENV, "") or "").strip()
+
+
+def _sms_webhook_max_pending_age_minutes() -> int:
+    return max(5, _to_int(os.getenv(SMS_WEBHOOK_MAX_PENDING_AGE_ENV, "360"), 360))
 
 
 def _query_requests_base64(query: str) -> bool:
@@ -54,6 +116,9 @@ class _SubHandler(BaseHTTPRequestHandler):
                 self.send_header(str(key), str(value))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _write_json(self, status: int, payload: dict) -> None:
+        self._write(status, json.dumps(payload, ensure_ascii=False), "application/json; charset=utf-8")
 
     @staticmethod
     def _subscription_headers(service: dict, is_b64: bool) -> dict:
@@ -180,6 +245,211 @@ class _SubHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("sub server request failed: %s", e)
             self._write(500, "internal error")
+
+    def do_POST(self) -> None:  # noqa: N802
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/")
+            if path not in {"/payment/sms-webhook", "/sms-webhook"}:
+                self._write_json(404, {"ok": False, "error": "not_found"})
+                return
+            self._handle_sms_webhook()
+        except Exception as e:
+            logger.exception("sms webhook request failed: %s", e)
+            self._write_json(500, {"ok": False, "error": "internal_error"})
+
+    def _handle_sms_webhook(self) -> None:
+        if not _env_bool(SMS_WEBHOOK_ENABLED_ENV, False):
+            self._write_json(403, {"ok": False, "error": "sms_webhook_disabled"})
+            return
+
+        expected_secret = _sms_webhook_secret()
+        if not expected_secret:
+            self._write_json(503, {"ok": False, "error": "sms_webhook_secret_not_configured"})
+            return
+
+        provided_secret = str(self.headers.get("X-SellBot-Sms-Secret") or "").strip()
+        if not hmac.compare_digest(provided_secret, expected_secret):
+            self._write_json(401, {"ok": False, "error": "invalid_secret"})
+            return
+
+        try:
+            length = min(int(self.headers.get("Content-Length", "0") or "0"), 64 * 1024)
+        except Exception:
+            length = 0
+        if length <= 0:
+            self._write_json(400, {"ok": False, "error": "empty_body"})
+            return
+
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8", errors="ignore"))
+        except Exception:
+            self._write_json(400, {"ok": False, "error": "invalid_json"})
+            return
+        if not isinstance(payload, dict):
+            self._write_json(400, {"ok": False, "error": "invalid_payload"})
+            return
+
+        event_id = str(payload.get("event_id") or self.headers.get("X-SellBot-Event-Id") or "").strip()
+        amount_raw = _to_int(payload.get("amount"), 0)
+        currency_raw = _normalize_sms_currency(str(payload.get("currency") or ""))
+        reference = str(payload.get("reference") or "").strip()
+        sender = str(payload.get("sender") or "").strip()
+        card_last4 = re.sub(r"\D", "", str(payload.get("card_last4") or ""))[-4:]
+        body = str(payload.get("body") or "")
+        is_test = bool(payload.get("test"))
+
+        if not event_id:
+            self._write_json(400, {"ok": False, "error": "event_id_required"})
+            return
+
+        if is_test:
+            inserted, existing = userbot_db.record_sms_webhook_event(
+                {
+                    "event_id": event_id,
+                    "sender": sender,
+                    "amount_raw": amount_raw,
+                    "currency_raw": currency_raw,
+                    "amount_toman": 0,
+                    "reference": reference,
+                    "card_last4": card_last4,
+                    "body": body,
+                    "status": "test_received",
+                    "message": "test webhook received",
+                    "received_at": _to_int(payload.get("received_at"), 0),
+                    "device_time": _to_int(payload.get("device_time"), 0),
+                }
+            )
+            self._write_json(200, {"ok": True, "test": True, "duplicate": not inserted, "event": existing or {}})
+            return
+
+        candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
+        if not candidates:
+            userbot_db.record_sms_webhook_event(
+                {
+                    "event_id": event_id,
+                    "sender": sender,
+                    "amount_raw": amount_raw,
+                    "currency_raw": currency_raw,
+                    "amount_toman": 0,
+                    "reference": reference,
+                    "card_last4": card_last4,
+                    "body": body,
+                    "status": "invalid_amount",
+                    "message": "amount not found or invalid",
+                    "received_at": _to_int(payload.get("received_at"), 0),
+                    "device_time": _to_int(payload.get("device_time"), 0),
+                }
+            )
+            self._write_json(422, {"ok": False, "error": "invalid_amount"})
+            return
+
+        inserted, existing = userbot_db.record_sms_webhook_event(
+            {
+                "event_id": event_id,
+                "sender": sender,
+                "amount_raw": amount_raw,
+                "currency_raw": currency_raw,
+                "amount_toman": candidates[0],
+                "reference": reference,
+                "card_last4": card_last4,
+                "body": body,
+                "status": "received",
+                "message": "received",
+                "received_at": _to_int(payload.get("received_at"), 0),
+                "device_time": _to_int(payload.get("device_time"), 0),
+            }
+        )
+        if not inserted:
+            self._write_json(
+                200,
+                {
+                    "ok": True,
+                    "duplicate": True,
+                    "status": (existing or {}).get("status"),
+                    "matched_payment_id": (existing or {}).get("matched_payment_id"),
+                },
+            )
+            return
+
+        matches: list[dict] = []
+        matched_amount = 0
+        for amount_toman in candidates:
+            matches = userbot_db.find_pending_card_payments_by_amount(
+                int(amount_toman),
+                card_last4=card_last4,
+                max_age_minutes=_sms_webhook_max_pending_age_minutes(),
+            )
+            if matches:
+                matched_amount = int(amount_toman)
+                break
+
+        if not matches:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="no_pending_match",
+                message=f"no pending card payment for candidates={candidates}",
+                amount_toman=candidates[0],
+            )
+            self._write_json(
+                202,
+                {
+                    "ok": True,
+                    "matched": False,
+                    "status": "no_pending_match",
+                    "amount_candidates_toman": candidates,
+                },
+            )
+            return
+
+        if len(matches) > 1:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="ambiguous",
+                message=f"multiple pending card payments matched amount={matched_amount}",
+                amount_toman=matched_amount,
+            )
+            self._write_json(
+                409,
+                {
+                    "ok": False,
+                    "matched": False,
+                    "error": "ambiguous_pending_payments",
+                    "amount_toman": matched_amount,
+                    "count": len(matches),
+                },
+            )
+            return
+
+        payment = matches[0]
+        payment_id = int(payment.get("id") or 0)
+        ok, message, updated = userbot_db.approve_pending_card_payment_from_sms(
+            payment_id,
+            event_id=event_id,
+            reference=reference,
+            sender=sender,
+            amount_raw=amount_raw,
+            currency_raw=currency_raw,
+        )
+        userbot_db.update_sms_webhook_event(
+            event_id,
+            status="approved" if ok else "approve_failed",
+            matched_payment_id=payment_id if ok else 0,
+            message=message,
+            amount_toman=matched_amount,
+        )
+        self._write_json(
+            200 if ok else 500,
+            {
+                "ok": bool(ok),
+                "matched": bool(ok),
+                "status": "approved" if ok else "approve_failed",
+                "payment_id": payment_id,
+                "tx_code": (updated or {}).get("tx_code") if updated else payment.get("tx_code"),
+                "amount_toman": matched_amount,
+                "message": message,
+            },
+        )
 
     def log_message(self, format: str, *args):  # noqa: A003
         return

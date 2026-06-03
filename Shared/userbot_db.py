@@ -286,6 +286,27 @@ def init_db() -> None:
     cur.execute("""CREATE TABLE IF NOT EXISTS userbot_payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tx_code TEXT, user_id INTEGER, amount INTEGER, method TEXT,
             status TEXT, receipt_image TEXT, idempotency_key TEXT, created_at TEXT, updated_at TEXT)""")
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS userbot_sms_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT UNIQUE,
+            sender TEXT DEFAULT '',
+            amount_raw INTEGER DEFAULT 0,
+            currency_raw TEXT DEFAULT '',
+            amount_toman INTEGER DEFAULT 0,
+            reference TEXT DEFAULT '',
+            card_last4 TEXT DEFAULT '',
+            body TEXT DEFAULT '',
+            status TEXT DEFAULT 'received',
+            matched_payment_id INTEGER DEFAULT 0,
+            message TEXT DEFAULT '',
+            received_at INTEGER DEFAULT 0,
+            device_time INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT ''
+        )
+        """
+    )
     cur.execute("""
         CREATE TABLE IF NOT EXISTS userbot_settings (
             key TEXT PRIMARY KEY,
@@ -405,6 +426,27 @@ def _migrate_db():
 
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_userbot_payments_idempotency ON userbot_payments(idempotency_key)"
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS userbot_sms_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT UNIQUE,
+            sender TEXT DEFAULT '',
+            amount_raw INTEGER DEFAULT 0,
+            currency_raw TEXT DEFAULT '',
+            amount_toman INTEGER DEFAULT 0,
+            reference TEXT DEFAULT '',
+            card_last4 TEXT DEFAULT '',
+            body TEXT DEFAULT '',
+            status TEXT DEFAULT 'received',
+            matched_payment_id INTEGER DEFAULT 0,
+            message TEXT DEFAULT '',
+            received_at INTEGER DEFAULT 0,
+            device_time INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT ''
+        )
+        """
     )
 
     # probe table migrations
@@ -3013,6 +3055,349 @@ def change_payment_status_with_wallet(payment_id: int, new_status: str) -> Tuple
         return True, "وضعیت تراکنش با موفقیت تغییر کرد.", (dict(updated) if updated else pay)
     finally:
         conn.close()
+
+
+def _parse_receipt_meta(raw: str) -> Dict[str, str]:
+    raw = str(raw or "").strip()
+    if not raw:
+        return {}
+    if "|" not in raw and ":" not in raw:
+        return {"admin_fid": raw}
+    data: Dict[str, str] = {}
+    for part in raw.split("|"):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        key, value = part.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and value:
+            data[key] = value
+    return data
+
+
+def _build_receipt_meta(meta: Dict[str, Any]) -> str:
+    ordered_keys = [
+        "admin_fid",
+        "user_fid",
+        "local_path",
+        "code",
+        "payer_last4",
+        "pay_flow",
+        "sid",
+        "gb",
+        "days",
+        "renew_service_id",
+        "service_name",
+        "sms_event_id",
+        "sms_reference",
+        "sms_sender",
+        "sms_amount_raw",
+        "sms_currency",
+        "direct_done",
+        "direct_done_at",
+        "direct_error",
+    ]
+    seen = set()
+    parts: List[str] = []
+    for key in ordered_keys:
+        value = meta.get(key)
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}:{value}")
+        seen.add(key)
+    for key, value in (meta or {}).items():
+        if key in seen or value is None or value == "":
+            continue
+        parts.append(f"{key}:{value}")
+    return "|".join(parts)
+
+
+def _patch_payment_receipt_meta(payment_id: int, patch: Dict[str, Any]) -> None:
+    if payment_id <= 0 or not isinstance(patch, dict):
+        return
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT receipt_image FROM userbot_payments WHERE id = ? LIMIT 1", (int(payment_id),))
+        row = cur.fetchone()
+        current = str((row["receipt_image"] if row else "") or "")
+        meta = _parse_receipt_meta(current)
+        for key, value in patch.items():
+            key = str(key or "").strip()
+            if not key:
+                continue
+            if value is None or str(value).strip() == "":
+                meta.pop(key, None)
+            else:
+                meta[key] = str(value).strip()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            "UPDATE userbot_payments SET receipt_image = ?, updated_at = ? WHERE id = ?",
+            (_build_receipt_meta(meta), now, int(payment_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_sms_webhook_event(event: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    init_db()
+    event_id = str(event.get("event_id") or "").strip()
+    if not event_id:
+        return False, None
+    conn = _get_conn()
+    cur = conn.cursor()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        cur.execute("SELECT * FROM userbot_sms_webhook_events WHERE event_id = ? LIMIT 1", (event_id,))
+        existing = cur.fetchone()
+        if existing:
+            return False, dict(existing)
+        cur.execute(
+            """
+            INSERT INTO userbot_sms_webhook_events
+            (event_id, sender, amount_raw, currency_raw, amount_toman, reference, card_last4, body,
+             status, matched_payment_id, message, received_at, device_time, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                str(event.get("sender") or "")[:120],
+                int(event.get("amount_raw") or 0),
+                str(event.get("currency_raw") or "")[:32],
+                int(event.get("amount_toman") or 0),
+                str(event.get("reference") or "")[:80],
+                str(event.get("card_last4") or "")[:8],
+                str(event.get("body") or "")[:2000],
+                str(event.get("status") or "received")[:40],
+                int(event.get("matched_payment_id") or 0),
+                str(event.get("message") or "")[:500],
+                int(event.get("received_at") or 0),
+                int(event.get("device_time") or 0),
+                now,
+            ),
+        )
+        conn.commit()
+        cur.execute("SELECT * FROM userbot_sms_webhook_events WHERE event_id = ? LIMIT 1", (event_id,))
+        row = cur.fetchone()
+        return True, dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_sms_webhook_event(
+    event_id: str,
+    *,
+    status: str,
+    matched_payment_id: int = 0,
+    message: str = "",
+    amount_toman: Optional[int] = None,
+) -> None:
+    init_db()
+    eid = str(event_id or "").strip()
+    if not eid:
+        return
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        if amount_toman is None:
+            cur.execute(
+                """
+                UPDATE userbot_sms_webhook_events
+                SET status = ?, matched_payment_id = ?, message = ?
+                WHERE event_id = ?
+                """,
+                (str(status or "")[:40], int(matched_payment_id or 0), str(message or "")[:500], eid),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE userbot_sms_webhook_events
+                SET status = ?, matched_payment_id = ?, message = ?, amount_toman = ?
+                WHERE event_id = ?
+                """,
+                (
+                    str(status or "")[:40],
+                    int(matched_payment_id or 0),
+                    str(message or "")[:500],
+                    int(amount_toman or 0),
+                    eid,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def find_pending_card_payments_by_amount(
+    amount_toman: int,
+    *,
+    card_last4: str = "",
+    max_age_minutes: int = 360,
+) -> List[Dict[str, Any]]:
+    init_db()
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        return []
+    age = max(5, int(max_age_minutes or 360))
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=age)
+    cutoff_s = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT p.*, u.username, u.full_name, u.telegram_id
+            FROM userbot_payments p
+            LEFT JOIN userbot_users u ON u.id = p.user_id
+            WHERE p.status = 'pending'
+              AND p.method = 'card'
+              AND p.amount = ?
+              AND COALESCE(p.created_at, '') >= ?
+            ORDER BY p.id DESC
+            LIMIT 10
+            """,
+            (amount, cutoff_s),
+        )
+        rows = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    last4 = str(card_last4 or "").strip()
+    if not last4:
+        return rows
+
+    filtered: List[Dict[str, Any]] = []
+    unknown: List[Dict[str, Any]] = []
+    for row in rows:
+        meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
+        payer_last4 = str(meta.get("payer_last4") or "").strip()
+        if not payer_last4:
+            unknown.append(row)
+        elif payer_last4 == last4:
+            filtered.append(row)
+    return filtered or unknown
+
+
+def approve_pending_card_payment_from_sms(
+    payment_id: int,
+    *,
+    event_id: str,
+    reference: str = "",
+    sender: str = "",
+    amount_raw: int = 0,
+    currency_raw: str = "",
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    ok, message, updated = change_payment_status_with_wallet(int(payment_id), "approved")
+    if ok:
+        _patch_payment_receipt_meta(
+            int(payment_id),
+            {
+                "sms_event_id": event_id,
+                "sms_reference": reference,
+                "sms_sender": sender,
+                "sms_amount_raw": amount_raw,
+                "sms_currency": currency_raw,
+            },
+        )
+        updated = get_payment_by_id(int(payment_id))
+    return ok, message, updated
+
+
+def _sms_amount_candidates_toman(amount_raw: int, currency_raw: str) -> List[int]:
+    amount = int(amount_raw or 0)
+    if amount <= 0:
+        return []
+    currency = str(currency_raw or "").strip().lower()
+    if currency in {"rial", "irr", "ریال", "ريال"}:
+        candidates = [int(round(amount / 10))]
+    elif currency in {"toman", "تومان"}:
+        candidates = [amount]
+    else:
+        candidates = [amount]
+        if amount >= 10:
+            candidates.append(int(round(amount / 10)))
+    out: List[int] = []
+    for item in candidates:
+        if item > 0 and item not in out:
+            out.append(item)
+    return out
+
+
+def try_approve_payment_from_unmatched_sms(
+    payment_id: int,
+    *,
+    max_age_minutes: int = 360,
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    init_db()
+    pid = int(payment_id or 0)
+    if pid <= 0:
+        return False, "payment_id نامعتبر است.", None
+
+    payment = get_payment_by_id(pid)
+    if not payment:
+        return False, "تراکنش یافت نشد.", None
+    if str(payment.get("status") or "").strip().lower() != "pending":
+        return False, "تراکنش pending نیست.", payment
+    if str(payment.get("method") or "").strip().lower() != "card":
+        return False, "روش پرداخت کارت به کارت نیست.", payment
+
+    amount = int(payment.get("amount") or 0)
+    meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
+    payment_last4 = str(meta.get("payer_last4") or "").strip()
+    age = max(5, int(max_age_minutes or 360))
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=age)
+    cutoff_s = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT *
+            FROM userbot_sms_webhook_events
+            WHERE status = 'no_pending_match'
+              AND COALESCE(created_at, '') >= ?
+            ORDER BY id DESC
+            LIMIT 100
+            """,
+            (cutoff_s,),
+        )
+        events = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    for event in events:
+        candidates = _sms_amount_candidates_toman(
+            int(event.get("amount_raw") or 0),
+            str(event.get("currency_raw") or ""),
+        )
+        if amount not in candidates:
+            continue
+        event_last4 = str(event.get("card_last4") or "").strip()
+        if payment_last4 and event_last4 and payment_last4 != event_last4:
+            continue
+
+        event_id = str(event.get("event_id") or "").strip()
+        ok, message, updated = approve_pending_card_payment_from_sms(
+            pid,
+            event_id=event_id,
+            reference=str(event.get("reference") or ""),
+            sender=str(event.get("sender") or ""),
+            amount_raw=int(event.get("amount_raw") or 0),
+            currency_raw=str(event.get("currency_raw") or ""),
+        )
+        update_sms_webhook_event(
+            event_id,
+            status="approved" if ok else "approve_failed",
+            matched_payment_id=pid if ok else 0,
+            message=message,
+            amount_toman=amount,
+        )
+        return ok, message, updated
+
+    return False, "SMS بی‌مچ مناسب برای این تراکنش پیدا نشد.", payment
 
 
 # ==========================================

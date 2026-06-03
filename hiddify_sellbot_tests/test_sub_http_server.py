@@ -1,6 +1,6 @@
 import unittest
 
-from Shared.sub_http_server import _detect_file_format, _query_requests_base64
+from Shared.sub_http_server import _detect_file_format, _query_requests_base64, _sms_amount_candidates_toman
 
 
 class TestSubHttpServer(unittest.TestCase):
@@ -17,3 +17,8 @@ class TestSubHttpServer(unittest.TestCase):
     def test_b64_endpoint_still_works(self):
         self.assertTrue(_detect_file_format("all.b64"))
         self.assertTrue(_detect_file_format("hiddify.b64"))
+
+    def test_sms_amount_candidates_convert_rial_to_toman(self):
+        self.assertEqual(_sms_amount_candidates_toman(1_000_000, "rial"), [100_000])
+        self.assertEqual(_sms_amount_candidates_toman(100_000, "toman"), [100_000])
+        self.assertEqual(_sms_amount_candidates_toman(1_000_000, "unknown"), [1_000_000, 100_000])

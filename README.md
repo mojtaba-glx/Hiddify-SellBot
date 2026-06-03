@@ -156,7 +156,22 @@ sudo ./install.sh ssl sell.example.com admin@example.com
 - فیلتر اختیاری چهار رقم آخر کارت با امکان روشن/خاموش
 - استخراج مبلغ، واحد پول و شماره پیگیری از SMS
 - ارسال Payload با Secret Key به endpoint ربات
+- تبدیل خودکار مبلغ ریالی SMS بانک به تومان برای تطبیق با پرداخت‌های ربات
 - نگهداری گزارش SMSهای ارسال‌شده، ردشده یا خطاخورده داخل اپ
+
+Webhook پیش‌فرض:
+
+```text
+https://YOUR_SUB_DOMAIN/payment/sms-webhook
+```
+
+تنظیمات سمت ربات:
+
+```env
+SMS_WEBHOOK_ENABLED=true
+SMS_WEBHOOK_SECRET=یک_رمز_طولانی_و_تصادفی
+SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES=360
+```
 
 راهنمای ساخت APK و اتصال در `SmsVerifierAndroid/README.md` قرار دارد.
 
