@@ -16,6 +16,13 @@ public final class SmsProcessor {
             return;
         }
         if (!settings.matchesSender(sender)) {
+            HistoryStore.add(
+                    context,
+                    "SKIPPED_SENDER",
+                    "Sender did not match filters."
+                            + "\nSender=" + (sender == null ? "" : sender)
+                            + "\nFilters=" + settings.getSenderFiltersRaw()
+            );
             return;
         }
         if (!settings.canSendWebhook()) {

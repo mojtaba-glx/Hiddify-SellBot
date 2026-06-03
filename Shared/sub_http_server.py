@@ -388,6 +388,20 @@ class _SubHandler(BaseHTTPRequestHandler):
             }
         )
         if not inserted:
+            status = str((existing or {}).get("status") or "").strip().lower()
+            if status in {"received", "no_pending_match", "ambiguous"}:
+                retry_status, retry_payload = self._try_approve_sms_event(
+                    event_id=event_id,
+                    amount_raw=_to_int((existing or {}).get("amount_raw"), amount_raw),
+                    currency_raw=str((existing or {}).get("currency_raw") or currency_raw),
+                    reference=str((existing or {}).get("reference") or reference),
+                    sender=str((existing or {}).get("sender") or sender),
+                    card_last4=re.sub(r"\D", "", str((existing or {}).get("card_last4") or card_last4))[-4:],
+                )
+                retry_payload["duplicate"] = True
+                retry_payload["retry"] = True
+                self._write_json(retry_status, retry_payload)
+                return
             self._write_json(
                 200,
                 {
@@ -398,6 +412,37 @@ class _SubHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+
+        status_code, response = self._try_approve_sms_event(
+            event_id=event_id,
+            amount_raw=amount_raw,
+            currency_raw=currency_raw,
+            reference=reference,
+            sender=sender,
+            card_last4=card_last4,
+        )
+        self._write_json(status_code, response)
+        return
+
+    def _try_approve_sms_event(
+        self,
+        *,
+        event_id: str,
+        amount_raw: int,
+        currency_raw: str,
+        reference: str,
+        sender: str,
+        card_last4: str,
+    ) -> tuple[int, dict]:
+        candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
+        if not candidates:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="invalid_amount",
+                message="amount not found or invalid",
+                amount_toman=0,
+            )
+            return 422, {"ok": False, "error": "invalid_amount"}
 
         matches: list[dict] = []
         matched_amount = 0
@@ -418,16 +463,12 @@ class _SubHandler(BaseHTTPRequestHandler):
                 message=f"no pending card payment for candidates={candidates}",
                 amount_toman=candidates[0],
             )
-            self._write_json(
-                202,
-                {
-                    "ok": True,
-                    "matched": False,
-                    "status": "no_pending_match",
-                    "amount_candidates_toman": candidates,
-                },
-            )
-            return
+            return 202, {
+                "ok": True,
+                "matched": False,
+                "status": "no_pending_match",
+                "amount_candidates_toman": candidates,
+            }
 
         if len(matches) > 1:
             userbot_db.update_sms_webhook_event(
@@ -436,17 +477,13 @@ class _SubHandler(BaseHTTPRequestHandler):
                 message=f"multiple pending card payments matched amount={matched_amount}",
                 amount_toman=matched_amount,
             )
-            self._write_json(
-                409,
-                {
-                    "ok": False,
-                    "matched": False,
-                    "error": "ambiguous_pending_payments",
-                    "amount_toman": matched_amount,
-                    "count": len(matches),
-                },
-            )
-            return
+            return 409, {
+                "ok": False,
+                "matched": False,
+                "error": "ambiguous_pending_payments",
+                "amount_toman": matched_amount,
+                "count": len(matches),
+            }
 
         payment = matches[0]
         payment_id = int(payment.get("id") or 0)
@@ -465,18 +502,15 @@ class _SubHandler(BaseHTTPRequestHandler):
             message=message,
             amount_toman=matched_amount,
         )
-        self._write_json(
-            200 if ok else 500,
-            {
-                "ok": bool(ok),
-                "matched": bool(ok),
-                "status": "approved" if ok else "approve_failed",
-                "payment_id": payment_id,
-                "tx_code": (updated or {}).get("tx_code") if updated else payment.get("tx_code"),
-                "amount_toman": matched_amount,
-                "message": message,
-            },
-        )
+        return 200 if ok else 500, {
+            "ok": bool(ok),
+            "matched": bool(ok),
+            "status": "approved" if ok else "approve_failed",
+            "payment_id": payment_id,
+            "tx_code": (updated or {}).get("tx_code") if updated else payment.get("tx_code"),
+            "amount_toman": matched_amount,
+            "message": message,
+        }
 
     def log_message(self, format: str, *args):  # noqa: A003
         return

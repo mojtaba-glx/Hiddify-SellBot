@@ -104,6 +104,17 @@ public class MainActivity extends Activity {
             }
         });
 
+        Button scanInboxButton = new Button(this);
+        scanInboxButton.setText("بررسی پیامک‌های قبلی و ارسال دوباره");
+        root.addView(scanInboxButton, matchWrap());
+        scanInboxButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                saveSettings();
+                scanInboxNow();
+            }
+        });
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         root.addView(row, matchWrap());
@@ -237,10 +248,44 @@ public class MainActivity extends Activity {
     }
 
     private void requestSmsPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                && checkSelfPermission(Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECEIVE_SMS}, REQ_SMS_PERMISSION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            boolean receiveDenied = checkSelfPermission(Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED;
+            boolean readDenied = checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED;
+            if (receiveDenied || readDenied) {
+                requestPermissions(
+                        new String[]{Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS},
+                        REQ_SMS_PERMISSION
+                );
+            }
         }
+    }
+
+    private void scanInboxNow() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            requestSmsPermission();
+            Toast.makeText(this, "اجازه READ_SMS را بده و دوباره دکمه بررسی پیامک‌های قبلی را بزن", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        Toast.makeText(this, "در حال بررسی پیامک‌های قبلی...", Toast.LENGTH_SHORT).show();
+        executor.execute(new Runnable() {
+            @Override
+            public void run() {
+                final int scanned = SmsInboxScanner.scanRecent(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        refreshHistory();
+                        Toast.makeText(
+                                MainActivity.this,
+                                "بررسی تمام شد: " + scanned + " پیامک",
+                                Toast.LENGTH_LONG
+                        ).show();
+                    }
+                });
+            }
+        });
     }
 
     private void refreshHistory() {

@@ -79,6 +79,9 @@ public final class SettingsStore {
             return false;
         }
         for (String filter : filters) {
+            if ("*".equals(filter) || "all".equals(filter) || "همه".equals(filter)) {
+                return true;
+            }
             if (normalizedSender.contains(filter) || filter.contains(normalizedSender)) {
                 return true;
             }
