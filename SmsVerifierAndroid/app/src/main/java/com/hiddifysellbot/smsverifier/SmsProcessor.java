@@ -15,7 +15,8 @@ public final class SmsProcessor {
             HistoryStore.add(context, "SKIPPED", "هیچ سرشماره بانکی تنظیم نشده است؛ SMS ارسال نشد.");
             return;
         }
-        if (!settings.matchesSender(sender)) {
+        String bankName = settings.getMatchedBankName(sender);
+        if (bankName.isEmpty()) {
             return;
         }
         if (!settings.canSendWebhook()) {
@@ -24,13 +25,13 @@ public final class SmsProcessor {
         }
 
         if (!PaymentSmsParser.isIncomingPayment(body)) {
-            HistoryStore.add(context, "SKIPPED", "این پیامک واریز نبود و نادیده گرفته شد.\nفرستنده: " + sender);
+            HistoryStore.add(context, "BANK_SKIPPED", "این پیامک بانکی واریز نبود و نادیده گرفته شد.\n🏦 بانک: " + bankName + "\nفرستنده: " + sender);
             return;
         }
 
         long amount = PaymentSmsParser.extractAmount(body);
         if (amount <= 0) {
-            HistoryStore.add(context, "SKIPPED", "مبلغ از داخل SMS پیدا نشد.\nفرستنده: " + sender + "\nمتن SMS:\n" + body);
+            HistoryStore.add(context, "BANK_SKIPPED", "مبلغ از داخل SMS پیدا نشد.\n🏦 بانک: " + bankName + "\nفرستنده: " + sender + "\nمتن SMS:\n" + body);
             return;
         }
         String detectedCardLast4 = PaymentSmsParser.extractCardLast4(body);
@@ -51,6 +52,7 @@ public final class SmsProcessor {
 
         WebhookClient.Result result = WebhookClient.post(settings.getWebhookUrl(), settings.getSecret(), event);
         String detail = "📨 نتیجه: " + WebhookClient.persianStatus(result)
+                + "\n🏦 بانک: " + bankName
                 + "\n👤 سرشماره: " + event.sender
                 + "\n💰 مبلغ SMS: " + event.amount + " " + event.currency
                 + "\n💵 معادل تقریبی: " + estimateToman(event.amount, event.currency) + " تومان"

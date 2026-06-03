@@ -11,9 +11,11 @@ public final class HistoryStore {
     private static final String PREF_NAME = "sellbot_sms_history";
     private static final String KEY_HISTORY = "history";
     private static final String KEY_APPROVED_HISTORY = "approved_history";
+    private static final String KEY_BANK_SMS_HISTORY = "bank_sms_history";
     private static final String SEP = "\n---\n";
     private static final int MAX_ITEMS = 80;
     private static final int MAX_APPROVED_ITEMS = 40;
+    private static final int MAX_BANK_SMS_ITEMS = 80;
 
     private HistoryStore() {
     }
@@ -23,6 +25,9 @@ public final class HistoryStore {
         save(context, KEY_HISTORY, entry, MAX_ITEMS);
         if ("APPROVED".equals(status) || "APPROVED_DUPLICATE".equals(status)) {
             save(context, KEY_APPROVED_HISTORY, entry, MAX_APPROVED_ITEMS);
+        }
+        if (isBankSmsStatus(status)) {
+            save(context, KEY_BANK_SMS_HISTORY, entry, MAX_BANK_SMS_ITEMS);
         }
     }
 
@@ -38,12 +43,19 @@ public final class HistoryStore {
                 .getString(KEY_APPROVED_HISTORY, "");
     }
 
+    public static String getBankSms(Context context) {
+        return context.getApplicationContext()
+                .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_BANK_SMS_HISTORY, "");
+    }
+
     public static void clear(Context context) {
         context.getApplicationContext()
                 .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .remove(KEY_HISTORY)
                 .remove(KEY_APPROVED_HISTORY)
+                .remove(KEY_BANK_SMS_HISTORY)
                 .apply();
     }
 
@@ -74,6 +86,15 @@ public final class HistoryStore {
         return text.length() <= max ? text : text.substring(0, max) + "...";
     }
 
+    private static boolean isBankSmsStatus(String status) {
+        return "APPROVED".equals(status)
+                || "APPROVED_DUPLICATE".equals(status)
+                || "NO_PENDING_MATCH".equals(status)
+                || "AMBIGUOUS".equals(status)
+                || "FAILED".equals(status)
+                || "BANK_SKIPPED".equals(status);
+    }
+
     private static String statusTitle(String status) {
         if ("APPROVED".equals(status)) {
             return "✅ تایید شد";
@@ -82,13 +103,16 @@ public final class HistoryStore {
             return "✅ قبلاً تایید شده بود";
         }
         if ("NO_PENDING_MATCH".equals(status)) {
-            return "🟡 SMS خوانده شد، ولی پرداخت در انتظار پیدا نشد";
+            return "❌ تایید نشد؛ پرداخت در انتظار پیدا نشد";
         }
         if ("AMBIGUOUS".equals(status)) {
-            return "🟠 چند پرداخت مشابه پیدا شد؛ نیاز به بررسی ادمین";
+            return "❌ چند پرداخت مشابه پیدا شد؛ نیاز به بررسی ادمین";
         }
         if ("FAILED".equals(status)) {
             return "🔴 خطا در ارسال یا ارتباط";
+        }
+        if ("BANK_SKIPPED".equals(status)) {
+            return "❌ پیامک بانکی تایید نشد";
         }
         if ("SKIPPED".equals(status)) {
             return "⚪ نادیده گرفته شد";

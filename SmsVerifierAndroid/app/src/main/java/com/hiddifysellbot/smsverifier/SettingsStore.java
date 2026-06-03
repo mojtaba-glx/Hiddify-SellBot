@@ -18,6 +18,22 @@ public final class SettingsStore {
     private static final String KEY_SECRET = "secret";
     private static final String KEY_SENDER_FILTERS = "sender_filters";
     private static final String KEY_CARD_LAST4_ENABLED = "card_last4_enabled";
+    private static final String[] BANK_IDS = {
+            "blu",
+            "middle_east",
+            "melli",
+            "mellat",
+            "keshavarzi",
+            "pasargad"
+    };
+    private static final String[] BANK_NAMES = {
+            "بلو بانک",
+            "بانک خاورمیانه",
+            "بانک ملی",
+            "بانک ملت",
+            "بانک کشاورزی",
+            "بانک پاسارگاد"
+    };
 
     private final SharedPreferences prefs;
 
@@ -61,14 +77,119 @@ public final class SettingsStore {
                 .apply();
     }
 
+    public int getBankCount() {
+        return BANK_IDS.length;
+    }
+
+    public String getBankName(int index) {
+        if (index < 0 || index >= BANK_NAMES.length) {
+            return "";
+        }
+        return BANK_NAMES[index];
+    }
+
+    public BankConfig getBank(int index) {
+        if (index < 0 || index >= BANK_IDS.length) {
+            return new BankConfig("", "", false, "", "");
+        }
+        String id = BANK_IDS[index];
+        String prefix = bankPrefix(id);
+        return new BankConfig(
+                id,
+                BANK_NAMES[index],
+                prefs.getBoolean(prefix + "_enabled", false),
+                prefs.getString(prefix + "_senders", ""),
+                prefs.getString(prefix + "_sample", "")
+        );
+    }
+
+    public void saveBank(int index, boolean enabled, String senderFilters, String sampleSms) {
+        if (index < 0 || index >= BANK_IDS.length) {
+            return;
+        }
+        String prefix = bankPrefix(BANK_IDS[index]);
+        prefs.edit()
+                .putBoolean(prefix + "_enabled", enabled)
+                .putString(prefix + "_senders", safe(senderFilters))
+                .putString(prefix + "_sample", safe(sampleSms))
+                .apply();
+    }
+
+    public String getBanksSummary() {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < getBankCount(); i++) {
+            BankConfig bank = getBank(i);
+            if (!bank.enabled) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append("\n");
+            }
+            out.append("✅ ")
+                    .append(bank.name)
+                    .append(" | سرشماره: ")
+                    .append(bank.senderFilters.trim().isEmpty() ? "ثبت نشده" : bank.senderFilters.trim().replace("\n", "، "));
+            if (bank.sampleSms.trim().isEmpty()) {
+                out.append(" | نمونه SMS: ثبت نشده");
+            }
+        }
+        if (out.length() == 0) {
+            return "هنوز بانکی فعال نشده است.";
+        }
+        return out.toString();
+    }
+
     public boolean hasSenderFilters() {
         return !getSenderFilters().isEmpty();
     }
 
     public boolean matchesSender(String sender) {
+        return !getMatchedBankName(sender).isEmpty();
+    }
+
+    public String getMatchedBankName(String sender) {
         String normalizedSender = safe(sender).toLowerCase();
-        List<String> filters = getSenderFilters();
-        if (normalizedSender.isEmpty() || filters.isEmpty()) {
+        if (normalizedSender.isEmpty()) {
+            return "";
+        }
+
+        for (int i = 0; i < getBankCount(); i++) {
+            BankConfig bank = getBank(i);
+            if (!bank.enabled) {
+                continue;
+            }
+            if (matchesAnyFilter(normalizedSender, parseFilters(bank.senderFilters))) {
+                return bank.name;
+            }
+        }
+
+        if (matchesAnyFilter(normalizedSender, parseFilters(getSenderFiltersRaw()))) {
+            return "تنظیمات عمومی";
+        }
+        return "";
+    }
+
+    public List<String> getSenderFilters() {
+        List<String> out = new ArrayList<>();
+        out.addAll(parseFilters(getSenderFiltersRaw()));
+        for (int i = 0; i < getBankCount(); i++) {
+            BankConfig bank = getBank(i);
+            if (bank.enabled) {
+                out.addAll(parseFilters(bank.senderFilters));
+            }
+        }
+        return out;
+    }
+
+    public boolean canSendWebhook() {
+        return isEnabled()
+                && !safe(getWebhookUrl()).isEmpty()
+                && !safe(getSecret()).isEmpty()
+                && hasSenderFilters();
+    }
+
+    private static boolean matchesAnyFilter(String normalizedSender, List<String> filters) {
+        if (filters.isEmpty()) {
             return false;
         }
         for (String filter : filters) {
@@ -82,8 +203,8 @@ public final class SettingsStore {
         return false;
     }
 
-    public List<String> getSenderFilters() {
-        String raw = getSenderFiltersRaw().toLowerCase();
+    private static List<String> parseFilters(String rawValue) {
+        String raw = safe(rawValue).toLowerCase();
         String[] parts = raw.split("[,;\\n\\r]+");
         List<String> out = new ArrayList<>();
         for (String part : parts) {
@@ -95,11 +216,8 @@ public final class SettingsStore {
         return out;
     }
 
-    public boolean canSendWebhook() {
-        return isEnabled()
-                && !safe(getWebhookUrl()).isEmpty()
-                && !safe(getSecret()).isEmpty()
-                && hasSenderFilters();
+    private static String bankPrefix(String id) {
+        return "bank_" + id;
     }
 
     private static String safe(String value) {
@@ -137,5 +255,21 @@ public final class SettingsStore {
             text = text.substring(0, text.length() - 1).trim();
         }
         return text;
+    }
+
+    public static final class BankConfig {
+        public final String id;
+        public final String name;
+        public final boolean enabled;
+        public final String senderFilters;
+        public final String sampleSms;
+
+        private BankConfig(String id, String name, boolean enabled, String senderFilters, String sampleSms) {
+            this.id = id;
+            this.name = name;
+            this.enabled = enabled;
+            this.senderFilters = senderFilters == null ? "" : senderFilters;
+            this.sampleSms = sampleSms == null ? "" : sampleSms;
+        }
     }
 }

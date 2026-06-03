@@ -11,11 +11,14 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -29,10 +32,15 @@ public class MainActivity extends Activity {
     private CheckBox enabledBox;
     private EditText webhookInput;
     private EditText secretInput;
-    private EditText senderInput;
     private CheckBox cardLast4Box;
+    private Spinner bankSpinner;
+    private CheckBox bankEnabledBox;
+    private EditText bankSenderInput;
+    private EditText bankSampleInput;
+    private TextView bankSummaryView;
     private EditText manualSenderInput;
     private EditText manualBodyInput;
+    private TextView bankSmsHistoryView;
     private TextView approvedHistoryView;
     private TextView historyView;
 
@@ -79,7 +87,6 @@ public class MainActivity extends Activity {
 
         webhookInput = addInput(root, "Webhook URL ربات", "https://example.com/payment/sms-webhook", false, 1);
         secretInput = addInput(root, "Secret Key اتصال", "کلید امنیتی مشترک با ربات", true, 1);
-        senderInput = addInput(root, "سرشماره‌های مجاز بانک", "مثال: BankMellat, 30001234", false, 3);
 
         cardLast4Box = new CheckBox(this);
         cardLast4Box.setText("اگر SMS چهار رقم کارت مشتری داشت، به ربات ارسال شود");
@@ -94,6 +101,66 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 saveSettings();
+            }
+        });
+
+        addSectionTitle(root, "🏦 بانک‌ها و نمونه SMS");
+
+        TextView bankHelp = new TextView(this);
+        bankHelp.setText("برای هر کارت بانکی، بانک را انتخاب کن، سرشماره‌های SMS آن بانک را وارد کن و یک نمونه SMS واقعی همان بانک را ذخیره کن.");
+        bankHelp.setTextSize(12);
+        bankHelp.setPadding(0, 0, 0, dp(8));
+        root.addView(bankHelp, matchWrap());
+
+        bankSpinner = new Spinner(this);
+        final SettingsStore bankSettings = new SettingsStore(this);
+        String[] bankNames = new String[bankSettings.getBankCount()];
+        for (int i = 0; i < bankNames.length; i++) {
+            bankNames[i] = bankSettings.getBankName(i);
+        }
+        ArrayAdapter<String> bankAdapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                bankNames
+        );
+        bankAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        bankSpinner.setAdapter(bankAdapter);
+        root.addView(bankSpinner, matchWrap());
+
+        bankEnabledBox = new CheckBox(this);
+        bankEnabledBox.setText("این بانک فعال باشد");
+        bankEnabledBox.setTextSize(13);
+        root.addView(bankEnabledBox, matchWrap());
+
+        bankSenderInput = addInput(root, "سرشماره‌های SMS همین بانک", "مثال: 20004861 یا 3000...\nهر خط یا کاما یک سرشماره", false, 3);
+        bankSampleInput = addInput(root, "نمونه SMS همین بانک", "یک نمونه پیامک واریز همین بانک را اینجا paste کن", false, 5);
+
+        Button saveBankButton = new Button(this);
+        saveBankButton.setText("ذخیره بانک انتخاب‌شده");
+        styleButton(saveBankButton);
+        root.addView(saveBankButton, matchWrap());
+        saveBankButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                saveSelectedBank();
+            }
+        });
+
+        bankSummaryView = new TextView(this);
+        bankSummaryView.setTextSize(12);
+        bankSummaryView.setTextIsSelectable(true);
+        bankSummaryView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        styleBox(bankSummaryView, "#EFF6FF", "#93C5FD");
+        root.addView(bankSummaryView, matchWrap());
+
+        bankSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                loadSelectedBank();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
             }
         });
 
@@ -165,6 +232,27 @@ public class MainActivity extends Activity {
             }
         });
 
+        addSectionTitle(root, "📩 پیامک‌های بانکی");
+
+        Button bankSmsButton = new Button(this);
+        bankSmsButton.setText("نمایش / بروزرسانی پیامک‌های بانکی");
+        styleButton(bankSmsButton);
+        root.addView(bankSmsButton, matchWrap());
+        bankSmsButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                refreshHistory();
+                Toast.makeText(MainActivity.this, "پیامک‌های بانکی بروزرسانی شد", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        bankSmsHistoryView = new TextView(this);
+        bankSmsHistoryView.setTextSize(12);
+        bankSmsHistoryView.setTextIsSelectable(true);
+        bankSmsHistoryView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        styleBox(bankSmsHistoryView, "#FFF7ED", "#FDBA74");
+        root.addView(bankSmsHistoryView, matchWrap());
+
         addSectionTitle(root, "✅ واریزی‌های تاییدشده");
 
         approvedHistoryView = new TextView(this);
@@ -212,8 +300,9 @@ public class MainActivity extends Activity {
         enabledBox.setChecked(settings.isEnabled());
         webhookInput.setText(settings.getWebhookUrl());
         secretInput.setText(settings.getSecret());
-        senderInput.setText(settings.getSenderFiltersRaw());
         cardLast4Box.setChecked(settings.isCardLast4Enabled());
+        loadSelectedBank();
+        refreshBankSummary();
         refreshHistory();
     }
 
@@ -223,10 +312,56 @@ public class MainActivity extends Activity {
                 enabledBox.isChecked(),
                 text(webhookInput),
                 text(secretInput),
-                text(senderInput),
+                settings.getSenderFiltersRaw(),
                 cardLast4Box.isChecked()
         );
         Toast.makeText(this, "تنظیمات ذخیره شد", Toast.LENGTH_SHORT).show();
+    }
+
+    private void loadSelectedBank() {
+        if (bankSpinner == null || bankEnabledBox == null || bankSenderInput == null || bankSampleInput == null) {
+            return;
+        }
+        SettingsStore settings = new SettingsStore(this);
+        SettingsStore.BankConfig bank = settings.getBank(bankSpinner.getSelectedItemPosition());
+        bankEnabledBox.setChecked(bank.enabled);
+        bankSenderInput.setText(bank.senderFilters);
+        bankSampleInput.setText(bank.sampleSms);
+    }
+
+    private void saveSelectedBank() {
+        if (bankSpinner == null) {
+            return;
+        }
+        boolean bankEnabled = bankEnabledBox.isChecked();
+        String senders = text(bankSenderInput);
+        String sample = text(bankSampleInput);
+        if (bankEnabled && senders.isEmpty()) {
+            Toast.makeText(this, "برای فعال کردن بانک، حداقل یک سرشماره SMS وارد کن", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (bankEnabled && sample.isEmpty()) {
+            Toast.makeText(this, "برای بار اول، یک نمونه SMS واقعی همین بانک را وارد کن", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        SettingsStore settings = new SettingsStore(this);
+        settings.saveBank(
+                bankSpinner.getSelectedItemPosition(),
+                bankEnabled,
+                senders,
+                sample
+        );
+        refreshBankSummary();
+        Toast.makeText(this, "تنظیمات بانک ذخیره شد", Toast.LENGTH_SHORT).show();
+    }
+
+    private void refreshBankSummary() {
+        if (bankSummaryView == null) {
+            return;
+        }
+        SettingsStore settings = new SettingsStore(this);
+        bankSummaryView.setText("بانک‌های فعال:\n" + settings.getBanksSummary());
     }
 
     private void sendTestWebhook() {
@@ -346,8 +481,15 @@ public class MainActivity extends Activity {
         if (historyView == null) {
             return;
         }
+        refreshBankSummary();
         String history = HistoryStore.get(this);
         String approved = HistoryStore.getApproved(this);
+        String bankSms = HistoryStore.getBankSms(this);
+        if (bankSmsHistoryView != null) {
+            bankSmsHistoryView.setText(bankSms == null || bankSms.trim().isEmpty()
+                    ? "هنوز پیامک بانکی پردازش‌شده‌ای ثبت نشده است."
+                    : bankSms);
+        }
         if (approvedHistoryView != null) {
             approvedHistoryView.setText(approved == null || approved.trim().isEmpty()
                     ? "هنوز واریزی تاییدشده‌ای ثبت نشده است."
