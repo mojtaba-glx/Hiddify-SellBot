@@ -21,3 +21,10 @@ venv/
 
 # Generated files
 pdf/pages/
+
+# Android build artifacts
+SmsVerifierAndroid/.gradle/
+SmsVerifierAndroid/build/
+SmsVerifierAndroid/app/build/
+*.apk
+*.aab
