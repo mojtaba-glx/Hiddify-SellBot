@@ -78,6 +78,14 @@ public final class HistoryStore {
                 .apply();
     }
 
+    public static void clearTechnicalLogs(Context context) {
+        context.getApplicationContext()
+                .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_HISTORY)
+                .apply();
+    }
+
     private static String buildEntry(String status, String detail) {
         String now = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
         return "🕒 " + now + "\n" + statusTitle(status) + "\n" + trim(detail, 1800);
@@ -146,7 +154,7 @@ public final class HistoryStore {
             return "✅ قبلاً تایید شده بود";
         }
         if ("NO_PENDING_MATCH".equals(status)) {
-            return "❌ تایید نشد؛ پرداخت در انتظار پیدا نشد";
+            return "🟡 تایید نشد؛ پرداخت در انتظار پیدا نشد";
         }
         if ("AMBIGUOUS".equals(status)) {
             return "❌ چند پرداخت مشابه پیدا شد؛ نیاز به بررسی ادمین";

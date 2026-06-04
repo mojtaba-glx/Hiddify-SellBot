@@ -570,8 +570,9 @@ public class MainActivity extends Activity {
         clearButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                HistoryStore.clear(MainActivity.this);
+                HistoryStore.clearTechnicalLogs(MainActivity.this);
                 refreshHistory();
+                Toast.makeText(MainActivity.this, "فقط لاگ فنی پاک شد؛ پیامک‌های بانکی محفوظ ماند", Toast.LENGTH_LONG).show();
             }
         });
 
@@ -1220,7 +1221,7 @@ public class MainActivity extends Activity {
             summary.total++;
             if (entry.approved) {
                 summary.approved++;
-            } else if (entry.rejected) {
+            } else if (entry.rejected && !isNoPendingEntry(entry)) {
                 summary.rejected++;
             }
         }
@@ -1342,8 +1343,9 @@ public class MainActivity extends Activity {
         bubble.setTextIsSelectable(true);
         bubble.setLineSpacing(dp(2), 1.08f);
         bubble.setPadding(dp(15), dp(13), dp(15), dp(13));
-        int fill = entry.approved ? approvedColor : (entry.rejected ? rejectedColor : neutralColor);
-        int border = entry.approved ? greenColor : (entry.rejected ? Color.parseColor("#EF4444") : goldColor);
+        boolean softReview = isNoPendingEntry(entry);
+        int fill = entry.approved ? approvedColor : (entry.rejected && !softReview ? rejectedColor : neutralColor);
+        int border = entry.approved ? greenColor : (entry.rejected && !softReview ? Color.parseColor("#EF4444") : goldColor);
         styleGradientRounded(bubble, fill, inputColor, border, dp(22));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 (int) (getResources().getDisplayMetrics().widthPixels * 0.82f),
@@ -1355,8 +1357,7 @@ public class MainActivity extends Activity {
     private String formatSmsBubble(HistoryStore.Entry entry) {
         String bank = entryBank(entry);
         String sender = entrySender(entry);
-        String status = entry.approved ? "✅ تایید شده توسط اپ"
-                : (entry.rejected ? "❌ نیازمند بررسی ادمین" : "📨 ارسال/ثبت شده");
+        String status = smsStatusText(entry);
         String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
         if (rawSms.isEmpty()) {
             rawSms = extractDetailBlock(entry.detail, "متن SMS:");
@@ -1376,7 +1377,7 @@ public class MainActivity extends Activity {
         String amount = extractDetailLine(entry.detail, "💵 معادل تقریبی:");
         String rawAmount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
         String reference = extractDetailLine(entry.detail, "🔖 پیگیری:");
-        String response = extractDetailLine(entry.detail, "🧾 پاسخ ربات:");
+        String response = robotResponseFromDetail(entry.detail);
         if (!amount.isEmpty()) {
             out.append("💰 مبلغ ربات: ").append(amount).append("\n");
         } else if (!rawAmount.isEmpty()) {
@@ -1386,7 +1387,7 @@ public class MainActivity extends Activity {
             out.append("🔖 پیگیری: ").append(reference).append("\n");
         }
         if (!response.isEmpty()) {
-            out.append("🤖 نتیجه ربات: ").append(humanRobotResponse(response)).append("\n");
+            out.append("🤖 نتیجه ربات: ").append(response).append("\n");
         }
         out.append("🕒 ").append(entry.time);
         return out.toString();
@@ -1422,7 +1423,7 @@ public class MainActivity extends Activity {
         if (amount.isEmpty()) {
             amount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
         }
-        String response = extractDetailLine(entry.detail, "🧾 پاسخ ربات:");
+        String response = robotResponseFromDetail(entry.detail);
         String reference = extractDetailLine(entry.detail, "🔖 پیگیری:");
         StringBuilder out = new StringBuilder();
         if (!amount.isEmpty()) {
@@ -1432,7 +1433,7 @@ public class MainActivity extends Activity {
             if (out.length() > 0) {
                 out.append(" • ");
             }
-            out.append(humanRobotResponse(response));
+            out.append(response);
         }
         if (!reference.isEmpty() && !"-".equals(reference)) {
             if (out.length() > 0) {
@@ -1514,6 +1515,9 @@ public class MainActivity extends Activity {
         String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
         if (rawSms.isEmpty()) {
             rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+        }
+        if (!rawSms.isEmpty() && !PaymentSmsParser.isIncomingPayment(rawSms)) {
+            return false;
         }
         String bank = entryBankRaw(entry);
         return !settings.getMatchedConfiguredBankName(sender, rawSms).isEmpty()
@@ -1628,6 +1632,49 @@ public class MainActivity extends Activity {
             return "پاسخ ربات دریافت شد، اما تایید قطعی نبود";
         }
         return text;
+    }
+
+    private String robotResponseFromDetail(String detail) {
+        String all = detail == null ? "" : detail;
+        String lower = all.toLowerCase(Locale.US);
+        boolean hasRobotStatus = all.contains("🧾 پاسخ ربات:")
+                || all.contains("📨 نتیجه:")
+                || lower.contains("\"status\"")
+                || lower.contains("no_pending_match")
+                || lower.contains("ambiguous")
+                || lower.contains("\"matched\"")
+                || all.contains("pending پیدا نشد")
+                || all.contains("تایید شد");
+        if (!hasRobotStatus) {
+            return "";
+        }
+        String line = extractDetailLine(detail, "🧾 پاسخ ربات:");
+        String combined = line + "\n" + all;
+        return humanRobotResponse(combined);
+    }
+
+    private boolean isNoPendingEntry(HistoryStore.Entry entry) {
+        String text = ((entry.title == null ? "" : entry.title) + "\n" + (entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
+        return text.contains("no_pending_match")
+                || text.contains("پرداخت در انتظار پیدا نشد")
+                || text.contains("pending پیدا نشد");
+    }
+
+    private String smsStatusText(HistoryStore.Entry entry) {
+        String text = ((entry.title == null ? "" : entry.title) + "\n" + (entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
+        if (entry.approved) {
+            return "✅ تایید شده توسط اپ";
+        }
+        if (text.contains("no_pending_match") || text.contains("پرداخت در انتظار پیدا نشد") || text.contains("pending پیدا نشد")) {
+            return "🟡 پرداخت در انتظار پیدا نشد";
+        }
+        if (text.contains("ambiguous") || text.contains("چند پرداخت")) {
+            return "⚠️ چند پرداخت مشابه؛ بررسی ادمین";
+        }
+        if (entry.rejected) {
+            return "⚠️ تایید نشد؛ بررسی لازم است";
+        }
+        return "📨 ارسال/ثبت شده";
     }
 
     private String extractDetailBlock(String detail, String marker) {

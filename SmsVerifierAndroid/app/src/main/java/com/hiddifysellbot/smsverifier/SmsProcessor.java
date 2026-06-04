@@ -35,19 +35,6 @@ public final class SmsProcessor {
         }
 
         if (!PaymentSmsParser.isIncomingPayment(body)) {
-            if (!configuredBankName.isEmpty()) {
-                String eventId = PaymentSmsParser.buildEventId(sender, body, 0, "");
-                HistoryStore.addUnique(
-                        context,
-                        "BANK_SKIPPED",
-                        "این پیامک واریز نبود و برای تایید پرداخت استفاده نشد.\n"
-                                + "🏦 بانک: " + bankName
-                                + "\n👤 سرشماره: " + sender
-                                + "\n🔐 شناسه داخلی: " + eventId
-                                + "\n📄 متن SMS:\n" + body,
-                        eventId
-                );
-            }
             return;
         }
 
