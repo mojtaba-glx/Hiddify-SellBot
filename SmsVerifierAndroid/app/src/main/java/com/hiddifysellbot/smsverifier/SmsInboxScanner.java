@@ -5,7 +5,7 @@ import android.database.Cursor;
 import android.net.Uri;
 
 public final class SmsInboxScanner {
-    private static final int DEFAULT_LIMIT = 40;
+    private static final int DEFAULT_LIMIT = 15;
     private static final long DEFAULT_MAX_AGE_MS = 7L * 24L * 60L * 60L * 1000L;
 
     private SmsInboxScanner() {

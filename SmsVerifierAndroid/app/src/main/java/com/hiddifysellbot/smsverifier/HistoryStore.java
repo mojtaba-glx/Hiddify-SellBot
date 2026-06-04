@@ -33,6 +33,19 @@ public final class HistoryStore {
         }
     }
 
+    public static void addUnique(Context context, String status, String detail, String uniqueId) {
+        String marker = uniqueMarker(uniqueId);
+        if (!marker.isEmpty()) {
+            String bankHistory = getBankSms(context);
+            String generalHistory = get(context);
+            if ((bankHistory != null && bankHistory.contains(marker))
+                    || (generalHistory != null && generalHistory.contains(marker))) {
+                return;
+            }
+        }
+        add(context, status, detail);
+    }
+
     public static String get(Context context) {
         return context.getApplicationContext()
                 .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -68,6 +81,11 @@ public final class HistoryStore {
     private static String buildEntry(String status, String detail) {
         String now = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
         return "🕒 " + now + "\n" + statusTitle(status) + "\n" + trim(detail, 1800);
+    }
+
+    private static String uniqueMarker(String uniqueId) {
+        String value = uniqueId == null ? "" : uniqueId.trim();
+        return value.isEmpty() ? "" : "🔐 شناسه داخلی: " + value;
     }
 
     private static void save(Context context, String key, String entry, int maxItems) {

@@ -28,15 +28,18 @@ import android.widget.Toast;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQ_SMS_PERMISSION = 1001;
+    private static final int MAX_VISIBLE_BANK_SMS = 15;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private ScrollView scrollView;
@@ -997,12 +1000,13 @@ public class MainActivity extends Activity {
         }
         HistoryStore.Entry[] entries = HistoryStore.getBankSmsEntries(this);
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+        SettingsStore settings = new SettingsStore(this);
         int todayCount = 0;
         int approved = 0;
         int review = 0;
-        int conversations = buildConversationSummaries(entries).size();
+        int conversations = buildConversationSummaries(filterBankSmsEntries(entries)).size();
         for (HistoryStore.Entry entry : entries) {
-            if (isSystemSmsEntry(entry)) {
+            if (isSystemSmsEntry(entry) || !shouldDisplayBankEntry(entry, settings)) {
                 continue;
             }
             if (entry.time != null && entry.time.startsWith(today)) {
@@ -1145,9 +1149,18 @@ public class MainActivity extends Activity {
             return new HistoryStore.Entry[0];
         }
         List<HistoryStore.Entry> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        SettingsStore settings = new SettingsStore(this);
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
         for (HistoryStore.Entry entry : entries) {
             if (isSystemSmsEntry(entry)) {
+                continue;
+            }
+            if (!shouldDisplayBankEntry(entry, settings)) {
+                continue;
+            }
+            String fingerprint = entryFingerprint(entry);
+            if (!fingerprint.isEmpty() && seen.contains(fingerprint)) {
                 continue;
             }
             String title = entry.title == null ? "" : entry.title;
@@ -1163,6 +1176,12 @@ public class MainActivity extends Activity {
                 out.add(entry);
             } else if ("review".equals(bankSmsFilter) && (entry.rejected || combined.contains("پیدا نشد") || combined.contains("نیاز") || combined.contains("چند پرداخت"))) {
                 out.add(entry);
+            }
+            if (!fingerprint.isEmpty()) {
+                seen.add(fingerprint);
+            }
+            if (out.size() >= MAX_VISIBLE_BANK_SMS) {
+                break;
             }
         }
         return out.toArray(new HistoryStore.Entry[0]);
@@ -1192,7 +1211,7 @@ public class MainActivity extends Activity {
             }
             String bank = entryBank(entry);
             String sender = entrySender(entry);
-            String key = bank + "|" + sender;
+            String key = conversationKey(sender);
             ConversationSummary summary = conversations.get(key);
             if (summary == null) {
                 summary = new ConversationSummary(key, bank, sender, entry);
@@ -1302,7 +1321,7 @@ public class MainActivity extends Activity {
             }
             String bank = entryBank(entry);
             String sender = entrySender(entry);
-            String key = bank + "|" + sender;
+            String key = conversationKey(sender);
             if (summary.key.equals(key)) {
                 addSmsBubble(bankSmsListView, entry);
             }
@@ -1367,7 +1386,7 @@ public class MainActivity extends Activity {
             out.append("🔖 پیگیری: ").append(reference).append("\n");
         }
         if (!response.isEmpty()) {
-            out.append("🤖 نتیجه ربات: ").append(response).append("\n");
+            out.append("🤖 نتیجه ربات: ").append(humanRobotResponse(response)).append("\n");
         }
         out.append("🕒 ").append(entry.time);
         return out.toString();
@@ -1413,7 +1432,7 @@ public class MainActivity extends Activity {
             if (out.length() > 0) {
                 out.append(" • ");
             }
-            out.append(response);
+            out.append(humanRobotResponse(response));
         }
         if (!reference.isEmpty() && !"-".equals(reference)) {
             if (out.length() > 0) {
@@ -1480,10 +1499,43 @@ public class MainActivity extends Activity {
         }
         text = text.replace("\n🌐 کد HTTP:", "\nکد HTTP:");
         text = text.replace("\n🧾 پاسخ ربات:", "\nپاسخ ربات:");
+        text = text.replaceAll("(?m)^🔐 شناسه داخلی:.*\\n?", "");
         if (text.length() > 520) {
             return text.substring(0, 520) + "...";
         }
         return text;
+    }
+
+    private boolean shouldDisplayBankEntry(HistoryStore.Entry entry, SettingsStore settings) {
+        if (entry == null || settings == null) {
+            return false;
+        }
+        String sender = entrySender(entry);
+        String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+        if (rawSms.isEmpty()) {
+            rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+        }
+        String bank = entryBankRaw(entry);
+        return !settings.getMatchedConfiguredBankName(sender, rawSms).isEmpty()
+                || settings.isActiveBankName(bank);
+    }
+
+    private String entryFingerprint(HistoryStore.Entry entry) {
+        String internalId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
+        if (!internalId.isEmpty()) {
+            return "id:" + internalId;
+        }
+        String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+        if (rawSms.isEmpty()) {
+            rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+        }
+        String sender = conversationKey(entrySender(entry));
+        if (!rawSms.isEmpty()) {
+            return "sms:" + sender + ":" + rawSms.hashCode();
+        }
+        String amount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
+        String reference = extractDetailLine(entry.detail, "🔖 پیگیری:");
+        return "meta:" + sender + ":" + amount + ":" + reference + ":" + (entry.title == null ? "" : entry.title);
     }
 
     private boolean isSystemSmsEntry(HistoryStore.Entry entry) {
@@ -1498,6 +1550,20 @@ public class MainActivity extends Activity {
     }
 
     private String entryBank(HistoryStore.Entry entry) {
+        String sender = entrySender(entry);
+        String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+        if (rawSms.isEmpty()) {
+            rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+        }
+        String configured = new SettingsStore(this).getMatchedConfiguredBankName(sender, rawSms);
+        if (!configured.isEmpty()) {
+            return configured;
+        }
+        String rawBank = entryBankRaw(entry);
+        return rawBank.isEmpty() || "تنظیمات عمومی".equals(rawBank) ? "پیامک بانکی" : rawBank;
+    }
+
+    private String entryBankRaw(HistoryStore.Entry entry) {
         String bank = extractDetailLine(entry.detail, "🏦 بانک:");
         if (bank.isEmpty()) {
             bank = extractDetailLine(entry.detail, "بانک:");
@@ -1524,6 +1590,44 @@ public class MainActivity extends Activity {
             sender = extractDetailLine(entry.detail, "Sender=");
         }
         return sender.isEmpty() ? "بدون سرشماره" : sender;
+    }
+
+    private String conversationKey(String sender) {
+        String value = sender == null ? "" : sender.trim().toLowerCase(Locale.US);
+        String digits = PaymentSmsParser.normalizeDigits(value).replaceAll("[^0-9]", "");
+        if (digits.startsWith("0098") && digits.length() > 6) {
+            digits = "0" + digits.substring(4);
+        } else if (digits.startsWith("98") && digits.length() > 10) {
+            digits = "0" + digits.substring(2);
+        }
+        return digits.length() >= 4 ? "sender:" + digits : "sender:" + value;
+    }
+
+    private String humanRobotResponse(String response) {
+        if (response == null || response.trim().isEmpty() || "-".equals(response.trim())) {
+            return "پاسخی ثبت نشده";
+        }
+        String text = response.trim();
+        String lower = text.toLowerCase(Locale.US);
+        if (lower.contains("\"status\":\"approved\"") || lower.contains("\"matched\":true") || text.contains("تایید شد")) {
+            if (lower.contains("\"duplicate\":true") || text.contains("قبلاً")) {
+                return "قبلاً تایید شده بود";
+            }
+            return "پرداخت تایید شد";
+        }
+        if (lower.contains("no_pending_match") || text.contains("pending پیدا نشد") || text.contains("پرداخت pending پیدا نشد")) {
+            return "پرداخت در انتظار با این مبلغ پیدا نشد";
+        }
+        if (lower.contains("ambiguous") || text.contains("چند پرداخت")) {
+            return "چند پرداخت مشابه پیدا شد؛ نیازمند بررسی ادمین";
+        }
+        if (lower.contains("\"retry\":true")) {
+            return "فعلاً تایید نشد؛ بعداً دوباره قابل بررسی است";
+        }
+        if (text.length() > 90) {
+            return "پاسخ ربات دریافت شد، اما تایید قطعی نبود";
+        }
+        return text;
     }
 
     private String extractDetailBlock(String detail, String marker) {

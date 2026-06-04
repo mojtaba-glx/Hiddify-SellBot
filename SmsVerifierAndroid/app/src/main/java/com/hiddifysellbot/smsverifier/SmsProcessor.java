@@ -15,13 +15,14 @@ public final class SmsProcessor {
             HistoryStore.add(context, "SKIPPED", "هیچ سرشماره بانکی تنظیم نشده است؛ SMS ارسال نشد.");
             return;
         }
-        String bankName = settings.getMatchedBankName(sender, body);
+        String configuredBankName = settings.getMatchedConfiguredBankName(sender, body);
+        String bankName = configuredBankName.isEmpty() ? settings.getMatchedBankName(sender, body) : configuredBankName;
         if (bankName.isEmpty()) {
             if (PaymentSmsParser.isIncomingPayment(body)) {
                 HistoryStore.add(
                         context,
-                        "BANK_SKIPPED",
-                        "پیامک شبیه واریز بود، اما سرشماره با هیچ بانک فعالی تطبیق نشد.\n"
+                        "SKIPPED",
+                        "پیامک شبیه واریز بود، اما با هیچ بانک فعالی تطبیق نشد.\n"
                                 + "👤 سرشماره: " + sender
                                 + "\n📄 متن SMS:\n" + body
                 );
@@ -34,13 +35,35 @@ public final class SmsProcessor {
         }
 
         if (!PaymentSmsParser.isIncomingPayment(body)) {
-            HistoryStore.add(context, "BANK_SKIPPED", "این پیامک بانکی واریز نبود و نادیده گرفته شد.\n🏦 بانک: " + bankName + "\n👤 سرشماره: " + sender + "\n📄 متن SMS:\n" + body);
+            if (!configuredBankName.isEmpty()) {
+                String eventId = PaymentSmsParser.buildEventId(sender, body, 0, "");
+                HistoryStore.addUnique(
+                        context,
+                        "BANK_SKIPPED",
+                        "این پیامک واریز نبود و برای تایید پرداخت استفاده نشد.\n"
+                                + "🏦 بانک: " + bankName
+                                + "\n👤 سرشماره: " + sender
+                                + "\n🔐 شناسه داخلی: " + eventId
+                                + "\n📄 متن SMS:\n" + body,
+                        eventId
+                );
+            }
             return;
         }
 
         long amount = PaymentSmsParser.extractAmount(body);
         if (amount <= 0) {
-            HistoryStore.add(context, "BANK_SKIPPED", "مبلغ از داخل SMS پیدا نشد.\n🏦 بانک: " + bankName + "\n👤 سرشماره: " + sender + "\n📄 متن SMS:\n" + body);
+            String eventId = PaymentSmsParser.buildEventId(sender, body, 0, "");
+            HistoryStore.addUnique(
+                    context,
+                    "BANK_SKIPPED",
+                    "مبلغ از داخل SMS پیدا نشد.\n"
+                            + "🏦 بانک: " + bankName
+                            + "\n👤 سرشماره: " + sender
+                            + "\n🔐 شناسه داخلی: " + eventId
+                            + "\n📄 متن SMS:\n" + body,
+                    eventId
+            );
             return;
         }
         String detectedCardLast4 = PaymentSmsParser.extractCardLast4(body);
@@ -70,8 +93,9 @@ public final class SmsProcessor {
                 + "\n🌐 کد HTTP: " + result.statusCode
                 + "\n🧾 پاسخ ربات: " + summarizeResponse(result.body)
                 + "\n⚠️ خطا: " + emptyDash(result.error)
+                + "\n🔐 شناسه داخلی: " + event.eventId
                 + "\n📄 متن SMS:\n" + event.body;
-        HistoryStore.add(context, WebhookClient.statusLabel(result), detail);
+        HistoryStore.addUnique(context, WebhookClient.statusLabel(result), detail, event.eventId);
     }
 
     private static String estimateToman(long amount, String currency) {

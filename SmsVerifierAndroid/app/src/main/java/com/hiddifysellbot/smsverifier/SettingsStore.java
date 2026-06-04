@@ -274,22 +274,35 @@ public final class SettingsStore {
     }
 
     public String getMatchedBankName(String sender, String body) {
+        String configured = getMatchedConfiguredBankName(sender, body);
+        if (!configured.isEmpty()) {
+            return configured;
+        }
+
         String normalizedSender = safe(sender).toLowerCase();
         if (normalizedSender.isEmpty()) {
             return "";
         }
 
+        if (matchesAnyFilter(normalizedSender, parseFilters(getSenderFiltersRaw()))) {
+            return "تنظیمات عمومی";
+        }
+        return "";
+    }
+
+    public String getMatchedConfiguredBankName(String sender, String body) {
+        String normalizedSender = safe(sender).toLowerCase();
+        String normalizedBody = safe(body).toLowerCase();
         for (int i = 0; i < getBankCount(); i++) {
             BankConfig bank = getBank(i);
             if (!bank.enabled) {
                 continue;
             }
-            if (matchesAnyFilter(normalizedSender, parseFilters(bank.senderFilters))) {
+            if (!normalizedSender.isEmpty() && matchesAnyFilter(normalizedSender, parseFilters(bank.senderFilters))) {
                 return bank.name;
             }
         }
 
-        String normalizedBody = safe(body).toLowerCase();
         if (!normalizedBody.isEmpty()) {
             for (int i = 0; i < getBankCount(); i++) {
                 BankConfig bank = getBank(i);
@@ -306,11 +319,25 @@ public final class SettingsStore {
                 }
             }
         }
-
-        if (matchesAnyFilter(normalizedSender, parseFilters(getSenderFiltersRaw()))) {
-            return "تنظیمات عمومی";
-        }
         return "";
+    }
+
+    public boolean isActiveBankName(String bankName) {
+        String needle = normalizeBankText(bankName);
+        if (needle.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < getBankCount(); i++) {
+            BankConfig bank = getBank(i);
+            if (!bank.enabled) {
+                continue;
+            }
+            String current = normalizeBankText(bank.name);
+            if (!current.isEmpty() && (current.equals(needle) || needle.contains(current) || current.contains(needle))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public List<String> getSenderFilters() {
@@ -360,6 +387,16 @@ public final class SettingsStore {
     private static boolean sameBankBySample(String body, String sample) {
         String sampleFirstLine = sample.split("\\n", 2)[0].trim();
         return sampleFirstLine.length() >= 2 && body.contains(sampleFirstLine);
+    }
+
+    private static String normalizeBankText(String value) {
+        return safe(value)
+                .toLowerCase()
+                .replace("ي", "ی")
+                .replace("ك", "ک")
+                .replace("‌", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private static String normalizePhoneDigits(String value) {
