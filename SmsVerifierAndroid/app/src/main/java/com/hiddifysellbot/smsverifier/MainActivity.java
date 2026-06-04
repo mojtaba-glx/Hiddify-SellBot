@@ -6,6 +6,7 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
@@ -18,6 +19,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -39,6 +41,7 @@ public class MainActivity extends Activity {
     private LinearLayout mainContent;
     private LinearLayout smsContent;
     private LinearLayout topMenuPanel;
+    private PopupWindow topMenuPopup;
     private CheckBox enabledBox;
     private EditText webhookInput;
     private EditText secretInput;
@@ -105,6 +108,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (topMenuPopup != null && topMenuPopup.isShowing()) {
+            topMenuPopup.dismiss();
+            return;
+        }
         if (smsContent != null && smsContent.getVisibility() == View.VISIBLE) {
             if (!selectedConversationKey.isEmpty()) {
                 selectedConversationKey = "";
@@ -155,13 +162,13 @@ public class MainActivity extends Activity {
         hero.addView(topRow, matchWrap());
 
         Button menuButton = new Button(this);
-        menuButton.setText("☰");
+        menuButton.setText("⋮");
         styleButton(menuButton, false);
         topRow.addView(menuButton, new LinearLayout.LayoutParams(dp(46), dp(42)));
         menuButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                topMenuPanel.setVisibility(topMenuPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                showTopMenu(v);
             }
         });
 
@@ -192,11 +199,10 @@ public class MainActivity extends Activity {
         desc.setPadding(0, dp(12), 0, 0);
         hero.addView(desc, matchWrap());
 
-        topMenuPanel = addCard(mainContent);
-        topMenuPanel.setVisibility(View.GONE);
-        addSectionTitle(topMenuPanel, "⋮ منوی برنامه");
+        topMenuPanel = createTopMenuPanel();
+        addSectionTitle(topMenuPanel, "⚡ منوی سریع");
         TextView versionText = new TextView(this);
-        versionText.setText("نسخه برنامه: " + BuildConfig.VERSION_NAME + "\nتنظیمات بیشتر در نسخه‌های بعدی اینجا اضافه می‌شود.");
+        versionText.setText("نسخه: " + BuildConfig.VERSION_NAME + "\nتنظیمات فوری و دسترسی سریع");
         versionText.setTextSize(12);
         versionText.setTextColor(mutedColor);
         versionText.setPadding(0, 0, 0, dp(8));
@@ -221,6 +227,25 @@ public class MainActivity extends Activity {
             public void onNothingSelected(AdapterView<?> parent) {
             }
         });
+        addButtonRow(topMenuPanel,
+                new String[]{"📩 پیامک‌ها", "🧪 تست اتصال"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                dismissTopMenu();
+                                showSmsScreen();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                dismissTopMenu();
+                                saveSettings(false);
+                                sendTestWebhook();
+                            }
+                        }
+                });
 
         LinearLayout dashboard = addDashboardCard(mainContent);
         addSectionTitle(dashboard, "💎 داشبورد تراکنش‌ها");
@@ -1192,6 +1217,41 @@ public class MainActivity extends Activity {
         lp.setMargins(0, dp(8), 0, dp(8));
         root.addView(card, lp);
         return card;
+    }
+
+    private LinearLayout createTopMenuPanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(14), dp(12), dp(14), dp(14));
+        styleGradientRounded(panel, glassStartColor, glassEndColor, goldColor, dp(24));
+        return panel;
+    }
+
+    private void showTopMenu(View anchor) {
+        if (topMenuPopup != null && topMenuPopup.isShowing()) {
+            topMenuPopup.dismiss();
+            return;
+        }
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int width = Math.min(screenWidth - dp(28), dp(360));
+        topMenuPopup = new PopupWindow(
+                topMenuPanel,
+                width,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                true
+        );
+        topMenuPopup.setOutsideTouchable(true);
+        topMenuPopup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            topMenuPopup.setElevation(dp(12));
+        }
+        topMenuPopup.showAsDropDown(anchor, 0, dp(8));
+    }
+
+    private void dismissTopMenu() {
+        if (topMenuPopup != null && topMenuPopup.isShowing()) {
+            topMenuPopup.dismiss();
+        }
     }
 
     private LinearLayout addDashboardCard(LinearLayout root) {
