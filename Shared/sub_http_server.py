@@ -236,6 +236,42 @@ def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str
             logger.warning("Failed sending fallback SMS payment admin report payment_id=%s: %s", payment_id, fallback_error)
 
 
+def _send_admin_sms_reused_report(
+    *,
+    prior_event: dict,
+    amount_toman: int,
+    sender: str,
+    reference: str,
+) -> None:
+    token = str(_dotenv_get("ADMIN_BOT_TOKEN", "") or "").strip()
+    admin_id = _to_int(_dotenv_get("ADMIN_ID", "0"), 0)
+    if not token or admin_id <= 0:
+        return
+    prior_payment_id = int((prior_event or {}).get("matched_payment_id") or 0)
+    prior_event_id = str((prior_event or {}).get("event_id") or "").strip()
+    text = (
+        "⚠️ SMS بانکی تکراری شناسایی شد و تایید خودکار انجام نشد.\n"
+        f"💰 مبلغ: {int(amount_toman or 0):,} تومان\n"
+        f"📨 سرشماره: {sender or '-'}\n"
+        f"🔖 پیگیری SMS: {reference or '-'}\n"
+        f"🆔 پرداخت تاییدشده قبلی: {prior_payment_id or '-'}\n"
+        f"🔐 شناسه SMS قبلی: {prior_event_id[:18] + '...' if prior_event_id else '-'}\n"
+        "لطفاً رسید جدید را دستی بررسی کنید."
+    )
+    try:
+        _telegram_form_request(
+            token,
+            "sendMessage",
+            {
+                "chat_id": str(admin_id),
+                "text": text,
+                "disable_web_page_preview": "true",
+            },
+        )
+    except Exception as e:
+        logger.warning("Failed sending reused SMS admin report: %s", e)
+
+
 def _query_requests_base64(query: str) -> bool:
     params = parse_qs(str(query or ""), keep_blank_values=True)
     for key, values in params.items():
@@ -532,9 +568,11 @@ class _SubHandler(BaseHTTPRequestHandler):
                     reference=str((existing or {}).get("reference") or reference),
                     sender=str((existing or {}).get("sender") or sender),
                     card_last4=re.sub(r"\D", "", str((existing or {}).get("card_last4") or card_last4))[-4:],
+                    body=str((existing or {}).get("body") or body),
                 )
                 retry_payload["duplicate"] = True
                 retry_payload["retry"] = True
+                retry_payload["previous_status"] = status
                 self._write_json(retry_status, retry_payload)
                 return
             self._write_json(
@@ -555,6 +593,7 @@ class _SubHandler(BaseHTTPRequestHandler):
             reference=reference,
             sender=sender,
             card_last4=card_last4,
+            body=body,
         )
         self._write_json(status_code, response)
         return
@@ -568,6 +607,7 @@ class _SubHandler(BaseHTTPRequestHandler):
         reference: str,
         sender: str,
         card_last4: str,
+        body: str = "",
     ) -> tuple[int, dict]:
         candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
         if not candidates:
@@ -578,6 +618,44 @@ class _SubHandler(BaseHTTPRequestHandler):
                 amount_toman=0,
             )
             return 422, {"ok": False, "error": "invalid_amount"}
+
+        prior_event = None
+        prior_amount = int(candidates[0])
+        for amount_toman in candidates:
+            prior_event = userbot_db.find_prior_approved_sms_webhook_event(
+                event_id=event_id,
+                amount_raw=amount_raw,
+                currency_raw=currency_raw,
+                amount_toman=int(amount_toman),
+                sender=sender,
+                reference=reference,
+                body=body,
+            )
+            if prior_event:
+                prior_amount = int(amount_toman)
+                break
+        if prior_event:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="sms_reused",
+                matched_payment_id=int((prior_event or {}).get("matched_payment_id") or 0),
+                message="same bank SMS was already used for another approved payment",
+                amount_toman=prior_amount,
+            )
+            _send_admin_sms_reused_report(
+                prior_event=prior_event,
+                amount_toman=prior_amount,
+                sender=sender,
+                reference=reference,
+            )
+            return 202, {
+                "ok": True,
+                "matched": False,
+                "status": "sms_reused",
+                "message": "bank_sms_already_used",
+                "amount_toman": prior_amount,
+                "previous_payment_id": int((prior_event or {}).get("matched_payment_id") or 0),
+            }
 
         matches: list[dict] = []
         matched_amount = 0

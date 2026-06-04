@@ -46,6 +46,19 @@ public final class HistoryStore {
         add(context, status, detail);
     }
 
+    public static void upsertUnique(Context context, String status, String detail, String uniqueId) {
+        String marker = uniqueMarker(uniqueId);
+        if (!marker.isEmpty()) {
+            SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+            prefs.edit()
+                    .putString(KEY_HISTORY, removeEntriesContaining(prefs.getString(KEY_HISTORY, ""), marker))
+                    .putString(KEY_APPROVED_HISTORY, removeEntriesContaining(prefs.getString(KEY_APPROVED_HISTORY, ""), marker))
+                    .putString(KEY_BANK_SMS_HISTORY, removeEntriesContaining(prefs.getString(KEY_BANK_SMS_HISTORY, ""), marker))
+                    .apply();
+        }
+        add(context, status, detail);
+    }
+
     public static String get(Context context) {
         return context.getApplicationContext()
                 .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -111,6 +124,24 @@ public final class HistoryStore {
         prefs.edit().putString(key, limited.toString()).apply();
     }
 
+    private static String removeEntriesContaining(String raw, String marker) {
+        if (raw == null || raw.trim().isEmpty() || marker == null || marker.trim().isEmpty()) {
+            return raw == null ? "" : raw;
+        }
+        String[] parts = raw.split(SEP);
+        StringBuilder out = new StringBuilder();
+        for (String part : parts) {
+            if (part == null || part.contains(marker)) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append(SEP);
+            }
+            out.append(part);
+        }
+        return out.toString();
+    }
+
     private static Entry[] parseEntries(String raw) {
         if (raw == null || raw.trim().isEmpty()) {
             return new Entry[0];
@@ -134,6 +165,7 @@ public final class HistoryStore {
         return "APPROVED".equals(status)
                 || "APPROVED_DUPLICATE".equals(status)
                 || "NO_PENDING_MATCH".equals(status)
+                || "SMS_REUSED".equals(status)
                 || "AMBIGUOUS".equals(status)
                 || "SENT".equals(status)
                 || "FAILED".equals(status)
@@ -155,6 +187,9 @@ public final class HistoryStore {
         }
         if ("NO_PENDING_MATCH".equals(status)) {
             return "🟡 تایید نشد؛ پرداخت در انتظار پیدا نشد";
+        }
+        if ("SMS_REUSED".equals(status)) {
+            return "🟡 این SMS قبلاً برای پرداخت دیگری استفاده شده است";
         }
         if ("AMBIGUOUS".equals(status)) {
             return "❌ چند پرداخت مشابه پیدا شد؛ نیاز به بررسی ادمین";

@@ -13,6 +13,16 @@ Write-Host "Project: $ProjectDir"
 Write-Host "JAVA_HOME: $env:JAVA_HOME"
 java -version
 
+$LocalProperties = Join-Path $ProjectDir "local.properties"
+if (-not (Test-Path $LocalProperties)) {
+    $DefaultSdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
+    if (Test-Path $DefaultSdk) {
+        $EscapedSdk = $DefaultSdk.Replace("\", "\\")
+        Set-Content -Path $LocalProperties -Value "sdk.dir=$EscapedSdk" -Encoding ASCII
+        Write-Host "local.properties created: sdk.dir=$DefaultSdk"
+    }
+}
+
 .\gradlew.bat --stop
 .\gradlew.bat clean :app:assembleDebug
 

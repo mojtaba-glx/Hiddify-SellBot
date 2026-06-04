@@ -713,7 +713,7 @@ public class MainActivity extends Activity {
                 enabledBox.isChecked(),
                 text(webhookInput),
                 text(secretInput),
-                settings.getSenderFiltersRaw(),
+                "",
                 cardLast4Box.isChecked()
         );
         settings.saveThemeMode(newTheme);
@@ -1175,7 +1175,7 @@ public class MainActivity extends Activity {
                 out.add(entry);
             } else if ("duplicate".equals(bankSmsFilter) && (combined.contains("قبلاً") || combined.toLowerCase(Locale.US).contains("duplicate"))) {
                 out.add(entry);
-            } else if ("review".equals(bankSmsFilter) && (entry.rejected || combined.contains("پیدا نشد") || combined.contains("نیاز") || combined.contains("چند پرداخت"))) {
+            } else if ("review".equals(bankSmsFilter) && (entry.rejected || combined.contains("پیدا نشد") || combined.contains("نیاز") || combined.contains("چند پرداخت") || combined.contains("قبلاً برای پرداخت"))) {
                 out.add(entry);
             }
             if (!fingerprint.isEmpty()) {
@@ -1221,7 +1221,7 @@ public class MainActivity extends Activity {
             summary.total++;
             if (entry.approved) {
                 summary.approved++;
-            } else if (entry.rejected && !isNoPendingEntry(entry)) {
+            } else if (entry.rejected && !isSoftReviewEntry(entry)) {
                 summary.rejected++;
             }
         }
@@ -1343,7 +1343,7 @@ public class MainActivity extends Activity {
         bubble.setTextIsSelectable(true);
         bubble.setLineSpacing(dp(2), 1.08f);
         bubble.setPadding(dp(15), dp(13), dp(15), dp(13));
-        boolean softReview = isNoPendingEntry(entry);
+        boolean softReview = isSoftReviewEntry(entry);
         int fill = entry.approved ? approvedColor : (entry.rejected && !softReview ? rejectedColor : neutralColor);
         int border = entry.approved ? greenColor : (entry.rejected && !softReview ? Color.parseColor("#EF4444") : goldColor);
         styleGradientRounded(bubble, fill, inputColor, border, dp(22));
@@ -1519,9 +1519,15 @@ public class MainActivity extends Activity {
         if (!rawSms.isEmpty() && !PaymentSmsParser.isIncomingPayment(rawSms)) {
             return false;
         }
+        String configured = settings.getMatchedConfiguredBankName(sender, rawSms);
+        if (!configured.isEmpty()) {
+            return true;
+        }
+        if (!rawSms.isEmpty()) {
+            return false;
+        }
         String bank = entryBankRaw(entry);
-        return !settings.getMatchedConfiguredBankName(sender, rawSms).isEmpty()
-                || settings.isActiveBankName(bank);
+        return settings.isActiveBankName(bank);
     }
 
     private String entryFingerprint(HistoryStore.Entry entry) {
@@ -1614,13 +1620,16 @@ public class MainActivity extends Activity {
         String text = response.trim();
         String lower = text.toLowerCase(Locale.US);
         if (lower.contains("\"status\":\"approved\"") || lower.contains("\"matched\":true") || text.contains("تایید شد")) {
-            if (lower.contains("\"duplicate\":true") || text.contains("قبلاً")) {
+            if ((lower.contains("\"duplicate\":true") && !lower.contains("\"retry\":true")) || text.contains("قبلاً")) {
                 return "قبلاً تایید شده بود";
             }
             return "پرداخت تایید شد";
         }
         if (lower.contains("no_pending_match") || text.contains("pending پیدا نشد") || text.contains("پرداخت pending پیدا نشد")) {
             return "پرداخت در انتظار با این مبلغ پیدا نشد";
+        }
+        if (lower.contains("sms_reused") || text.contains("قبلاً برای پرداخت دیگری استفاده")) {
+            return "این SMS قبلاً برای پرداخت دیگری استفاده شده است";
         }
         if (lower.contains("ambiguous") || text.contains("چند پرداخت")) {
             return "چند پرداخت مشابه پیدا شد؛ نیازمند بررسی ادمین";
@@ -1653,11 +1662,13 @@ public class MainActivity extends Activity {
         return humanRobotResponse(combined);
     }
 
-    private boolean isNoPendingEntry(HistoryStore.Entry entry) {
+    private boolean isSoftReviewEntry(HistoryStore.Entry entry) {
         String text = ((entry.title == null ? "" : entry.title) + "\n" + (entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
         return text.contains("no_pending_match")
                 || text.contains("پرداخت در انتظار پیدا نشد")
-                || text.contains("pending پیدا نشد");
+                || text.contains("pending پیدا نشد")
+                || text.contains("sms_reused")
+                || text.contains("قبلاً برای پرداخت دیگری استفاده");
     }
 
     private String smsStatusText(HistoryStore.Entry entry) {
@@ -1667,6 +1678,9 @@ public class MainActivity extends Activity {
         }
         if (text.contains("no_pending_match") || text.contains("پرداخت در انتظار پیدا نشد") || text.contains("pending پیدا نشد")) {
             return "🟡 پرداخت در انتظار پیدا نشد";
+        }
+        if (text.contains("sms_reused") || text.contains("قبلاً برای پرداخت دیگری استفاده")) {
+            return "🟡 SMS تکراری؛ بررسی ادمین";
         }
         if (text.contains("ambiguous") || text.contains("چند پرداخت")) {
             return "⚠️ چند پرداخت مشابه؛ بررسی ادمین";

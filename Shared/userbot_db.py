@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import random
@@ -3280,6 +3281,71 @@ def find_pending_card_payments_by_amount(
     return filtered or unknown
 
 
+def find_prior_approved_sms_webhook_event(
+    *,
+    event_id: str = "",
+    amount_raw: int = 0,
+    currency_raw: str = "",
+    amount_toman: int = 0,
+    sender: str = "",
+    reference: str = "",
+    body: str = "",
+) -> Optional[Dict[str, Any]]:
+    init_db()
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        candidates = _sms_amount_candidates_toman(int(amount_raw or 0), str(currency_raw or ""))
+        amount = int(candidates[0]) if candidates else 0
+    if amount <= 0:
+        return None
+
+    eid = str(event_id or "").strip()
+    sender_norm = re.sub(r"\D", "", str(sender or ""))
+    ref_norm = re.sub(r"\D", "", str(reference or ""))
+    body_norm = str(body or "").strip()
+    raw_amount = int(amount_raw or 0)
+    currency = str(currency_raw or "").strip().lower()
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT *
+            FROM userbot_sms_webhook_events
+            WHERE status = 'approved'
+              AND amount_toman = ?
+              AND event_id != ?
+            ORDER BY id DESC
+            LIMIT 100
+            """,
+            (amount, eid),
+        )
+        rows = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    for row in rows:
+        row_sender = re.sub(r"\D", "", str(row.get("sender") or ""))
+        row_ref = re.sub(r"\D", "", str(row.get("reference") or ""))
+        row_body = str(row.get("body") or "").strip()
+        row_raw = int(row.get("amount_raw") or 0)
+        row_currency = str(row.get("currency_raw") or "").strip().lower()
+
+        same_sender = bool(sender_norm and row_sender and (sender_norm.endswith(row_sender) or row_sender.endswith(sender_norm)))
+        same_raw = raw_amount > 0 and row_raw == raw_amount and (not currency or not row_currency or currency == row_currency)
+        same_reference = bool(ref_norm and row_ref and ref_norm == row_ref)
+        same_body = bool(body_norm and row_body and body_norm == row_body)
+
+        if same_reference and same_sender:
+            return row
+        if same_body and (same_sender or not sender_norm):
+            return row
+        if same_raw and same_sender and not ref_norm and not row_ref and same_body:
+            return row
+    return None
+
+
 def approve_pending_card_payment_from_sms(
     payment_id: int,
     *,
@@ -3380,6 +3446,25 @@ def try_approve_payment_from_unmatched_sms(
             continue
 
         event_id = str(event.get("event_id") or "").strip()
+        prior_event = find_prior_approved_sms_webhook_event(
+            event_id=event_id,
+            amount_raw=int(event.get("amount_raw") or 0),
+            currency_raw=str(event.get("currency_raw") or ""),
+            amount_toman=amount,
+            sender=str(event.get("sender") or ""),
+            reference=str(event.get("reference") or ""),
+            body=str(event.get("body") or ""),
+        )
+        if prior_event:
+            update_sms_webhook_event(
+                event_id,
+                status="sms_reused",
+                matched_payment_id=int((prior_event or {}).get("matched_payment_id") or 0),
+                message="same bank SMS was already used for another approved payment",
+                amount_toman=amount,
+            )
+            return False, "این SMS قبلاً برای پرداخت دیگری استفاده شده است؛ بررسی دستی لازم است.", payment
+
         ok, message, updated = approve_pending_card_payment_from_sms(
             pid,
             event_id=event_id,

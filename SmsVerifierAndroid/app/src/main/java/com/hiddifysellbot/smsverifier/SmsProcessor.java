@@ -82,7 +82,7 @@ public final class SmsProcessor {
                 + "\n⚠️ خطا: " + emptyDash(result.error)
                 + "\n🔐 شناسه داخلی: " + event.eventId
                 + "\n📄 متن SMS:\n" + event.body;
-        HistoryStore.addUnique(context, WebhookClient.statusLabel(result), detail, event.eventId);
+        HistoryStore.upsertUnique(context, WebhookClient.statusLabel(result), detail, event.eventId);
     }
 
     private static String estimateToman(long amount, String currency) {
@@ -105,6 +105,9 @@ public final class SmsProcessor {
         }
         if (text.contains("\"status\":\"no_pending_match\"")) {
             return "پرداخت pending پیدا نشد";
+        }
+        if (text.contains("\"status\":\"sms_reused\"")) {
+            return "این SMS قبلاً برای پرداخت دیگری استفاده شده است";
         }
         if (text.contains("\"duplicate\":true")) {
             return "تکراری/قبلاً ثبت شده";

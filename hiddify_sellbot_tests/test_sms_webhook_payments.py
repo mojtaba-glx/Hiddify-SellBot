@@ -91,6 +91,72 @@ class TestSmsWebhookPayments(unittest.TestCase):
         payment = userbot_db.get_payment_by_id(payment_id)
         self.assertIn("sms_event_id:sms-before-receipt", payment["receipt_image"])
 
+    def test_reused_approved_sms_does_not_auto_approve_new_payment(self):
+        first_user_id, first_payment_id = self._create_pending_payment(amount=300000)
+        ok, message, updated = userbot_db.approve_pending_card_payment_from_sms(
+            first_payment_id,
+            event_id="sms-used-once",
+            reference="020000631300",
+            sender="+989999987641",
+            amount_raw=3_000_000,
+            currency_raw="rial",
+        )
+        self.assertTrue(ok, message)
+        self.assertEqual(int(userbot_db.get_user_by_id(first_user_id)["wallet_balance"]), 300000)
+        userbot_db.record_sms_webhook_event(
+            {
+                "event_id": "sms-used-once",
+                "sender": "+989999987641",
+                "amount_raw": 3_000_000,
+                "currency_raw": "rial",
+                "amount_toman": 300_000,
+                "reference": "020000631300",
+                "card_last4": "",
+                "body": "بلو\nواریز پول\nمجتبی عزیز، 3,000,000 ریال به حساب شما نشست.",
+                "status": "approved",
+                "matched_payment_id": first_payment_id,
+                "message": "approved",
+                "received_at": 1780000000000,
+                "device_time": 1780000001000,
+            }
+        )
+
+        inserted, _existing = userbot_db.record_sms_webhook_event(
+            {
+                "event_id": "sms-reused-copy",
+                "sender": "+989999987641",
+                "amount_raw": 3_000_000,
+                "currency_raw": "rial",
+                "amount_toman": 300_000,
+                "reference": "020000631300",
+                "card_last4": "",
+                "body": "بلو\nواریز پول\nمجتبی عزیز، 3,000,000 ریال به حساب شما نشست.",
+                "status": "no_pending_match",
+                "message": "no pending yet",
+                "received_at": 1780000000000,
+                "device_time": 1780000001000,
+            }
+        )
+        self.assertTrue(inserted)
+        _second_user_id, second_payment_id = self._create_pending_payment(amount=300000)
+
+        auto_ok, auto_message, auto_payment = userbot_db.try_approve_payment_from_unmatched_sms(
+            second_payment_id,
+            max_age_minutes=60 * 24 * 365,
+        )
+
+        self.assertFalse(auto_ok, auto_message)
+        self.assertEqual(auto_payment["status"], "pending")
+        self.assertIn("قبلاً", auto_message)
+        self.assertEqual(userbot_db.get_payment_by_id(second_payment_id)["status"], "pending")
+        event_rows = []
+        with userbot_db._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT status, matched_payment_id FROM userbot_sms_webhook_events WHERE event_id = ?", ("sms-reused-copy",))
+            event_rows = cur.fetchall()
+        self.assertEqual(event_rows[0]["status"], "sms_reused")
+        self.assertEqual(int(event_rows[0]["matched_payment_id"]), first_payment_id)
+
 
 if __name__ == "__main__":
     unittest.main()

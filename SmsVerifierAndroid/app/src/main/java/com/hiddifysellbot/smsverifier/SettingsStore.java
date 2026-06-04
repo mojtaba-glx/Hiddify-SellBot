@@ -284,7 +284,7 @@ public final class SettingsStore {
             return "";
         }
 
-        if (matchesAnyFilter(normalizedSender, parseFilters(getSenderFiltersRaw()))) {
+        if (!hasActiveBankSenderFilters() && matchesAnyFilter(normalizedSender, parseFilters(getSenderFiltersRaw()))) {
             return "تنظیمات عمومی";
         }
         return "";
@@ -292,7 +292,7 @@ public final class SettingsStore {
 
     public String getMatchedConfiguredBankName(String sender, String body) {
         String normalizedSender = safe(sender).toLowerCase();
-        String normalizedBody = safe(body).toLowerCase();
+        String normalizedBody = normalizeBankText(body);
         for (int i = 0; i < getBankCount(); i++) {
             BankConfig bank = getBank(i);
             if (!bank.enabled) {
@@ -309,8 +309,11 @@ public final class SettingsStore {
                 if (!bank.enabled) {
                     continue;
                 }
-                String bankName = safe(bank.name).toLowerCase();
-                String sample = safe(bank.sampleSms).toLowerCase();
+                if (!parseFilters(bank.senderFilters).isEmpty()) {
+                    continue;
+                }
+                String bankName = normalizeBankText(bank.name);
+                String sample = normalizeBankText(bank.sampleSms);
                 if ((!bankName.isEmpty() && normalizedBody.contains(bankName))
                         || ("blu".equals(bank.id) && normalizedBody.contains("بلو"))
                         || ("middle_east".equals(bank.id) && (normalizedBody.contains("خاورمیانه") || normalizedBody.contains("خاورميانه")))
@@ -342,12 +345,14 @@ public final class SettingsStore {
 
     public List<String> getSenderFilters() {
         List<String> out = new ArrayList<>();
-        out.addAll(parseFilters(getSenderFiltersRaw()));
         for (int i = 0; i < getBankCount(); i++) {
             BankConfig bank = getBank(i);
             if (bank.enabled) {
                 out.addAll(parseFilters(bank.senderFilters));
             }
+        }
+        if (out.isEmpty()) {
+            out.addAll(parseFilters(getSenderFiltersRaw()));
         }
         return out;
     }
@@ -368,9 +373,6 @@ public final class SettingsStore {
             if ("*".equals(filter) || "all".equals(filter) || "همه".equals(filter)) {
                 return true;
             }
-            if (normalizedSender.contains(filter) || filter.contains(normalizedSender)) {
-                return true;
-            }
             String filterDigits = normalizePhoneDigits(filter);
             if (senderDigits.length() >= 4 && filterDigits.length() >= 4) {
                 if (senderDigits.endsWith(filterDigits)
@@ -379,6 +381,23 @@ public final class SettingsStore {
                         || filterDigits.contains(senderDigits)) {
                     return true;
                 }
+                continue;
+            }
+            if (filterDigits.length() >= 4 || senderDigits.length() >= 4) {
+                continue;
+            }
+            if (filter.length() >= 3 && (normalizedSender.contains(filter) || filter.contains(normalizedSender))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasActiveBankSenderFilters() {
+        for (int i = 0; i < getBankCount(); i++) {
+            BankConfig bank = getBank(i);
+            if (bank.enabled && !parseFilters(bank.senderFilters).isEmpty()) {
+                return true;
             }
         }
         return false;

@@ -69,13 +69,16 @@ public final class WebhookClient {
         }
         String body = result.body == null ? "" : result.body.toLowerCase();
         if (body.contains("\"status\":\"approved\"") || body.contains("\"matched\":true")) {
-            if (body.contains("\"duplicate\":true")) {
+            if (body.contains("\"duplicate\":true") && !body.contains("\"retry\":true")) {
                 return "APPROVED_DUPLICATE";
             }
             return "APPROVED";
         }
         if (body.contains("\"status\":\"no_pending_match\"")) {
             return "NO_PENDING_MATCH";
+        }
+        if (body.contains("\"status\":\"sms_reused\"")) {
+            return "SMS_REUSED";
         }
         if (body.contains("\"error\":\"ambiguous_pending_payments\"")) {
             return "AMBIGUOUS";
@@ -96,6 +99,9 @@ public final class WebhookClient {
         }
         if ("NO_PENDING_MATCH".equals(label)) {
             return "🟡 SMS خوانده شد، اما پرداخت pending با این مبلغ پیدا نشد";
+        }
+        if ("SMS_REUSED".equals(label)) {
+            return "🟡 این SMS قبلاً برای پرداخت دیگری استفاده شده؛ بررسی ادمین لازم است";
         }
         if ("AMBIGUOUS".equals(label)) {
             return "🟠 چند پرداخت با مبلغ مشابه پیدا شد؛ ادمین باید بررسی کند";
