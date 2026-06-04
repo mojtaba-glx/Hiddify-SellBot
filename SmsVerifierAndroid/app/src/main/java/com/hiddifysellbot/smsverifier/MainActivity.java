@@ -40,6 +40,10 @@ public class MainActivity extends Activity {
     private ScrollView scrollView;
     private LinearLayout mainContent;
     private LinearLayout smsContent;
+    private LinearLayout rulesContent;
+    private LinearLayout botSettingsContent;
+    private LinearLayout reportsContent;
+    private LinearLayout securityContent;
     private LinearLayout topMenuPanel;
     private PopupWindow topMenuPopup;
     private CheckBox enabledBox;
@@ -121,6 +125,10 @@ public class MainActivity extends Activity {
             showMainScreen();
             return;
         }
+        if (isSubPageVisible()) {
+            showMainScreen();
+            return;
+        }
         super.onBackPressed();
     }
 
@@ -142,9 +150,22 @@ public class MainActivity extends Activity {
         smsContent.setVisibility(View.GONE);
         root.addView(smsContent, matchWrap());
 
+        rulesContent = addHiddenPage(root);
+        botSettingsContent = addHiddenPage(root);
+        reportsContent = addHiddenPage(root);
+        securityContent = addHiddenPage(root);
+
         buildMainContent();
         buildSmsContent();
         setContentView(scrollView);
+    }
+
+    private LinearLayout addHiddenPage(LinearLayout root) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setVisibility(View.GONE);
+        root.addView(page, matchWrap());
+        return page;
     }
 
     private void buildMainContent() {
@@ -228,7 +249,7 @@ public class MainActivity extends Activity {
             }
         });
         addButtonRow(topMenuPanel,
-                new String[]{"📩 پیامک‌ها", "🧪 تست اتصال"},
+                new String[]{"🔎 تراکنش‌ها", "📊 گزارش‌ها"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
@@ -241,8 +262,7 @@ public class MainActivity extends Activity {
                             @Override
                             public void onClick(View v) {
                                 dismissTopMenu();
-                                saveSettings(false);
-                                sendTestWebhook();
+                                showReportsScreen();
                             }
                         }
                 });
@@ -273,12 +293,44 @@ public class MainActivity extends Activity {
         conversationsMetricView = addMetricCard(metricRowTwo, "🏦", "بانک فعال", inputColor, strokeColor);
 
         addButtonRow(dashboard,
-                new String[]{"📩 پیامک‌های بانکی", "🧪 تست اتصال"},
+                new String[]{"🔎 بررسی تراکنش‌ها", "📜 قوانین پیامک"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 showSmsScreen();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showRulesScreen();
+                            }
+                        }
+                });
+        addButtonRow(dashboard,
+                new String[]{"🤖 تنظیمات تلگرام", "📊 گزارش‌ها"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showBotSettingsScreen();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showReportsScreen();
+                            }
+                        }
+                });
+        addButtonRow(dashboard,
+                new String[]{"🔐 امنیت", "🧪 تست اتصال"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showSecurityScreen();
                             }
                         },
                         new View.OnClickListener() {
@@ -299,7 +351,12 @@ public class MainActivity extends Activity {
         styleRounded(connectionStatusView, inputColor, strokeColor, dp(12));
         dashboard.addView(connectionStatusView, matchWrap());
 
-        LinearLayout connectionCard = addCard(mainContent);
+        addPageHeader(botSettingsContent, "🤖 تنظیمات تلگرام", "اتصال امن اپ به Webhook ربات و کلید Secret اینجا مدیریت می‌شود.");
+        addPageHeader(rulesContent, "📜 قوانین پیامک", "بانک‌ها، سرشماره‌ها و نمونه SMS هر بانک را اینجا تعریف کن.");
+        addPageHeader(reportsContent, "📊 گزارش‌ها", "لاگ فنی اتصال اپ، تست‌ها و خطاهای ارتباط با ربات.");
+        addPageHeader(securityContent, "🔐 امنیت", "چک‌لیست امنیت اتصال، جلوگیری از تکرار و نکته‌های حساس.");
+
+        LinearLayout connectionCard = addCard(botSettingsContent);
         addSectionTitle(connectionCard, "⚙️ تنظیمات اصلی");
 
         editSettingsButton = new Button(this);
@@ -340,7 +397,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        LinearLayout bankCard = addCard(mainContent);
+        LinearLayout bankCard = addCard(rulesContent);
         addSectionTitle(bankCard, "🏦 بانک‌ها و نمونه SMS");
         TextView bankHelp = new TextView(this);
         bankHelp.setText("بانک را انتخاب کن یا با دکمه + بانک جدید بساز؛ هر بانک چند سرشماره جدا و نمونه SMS خودش را دارد.");
@@ -412,7 +469,7 @@ public class MainActivity extends Activity {
         styleRounded(bankSummaryView, inputColor, strokeColor, dp(12));
         bankCard.addView(bankSummaryView, matchWrap());
 
-        LinearLayout testCard = addCard(mainContent);
+        LinearLayout testCard = addCard(rulesContent);
         addSectionTitle(testCard, "🧪 تست دستی SMS");
         manualSenderInput = addInput(testCard, "سرشماره SMS", "مثال: 20004861", false, 1);
         manualBodyInput = addInput(testCard, "متن SMS بانک", "متن پیامک بانک را برای تست اینجا paste کن", false, 4);
@@ -429,7 +486,34 @@ public class MainActivity extends Activity {
             }
         });
 
-        LinearLayout logCard = addCard(mainContent);
+        LinearLayout securityCard = addCard(securityContent);
+        addSectionTitle(securityCard, "🛡️ وضعیت امنیت");
+        TextView securityText = new TextView(this);
+        securityText.setText("✅ Secret Key روی درخواست‌ها بررسی می‌شود.\n✅ پیامک‌های تکراری دوباره تایید نمی‌شوند.\n✅ Webhook فقط با آدرس HTTPS پیشنهاد می‌شود.\n✅ Secret داخل اپ مخفی نمایش داده می‌شود.\n\nبرای تغییر Webhook یا Secret وارد «تنظیمات تلگرام» شو.");
+        securityText.setTextColor(textColor);
+        securityText.setTextSize(13);
+        securityText.setLineSpacing(0, 1.18f);
+        securityText.setPadding(dp(10), dp(10), dp(10), dp(10));
+        styleGradientRounded(securityText, softGreenColor, inputColor, greenColor, dp(18));
+        securityCard.addView(securityText, matchWrap());
+        addButtonRow(securityCard,
+                new String[]{"🤖 تنظیمات تلگرام", "📊 گزارش‌ها"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showBotSettingsScreen();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showReportsScreen();
+                            }
+                        }
+                });
+
+        LinearLayout logCard = addCard(reportsContent);
         addSectionTitle(logCard, "📋 لاگ کامل برنامه");
         TextView logHelp = new TextView(this);
         logHelp.setText("اینجا فقط لاگ فنی و خطاهاست؛ پیامک‌های بانکی از دکمه بالای صفحه باز می‌شوند.");
@@ -478,7 +562,7 @@ public class MainActivity extends Activity {
     private void buildSmsContent() {
         LinearLayout smsCard = addDashboardCard(smsContent);
         TextView title = new TextView(this);
-        title.setText("📩 صندوق پیامک‌های بانکی");
+        title.setText("🔎 بررسی تراکنش‌ها");
         title.setTextSize(21);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         title.setTextColor(textColor);
@@ -486,7 +570,7 @@ public class MainActivity extends Activity {
         smsCard.addView(title, matchWrap());
 
         TextView hint = new TextView(this);
-        hint.setText("هر سرشماره مثل یک گفت‌وگوی جدا نمایش داده می‌شود؛ تایید شده‌ها سبز، نیازمند بررسی‌ها طلایی/قرمز.");
+        hint.setText("اینجا صفحه جداگانه بررسی تراکنش‌هاست؛ هر سرشماره مثل یک گفت‌وگوی بانکی جدا نمایش داده می‌شود.");
         hint.setTextColor(mutedColor);
         hint.setTextSize(13);
         hint.setGravity(Gravity.CENTER);
@@ -495,7 +579,7 @@ public class MainActivity extends Activity {
         smsCard.addView(hint, matchWrap());
 
         addButtonRow(smsCard,
-                new String[]{"⬅️ برگشت", "🔎 بررسی پیامک‌ها"},
+                new String[]{"⬅️ داشبورد", "🔎 بررسی پیامک‌ها"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
@@ -841,8 +925,7 @@ public class MainActivity extends Activity {
     }
 
     private void showSmsScreen() {
-        mainContent.setVisibility(View.GONE);
-        smsContent.setVisibility(View.VISIBLE);
+        showOnly(smsContent);
         refreshHistory();
         scrollView.post(new Runnable() {
             @Override
@@ -853,8 +936,48 @@ public class MainActivity extends Activity {
     }
 
     private void showMainScreen() {
-        smsContent.setVisibility(View.GONE);
-        mainContent.setVisibility(View.VISIBLE);
+        showOnly(mainContent);
+        scrollToTop();
+    }
+
+    private void showRulesScreen() {
+        showOnly(rulesContent);
+        scrollToTop();
+    }
+
+    private void showBotSettingsScreen() {
+        showOnly(botSettingsContent);
+        scrollToTop();
+    }
+
+    private void showReportsScreen() {
+        showOnly(reportsContent);
+        refreshHistory();
+        scrollToTop();
+    }
+
+    private void showSecurityScreen() {
+        showOnly(securityContent);
+        scrollToTop();
+    }
+
+    private void showOnly(LinearLayout target) {
+        mainContent.setVisibility(target == mainContent ? View.VISIBLE : View.GONE);
+        smsContent.setVisibility(target == smsContent ? View.VISIBLE : View.GONE);
+        rulesContent.setVisibility(target == rulesContent ? View.VISIBLE : View.GONE);
+        botSettingsContent.setVisibility(target == botSettingsContent ? View.VISIBLE : View.GONE);
+        reportsContent.setVisibility(target == reportsContent ? View.VISIBLE : View.GONE);
+        securityContent.setVisibility(target == securityContent ? View.VISIBLE : View.GONE);
+    }
+
+    private boolean isSubPageVisible() {
+        return (rulesContent != null && rulesContent.getVisibility() == View.VISIBLE)
+                || (botSettingsContent != null && botSettingsContent.getVisibility() == View.VISIBLE)
+                || (reportsContent != null && reportsContent.getVisibility() == View.VISIBLE)
+                || (securityContent != null && securityContent.getVisibility() == View.VISIBLE);
+    }
+
+    private void scrollToTop() {
         scrollView.post(new Runnable() {
             @Override
             public void run() {
@@ -1225,6 +1348,42 @@ public class MainActivity extends Activity {
         panel.setPadding(dp(14), dp(12), dp(14), dp(14));
         styleGradientRounded(panel, glassStartColor, glassEndColor, goldColor, dp(24));
         return panel;
+    }
+
+    private void addPageHeader(LinearLayout root, String titleText, String hintText) {
+        LinearLayout header = addDashboardCard(root);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(row, matchWrap());
+
+        Button back = new Button(this);
+        back.setText("⬅️");
+        styleButton(back, false);
+        row.addView(back, new LinearLayout.LayoutParams(dp(48), dp(42)));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showMainScreen();
+            }
+        });
+
+        TextView title = new TextView(this);
+        title.setText(titleText);
+        title.setTextSize(20);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        title.setTextColor(textColor);
+        title.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        row.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        TextView hint = new TextView(this);
+        hint.setText(hintText);
+        hint.setTextSize(12);
+        hint.setTextColor(mutedColor);
+        hint.setGravity(Gravity.RIGHT);
+        hint.setLineSpacing(0, 1.15f);
+        hint.setPadding(0, dp(9), 0, 0);
+        header.addView(hint, matchWrap());
     }
 
     private void showTopMenu(View anchor) {
