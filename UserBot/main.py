@@ -3491,6 +3491,8 @@ def _build_receipt_meta(meta: dict) -> str:
         "direct_error",
         "admin_notified_at",
         "admin_notify_flow",
+        "admin_notify_error",
+        "admin_notify_error_at",
         "sms_auto_admin_report_at",
     ]
     seen = set()
@@ -3674,14 +3676,23 @@ async def _send_admin_pending_card_payment_report(
     payer_last4: str = "",
     flow: str = "",
 ) -> bool:
-    if not (ADMIN_ID and ADMIN_BOT_TOKEN and payment_id):
+    if not payment_id:
+        return False
+    if not (ADMIN_ID and ADMIN_BOT_TOKEN):
+        _update_payment_receipt_meta(
+            int(payment_id),
+            {
+                "admin_notify_error": "missing_admin_config",
+                "admin_notify_error_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
         return False
     try:
         payment = userbot_db.get_payment_by_id(int(payment_id)) or {}
         if str(payment.get("status") or "").strip().lower() != "pending":
             return False
         meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
-        if str(meta.get("admin_fid") or "").strip() or str(meta.get("admin_notified_at") or "").strip():
+        if str(meta.get("admin_notified_at") or "").strip():
             return False
 
         caption = _build_payment_report_caption(
@@ -3699,32 +3710,126 @@ async def _send_admin_pending_card_payment_report(
         ])
 
         admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        receipt_admin_fid = str(meta.get("admin_fid") or "").strip()
+        receipt_local_path = str(meta.get("local_path") or "").strip()
+        user_receipt_file_id = str(photo_file_id or meta.get("user_fid") or "").strip()
+        sent = None
+
         try:
-            f = await context.bot.get_file(photo_file_id)
-            data = await f.download_as_bytearray()
-            bio = io.BytesIO(data)
-            bio.name = "receipt.jpg"
-            sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=caption, reply_markup=kb)
+            if receipt_admin_fid:
+                sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_admin_fid, caption=caption, reply_markup=kb)
+        except Exception as e:
+            logger.warning("Failed to reuse admin receipt file_id for payment %s: %s", payment_id, e)
+
+        if sent is None and user_receipt_file_id:
             try:
-                admin_file_id = (sent.photo[-1].file_id if sent and sent.photo else None)
-            except Exception:
-                admin_file_id = None
-            if admin_file_id:
-                _save_admin_receipt_file_id(int(payment_id), admin_file_id)
+                f = await context.bot.get_file(user_receipt_file_id)
+                data = await f.download_as_bytearray()
+                bio = io.BytesIO(data)
+                bio.name = "receipt.jpg"
+                sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=caption, reply_markup=kb)
+            except Exception as e:
+                logger.warning("Failed to forward user receipt to admin for payment %s: %s", payment_id, e)
+
+        if sent is None and receipt_local_path and os.path.exists(receipt_local_path):
+            try:
+                with open(receipt_local_path, "rb") as receipt_file:
+                    sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_file, caption=caption, reply_markup=kb)
+            except Exception as e:
+                logger.warning("Failed to send local receipt to admin for payment %s: %s", payment_id, e)
+
+        if sent is None:
+            sent = await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
+
+        try:
+            admin_file_id = (sent.photo[-1].file_id if sent and getattr(sent, "photo", None) else None)
         except Exception:
-            await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
+            admin_file_id = None
+        if admin_file_id:
+            _save_admin_receipt_file_id(int(payment_id), admin_file_id)
 
         _update_payment_receipt_meta(
             int(payment_id),
             {
                 "admin_notified_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
                 "admin_notify_flow": str(flow or "").strip(),
+                "admin_notify_error": None,
+                "admin_notify_error_at": None,
             },
         )
         return True
     except Exception as e:
+        _update_payment_receipt_meta(
+            int(payment_id),
+            {
+                "admin_notify_error": str(e)[:120],
+                "admin_notify_error_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
         logger.warning("Failed to notify admin (AdminBot) for payment %s: %s", payment_id, e)
         return False
+
+
+async def _notify_unreported_pending_card_payments(context: ContextTypes.DEFAULT_TYPE, *, limit: int = 30) -> int:
+    """Retry AdminBot reports for pending card payments that have no admin notification marker."""
+    if not (ADMIN_ID and ADMIN_BOT_TOKEN):
+        return 0
+    conn = userbot_db._get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT p.id, p.tx_code, p.user_id, p.amount, p.receipt_image,
+                   u.telegram_id, u.username, u.full_name
+            FROM userbot_payments p
+            LEFT JOIN userbot_users u ON u.id = p.user_id
+            WHERE p.status = 'pending' AND p.method = 'card'
+            ORDER BY p.id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+        rows = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    sent_count = 0
+    for row in rows:
+        payment_id = int(row.get("id") or 0)
+        if payment_id <= 0:
+            continue
+        meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
+        if str(meta.get("admin_notified_at") or "").strip():
+            continue
+        user_title = (
+            str(row.get("full_name") or "").strip()
+            or str(row.get("username") or "").strip()
+            or str(row.get("telegram_id") or "").strip()
+            or str(row.get("user_id") or payment_id)
+        )
+        ok = await _send_admin_pending_card_payment_report(
+            context=context,
+            payment_id=payment_id,
+            tx_code=str(row.get("tx_code") or ""),
+            amount=int(row.get("amount") or 0),
+            photo_file_id=str(meta.get("user_fid") or "").strip(),
+            user_btn_title=user_title,
+            internal_user_id=int(row.get("user_id") or 0),
+            payer_last4=str(meta.get("payer_last4") or "").strip(),
+            flow=str(meta.get("pay_flow") or meta.get("admin_notify_flow") or "").strip(),
+        )
+        if ok:
+            sent_count += 1
+    return sent_count
+
+
+async def _pending_card_admin_notify_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        sent_count = await _notify_unreported_pending_card_payments(context)
+        if sent_count:
+            logger.info("Pending card admin notifier sent %s report(s).", sent_count)
+    except Exception as e:
+        logger.warning("Pending card admin notifier job error: %s", e)
 
 
 async def _finalize_pending_card_payment(
@@ -7746,6 +7851,18 @@ async def _post_init_set_menu(application):
             application.bot_data["_direct_buy_delivery_job_registered"] = True
     except Exception as e:
         logger.warning(f"Failed to register direct-buy delivery job: {e}")
+
+    try:
+        if application.job_queue is not None and not application.bot_data.get("_pending_card_admin_notify_job_registered"):
+            application.job_queue.run_repeating(
+                _pending_card_admin_notify_job,
+                interval=25,
+                first=8,
+                name="pending-card-admin-notifier",
+            )
+            application.bot_data["_pending_card_admin_notify_job_registered"] = True
+    except Exception as e:
+        logger.warning(f"Failed to register pending-card admin notifier job: {e}")
 
     if USERBOT_TICKET_AUTOCLOSE_ENABLED and application.job_queue is not None:
         try:
