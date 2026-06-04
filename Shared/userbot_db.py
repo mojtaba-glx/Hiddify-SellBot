@@ -3270,15 +3270,12 @@ def find_pending_card_payments_by_amount(
         return rows
 
     filtered: List[Dict[str, Any]] = []
-    unknown: List[Dict[str, Any]] = []
     for row in rows:
         meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
         payer_last4 = str(meta.get("payer_last4") or "").strip()
-        if not payer_last4:
-            unknown.append(row)
-        elif payer_last4 == last4:
+        if payer_last4 == last4:
             filtered.append(row)
-    return filtered or unknown
+    return filtered
 
 
 def find_prior_approved_sms_webhook_event(
@@ -3346,6 +3343,18 @@ def find_prior_approved_sms_webhook_event(
     return None
 
 
+def _parse_db_datetime(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw[:19], fmt)
+        except Exception:
+            continue
+    return None
+
+
 def approve_pending_card_payment_from_sms(
     payment_id: int,
     *,
@@ -3395,6 +3404,7 @@ def try_approve_payment_from_unmatched_sms(
     payment_id: int,
     *,
     max_age_minutes: int = 360,
+    receipt_lookback_minutes: int = 30,
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     init_db()
     pid = int(payment_id or 0)
@@ -3412,7 +3422,14 @@ def try_approve_payment_from_unmatched_sms(
     amount = int(payment.get("amount") or 0)
     meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
     payment_last4 = str(meta.get("payer_last4") or "").strip()
+    payment_created_at = _parse_db_datetime(payment.get("created_at"))
+    if payment_created_at is None:
+        return False, "زمان ثبت تراکنش نامعتبر است؛ بررسی دستی لازم است.", payment
+
     age = max(5, int(max_age_minutes or 360))
+    lookback = max(1, min(120, int(receipt_lookback_minutes or 30)))
+    sms_not_before = payment_created_at - timedelta(minutes=lookback)
+    sms_not_after = payment_created_at + timedelta(minutes=5)
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=age)
     cutoff_s = cutoff.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -3435,6 +3452,14 @@ def try_approve_payment_from_unmatched_sms(
         conn.close()
 
     for event in events:
+        event_created_at = _parse_db_datetime(event.get("created_at"))
+        if event_created_at is None:
+            continue
+        if event_created_at < sms_not_before:
+            continue
+        if event_created_at > sms_not_after:
+            continue
+
         candidates = _sms_amount_candidates_toman(
             int(event.get("amount_raw") or 0),
             str(event.get("currency_raw") or ""),
@@ -3442,7 +3467,10 @@ def try_approve_payment_from_unmatched_sms(
         if amount not in candidates:
             continue
         event_last4 = str(event.get("card_last4") or "").strip()
-        if payment_last4 and event_last4 and payment_last4 != event_last4:
+        if event_last4:
+            if not payment_last4 or payment_last4 != event_last4:
+                continue
+        elif payment_last4:
             continue
 
         event_id = str(event.get("event_id") or "").strip()
