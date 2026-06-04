@@ -23,7 +23,10 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,6 +56,7 @@ public class MainActivity extends Activity {
     private EditText manualSenderInput;
     private EditText manualBodyInput;
     private TextView connectionStatusView;
+    private TextView dashboardStatsView;
     private LinearLayout bankSmsListView;
     private TextView historyView;
 
@@ -70,6 +74,7 @@ public class MainActivity extends Activity {
     private boolean addingCustomBank = false;
     private boolean suppressThemeChange = false;
     private boolean suppressBankSelection = false;
+    private String selectedConversationKey = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,6 +94,11 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (smsContent != null && smsContent.getVisibility() == View.VISIBLE) {
+            if (!selectedConversationKey.isEmpty()) {
+                selectedConversationKey = "";
+                renderBankSmsBubbles();
+                return;
+            }
             showMainScreen();
             return;
         }
@@ -182,7 +192,15 @@ public class MainActivity extends Activity {
         });
 
         LinearLayout dashboard = addCard(mainContent);
-        addSectionTitle(dashboard, "⚡ دسترسی سریع");
+        addSectionTitle(dashboard, "📊 داشبورد تراکنش‌ها");
+        dashboardStatsView = new TextView(this);
+        dashboardStatsView.setText("در حال آماده‌سازی آمار...");
+        dashboardStatsView.setTextSize(13);
+        dashboardStatsView.setTextColor(textColor);
+        dashboardStatsView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        dashboardStatsView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        styleRounded(dashboardStatsView, inputColor, strokeColor, dp(12));
+        dashboard.addView(dashboardStatsView, matchWrap());
         addButtonRow(dashboard,
                 new String[]{"📩 پیامک‌های بانکی", "🧪 تست اتصال"},
                 new View.OnClickListener[]{
@@ -711,11 +729,41 @@ public class MainActivity extends Activity {
             return;
         }
         refreshBankSummary();
+        renderDashboardStats();
         renderBankSmsBubbles();
         String history = HistoryStore.get(this);
         historyView.setText(history == null || history.trim().isEmpty()
                 ? "هنوز لاگی ثبت نشده است."
                 : makeLogReadable(history));
+    }
+
+    private void renderDashboardStats() {
+        if (dashboardStatsView == null) {
+            return;
+        }
+        HistoryStore.Entry[] entries = HistoryStore.getBankSmsEntries(this);
+        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+        int todayCount = 0;
+        int approved = 0;
+        int review = 0;
+        int conversations = buildConversationSummaries(entries).size();
+        for (HistoryStore.Entry entry : entries) {
+            if (entry.time != null && entry.time.startsWith(today)) {
+                todayCount++;
+            }
+            if (entry.approved) {
+                approved++;
+            } else if (entry.rejected) {
+                review++;
+            }
+        }
+        dashboardStatsView.setText(
+                "وضعیت ربات: آماده ✅"
+                        + "\nپیامک‌های امروز: " + todayCount
+                        + "\nتاییدشده‌ها: " + approved
+                        + "\nنیازمند بررسی: " + review
+                        + "\nمکالمه‌های بانکی: " + conversations
+        );
     }
 
     private void showSmsScreen() {
@@ -757,7 +805,33 @@ public class MainActivity extends Activity {
             bankSmsListView.addView(empty, matchWrap());
             return;
         }
-        Map<String, LinearLayout> groups = new LinkedHashMap<>();
+
+        Map<String, ConversationSummary> conversations = buildConversationSummaries(entries);
+        if (!selectedConversationKey.isEmpty()) {
+            ConversationSummary selected = conversations.get(selectedConversationKey);
+            if (selected == null) {
+                selectedConversationKey = "";
+            } else {
+                renderConversationThread(selected, entries);
+                return;
+            }
+        }
+
+        TextView header = new TextView(this);
+        header.setText("صندوق پیامک‌های بانکی\n" + conversations.size() + " مکالمه فعال");
+        header.setTextSize(14);
+        header.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        header.setTextColor(textColor);
+        header.setPadding(dp(4), dp(2), dp(4), dp(10));
+        bankSmsListView.addView(header, matchWrap());
+
+        for (ConversationSummary summary : conversations.values()) {
+            addConversationRow(bankSmsListView, summary);
+        }
+    }
+
+    private Map<String, ConversationSummary> buildConversationSummaries(HistoryStore.Entry[] entries) {
+        Map<String, ConversationSummary> conversations = new LinkedHashMap<>();
         for (HistoryStore.Entry entry : entries) {
             String bank = extractDetailLine(entry.detail, "🏦 بانک:");
             String sender = extractDetailLine(entry.detail, "👤 سرشماره:");
@@ -772,29 +846,126 @@ public class MainActivity extends Activity {
                 sender = "بدون سرشماره";
             }
             String key = bank + "|" + sender;
-            LinearLayout group = groups.get(key);
-            if (group == null) {
-                group = addSmsGroup(bankSmsListView, bank, sender);
-                groups.put(key, group);
+            ConversationSummary summary = conversations.get(key);
+            if (summary == null) {
+                summary = new ConversationSummary(key, bank, sender, entry);
+                conversations.put(key, summary);
             }
-            addSmsBubble(group, entry);
+            summary.total++;
+            if (entry.approved) {
+                summary.approved++;
+            } else if (entry.rejected) {
+                summary.rejected++;
+            }
         }
+        return conversations;
     }
 
-    private LinearLayout addSmsGroup(LinearLayout parent, String bank, String sender) {
-        LinearLayout groupCard = addCard(parent);
-        TextView header = new TextView(this);
-        header.setText("🏦 " + bank + "\n📨 سرشماره: " + sender);
-        header.setTextSize(13);
-        header.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        header.setTextColor(textColor);
-        header.setPadding(dp(4), dp(2), dp(4), dp(8));
-        groupCard.addView(header, matchWrap());
+    private void addConversationRow(LinearLayout parent, final ConversationSummary summary) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(10), dp(8), dp(10));
+        styleRounded(row, inputColor, strokeColor, dp(18));
+        LinearLayout.LayoutParams rowLp = matchWrap();
+        rowLp.setMargins(0, dp(5), 0, dp(5));
+        parent.addView(row, rowLp);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                selectedConversationKey = summary.key;
+                renderBankSmsBubbles();
+                scrollView.smoothScrollTo(0, 0);
+            }
+        });
 
-        LinearLayout messages = new LinearLayout(this);
-        messages.setOrientation(LinearLayout.VERTICAL);
-        groupCard.addView(messages, matchWrap());
-        return messages;
+        TextView avatar = new TextView(this);
+        avatar.setText(summary.bank.length() > 0 ? summary.bank.substring(0, 1) : "ب");
+        avatar.setTextSize(22);
+        avatar.setTypeface(Typeface.DEFAULT_BOLD);
+        avatar.setTextColor(Color.WHITE);
+        avatar.setGravity(Gravity.CENTER);
+        styleCircle(avatar, avatarColor(summary.key));
+        LinearLayout.LayoutParams avatarLp = new LinearLayout.LayoutParams(dp(58), dp(58));
+        avatarLp.setMargins(dp(8), 0, dp(8), 0);
+        row.addView(avatar, avatarLp);
+
+        LinearLayout textBox = new LinearLayout(this);
+        textBox.setOrientation(LinearLayout.VERTICAL);
+        row.addView(textBox, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        TextView sender = new TextView(this);
+        sender.setText(summary.sender);
+        sender.setTextSize(18);
+        sender.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        sender.setTextColor(textColor);
+        textBox.addView(sender, matchWrap());
+
+        TextView bank = new TextView(this);
+        bank.setText(summary.bank + " • " + summary.total + " پیام • " + summaryStatus(summary));
+        bank.setTextSize(12);
+        bank.setTextColor(mutedColor);
+        textBox.addView(bank, matchWrap());
+
+        TextView preview = new TextView(this);
+        preview.setText(shortPreview(summary.latest.title + " — " + compactSmsDetail(summary.latest.detail)));
+        preview.setTextSize(12);
+        preview.setTextColor(mutedColor);
+        preview.setSingleLine(true);
+        textBox.addView(preview, matchWrap());
+
+        TextView time = new TextView(this);
+        time.setText(shortTime(summary.latest.time));
+        time.setTextSize(12);
+        time.setTextColor(mutedColor);
+        row.addView(time, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void renderConversationThread(final ConversationSummary summary, HistoryStore.Entry[] entries) {
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(0, 0, 0, dp(8));
+        bankSmsListView.addView(head, matchWrap());
+
+        Button back = new Button(this);
+        back.setText("⬅️ لیست");
+        styleButton(back, false);
+        head.addView(back, new LinearLayout.LayoutParams(dp(96), LinearLayout.LayoutParams.WRAP_CONTENT));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                selectedConversationKey = "";
+                renderBankSmsBubbles();
+            }
+        });
+
+        TextView title = new TextView(this);
+        title.setText(summary.sender + "\n" + summary.bank);
+        title.setTextSize(16);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        title.setTextColor(textColor);
+        title.setGravity(Gravity.CENTER);
+        head.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        for (HistoryStore.Entry entry : entries) {
+            String bank = extractDetailLine(entry.detail, "🏦 بانک:");
+            String sender = extractDetailLine(entry.detail, "👤 سرشماره:");
+            if (bank.isEmpty() && entry.title.contains("بررسی")) {
+                bank = "وضعیت بررسی پیامک‌ها";
+                sender = "سیستم";
+            }
+            if (bank.isEmpty()) {
+                bank = "پیامک‌های بانکی";
+            }
+            if (sender.isEmpty()) {
+                sender = "بدون سرشماره";
+            }
+            String key = bank + "|" + sender;
+            if (summary.key.equals(key)) {
+                addSmsBubble(bankSmsListView, entry);
+            }
+        }
     }
 
     private void addSmsBubble(LinearLayout parent, HistoryStore.Entry entry) {
@@ -819,6 +990,63 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
         row.addView(bubble, lp);
+    }
+
+    private String summaryStatus(ConversationSummary summary) {
+        if (summary.rejected > 0) {
+            return summary.rejected + " نیازمند بررسی";
+        }
+        if (summary.approved > 0) {
+            return summary.approved + " تاییدشده";
+        }
+        return "در انتظار";
+    }
+
+    private String shortPreview(String text) {
+        if (text == null) {
+            return "";
+        }
+        String oneLine = text.replace("\n", " ").trim();
+        return oneLine.length() > 72 ? oneLine.substring(0, 72) + "..." : oneLine;
+    }
+
+    private String shortTime(String time) {
+        if (time == null) {
+            return "";
+        }
+        String value = time.trim();
+        if (value.length() >= 16) {
+            return value.substring(11, 16);
+        }
+        return value;
+    }
+
+    private int avatarColor(String key) {
+        int[] colors = {
+                Color.parseColor("#0EA5E9"),
+                Color.parseColor("#EC4899"),
+                Color.parseColor("#22C55E"),
+                Color.parseColor("#F59E0B"),
+                Color.parseColor("#8B5CF6")
+        };
+        return colors[(key.hashCode() & 0x7fffffff) % colors.length];
+    }
+
+    private static final class ConversationSummary {
+        final String key;
+        final String bank;
+        final String sender;
+        final HistoryStore.Entry latest;
+        int total;
+        int approved;
+        int rejected;
+
+        ConversationSummary(String key, String bank, String sender, HistoryStore.Entry latest) {
+            this.key = key;
+            this.bank = bank;
+            this.sender = sender;
+            this.latest = latest;
+        }
     }
 
     private String compactSmsDetail(String detail) {
@@ -958,6 +1186,13 @@ public class MainActivity extends Activity {
         bg.setColor(fill);
         bg.setStroke(dp(1), stroke);
         bg.setCornerRadius(radius);
+        view.setBackground(bg);
+    }
+
+    private void styleCircle(View view, int fill) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setColor(fill);
         view.setBackground(bg);
     }
 
