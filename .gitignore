@@ -28,5 +28,8 @@ SmsVerifierAndroid/.idea/
 SmsVerifierAndroid/local.properties
 SmsVerifierAndroid/build/
 SmsVerifierAndroid/app/build/
+SmsVerifierAndroid/keystore.properties
+SmsVerifierAndroid/*.jks
+SmsVerifierAndroid/*.keystore
 *.apk
 *.aab

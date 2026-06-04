@@ -2,14 +2,18 @@ package com.hiddifysellbot.smsverifier;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -39,6 +43,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQ_SMS_PERMISSION = 1001;
+    private static final int REQ_NOTIFICATION_PERMISSION = 1002;
     private static final int MAX_VISIBLE_BANK_SMS = 15;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -54,12 +59,12 @@ public class MainActivity extends Activity {
     private CheckBox enabledBox;
     private EditText webhookInput;
     private EditText secretInput;
-    private CheckBox cardLast4Box;
     private Spinner themeSpinner;
     private Button editSettingsButton;
     private Button saveSettingsButton;
     private Spinner bankSpinner;
     private CheckBox bankEnabledBox;
+    private CheckBox bankCardLast4Box;
     private EditText customBankNameInput;
     private EditText bankSenderInput;
     private EditText bankSampleInput;
@@ -109,6 +114,7 @@ public class MainActivity extends Activity {
         buildUi();
         loadSettings();
         requestSmsPermission();
+        ensureMonitorServiceState();
     }
 
     @Override
@@ -406,11 +412,6 @@ public class MainActivity extends Activity {
         webhookInput = addInput(connectionCard, "Webhook URL ربات", "https://example.com/payment/sms-webhook", false, 1);
         secretInput = addInput(connectionCard, "Secret Key اتصال", "کلید امنیتی مشترک با ربات", true, 1);
 
-        cardLast4Box = new CheckBox(this);
-        cardLast4Box.setText("اگر SMS چهار رقم کارت مشتری داشت، به ربات ارسال شود");
-        styleCheckBox(cardLast4Box);
-        connectionCard.addView(cardLast4Box, matchWrap());
-
         saveSettingsButton = new Button(this);
         saveSettingsButton.setText("💾 ذخیره تنظیمات اصلی");
         styleButton(saveSettingsButton, true);
@@ -462,6 +463,11 @@ public class MainActivity extends Activity {
         bankEnabledBox.setText("این بانک فعال باشد");
         styleCheckBox(bankEnabledBox);
         bankCard.addView(bankEnabledBox, matchWrap());
+
+        bankCardLast4Box = new CheckBox(this);
+        bankCardLast4Box.setText("اگر SMS همین بانک چهار رقم کارت مبدا داشت، برای تطبیق دقیق ارسال شود");
+        styleCheckBox(bankCardLast4Box);
+        bankCard.addView(bankCardLast4Box, matchWrap());
 
         bankSenderInput = addInput(bankCard, "سرشماره‌های SMS همین بانک", "مثال: 20004861، 3000...\nهر خط یا کاما یک سرشماره", false, 3);
         bankSampleInput = addInput(bankCard, "نمونه SMS همین بانک", "نمونه پیامک واریز همین بانک را کامل اینجا paste کن", false, 8);
@@ -522,6 +528,18 @@ public class MainActivity extends Activity {
         securityText.setPadding(dp(10), dp(10), dp(10), dp(10));
         styleGradientRounded(securityText, softGreenColor, inputColor, greenColor, dp(18));
         securityCard.addView(securityText, matchWrap());
+
+        Button batteryButton = new Button(this);
+        batteryButton.setText("🔋 باز کردن تنظیمات مصرف باتری");
+        styleButton(batteryButton, true);
+        securityCard.addView(batteryButton, matchWrap());
+        batteryButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openBatteryOptimizationSettings();
+            }
+        });
+
         addButtonRow(securityCard,
                 new String[]{"🤖 تنظیمات تلگرام", "📊 گزارش‌ها"},
                 new View.OnClickListener[]{
@@ -694,7 +712,6 @@ public class MainActivity extends Activity {
         enabledBox.setChecked(settings.isEnabled());
         webhookInput.setText(settings.getWebhookUrl());
         secretInput.setText(settings.getSecret());
-        cardLast4Box.setChecked(settings.isCardLast4Enabled());
         suppressThemeChange = true;
         themeSpinner.setSelection(themeIndex(settings.getThemeMode()));
         suppressThemeChange = false;
@@ -714,9 +731,10 @@ public class MainActivity extends Activity {
                 text(webhookInput),
                 text(secretInput),
                 "",
-                cardLast4Box.isChecked()
+                false
         );
         settings.saveThemeMode(newTheme);
+        ensureMonitorServiceState();
         if (showToast) {
             Toast.makeText(this, "تنظیمات ذخیره شد", Toast.LENGTH_SHORT).show();
         }
@@ -729,7 +747,6 @@ public class MainActivity extends Activity {
         enabledBox.setEnabled(editSettingsMode);
         webhookInput.setEnabled(editSettingsMode);
         secretInput.setEnabled(editSettingsMode);
-        cardLast4Box.setEnabled(editSettingsMode);
         saveSettingsButton.setEnabled(editSettingsMode);
         saveSettingsButton.setAlpha(editSettingsMode ? 1f : 0.45f);
         editSettingsButton.setText(editSettingsMode
@@ -762,6 +779,7 @@ public class MainActivity extends Activity {
                 || bankEditTitleView == null
                 || customBankNameInput == null
                 || bankEnabledBox == null
+                || bankCardLast4Box == null
                 || bankSenderInput == null
                 || bankSampleInput == null) {
             return;
@@ -772,6 +790,7 @@ public class MainActivity extends Activity {
         customBankNameInput.setVisibility(bank.custom ? View.VISIBLE : View.GONE);
         customBankNameInput.setText(bank.custom ? bank.name : "");
         bankEnabledBox.setChecked(bank.enabled);
+        bankCardLast4Box.setChecked(bank.cardLast4Enabled);
         bankSenderInput.setText(bank.senderFilters);
         bankSampleInput.setText(bank.sampleSms);
         if (deleteBankButton != null) {
@@ -786,6 +805,7 @@ public class MainActivity extends Activity {
         customBankNameInput.setVisibility(View.VISIBLE);
         customBankNameInput.setText("");
         bankEnabledBox.setChecked(true);
+        bankCardLast4Box.setChecked(false);
         bankSenderInput.setText("");
         bankSampleInput.setText("");
         if (deleteBankButton != null) {
@@ -797,6 +817,7 @@ public class MainActivity extends Activity {
 
     private void saveSelectedBank() {
         boolean bankEnabled = bankEnabledBox.isChecked();
+        boolean cardLast4Enabled = bankCardLast4Box.isChecked();
         String name = text(customBankNameInput);
         String senders = text(bankSenderInput);
         String sample = text(bankSampleInput);
@@ -816,7 +837,7 @@ public class MainActivity extends Activity {
         SettingsStore settings = new SettingsStore(this);
         int selectedIndex;
         if (addingCustomBank) {
-            selectedIndex = settings.addCustomBank(name, bankEnabled, senders, sample);
+            selectedIndex = settings.addCustomBank(name, bankEnabled, senders, sample, cardLast4Enabled);
             if (selectedIndex < 0) {
                 Toast.makeText(this, "فعلاً حداکثر ۵ بانک سفارشی قابل ثبت است", Toast.LENGTH_LONG).show();
                 return;
@@ -825,7 +846,7 @@ public class MainActivity extends Activity {
             rebuildBankSpinner(selectedIndex);
         } else {
             selectedIndex = bankSpinner.getSelectedItemPosition();
-            settings.saveBank(selectedIndex, name, bankEnabled, senders, sample);
+            settings.saveBank(selectedIndex, name, bankEnabled, senders, sample, cardLast4Enabled);
             loadSelectedBank();
         }
         refreshBankSummary();
@@ -924,6 +945,51 @@ public class MainActivity extends Activity {
                         new String[]{Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS},
                         REQ_SMS_PERMISSION
                 );
+            }
+        }
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQ_NOTIFICATION_PERMISSION
+            );
+        }
+    }
+
+    private void ensureMonitorServiceState() {
+        SettingsStore settings = new SettingsStore(this);
+        if (settings.isEnabled()) {
+            requestNotificationPermissionIfNeeded();
+            SmsMonitorService.start(this);
+        } else {
+            SmsMonitorService.stop(this);
+        }
+    }
+
+    private void openBatteryOptimizationSettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+                if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(getPackageName())) {
+                    Intent requestIntent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    requestIntent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(requestIntent);
+                    Toast.makeText(this, "برای کارکرد پایدار، اجازه فعالیت پس‌زمینه را تایید کن", Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
+            Intent detailsIntent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            detailsIntent.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(detailsIntent);
+            Toast.makeText(this, "در Battery، حالت Unrestricted/بدون محدودیت را انتخاب کن", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
+            } catch (Exception ignored) {
+                Toast.makeText(this, "تنظیمات گوشی باز نشد؛ دستی وارد Battery app settings شو", Toast.LENGTH_LONG).show();
             }
         }
     }

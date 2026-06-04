@@ -122,6 +122,10 @@ public final class SettingsStore {
     }
 
     public int addCustomBank(String name, boolean enabled, String senderFilters, String sampleSms) {
+        return addCustomBank(name, enabled, senderFilters, sampleSms, false);
+    }
+
+    public int addCustomBank(String name, boolean enabled, String senderFilters, String sampleSms, boolean cardLast4Enabled) {
         int count = getCustomBankCount();
         if (count >= MAX_CUSTOM_BANKS) {
             return -1;
@@ -133,6 +137,7 @@ public final class SettingsStore {
                 .putBoolean(prefix + "_enabled", enabled)
                 .putString(prefix + "_senders", safe(senderFilters))
                 .putString(prefix + "_sample", safe(sampleSms))
+                .putBoolean(prefix + "_card_last4", cardLast4Enabled)
                 .apply();
         return BANK_IDS.length + count;
     }
@@ -142,7 +147,7 @@ public final class SettingsStore {
             return;
         }
         if (!isCustomBankIndex(index)) {
-            saveBank(index, getBank(index).name, false, "", "");
+            saveBank(index, getBank(index).name, false, "", "", false);
             return;
         }
         deleteCustomBank(index - BANK_IDS.length);
@@ -162,7 +167,7 @@ public final class SettingsStore {
 
     public BankConfig getBank(int index) {
         if (index < 0 || index >= getBankCount()) {
-            return new BankConfig("", "", false, "", "", false);
+            return new BankConfig("", "", false, "", "", false, false);
         }
         if (index >= BANK_IDS.length) {
             int customIndex = index - BANK_IDS.length;
@@ -173,6 +178,7 @@ public final class SettingsStore {
                     prefs.getBoolean(prefix + "_enabled", false),
                     prefs.getString(prefix + "_senders", ""),
                     prefs.getString(prefix + "_sample", ""),
+                    prefs.getBoolean(prefix + "_card_last4", prefs.getBoolean(KEY_CARD_LAST4_ENABLED, false)),
                     true
             );
         }
@@ -183,15 +189,20 @@ public final class SettingsStore {
                 prefs.getBoolean(prefix + "_enabled", false),
                 prefs.getString(prefix + "_senders", ""),
                 prefs.getString(prefix + "_sample", ""),
+                prefs.getBoolean(prefix + "_card_last4", prefs.getBoolean(KEY_CARD_LAST4_ENABLED, false)),
                 false
         );
     }
 
     public void saveBank(int index, boolean enabled, String senderFilters, String sampleSms) {
-        saveBank(index, getBank(index).name, enabled, senderFilters, sampleSms);
+        saveBank(index, getBank(index).name, enabled, senderFilters, sampleSms, getBank(index).cardLast4Enabled);
     }
 
     public void saveBank(int index, String name, boolean enabled, String senderFilters, String sampleSms) {
+        saveBank(index, name, enabled, senderFilters, sampleSms, getBank(index).cardLast4Enabled);
+    }
+
+    public void saveBank(int index, String name, boolean enabled, String senderFilters, String sampleSms, boolean cardLast4Enabled) {
         if (index < 0 || index >= BANK_IDS.length) {
             if (!isCustomBankIndex(index)) {
                 return;
@@ -203,6 +214,7 @@ public final class SettingsStore {
                     .putBoolean(prefix + "_enabled", enabled)
                     .putString(prefix + "_senders", safe(senderFilters))
                     .putString(prefix + "_sample", safe(sampleSms))
+                    .putBoolean(prefix + "_card_last4", cardLast4Enabled)
                     .apply();
             return;
         }
@@ -211,6 +223,7 @@ public final class SettingsStore {
                 .putBoolean(prefix + "_enabled", enabled)
                 .putString(prefix + "_senders", safe(senderFilters))
                 .putString(prefix + "_sample", safe(sampleSms))
+                .putBoolean(prefix + "_card_last4", cardLast4Enabled)
                 .apply();
     }
 
@@ -227,12 +240,14 @@ public final class SettingsStore {
             editor.putBoolean(current + "_enabled", prefs.getBoolean(next + "_enabled", false));
             editor.putString(current + "_senders", prefs.getString(next + "_senders", ""));
             editor.putString(current + "_sample", prefs.getString(next + "_sample", ""));
+            editor.putBoolean(current + "_card_last4", prefs.getBoolean(next + "_card_last4", false));
         }
         String last = customBankPrefix(count - 1);
         editor.remove(last + "_name")
                 .remove(last + "_enabled")
                 .remove(last + "_senders")
                 .remove(last + "_sample")
+                .remove(last + "_card_last4")
                 .putInt(KEY_CUSTOM_BANK_COUNT, count - 1)
                 .apply();
     }
@@ -254,6 +269,7 @@ public final class SettingsStore {
             if (bank.sampleSms.trim().isEmpty()) {
                 out.append(" | نمونه SMS: ثبت نشده");
             }
+            out.append(" | چهار رقم کارت: ").append(bank.cardLast4Enabled ? "فعال" : "خاموش");
         }
         if (out.length() == 0) {
             return "هنوز بانکی فعال نشده است.";
@@ -341,6 +357,23 @@ public final class SettingsStore {
             }
         }
         return false;
+    }
+
+    public boolean isCardLast4EnabledFor(String sender, String body) {
+        String bankName = getMatchedConfiguredBankName(sender, body);
+        if (!bankName.isEmpty()) {
+            String needle = normalizeBankText(bankName);
+            for (int i = 0; i < getBankCount(); i++) {
+                BankConfig bank = getBank(i);
+                if (!bank.enabled) {
+                    continue;
+                }
+                if (normalizeBankText(bank.name).equals(needle)) {
+                    return bank.cardLast4Enabled;
+                }
+            }
+        }
+        return prefs.getBoolean(KEY_CARD_LAST4_ENABLED, false);
     }
 
     public List<String> getSenderFilters() {
@@ -499,14 +532,16 @@ public final class SettingsStore {
         public final boolean enabled;
         public final String senderFilters;
         public final String sampleSms;
+        public final boolean cardLast4Enabled;
         public final boolean custom;
 
-        private BankConfig(String id, String name, boolean enabled, String senderFilters, String sampleSms, boolean custom) {
+        private BankConfig(String id, String name, boolean enabled, String senderFilters, String sampleSms, boolean cardLast4Enabled, boolean custom) {
             this.id = id;
             this.name = name;
             this.enabled = enabled;
             this.senderFilters = senderFilters == null ? "" : senderFilters;
             this.sampleSms = sampleSms == null ? "" : sampleSms;
+            this.cardLast4Enabled = cardLast4Enabled;
             this.custom = custom;
         }
     }

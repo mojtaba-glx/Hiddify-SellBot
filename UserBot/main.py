@@ -3808,6 +3808,12 @@ async def _finalize_pending_card_payment(
             auto_payment or userbot_db.get_payment_by_id(int(payment_id)) or {},
             flow=flow,
         )
+        if str(flow or "").strip().lower() == "direct_buy_payment":
+            try:
+                app = getattr(context, "application", None) or SimpleNamespace(bot=context.bot)
+                await _process_approved_direct_buy_payments(app)
+            except Exception as e:
+                logger.warning("Immediate direct-buy delivery after SMS approval failed payment=%s: %s", payment_id, e)
 
     if (not auto_approved) and payment_id:
         uname = update.effective_user.username
@@ -3897,7 +3903,8 @@ async def _process_approved_direct_buy_payments(application) -> None:
             if str(meta.get("pay_flow") or "").strip().lower() != "direct_buy":
                 continue
             done_state = str(meta.get("direct_done") or "").strip().lower()
-            if done_state in {"1", "err"}:
+            direct_error = str(meta.get("direct_error") or "").strip().lower()
+            if done_state in {"1", "processing"} or (done_state == "err" and direct_error == "invalid_meta"):
                 continue
 
             internal_user_id = int(row.get("user_id") or 0)
@@ -3918,6 +3925,10 @@ async def _process_approved_direct_buy_payments(application) -> None:
                 _update_payment_receipt_meta(payment_id, {"direct_done": "err", "direct_error": "invalid_meta"})
                 continue
 
+            _update_payment_receipt_meta(
+                payment_id,
+                {"direct_done": "processing", "direct_error": None},
+            )
             tg_user = SimpleNamespace(
                 id=tg_id,
                 username=str(row.get("username") or ""),
@@ -3961,6 +3972,14 @@ async def _process_approved_direct_buy_payments(application) -> None:
                 )
         except Exception as e:
             # یک پرداخت خراب نباید کل صف پرداخت مستقیم را متوقف کند.
+            _update_payment_receipt_meta(
+                payment_id,
+                {
+                    "direct_done": "err",
+                    "direct_error": "fulfillment_exception",
+                    "direct_error_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
             logger.exception(
                 "Direct-buy fulfillment row failed (payment_id=%s): %s",
                 payment_id,
@@ -3978,6 +3997,13 @@ async def _direct_buy_delivery_loop(application) -> None:
         except Exception as e:
             logger.warning("Direct-buy delivery loop error: %s", e)
         await asyncio.sleep(6)
+
+
+async def _direct_buy_delivery_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await _process_approved_direct_buy_payments(context.application)
+    except Exception as e:
+        logger.warning("Direct-buy delivery job error: %s", e)
 
 
 def _resolve_plan_display_mode(server_block: Optional[Dict[str, Any]]) -> str:
@@ -7708,6 +7734,18 @@ async def _post_init_set_menu(application):
             application.bot_data["_direct_buy_delivery_task"] = task
     except Exception as e:
         logger.warning(f"Failed to start direct-buy delivery loop: {e}")
+
+    try:
+        if application.job_queue is not None and not application.bot_data.get("_direct_buy_delivery_job_registered"):
+            application.job_queue.run_repeating(
+                _direct_buy_delivery_job,
+                interval=10,
+                first=5,
+                name="userbot-direct-buy-delivery",
+            )
+            application.bot_data["_direct_buy_delivery_job_registered"] = True
+    except Exception as e:
+        logger.warning(f"Failed to register direct-buy delivery job: {e}")
 
     if USERBOT_TICKET_AUTOCLOSE_ENABLED and application.job_queue is not None:
         try:

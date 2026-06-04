@@ -62,7 +62,7 @@ public final class SmsProcessor {
         event.amount = amount;
         event.currency = currency;
         event.reference = PaymentSmsParser.extractReference(body);
-        event.cardLast4 = settings.isCardLast4Enabled() && detectedCardLast4.length() == 4 ? detectedCardLast4 : "";
+        event.cardLast4 = settings.isCardLast4EnabledFor(event.sender, event.body) && detectedCardLast4.length() == 4 ? detectedCardLast4 : "";
         event.cardLast4Required = false;
         event.receivedAt = receivedAt;
         event.deviceTime = System.currentTimeMillis();
