@@ -57,6 +57,10 @@ public class MainActivity extends Activity {
     private EditText manualBodyInput;
     private TextView connectionStatusView;
     private TextView dashboardStatsView;
+    private TextView todayMetricView;
+    private TextView approvedMetricView;
+    private TextView reviewMetricView;
+    private TextView conversationsMetricView;
     private LinearLayout bankSmsListView;
     private TextView historyView;
 
@@ -70,6 +74,14 @@ public class MainActivity extends Activity {
     private int approvedColor;
     private int rejectedColor;
     private int neutralColor;
+    private int pageTopColor;
+    private int pageBottomColor;
+    private int goldColor;
+    private int greenColor;
+    private int glassStartColor;
+    private int glassEndColor;
+    private int softGoldColor;
+    private int softGreenColor;
     private boolean editSettingsMode = false;
     private boolean addingCustomBank = false;
     private boolean suppressThemeChange = false;
@@ -110,8 +122,8 @@ public class MainActivity extends Activity {
         scrollView.setBackgroundColor(bgColor);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(12), dp(12), dp(20));
-        root.setBackgroundColor(bgColor);
+        root.setPadding(dp(14), dp(14), dp(14), dp(22));
+        stylePageBackground(root);
         scrollView.addView(root);
 
         mainContent = new LinearLayout(this);
@@ -129,15 +141,23 @@ public class MainActivity extends Activity {
     }
 
     private void buildMainContent() {
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setPadding(dp(14), dp(14), dp(14), dp(14));
+        styleGradientRounded(hero, glassStartColor, glassEndColor, strokeColor, dp(26));
+        LinearLayout.LayoutParams heroLp = matchWrap();
+        heroLp.setMargins(0, 0, 0, dp(12));
+        mainContent.addView(hero, heroLp);
+
         LinearLayout topRow = new LinearLayout(this);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
-        mainContent.addView(topRow, matchWrap());
+        hero.addView(topRow, matchWrap());
 
         Button menuButton = new Button(this);
-        menuButton.setText("⋮");
+        menuButton.setText("☰");
         styleButton(menuButton, false);
-        topRow.addView(menuButton, new LinearLayout.LayoutParams(dp(46), LinearLayout.LayoutParams.WRAP_CONTENT));
+        topRow.addView(menuButton, new LinearLayout.LayoutParams(dp(46), dp(42)));
         menuButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -146,20 +166,31 @@ public class MainActivity extends Activity {
         });
 
         TextView title = new TextView(this);
-        title.setText("🛡️ SellBot SMS Verifier");
-        title.setTextSize(20);
+        title.setText("SellBot SMS Verifier");
+        title.setTextSize(21);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         title.setTextColor(textColor);
-        title.setGravity(Gravity.CENTER);
+        title.setGravity(Gravity.CENTER_VERTICAL);
         topRow.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
+        TextView liveBadge = new TextView(this);
+        liveBadge.setText("LIVE ✅");
+        liveBadge.setTextSize(11);
+        liveBadge.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        liveBadge.setTextColor(Color.parseColor("#07111F"));
+        liveBadge.setGravity(Gravity.CENTER);
+        liveBadge.setPadding(dp(10), dp(5), dp(10), dp(5));
+        styleRounded(liveBadge, greenColor, greenColor, dp(999));
+        topRow.addView(liveBadge, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
         TextView desc = new TextView(this);
-        desc.setText("پردازش SMS بانک، تایید خودکار پرداخت و گزارش شفاف برای فروشگاه شما.");
-        desc.setTextSize(12);
+        desc.setText("داشبورد هوشمند تایید پرداخت؛ SMS بانک را می‌خواند، با ربات هماهنگ می‌کند و نتیجه را شفاف نگه می‌دارد.");
+        desc.setTextSize(13);
         desc.setTextColor(mutedColor);
-        desc.setGravity(Gravity.CENTER);
-        desc.setPadding(0, dp(6), 0, dp(10));
-        mainContent.addView(desc, matchWrap());
+        desc.setGravity(Gravity.RIGHT);
+        desc.setLineSpacing(0, 1.15f);
+        desc.setPadding(0, dp(12), 0, 0);
+        hero.addView(desc, matchWrap());
 
         topMenuPanel = addCard(mainContent);
         topMenuPanel.setVisibility(View.GONE);
@@ -191,16 +222,31 @@ public class MainActivity extends Activity {
             }
         });
 
-        LinearLayout dashboard = addCard(mainContent);
-        addSectionTitle(dashboard, "📊 داشبورد تراکنش‌ها");
+        LinearLayout dashboard = addDashboardCard(mainContent);
+        addSectionTitle(dashboard, "💎 داشبورد تراکنش‌ها");
         dashboardStatsView = new TextView(this);
-        dashboardStatsView.setText("در حال آماده‌سازی آمار...");
-        dashboardStatsView.setTextSize(13);
+        dashboardStatsView.setText("وضعیت سیستم در حال آماده‌سازی...");
+        dashboardStatsView.setTextSize(12);
         dashboardStatsView.setTextColor(textColor);
         dashboardStatsView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        dashboardStatsView.setPadding(dp(10), dp(10), dp(10), dp(10));
-        styleRounded(dashboardStatsView, inputColor, strokeColor, dp(12));
+        dashboardStatsView.setPadding(dp(12), dp(9), dp(12), dp(9));
+        styleGradientRounded(dashboardStatsView, softGreenColor, inputColor, greenColor, dp(18));
         dashboard.addView(dashboardStatsView, matchWrap());
+
+        LinearLayout metricRowOne = new LinearLayout(this);
+        metricRowOne.setOrientation(LinearLayout.HORIZONTAL);
+        metricRowOne.setPadding(0, dp(8), 0, dp(2));
+        dashboard.addView(metricRowOne, matchWrap());
+        todayMetricView = addMetricCard(metricRowOne, "📨", "پیامک امروز", softGoldColor, goldColor);
+        approvedMetricView = addMetricCard(metricRowOne, "✅", "تایید شده", softGreenColor, greenColor);
+
+        LinearLayout metricRowTwo = new LinearLayout(this);
+        metricRowTwo.setOrientation(LinearLayout.HORIZONTAL);
+        metricRowTwo.setPadding(0, dp(2), 0, dp(8));
+        dashboard.addView(metricRowTwo, matchWrap());
+        reviewMetricView = addMetricCard(metricRowTwo, "⚠️", "نیاز بررسی", neutralColor, goldColor);
+        conversationsMetricView = addMetricCard(metricRowTwo, "🏦", "بانک فعال", inputColor, strokeColor);
+
         addButtonRow(dashboard,
                 new String[]{"📩 پیامک‌های بانکی", "🧪 تست اتصال"},
                 new View.OnClickListener[]{
@@ -405,20 +451,21 @@ public class MainActivity extends Activity {
     }
 
     private void buildSmsContent() {
-        LinearLayout smsCard = addCard(smsContent);
+        LinearLayout smsCard = addDashboardCard(smsContent);
         TextView title = new TextView(this);
-        title.setText("📩 پیامک‌های بانکی");
-        title.setTextSize(19);
+        title.setText("📩 صندوق پیامک‌های بانکی");
+        title.setTextSize(21);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         title.setTextColor(textColor);
         title.setGravity(Gravity.CENTER);
         smsCard.addView(title, matchWrap());
 
         TextView hint = new TextView(this);
-        hint.setText("مثل برنامه پیامک: تاییدشده‌ها ✅ و تاییدنشد‌ه‌ها ❌ نمایش داده می‌شوند. پیام‌ها ذخیره می‌شوند و لازم نیست هر بار دوباره اسکن کنی.");
+        hint.setText("هر سرشماره مثل یک گفت‌وگوی جدا نمایش داده می‌شود؛ تایید شده‌ها سبز، نیازمند بررسی‌ها طلایی/قرمز.");
         hint.setTextColor(mutedColor);
-        hint.setTextSize(12);
+        hint.setTextSize(13);
         hint.setGravity(Gravity.CENTER);
+        hint.setLineSpacing(0, 1.15f);
         hint.setPadding(0, dp(6), 0, dp(10));
         smsCard.addView(hint, matchWrap());
 
@@ -441,7 +488,7 @@ public class MainActivity extends Activity {
                 });
 
         Button refreshSmsButton = new Button(this);
-        refreshSmsButton.setText("🔄 بروزرسانی نمایش پیامک‌ها");
+        refreshSmsButton.setText("🔄 بروزرسانی صندوق پیامک‌ها");
         styleButton(refreshSmsButton, false);
         smsCard.addView(refreshSmsButton, matchWrap());
         refreshSmsButton.setOnClickListener(new View.OnClickListener() {
@@ -738,7 +785,11 @@ public class MainActivity extends Activity {
     }
 
     private void renderDashboardStats() {
-        if (dashboardStatsView == null) {
+        if (dashboardStatsView == null
+                || todayMetricView == null
+                || approvedMetricView == null
+                || reviewMetricView == null
+                || conversationsMetricView == null) {
             return;
         }
         HistoryStore.Entry[] entries = HistoryStore.getBankSmsEntries(this);
@@ -757,13 +808,11 @@ public class MainActivity extends Activity {
                 review++;
             }
         }
-        dashboardStatsView.setText(
-                "وضعیت ربات: آماده ✅"
-                        + "\nپیامک‌های امروز: " + todayCount
-                        + "\nتاییدشده‌ها: " + approved
-                        + "\nنیازمند بررسی: " + review
-                        + "\nمکالمه‌های بانکی: " + conversations
-        );
+        dashboardStatsView.setText("وضعیت ربات: متصل و آماده ✅   |   آخرین بروزرسانی: " + new SimpleDateFormat("HH:mm", Locale.US).format(new Date()));
+        todayMetricView.setText(String.valueOf(todayCount));
+        approvedMetricView.setText(String.valueOf(approved));
+        reviewMetricView.setText(String.valueOf(review));
+        conversationsMetricView.setText(String.valueOf(conversations));
     }
 
     private void showSmsScreen() {
@@ -818,11 +867,13 @@ public class MainActivity extends Activity {
         }
 
         TextView header = new TextView(this);
-        header.setText("صندوق پیامک‌های بانکی\n" + conversations.size() + " مکالمه فعال");
-        header.setTextSize(14);
+        header.setText("مکالمه‌های بانکی فعال: " + conversations.size());
+        header.setTextSize(13);
         header.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        header.setTextColor(textColor);
-        header.setPadding(dp(4), dp(2), dp(4), dp(10));
+        header.setTextColor(goldColor);
+        header.setGravity(Gravity.CENTER);
+        header.setPadding(dp(10), dp(8), dp(10), dp(8));
+        styleGradientRounded(header, softGoldColor, inputColor, goldColor, dp(18));
         bankSmsListView.addView(header, matchWrap());
 
         for (ConversationSummary summary : conversations.values()) {
@@ -865,10 +916,10 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(8), dp(10), dp(8), dp(10));
-        styleRounded(row, inputColor, strokeColor, dp(18));
+        row.setPadding(dp(10), dp(12), dp(10), dp(12));
+        styleGradientRounded(row, cardColor, inputColor, strokeColor, dp(24));
         LinearLayout.LayoutParams rowLp = matchWrap();
-        rowLp.setMargins(0, dp(5), 0, dp(5));
+        rowLp.setMargins(0, dp(6), 0, dp(6));
         parent.addView(row, rowLp);
         row.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -881,13 +932,13 @@ public class MainActivity extends Activity {
 
         TextView avatar = new TextView(this);
         avatar.setText(summary.bank.length() > 0 ? summary.bank.substring(0, 1) : "ب");
-        avatar.setTextSize(22);
+        avatar.setTextSize(21);
         avatar.setTypeface(Typeface.DEFAULT_BOLD);
-        avatar.setTextColor(Color.WHITE);
+        avatar.setTextColor(Color.parseColor("#07111F"));
         avatar.setGravity(Gravity.CENTER);
         styleCircle(avatar, avatarColor(summary.key));
-        LinearLayout.LayoutParams avatarLp = new LinearLayout.LayoutParams(dp(58), dp(58));
-        avatarLp.setMargins(dp(8), 0, dp(8), 0);
+        LinearLayout.LayoutParams avatarLp = new LinearLayout.LayoutParams(dp(56), dp(56));
+        avatarLp.setMargins(dp(8), 0, dp(10), 0);
         row.addView(avatar, avatarLp);
 
         LinearLayout textBox = new LinearLayout(this);
@@ -896,13 +947,13 @@ public class MainActivity extends Activity {
 
         TextView sender = new TextView(this);
         sender.setText(summary.sender);
-        sender.setTextSize(18);
+        sender.setTextSize(17);
         sender.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         sender.setTextColor(textColor);
         textBox.addView(sender, matchWrap());
 
         TextView bank = new TextView(this);
-        bank.setText(summary.bank + " • " + summary.total + " پیام • " + summaryStatus(summary));
+        bank.setText(summary.bank + " • " + summary.total + " پیام");
         bank.setTextSize(12);
         bank.setTextColor(mutedColor);
         textBox.addView(bank, matchWrap());
@@ -915,9 +966,10 @@ public class MainActivity extends Activity {
         textBox.addView(preview, matchWrap());
 
         TextView time = new TextView(this);
-        time.setText(shortTime(summary.latest.time));
+        time.setText(shortTime(summary.latest.time) + "\n" + summaryStatus(summary));
         time.setTextSize(12);
-        time.setTextColor(mutedColor);
+        time.setGravity(Gravity.CENTER);
+        time.setTextColor(summary.rejected > 0 ? goldColor : (summary.approved > 0 ? greenColor : mutedColor));
         row.addView(time, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 
@@ -982,9 +1034,10 @@ public class MainActivity extends Activity {
         bubble.setTextColor(textColor);
         bubble.setTextIsSelectable(true);
         bubble.setLineSpacing(0, 1.08f);
-        bubble.setPadding(dp(12), dp(10), dp(12), dp(10));
+        bubble.setPadding(dp(13), dp(11), dp(13), dp(11));
         int fill = entry.approved ? approvedColor : (entry.rejected ? rejectedColor : neutralColor);
-        styleRounded(bubble, fill, strokeColor, dp(18));
+        int border = entry.approved ? greenColor : (entry.rejected ? Color.parseColor("#EF4444") : goldColor);
+        styleGradientRounded(bubble, fill, inputColor, border, dp(22));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 (int) (getResources().getDisplayMetrics().widthPixels * 0.82f),
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -1097,6 +1150,7 @@ public class MainActivity extends Activity {
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, items);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(adapter);
+        styleGradientRounded(spinner, inputColor, cardColor, strokeColor, dp(14));
         root.addView(spinner, matchWrap());
         return spinner;
     }
@@ -1119,8 +1173,9 @@ public class MainActivity extends Activity {
         input.setTextColor(textColor);
         input.setHintTextColor(mutedColor);
         input.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        input.setPadding(dp(10), dp(7), dp(10), dp(7));
-        styleRounded(input, inputColor, strokeColor, dp(10));
+        input.setPadding(dp(12), dp(8), dp(12), dp(8));
+        input.setSelectAllOnFocus(true);
+        styleGradientRounded(input, inputColor, cardColor, strokeColor, dp(15));
         input.setInputType(secret
                 ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD
                 : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
@@ -1131,12 +1186,56 @@ public class MainActivity extends Activity {
     private LinearLayout addCard(LinearLayout root) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(10), dp(12), dp(12));
-        styleRounded(card, cardColor, strokeColor, dp(16));
+        card.setPadding(dp(13), dp(12), dp(13), dp(13));
+        styleGradientRounded(card, cardColor, glassEndColor, strokeColor, dp(22));
         LinearLayout.LayoutParams lp = matchWrap();
         lp.setMargins(0, dp(8), 0, dp(8));
         root.addView(card, lp);
         return card;
+    }
+
+    private LinearLayout addDashboardCard(LinearLayout root) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(13), dp(14), dp(14));
+        styleGradientRounded(card, glassStartColor, glassEndColor, strokeColor, dp(26));
+        LinearLayout.LayoutParams lp = matchWrap();
+        lp.setMargins(0, dp(8), 0, dp(10));
+        root.addView(card, lp);
+        return card;
+    }
+
+    private TextView addMetricCard(LinearLayout row, String icon, String label, int fill, int border) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER);
+        card.setPadding(dp(8), dp(10), dp(8), dp(10));
+        styleGradientRounded(card, fill, inputColor, border, dp(20));
+        LinearLayout.LayoutParams lp = weightedButtonLp();
+        lp.setMargins(dp(4), dp(3), dp(4), dp(3));
+        row.addView(card, lp);
+
+        TextView iconView = new TextView(this);
+        iconView.setText(icon);
+        iconView.setTextSize(18);
+        iconView.setGravity(Gravity.CENTER);
+        card.addView(iconView, matchWrap());
+
+        TextView valueView = new TextView(this);
+        valueView.setText("0");
+        valueView.setTextSize(24);
+        valueView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        valueView.setTextColor(textColor);
+        valueView.setGravity(Gravity.CENTER);
+        card.addView(valueView, matchWrap());
+
+        TextView labelView = new TextView(this);
+        labelView.setText(label);
+        labelView.setTextSize(11);
+        labelView.setTextColor(mutedColor);
+        labelView.setGravity(Gravity.CENTER);
+        card.addView(labelView, matchWrap());
+        return valueView;
     }
 
     private void addButtonRow(LinearLayout root, String[] labels, View.OnClickListener[] listeners) {
@@ -1158,8 +1257,8 @@ public class MainActivity extends Activity {
         section.setText(text);
         section.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         section.setTextColor(textColor);
-        section.setTextSize(15);
-        section.setPadding(0, dp(3), 0, dp(7));
+        section.setTextSize(16);
+        section.setPadding(0, dp(3), 0, dp(9));
         root.addView(section, matchWrap());
     }
 
@@ -1167,11 +1266,15 @@ public class MainActivity extends Activity {
         button.setAllCaps(false);
         button.setTextSize(12);
         button.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        button.setTextColor(primary ? Color.WHITE : textColor);
-        button.setMinHeight(dp(38));
+        button.setTextColor(primary ? Color.parseColor("#07111F") : textColor);
+        button.setMinHeight(dp(42));
         button.setMinWidth(0);
-        button.setPadding(dp(8), dp(4), dp(8), dp(4));
-        styleRounded(button, primary ? primaryColor : inputColor, primary ? primaryColor : strokeColor, dp(12));
+        button.setPadding(dp(9), dp(5), dp(9), dp(5));
+        if (primary) {
+            styleGradientRounded(button, goldColor, greenColor, goldColor, dp(18));
+        } else {
+            styleGradientRounded(button, inputColor, cardColor, strokeColor, dp(18));
+        }
     }
 
     private void styleCheckBox(CheckBox box) {
@@ -1189,6 +1292,24 @@ public class MainActivity extends Activity {
         view.setBackground(bg);
     }
 
+    private void styleGradientRounded(View view, int start, int end, int stroke, int radius) {
+        GradientDrawable bg = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{start, end}
+        );
+        bg.setStroke(dp(1), stroke);
+        bg.setCornerRadius(radius);
+        view.setBackground(bg);
+    }
+
+    private void stylePageBackground(View view) {
+        GradientDrawable bg = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{pageTopColor, bgColor, pageBottomColor}
+        );
+        view.setBackground(bg);
+    }
+
     private void styleCircle(View view, int fill) {
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.OVAL);
@@ -1199,16 +1320,24 @@ public class MainActivity extends Activity {
     private void loadPalette() {
         SettingsStore settings = new SettingsStore(this);
         boolean dark = isDarkMode(settings.getThemeMode());
-        bgColor = Color.parseColor(dark ? "#0F172A" : "#F6F8FC");
-        cardColor = Color.parseColor(dark ? "#111827" : "#FFFFFF");
-        inputColor = Color.parseColor(dark ? "#1E293B" : "#FFFFFF");
-        textColor = Color.parseColor(dark ? "#E5E7EB" : "#111827");
-        mutedColor = Color.parseColor(dark ? "#94A3B8" : "#64748B");
-        strokeColor = Color.parseColor(dark ? "#334155" : "#CBD5E1");
-        primaryColor = Color.parseColor("#2563EB");
-        approvedColor = Color.parseColor(dark ? "#064E3B" : "#DCFCE7");
-        rejectedColor = Color.parseColor(dark ? "#7F1D1D" : "#FEE2E2");
-        neutralColor = Color.parseColor(dark ? "#42320D" : "#FEF3C7");
+        bgColor = Color.parseColor(dark ? "#07111F" : "#F3F7F2");
+        pageTopColor = Color.parseColor(dark ? "#0B1628" : "#FFFFFF");
+        pageBottomColor = Color.parseColor(dark ? "#020617" : "#E9F5EC");
+        cardColor = Color.parseColor(dark ? "#101B2D" : "#FFFFFF");
+        inputColor = Color.parseColor(dark ? "#162338" : "#F8FAF7");
+        textColor = Color.parseColor(dark ? "#F8FAFC" : "#102017");
+        mutedColor = Color.parseColor(dark ? "#A7B0C2" : "#607066");
+        strokeColor = Color.parseColor(dark ? "#2A3B55" : "#D2DDCE");
+        primaryColor = Color.parseColor("#22C55E");
+        goldColor = Color.parseColor(dark ? "#F5C542" : "#D69B00");
+        greenColor = Color.parseColor(dark ? "#35E07B" : "#16A34A");
+        glassStartColor = Color.parseColor(dark ? "#14233A" : "#FFFFFF");
+        glassEndColor = Color.parseColor(dark ? "#0A1220" : "#ECF7EF");
+        softGoldColor = Color.parseColor(dark ? "#3B2F12" : "#FFF4C7");
+        softGreenColor = Color.parseColor(dark ? "#0D3328" : "#DCFCE7");
+        approvedColor = Color.parseColor(dark ? "#0F3D2E" : "#DCFCE7");
+        rejectedColor = Color.parseColor(dark ? "#4A151A" : "#FEE2E2");
+        neutralColor = Color.parseColor(dark ? "#3B2F12" : "#FEF3C7");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(bgColor);
             getWindow().setNavigationBarColor(bgColor);
