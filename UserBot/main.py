@@ -3359,6 +3359,9 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
         sms_reference = str(meta.get("sms_reference") or "").strip()
         sms_amount_raw = str(meta.get("sms_amount_raw") or "").strip()
         sms_currency = str(meta.get("sms_currency") or "").strip()
+        receipt_admin_fid = str(meta.get("admin_fid") or "").strip()
+        receipt_local_path = str(meta.get("local_path") or "").strip()
+        has_receipt = bool(receipt_admin_fid or receipt_local_path)
         flow_label = {
             "wallet_topup": "شارژ کیف پول",
             "direct_buy": "خرید مستقیم",
@@ -3374,7 +3377,8 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
             f"🆔 شناسه پرداخت: {payment_id or '-'}\n"
             f"📨 سرشماره SMS: {sms_sender or '-'}\n"
             f"🏦 مبلغ خام SMS: {sms_amount_raw or '-'} {sms_currency or ''}\n"
-            f"🔖 پیگیری SMS: {sms_reference or '-'}"
+            f"🔖 پیگیری SMS: {sms_reference or '-'}\n"
+            f"🖼 رسید کاربر: {'پیوست شد' if has_receipt else 'در دسترس نیست'}"
         )
         kb = None
         if uid > 0:
@@ -3382,7 +3386,13 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
                 [InlineKeyboardButton(f"👤 {user_label}", callback_data=f"userbot:user:{uid}")]
             ])
         bot = Bot(token=ADMIN_BOT_TOKEN)
-        await bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=kb)
+        if receipt_admin_fid:
+            await bot.send_photo(chat_id=ADMIN_ID, photo=receipt_admin_fid, caption=text, reply_markup=kb)
+        elif receipt_local_path and os.path.exists(receipt_local_path):
+            with open(receipt_local_path, "rb") as receipt_file:
+                await bot.send_photo(chat_id=ADMIN_ID, photo=receipt_file, caption=text, reply_markup=kb)
+        else:
+            await bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=kb)
         if payment_id > 0:
             _update_payment_receipt_meta(
                 payment_id,

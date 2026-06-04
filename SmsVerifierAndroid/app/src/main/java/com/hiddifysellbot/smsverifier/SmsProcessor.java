@@ -15,8 +15,17 @@ public final class SmsProcessor {
             HistoryStore.add(context, "SKIPPED", "هیچ سرشماره بانکی تنظیم نشده است؛ SMS ارسال نشد.");
             return;
         }
-        String bankName = settings.getMatchedBankName(sender);
+        String bankName = settings.getMatchedBankName(sender, body);
         if (bankName.isEmpty()) {
+            if (PaymentSmsParser.isIncomingPayment(body)) {
+                HistoryStore.add(
+                        context,
+                        "BANK_SKIPPED",
+                        "پیامک شبیه واریز بود، اما سرشماره با هیچ بانک فعالی تطبیق نشد.\n"
+                                + "👤 سرشماره: " + sender
+                                + "\nمتن SMS:\n" + body
+                );
+            }
             return;
         }
         if (!settings.canSendWebhook()) {

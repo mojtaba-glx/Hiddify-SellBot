@@ -103,6 +103,65 @@ def _sms_webhook_max_pending_age_minutes() -> int:
     return max(5, _to_int(_dotenv_get(SMS_WEBHOOK_MAX_PENDING_AGE_ENV, "360"), 360))
 
 
+def _parse_receipt_meta(raw: str) -> dict[str, str]:
+    raw = str(raw or "").strip()
+    if not raw:
+        return {}
+    if "|" not in raw and ":" not in raw:
+        return {"admin_fid": raw}
+    data: dict[str, str] = {}
+    for part in raw.split("|"):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        key, value = part.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and value:
+            data[key] = value
+    return data
+
+
+def _telegram_form_request(token: str, method: str, fields: dict, timeout: int = 8) -> None:
+    data = urllib.parse.urlencode({str(k): str(v) for k, v in fields.items()}).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=data,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        resp.read(512)
+
+
+def _telegram_photo_file_request(token: str, fields: dict, file_path: str, timeout: int = 12) -> None:
+    path = Path(str(file_path or ""))
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(str(path))
+    boundary = f"----SellBotBoundary{int(time.time() * 1000)}"
+    body = bytearray()
+    for key, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+        body.extend(str(value).encode("utf-8"))
+        body.extend(b"\r\n")
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(
+        b'Content-Disposition: form-data; name="photo"; filename="receipt.jpg"\r\n'
+        b"Content-Type: image/jpeg\r\n\r\n"
+    )
+    body.extend(path.read_bytes())
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data=bytes(body),
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        resp.read(512)
+
+
 def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str, reference: str) -> None:
     token = str(_dotenv_get("ADMIN_BOT_TOKEN", "") or "").strip()
     admin_id = _to_int(_dotenv_get("ADMIN_ID", "0"), 0)
@@ -115,6 +174,10 @@ def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str
     full_name = str((payment or {}).get("full_name") or "").strip()
     telegram_id = str((payment or {}).get("telegram_id") or "").strip()
     user_label = full_name or (f"@{username}" if username else telegram_id) or "نامشخص"
+    receipt_meta = _parse_receipt_meta(str((payment or {}).get("receipt_image") or ""))
+    receipt_photo_id = str(receipt_meta.get("admin_fid") or "").strip()
+    receipt_local_path = str(receipt_meta.get("local_path") or "").strip()
+    has_receipt = bool(receipt_photo_id or receipt_local_path)
 
     text = (
         "✅ پرداخت کارت‌به‌کارت با SMS تایید شد.\n"
@@ -123,25 +186,54 @@ def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str
         f"🧾 کد تراکنش: {tx_code or '-'}\n"
         f"🆔 شناسه پرداخت: {payment_id or '-'}\n"
         f"📨 سرشماره: {sender or '-'}\n"
-        f"🔖 پیگیری SMS: {reference or '-'}"
+        f"🔖 پیگیری SMS: {reference or '-'}\n"
+        f"🖼 رسید کاربر: {'پیوست شد' if has_receipt else 'در دسترس نیست'}"
     )
-    data = urllib.parse.urlencode(
-        {
-            "chat_id": str(admin_id),
-            "text": text,
-            "disable_web_page_preview": "true",
-        }
-    ).encode("utf-8")
     try:
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=data,
-            method="POST",
+        if receipt_photo_id:
+            _telegram_form_request(
+                token,
+                "sendPhoto",
+                {
+                    "chat_id": str(admin_id),
+                    "photo": receipt_photo_id,
+                    "caption": text,
+                },
+            )
+            return
+        if receipt_local_path:
+            _telegram_photo_file_request(
+                token,
+                {
+                    "chat_id": str(admin_id),
+                    "caption": text,
+                },
+                receipt_local_path,
+            )
+            return
+        _telegram_form_request(
+            token,
+            "sendMessage",
+            {
+                "chat_id": str(admin_id),
+                "text": text,
+                "disable_web_page_preview": "true",
+            },
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            resp.read(512)
     except Exception as e:
-        logger.warning("Failed sending SMS payment admin report payment_id=%s: %s", payment_id, e)
+        logger.warning("Failed sending SMS payment admin report with receipt payment_id=%s: %s", payment_id, e)
+        try:
+            _telegram_form_request(
+                token,
+                "sendMessage",
+                {
+                    "chat_id": str(admin_id),
+                    "text": text,
+                    "disable_web_page_preview": "true",
+                },
+            )
+        except Exception as fallback_error:
+            logger.warning("Failed sending fallback SMS payment admin report payment_id=%s: %s", payment_id, fallback_error)
 
 
 def _query_requests_base64(query: str) -> bool:

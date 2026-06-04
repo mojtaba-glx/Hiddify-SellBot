@@ -26,8 +26,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -94,6 +96,7 @@ public class MainActivity extends Activity {
     private boolean suppressThemeChange = false;
     private boolean suppressBankSelection = false;
     private String selectedConversationKey = "";
+    private String bankSmsFilter = "all";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -608,6 +611,39 @@ public class MainActivity extends Activity {
             }
         });
 
+        addButtonRow(smsCard,
+                new String[]{"همه", "✅ تایید شده"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                setBankSmsFilter("all");
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                setBankSmsFilter("approved");
+                            }
+                        }
+                });
+        addButtonRow(smsCard,
+                new String[]{"⚠️ نیاز بررسی", "🔁 تکراری"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                setBankSmsFilter("review");
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                setBankSmsFilter("duplicate");
+                            }
+                        }
+                });
+
         bankSmsListView = new LinearLayout(this);
         bankSmsListView.setOrientation(LinearLayout.VERTICAL);
         smsCard.addView(bankSmsListView, matchWrap());
@@ -991,10 +1027,11 @@ public class MainActivity extends Activity {
             return;
         }
         bankSmsListView.removeAllViews();
-        HistoryStore.Entry[] entries = HistoryStore.getBankSmsEntries(this);
+        HistoryStore.Entry[] allEntries = HistoryStore.getBankSmsEntries(this);
+        HistoryStore.Entry[] entries = filterBankSmsEntries(allEntries);
         if (entries.length == 0) {
             TextView empty = new TextView(this);
-            empty.setText("هنوز پیامک بانکی پردازش‌شده‌ای ثبت نشده است.");
+            empty.setText("در این فیلتر هنوز تراکنشی ثبت نشده است.\nفیلتر فعلی: " + bankSmsFilterTitle());
             empty.setTextColor(mutedColor);
             empty.setTextSize(12);
             empty.setGravity(Gravity.CENTER);
@@ -1015,7 +1052,7 @@ public class MainActivity extends Activity {
         }
 
         TextView header = new TextView(this);
-        header.setText("مکالمه‌های بانکی فعال: " + conversations.size());
+        header.setText("فیلتر: " + bankSmsFilterTitle() + "  •  " + entries.length + " تراکنش  •  " + conversations.size() + " مکالمه");
         header.setTextSize(13);
         header.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         header.setTextColor(goldColor);
@@ -1027,6 +1064,46 @@ public class MainActivity extends Activity {
         for (ConversationSummary summary : conversations.values()) {
             addConversationRow(bankSmsListView, summary);
         }
+    }
+
+    private void setBankSmsFilter(String filter) {
+        bankSmsFilter = filter == null || filter.trim().isEmpty() ? "all" : filter.trim();
+        selectedConversationKey = "";
+        renderBankSmsBubbles();
+        Toast.makeText(this, "فیلتر: " + bankSmsFilterTitle(), Toast.LENGTH_SHORT).show();
+    }
+
+    private HistoryStore.Entry[] filterBankSmsEntries(HistoryStore.Entry[] entries) {
+        if (entries == null || entries.length == 0 || "all".equals(bankSmsFilter)) {
+            return entries == null ? new HistoryStore.Entry[0] : entries;
+        }
+        List<HistoryStore.Entry> out = new ArrayList<>();
+        for (HistoryStore.Entry entry : entries) {
+            String title = entry.title == null ? "" : entry.title;
+            String detail = entry.detail == null ? "" : entry.detail;
+            String combined = title + "\n" + detail;
+            if ("approved".equals(bankSmsFilter) && entry.approved && !combined.contains("قبلاً")) {
+                out.add(entry);
+            } else if ("duplicate".equals(bankSmsFilter) && (combined.contains("قبلاً") || combined.toLowerCase(Locale.US).contains("duplicate"))) {
+                out.add(entry);
+            } else if ("review".equals(bankSmsFilter) && (entry.rejected || combined.contains("پیدا نشد") || combined.contains("نیاز") || combined.contains("چند پرداخت"))) {
+                out.add(entry);
+            }
+        }
+        return out.toArray(new HistoryStore.Entry[0]);
+    }
+
+    private String bankSmsFilterTitle() {
+        if ("approved".equals(bankSmsFilter)) {
+            return "تایید شده";
+        }
+        if ("review".equals(bankSmsFilter)) {
+            return "نیازمند بررسی";
+        }
+        if ("duplicate".equals(bankSmsFilter)) {
+            return "تکراری";
+        }
+        return "همه";
     }
 
     private Map<String, ConversationSummary> buildConversationSummaries(HistoryStore.Entry[] entries) {
@@ -1107,7 +1184,7 @@ public class MainActivity extends Activity {
         textBox.addView(bank, matchWrap());
 
         TextView preview = new TextView(this);
-        preview.setText(shortPreview(summary.latest.title + " — " + compactSmsDetail(summary.latest.detail)));
+        preview.setText(shortPreview(summary.latest.title + " — " + transactionPreview(summary.latest)));
         preview.setTextSize(12);
         preview.setTextColor(mutedColor);
         preview.setSingleLine(true);
@@ -1209,6 +1286,35 @@ public class MainActivity extends Activity {
         }
         String oneLine = text.replace("\n", " ").trim();
         return oneLine.length() > 72 ? oneLine.substring(0, 72) + "..." : oneLine;
+    }
+
+    private String transactionPreview(HistoryStore.Entry entry) {
+        if (entry == null) {
+            return "";
+        }
+        String amount = extractDetailLine(entry.detail, "💵 معادل تقریبی:");
+        if (amount.isEmpty()) {
+            amount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
+        }
+        String response = extractDetailLine(entry.detail, "🧾 پاسخ ربات:");
+        String reference = extractDetailLine(entry.detail, "🔖 پیگیری:");
+        StringBuilder out = new StringBuilder();
+        if (!amount.isEmpty()) {
+            out.append(amount);
+        }
+        if (!response.isEmpty()) {
+            if (out.length() > 0) {
+                out.append(" • ");
+            }
+            out.append(response);
+        }
+        if (!reference.isEmpty() && !"-".equals(reference)) {
+            if (out.length() > 0) {
+                out.append(" • ");
+            }
+            out.append("پیگیری ").append(reference);
+        }
+        return out.length() > 0 ? out.toString() : compactSmsDetail(entry.detail);
     }
 
     private String shortTime(String time) {

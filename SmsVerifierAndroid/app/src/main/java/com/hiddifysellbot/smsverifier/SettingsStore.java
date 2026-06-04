@@ -232,10 +232,14 @@ public final class SettingsStore {
     }
 
     public boolean matchesSender(String sender) {
-        return !getMatchedBankName(sender).isEmpty();
+        return !getMatchedBankName(sender, "").isEmpty();
     }
 
     public String getMatchedBankName(String sender) {
+        return getMatchedBankName(sender, "");
+    }
+
+    public String getMatchedBankName(String sender, String body) {
         String normalizedSender = safe(sender).toLowerCase();
         if (normalizedSender.isEmpty()) {
             return "";
@@ -248,6 +252,24 @@ public final class SettingsStore {
             }
             if (matchesAnyFilter(normalizedSender, parseFilters(bank.senderFilters))) {
                 return bank.name;
+            }
+        }
+
+        String normalizedBody = safe(body).toLowerCase();
+        if (!normalizedBody.isEmpty()) {
+            for (int i = 0; i < getBankCount(); i++) {
+                BankConfig bank = getBank(i);
+                if (!bank.enabled) {
+                    continue;
+                }
+                String bankName = safe(bank.name).toLowerCase();
+                String sample = safe(bank.sampleSms).toLowerCase();
+                if ((!bankName.isEmpty() && normalizedBody.contains(bankName))
+                        || ("blu".equals(bank.id) && normalizedBody.contains("بلو"))
+                        || ("middle_east".equals(bank.id) && (normalizedBody.contains("خاورمیانه") || normalizedBody.contains("خاورميانه")))
+                        || (!sample.isEmpty() && sameBankBySample(normalizedBody, sample))) {
+                    return bank.name;
+                }
             }
         }
 
@@ -280,6 +302,7 @@ public final class SettingsStore {
         if (filters.isEmpty()) {
             return false;
         }
+        String senderDigits = normalizePhoneDigits(normalizedSender);
         for (String filter : filters) {
             if ("*".equals(filter) || "all".equals(filter) || "همه".equals(filter)) {
                 return true;
@@ -287,8 +310,39 @@ public final class SettingsStore {
             if (normalizedSender.contains(filter) || filter.contains(normalizedSender)) {
                 return true;
             }
+            String filterDigits = normalizePhoneDigits(filter);
+            if (senderDigits.length() >= 4 && filterDigits.length() >= 4) {
+                if (senderDigits.endsWith(filterDigits)
+                        || filterDigits.endsWith(senderDigits)
+                        || senderDigits.contains(filterDigits)
+                        || filterDigits.contains(senderDigits)) {
+                    return true;
+                }
+            }
         }
         return false;
+    }
+
+    private static boolean sameBankBySample(String body, String sample) {
+        String sampleFirstLine = sample.split("\\n", 2)[0].trim();
+        return sampleFirstLine.length() >= 2 && body.contains(sampleFirstLine);
+    }
+
+    private static String normalizePhoneDigits(String value) {
+        String digits = safe(value)
+                .replace('۰', '0').replace('۱', '1').replace('۲', '2').replace('۳', '3').replace('۴', '4')
+                .replace('۵', '5').replace('۶', '6').replace('۷', '7').replace('۸', '8').replace('۹', '9')
+                .replace('٠', '0').replace('١', '1').replace('٢', '2').replace('٣', '3').replace('٤', '4')
+                .replace('٥', '5').replace('٦', '6').replace('٧', '7').replace('٨', '8').replace('٩', '9')
+                .replaceAll("[^0-9]", "");
+        if (digits.startsWith("0098") && digits.length() > 6) {
+            digits = "0" + digits.substring(4);
+        } else if (digits.startsWith("98") && digits.length() > 10) {
+            digits = "0" + digits.substring(2);
+        } else if (digits.startsWith("9") && digits.length() == 10) {
+            digits = "0" + digits;
+        }
+        return digits;
     }
 
     private static List<String> parseFilters(String rawValue) {
