@@ -67,7 +67,7 @@ public final class HistoryStore {
 
     private static String buildEntry(String status, String detail) {
         String now = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
-        return "🕒 " + now + "\n" + statusTitle(status) + "\n" + trim(detail, 900);
+        return "🕒 " + now + "\n" + statusTitle(status) + "\n" + trim(detail, 1800);
     }
 
     private static void save(Context context, String key, String entry, int maxItems) {
@@ -109,6 +109,7 @@ public final class HistoryStore {
                 || "APPROVED_DUPLICATE".equals(status)
                 || "NO_PENDING_MATCH".equals(status)
                 || "AMBIGUOUS".equals(status)
+                || "SENT".equals(status)
                 || "FAILED".equals(status)
                 || "BANK_SKIPPED".equals(status);
     }
@@ -131,6 +132,9 @@ public final class HistoryStore {
         }
         if ("AMBIGUOUS".equals(status)) {
             return "❌ چند پرداخت مشابه پیدا شد؛ نیاز به بررسی ادمین";
+        }
+        if ("SENT".equals(status)) {
+            return "📨 پیامک به ربات ارسال شد";
         }
         if ("FAILED".equals(status)) {
             return "🔴 خطا در ارسال یا ارتباط";

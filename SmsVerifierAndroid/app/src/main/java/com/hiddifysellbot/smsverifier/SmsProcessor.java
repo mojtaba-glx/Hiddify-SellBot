@@ -23,7 +23,7 @@ public final class SmsProcessor {
                         "BANK_SKIPPED",
                         "پیامک شبیه واریز بود، اما سرشماره با هیچ بانک فعالی تطبیق نشد.\n"
                                 + "👤 سرشماره: " + sender
-                                + "\nمتن SMS:\n" + body
+                                + "\n📄 متن SMS:\n" + body
                 );
             }
             return;
@@ -34,13 +34,13 @@ public final class SmsProcessor {
         }
 
         if (!PaymentSmsParser.isIncomingPayment(body)) {
-            HistoryStore.add(context, "BANK_SKIPPED", "این پیامک بانکی واریز نبود و نادیده گرفته شد.\n🏦 بانک: " + bankName + "\nفرستنده: " + sender);
+            HistoryStore.add(context, "BANK_SKIPPED", "این پیامک بانکی واریز نبود و نادیده گرفته شد.\n🏦 بانک: " + bankName + "\n👤 سرشماره: " + sender + "\n📄 متن SMS:\n" + body);
             return;
         }
 
         long amount = PaymentSmsParser.extractAmount(body);
         if (amount <= 0) {
-            HistoryStore.add(context, "BANK_SKIPPED", "مبلغ از داخل SMS پیدا نشد.\n🏦 بانک: " + bankName + "\nفرستنده: " + sender + "\nمتن SMS:\n" + body);
+            HistoryStore.add(context, "BANK_SKIPPED", "مبلغ از داخل SMS پیدا نشد.\n🏦 بانک: " + bankName + "\n👤 سرشماره: " + sender + "\n📄 متن SMS:\n" + body);
             return;
         }
         String detectedCardLast4 = PaymentSmsParser.extractCardLast4(body);
@@ -69,7 +69,8 @@ public final class SmsProcessor {
                 + "\n💳 چهار رقم کارت: " + emptyDash(event.cardLast4)
                 + "\n🌐 کد HTTP: " + result.statusCode
                 + "\n🧾 پاسخ ربات: " + summarizeResponse(result.body)
-                + "\n⚠️ خطا: " + emptyDash(result.error);
+                + "\n⚠️ خطا: " + emptyDash(result.error)
+                + "\n📄 متن SMS:\n" + event.body;
         HistoryStore.add(context, WebhookClient.statusLabel(result), detail);
     }
 

@@ -137,6 +137,17 @@ public final class SettingsStore {
         return BANK_IDS.length + count;
     }
 
+    public void deleteOrResetBank(int index) {
+        if (index < 0 || index >= getBankCount()) {
+            return;
+        }
+        if (!isCustomBankIndex(index)) {
+            saveBank(index, getBank(index).name, false, "", "");
+            return;
+        }
+        deleteCustomBank(index - BANK_IDS.length);
+    }
+
     public String getCustomBankNameHint() {
         return "مثال: سامان، رسالت، تجارت";
     }
@@ -200,6 +211,29 @@ public final class SettingsStore {
                 .putBoolean(prefix + "_enabled", enabled)
                 .putString(prefix + "_senders", safe(senderFilters))
                 .putString(prefix + "_sample", safe(sampleSms))
+                .apply();
+    }
+
+    private void deleteCustomBank(int customIndex) {
+        int count = getCustomBankCount();
+        if (customIndex < 0 || customIndex >= count) {
+            return;
+        }
+        SharedPreferences.Editor editor = prefs.edit();
+        for (int i = customIndex; i < count - 1; i++) {
+            String current = customBankPrefix(i);
+            String next = customBankPrefix(i + 1);
+            editor.putString(current + "_name", prefs.getString(next + "_name", "بانک سفارشی " + (i + 1)));
+            editor.putBoolean(current + "_enabled", prefs.getBoolean(next + "_enabled", false));
+            editor.putString(current + "_senders", prefs.getString(next + "_senders", ""));
+            editor.putString(current + "_sample", prefs.getString(next + "_sample", ""));
+        }
+        String last = customBankPrefix(count - 1);
+        editor.remove(last + "_name")
+                .remove(last + "_enabled")
+                .remove(last + "_senders")
+                .remove(last + "_sample")
+                .putInt(KEY_CUSTOM_BANK_COUNT, count - 1)
                 .apply();
     }
 

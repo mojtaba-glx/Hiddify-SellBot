@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     private EditText bankSampleInput;
     private TextView bankSummaryView;
     private TextView bankEditTitleView;
+    private Button deleteBankButton;
     private EditText manualSenderInput;
     private EditText manualBodyInput;
     private TextView connectionStatusView;
@@ -285,18 +286,38 @@ public class MainActivity extends Activity {
         metricRowOne.setOrientation(LinearLayout.HORIZONTAL);
         metricRowOne.setPadding(0, dp(8), 0, dp(2));
         dashboard.addView(metricRowOne, matchWrap());
-        todayMetricView = addMetricCard(metricRowOne, "📨", "پیامک امروز", softGoldColor, goldColor);
-        approvedMetricView = addMetricCard(metricRowOne, "✅", "تایید شده", softGreenColor, greenColor);
+        todayMetricView = addMetricCard(metricRowOne, "📨", "پیامک امروز", softGoldColor, goldColor, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openSmsFilter("today");
+            }
+        });
+        approvedMetricView = addMetricCard(metricRowOne, "✅", "تایید شده", softGreenColor, greenColor, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openSmsFilter("approved");
+            }
+        });
 
         LinearLayout metricRowTwo = new LinearLayout(this);
         metricRowTwo.setOrientation(LinearLayout.HORIZONTAL);
         metricRowTwo.setPadding(0, dp(2), 0, dp(8));
         dashboard.addView(metricRowTwo, matchWrap());
-        reviewMetricView = addMetricCard(metricRowTwo, "⚠️", "نیاز بررسی", neutralColor, goldColor);
-        conversationsMetricView = addMetricCard(metricRowTwo, "🏦", "بانک فعال", inputColor, strokeColor);
+        reviewMetricView = addMetricCard(metricRowTwo, "⚠️", "نیاز بررسی", neutralColor, goldColor, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openSmsFilter("review");
+            }
+        });
+        conversationsMetricView = addMetricCard(metricRowTwo, "🏦", "سرشماره‌ها", inputColor, strokeColor, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openSmsFilter("all");
+            }
+        });
 
         addButtonRow(dashboard,
-                new String[]{"🔎 بررسی تراکنش‌ها", "📜 قوانین پیامک"},
+                new String[]{"🔎 بررسی تراکنش‌ها", "🏦 بانک‌ها و الگوها"},
                 new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
@@ -355,7 +376,7 @@ public class MainActivity extends Activity {
         dashboard.addView(connectionStatusView, matchWrap());
 
         addPageHeader(botSettingsContent, "🤖 تنظیمات تلگرام", "اتصال امن اپ به Webhook ربات و کلید Secret اینجا مدیریت می‌شود.");
-        addPageHeader(rulesContent, "📜 قوانین پیامک", "بانک‌ها، سرشماره‌ها و نمونه SMS هر بانک را اینجا تعریف کن.");
+        addPageHeader(rulesContent, "🏦 بانک‌ها و الگوهای SMS", "بانک‌ها، سرشماره‌ها و نمونه SMS هر بانک را اینجا تعریف کن.");
         addPageHeader(reportsContent, "📊 گزارش‌ها", "لاگ فنی اتصال اپ، تست‌ها و خطاهای ارتباط با ربات.");
         addPageHeader(securityContent, "🔐 امنیت", "چک‌لیست امنیت اتصال، جلوگیری از تکرار و نکته‌های حساس.");
 
@@ -401,7 +422,7 @@ public class MainActivity extends Activity {
         });
 
         LinearLayout bankCard = addCard(rulesContent);
-        addSectionTitle(bankCard, "🏦 بانک‌ها و نمونه SMS");
+        addSectionTitle(bankCard, "🏦 بانک‌ها و الگوهای SMS");
         TextView bankHelp = new TextView(this);
         bankHelp.setText("بانک را انتخاب کن یا با دکمه + بانک جدید بساز؛ هر بانک چند سرشماره جدا و نمونه SMS خودش را دارد.");
         bankHelp.setTextSize(12);
@@ -440,16 +461,32 @@ public class MainActivity extends Activity {
         bankCard.addView(bankEnabledBox, matchWrap());
 
         bankSenderInput = addInput(bankCard, "سرشماره‌های SMS همین بانک", "مثال: 20004861، 3000...\nهر خط یا کاما یک سرشماره", false, 3);
-        bankSampleInput = addInput(bankCard, "نمونه SMS همین بانک", "نمونه پیامک واریز همین بانک را اینجا paste کن", false, 4);
+        bankSampleInput = addInput(bankCard, "نمونه SMS همین بانک", "نمونه پیامک واریز همین بانک را کامل اینجا paste کن", false, 8);
+
+        LinearLayout bankActionRow = new LinearLayout(this);
+        bankActionRow.setOrientation(LinearLayout.HORIZONTAL);
+        bankActionRow.setPadding(0, dp(4), 0, dp(2));
+        bankCard.addView(bankActionRow, matchWrap());
 
         Button saveBankButton = new Button(this);
         saveBankButton.setText("✅ ذخیره بانک");
         styleButton(saveBankButton, true);
-        bankCard.addView(saveBankButton, matchWrap());
+        bankActionRow.addView(saveBankButton, weightedButtonLp());
         saveBankButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 saveSelectedBank();
+            }
+        });
+
+        deleteBankButton = new Button(this);
+        deleteBankButton.setText("🗑 حذف/غیرفعال");
+        styleButton(deleteBankButton, false);
+        bankActionRow.addView(deleteBankButton, weightedButtonLp());
+        deleteBankButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                deleteSelectedBank();
             }
         });
 
@@ -471,23 +508,6 @@ public class MainActivity extends Activity {
         bankSummaryView.setPadding(dp(10), dp(10), dp(10), dp(10));
         styleRounded(bankSummaryView, inputColor, strokeColor, dp(12));
         bankCard.addView(bankSummaryView, matchWrap());
-
-        LinearLayout testCard = addCard(rulesContent);
-        addSectionTitle(testCard, "🧪 تست دستی SMS");
-        manualSenderInput = addInput(testCard, "سرشماره SMS", "مثال: 20004861", false, 1);
-        manualBodyInput = addInput(testCard, "متن SMS بانک", "متن پیامک بانک را برای تست اینجا paste کن", false, 4);
-
-        Button manualSmsButton = new Button(this);
-        manualSmsButton.setText("بررسی متن SMS تستی");
-        styleButton(manualSmsButton, false);
-        testCard.addView(manualSmsButton, matchWrap());
-        manualSmsButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                saveSettings(false);
-                sendManualSmsTest();
-            }
-        });
 
         LinearLayout securityCard = addCard(securityContent);
         addSectionTitle(securityCard, "🛡️ وضعیت امنیت");
@@ -612,34 +632,50 @@ public class MainActivity extends Activity {
         });
 
         addButtonRow(smsCard,
-                new String[]{"همه", "✅ تایید شده"},
+                new String[]{"📨 امروز", "همه"},
                 new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                setBankSmsFilter("today");
+                            }
+                        },
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 setBankSmsFilter("all");
                             }
-                        },
+                        }
+                });
+        addButtonRow(smsCard,
+                new String[]{"✅ تایید شده", "⚠️ نیاز بررسی"},
+                new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 setBankSmsFilter("approved");
                             }
-                        }
-                });
-        addButtonRow(smsCard,
-                new String[]{"⚠️ نیاز بررسی", "🔁 تکراری"},
-                new View.OnClickListener[]{
+                        },
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 setBankSmsFilter("review");
                             }
-                        },
+                        }
+                });
+        addButtonRow(smsCard,
+                new String[]{"🔁 تکراری", "🏦 تنظیم بانک‌ها"},
+                new View.OnClickListener[]{
                         new View.OnClickListener() {
                             @Override
                             public void onClick(View v) {
                                 setBankSmsFilter("duplicate");
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showRulesScreen();
                             }
                         }
                 });
@@ -734,6 +770,10 @@ public class MainActivity extends Activity {
         bankEnabledBox.setChecked(bank.enabled);
         bankSenderInput.setText(bank.senderFilters);
         bankSampleInput.setText(bank.sampleSms);
+        if (deleteBankButton != null) {
+            deleteBankButton.setVisibility(View.VISIBLE);
+            deleteBankButton.setText(bank.custom ? "🗑 حذف بانک" : "🧹 پاک‌کردن الگو");
+        }
     }
 
     private void startAddCustomBank() {
@@ -744,6 +784,9 @@ public class MainActivity extends Activity {
         bankEnabledBox.setChecked(true);
         bankSenderInput.setText("");
         bankSampleInput.setText("");
+        if (deleteBankButton != null) {
+            deleteBankButton.setVisibility(View.GONE);
+        }
         customBankNameInput.requestFocus();
         Toast.makeText(this, "نام بانک، سرشماره و نمونه SMS را وارد کن", Toast.LENGTH_LONG).show();
     }
@@ -783,6 +826,21 @@ public class MainActivity extends Activity {
         }
         refreshBankSummary();
         Toast.makeText(this, "تنظیمات بانک ذخیره شد", Toast.LENGTH_SHORT).show();
+    }
+
+    private void deleteSelectedBank() {
+        if (addingCustomBank || bankSpinner == null) {
+            startAddCustomBank();
+            return;
+        }
+        SettingsStore settings = new SettingsStore(this);
+        int index = bankSpinner.getSelectedItemPosition();
+        SettingsStore.BankConfig bank = settings.getBank(index);
+        settings.deleteOrResetBank(index);
+        addingCustomBank = false;
+        rebuildBankSpinner(Math.max(0, Math.min(index, settings.getBankCount() - 1)));
+        refreshBankSummary();
+        Toast.makeText(this, bank.custom ? "بانک حذف شد" : "بانک آماده غیرفعال و الگوی آن پاک شد", Toast.LENGTH_LONG).show();
     }
 
     private void refreshBankSummary() {
@@ -944,6 +1002,9 @@ public class MainActivity extends Activity {
         int review = 0;
         int conversations = buildConversationSummaries(entries).size();
         for (HistoryStore.Entry entry : entries) {
+            if (isSystemSmsEntry(entry)) {
+                continue;
+            }
             if (entry.time != null && entry.time.startsWith(today)) {
                 todayCount++;
             }
@@ -969,6 +1030,12 @@ public class MainActivity extends Activity {
                 scrollView.smoothScrollTo(0, 0);
             }
         });
+    }
+
+    private void openSmsFilter(String filter) {
+        bankSmsFilter = filter == null || filter.trim().isEmpty() ? "all" : filter.trim();
+        selectedConversationKey = "";
+        showSmsScreen();
     }
 
     private void showMainScreen() {
@@ -1074,15 +1141,23 @@ public class MainActivity extends Activity {
     }
 
     private HistoryStore.Entry[] filterBankSmsEntries(HistoryStore.Entry[] entries) {
-        if (entries == null || entries.length == 0 || "all".equals(bankSmsFilter)) {
-            return entries == null ? new HistoryStore.Entry[0] : entries;
+        if (entries == null || entries.length == 0) {
+            return new HistoryStore.Entry[0];
         }
         List<HistoryStore.Entry> out = new ArrayList<>();
+        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
         for (HistoryStore.Entry entry : entries) {
+            if (isSystemSmsEntry(entry)) {
+                continue;
+            }
             String title = entry.title == null ? "" : entry.title;
             String detail = entry.detail == null ? "" : entry.detail;
             String combined = title + "\n" + detail;
-            if ("approved".equals(bankSmsFilter) && entry.approved && !combined.contains("قبلاً")) {
+            if ("all".equals(bankSmsFilter)) {
+                out.add(entry);
+            } else if ("today".equals(bankSmsFilter) && entry.time != null && entry.time.startsWith(today)) {
+                out.add(entry);
+            } else if ("approved".equals(bankSmsFilter) && entry.approved && !combined.contains("قبلاً")) {
                 out.add(entry);
             } else if ("duplicate".equals(bankSmsFilter) && (combined.contains("قبلاً") || combined.toLowerCase(Locale.US).contains("duplicate"))) {
                 out.add(entry);
@@ -1094,6 +1169,9 @@ public class MainActivity extends Activity {
     }
 
     private String bankSmsFilterTitle() {
+        if ("today".equals(bankSmsFilter)) {
+            return "پیامک‌های امروز";
+        }
         if ("approved".equals(bankSmsFilter)) {
             return "تایید شده";
         }
@@ -1109,18 +1187,11 @@ public class MainActivity extends Activity {
     private Map<String, ConversationSummary> buildConversationSummaries(HistoryStore.Entry[] entries) {
         Map<String, ConversationSummary> conversations = new LinkedHashMap<>();
         for (HistoryStore.Entry entry : entries) {
-            String bank = extractDetailLine(entry.detail, "🏦 بانک:");
-            String sender = extractDetailLine(entry.detail, "👤 سرشماره:");
-            if (bank.isEmpty() && entry.title.contains("بررسی")) {
-                bank = "وضعیت بررسی پیامک‌ها";
-                sender = "سیستم";
+            if (isSystemSmsEntry(entry)) {
+                continue;
             }
-            if (bank.isEmpty()) {
-                bank = "پیامک‌های بانکی";
-            }
-            if (sender.isEmpty()) {
-                sender = "بدون سرشماره";
-            }
+            String bank = entryBank(entry);
+            String sender = entrySender(entry);
             String key = bank + "|" + sender;
             ConversationSummary summary = conversations.get(key);
             if (summary == null) {
@@ -1226,18 +1297,11 @@ public class MainActivity extends Activity {
         head.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         for (HistoryStore.Entry entry : entries) {
-            String bank = extractDetailLine(entry.detail, "🏦 بانک:");
-            String sender = extractDetailLine(entry.detail, "👤 سرشماره:");
-            if (bank.isEmpty() && entry.title.contains("بررسی")) {
-                bank = "وضعیت بررسی پیامک‌ها";
-                sender = "سیستم";
+            if (isSystemSmsEntry(entry)) {
+                continue;
             }
-            if (bank.isEmpty()) {
-                bank = "پیامک‌های بانکی";
-            }
-            if (sender.isEmpty()) {
-                sender = "بدون سرشماره";
-            }
+            String bank = entryBank(entry);
+            String sender = entrySender(entry);
             String key = bank + "|" + sender;
             if (summary.key.equals(key)) {
                 addSmsBubble(bankSmsListView, entry);
@@ -1253,13 +1317,12 @@ public class MainActivity extends Activity {
         parent.addView(row, matchWrap());
 
         TextView bubble = new TextView(this);
-        String mark = entry.approved ? "✅" : (entry.rejected ? "❌" : "•");
-        bubble.setText(mark + " " + entry.title + "\n" + compactSmsDetail(entry.detail) + "\n🕒 " + entry.time);
-        bubble.setTextSize(12);
+        bubble.setText(formatSmsBubble(entry));
+        bubble.setTextSize(13);
         bubble.setTextColor(textColor);
         bubble.setTextIsSelectable(true);
-        bubble.setLineSpacing(0, 1.08f);
-        bubble.setPadding(dp(13), dp(11), dp(13), dp(11));
+        bubble.setLineSpacing(dp(2), 1.08f);
+        bubble.setPadding(dp(15), dp(13), dp(15), dp(13));
         int fill = entry.approved ? approvedColor : (entry.rejected ? rejectedColor : neutralColor);
         int border = entry.approved ? greenColor : (entry.rejected ? Color.parseColor("#EF4444") : goldColor);
         styleGradientRounded(bubble, fill, inputColor, border, dp(22));
@@ -1268,6 +1331,46 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
         row.addView(bubble, lp);
+    }
+
+    private String formatSmsBubble(HistoryStore.Entry entry) {
+        String bank = entryBank(entry);
+        String sender = entrySender(entry);
+        String status = entry.approved ? "✅ تایید شده توسط اپ"
+                : (entry.rejected ? "❌ نیازمند بررسی ادمین" : "📨 ارسال/ثبت شده");
+        String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+        if (rawSms.isEmpty()) {
+            rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append(status).append("\n");
+        out.append(sender).append("  •  ").append(bank).append("\n");
+        out.append("━━━━━━━━━━━━").append("\n");
+        if (!rawSms.isEmpty()) {
+            out.append(formatRawSms(rawSms)).append("\n");
+        } else {
+            out.append(compactSmsDetail(entry.detail)).append("\n");
+        }
+        out.append("━━━━━━━━━━━━").append("\n");
+
+        String amount = extractDetailLine(entry.detail, "💵 معادل تقریبی:");
+        String rawAmount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
+        String reference = extractDetailLine(entry.detail, "🔖 پیگیری:");
+        String response = extractDetailLine(entry.detail, "🧾 پاسخ ربات:");
+        if (!amount.isEmpty()) {
+            out.append("💰 مبلغ ربات: ").append(amount).append("\n");
+        } else if (!rawAmount.isEmpty()) {
+            out.append("💰 مبلغ SMS: ").append(rawAmount).append("\n");
+        }
+        if (!reference.isEmpty() && !"-".equals(reference)) {
+            out.append("🔖 پیگیری: ").append(reference).append("\n");
+        }
+        if (!response.isEmpty()) {
+            out.append("🤖 نتیجه ربات: ").append(response).append("\n");
+        }
+        out.append("🕒 ").append(entry.time);
+        return out.toString();
     }
 
     private String summaryStatus(ConversationSummary summary) {
@@ -1292,6 +1395,10 @@ public class MainActivity extends Activity {
         if (entry == null) {
             return "";
         }
+        String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+        if (rawSms.isEmpty()) {
+            rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+        }
         String amount = extractDetailLine(entry.detail, "💵 معادل تقریبی:");
         if (amount.isEmpty()) {
             amount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
@@ -1313,6 +1420,9 @@ public class MainActivity extends Activity {
                 out.append(" • ");
             }
             out.append("پیگیری ").append(reference);
+        }
+        if (out.length() == 0 && !rawSms.isEmpty()) {
+            out.append(shortPreview(rawSms));
         }
         return out.length() > 0 ? out.toString() : compactSmsDetail(entry.detail);
     }
@@ -1361,12 +1471,76 @@ public class MainActivity extends Activity {
             return "جزئیات ثبت نشده است.";
         }
         String text = detail.trim();
+        int rawIndex = text.indexOf("📄 متن SMS:");
+        if (rawIndex < 0) {
+            rawIndex = text.indexOf("متن SMS:");
+        }
+        if (rawIndex >= 0) {
+            text = text.substring(0, rawIndex).trim();
+        }
         text = text.replace("\n🌐 کد HTTP:", "\nکد HTTP:");
         text = text.replace("\n🧾 پاسخ ربات:", "\nپاسخ ربات:");
         if (text.length() > 520) {
             return text.substring(0, 520) + "...";
         }
         return text;
+    }
+
+    private boolean isSystemSmsEntry(HistoryStore.Entry entry) {
+        if (entry == null) {
+            return true;
+        }
+        String text = (entry.title == null ? "" : entry.title) + "\n" + (entry.detail == null ? "" : entry.detail);
+        return text.contains("بررسی پیامک‌های قبلی")
+                || text.contains("INBOX_SCAN")
+                || text.contains("تعداد پیامک‌های بررسی‌شده")
+                || text.contains("Scanning last");
+    }
+
+    private String entryBank(HistoryStore.Entry entry) {
+        String bank = extractDetailLine(entry.detail, "🏦 بانک:");
+        if (bank.isEmpty()) {
+            bank = extractDetailLine(entry.detail, "بانک:");
+        }
+        if (bank.isEmpty()) {
+            String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+            if (rawSms.isEmpty()) {
+                rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+            }
+            String firstLine = rawSms.split("\\n", 2)[0].trim();
+            if (!firstLine.isEmpty()) {
+                bank = firstLine;
+            }
+        }
+        return bank.isEmpty() ? "پیامک بانکی" : bank;
+    }
+
+    private String entrySender(HistoryStore.Entry entry) {
+        String sender = extractDetailLine(entry.detail, "👤 سرشماره:");
+        if (sender.isEmpty()) {
+            sender = extractDetailLine(entry.detail, "فرستنده:");
+        }
+        if (sender.isEmpty()) {
+            sender = extractDetailLine(entry.detail, "Sender=");
+        }
+        return sender.isEmpty() ? "بدون سرشماره" : sender;
+    }
+
+    private String extractDetailBlock(String detail, String marker) {
+        if (detail == null || marker == null || marker.trim().isEmpty()) {
+            return "";
+        }
+        int index = detail.indexOf(marker);
+        if (index < 0) {
+            return "";
+        }
+        return detail.substring(index + marker.length()).trim();
+    }
+
+    private String formatRawSms(String rawSms) {
+        String value = rawSms == null ? "" : rawSms.trim();
+        value = value.replace("\r", "\n").replaceAll("\\n{3,}", "\n\n");
+        return value.length() > 900 ? value.substring(0, 900) + "..." : value;
     }
 
     private String extractDetailLine(String detail, String prefix) {
@@ -1530,7 +1704,7 @@ public class MainActivity extends Activity {
         return card;
     }
 
-    private TextView addMetricCard(LinearLayout row, String icon, String label, int fill, int border) {
+    private TextView addMetricCard(LinearLayout row, String icon, String label, int fill, int border, View.OnClickListener listener) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER);
@@ -1539,6 +1713,10 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams lp = weightedButtonLp();
         lp.setMargins(dp(4), dp(3), dp(4), dp(3));
         row.addView(card, lp);
+        if (listener != null) {
+            card.setOnClickListener(listener);
+            card.setClickable(true);
+        }
 
         TextView iconView = new TextView(this);
         iconView.setText(icon);
