@@ -3784,39 +3784,36 @@ async def _send_admin_pending_card_payment_report(
         receipt_admin_fid = str(meta.get("admin_fid") or "").strip()
         receipt_local_path = str(meta.get("local_path") or "").strip()
         user_receipt_file_id = str(photo_file_id or meta.get("user_fid") or "").strip()
-        sent = await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
-        receipt_sent = None
-        receipt_caption = (
-            "🖼 رسید پرداخت کارت‌به‌کارت\n"
-            f"🔑 شناسه تراکنش: {tx_code or str(payment.get('tx_code') or payment_id)}\n"
-            f"💰 مبلغ: {int(amount or payment.get('amount') or 0):,} تومان"
-        )
+        sent = None
 
         try:
             if receipt_admin_fid:
-                receipt_sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_admin_fid, caption=receipt_caption)
+                sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_admin_fid, caption=caption, reply_markup=kb)
         except Exception as e:
             logger.warning("Failed to reuse admin receipt file_id for payment %s: %s", payment_id, e)
 
-        if receipt_sent is None and user_receipt_file_id:
+        if sent is None and user_receipt_file_id:
             try:
                 f = await context.bot.get_file(user_receipt_file_id)
                 data = await f.download_as_bytearray()
                 bio = io.BytesIO(data)
                 bio.name = "receipt.jpg"
-                receipt_sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=receipt_caption)
+                sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=caption, reply_markup=kb)
             except Exception as e:
                 logger.warning("Failed to forward user receipt to admin for payment %s: %s", payment_id, e)
 
-        if receipt_sent is None and receipt_local_path and os.path.exists(receipt_local_path):
+        if sent is None and receipt_local_path and os.path.exists(receipt_local_path):
             try:
                 with open(receipt_local_path, "rb") as receipt_file:
-                    receipt_sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_file, caption=receipt_caption)
+                    sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_file, caption=caption, reply_markup=kb)
             except Exception as e:
                 logger.warning("Failed to send local receipt to admin for payment %s: %s", payment_id, e)
 
+        if sent is None:
+            sent = await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
+
         try:
-            admin_file_id = (receipt_sent.photo[-1].file_id if receipt_sent and getattr(receipt_sent, "photo", None) else None)
+            admin_file_id = (sent.photo[-1].file_id if sent and getattr(sent, "photo", None) else None)
         except Exception:
             admin_file_id = None
         if admin_file_id:
