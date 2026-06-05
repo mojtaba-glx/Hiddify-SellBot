@@ -103,6 +103,30 @@ class TestSmsWebhookPayments(unittest.TestCase):
         self.assertIn("sms_event_id:sms-event-1", payment["receipt_image"])
         self.assertIn("sms_amount_raw:1000000", payment["receipt_image"])
 
+    def test_find_approved_payment_by_sms_event_meta(self):
+        _internal_user_id, payment_id = self._create_pending_payment(
+            amount=75211,
+            created_at=self._near_fixed_sms_time(),
+        )
+        ok, message, _updated = userbot_db.approve_pending_card_payment_from_sms(
+            payment_id,
+            event_id="sms-before-receipt-event",
+            reference="020000631300",
+            sender="+989178723364",
+            amount_raw=752110,
+            currency_raw="rial",
+        )
+        self.assertTrue(ok, message)
+
+        found = userbot_db.find_approved_card_payment_by_sms_event(
+            event_id="sms-before-receipt-event",
+            amount_raw=752110,
+            currency_raw="rial",
+        )
+
+        self.assertIsNotNone(found)
+        self.assertEqual(int(found["id"]), payment_id)
+
     def test_previous_unmatched_sms_without_last4_does_not_approve_later_receipt(self):
         userbot_db.record_sms_webhook_event(
             {

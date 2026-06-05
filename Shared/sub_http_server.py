@@ -660,6 +660,37 @@ class _SubHandler(BaseHTTPRequestHandler):
             )
             return 422, {"ok": False, "error": "invalid_amount"}
 
+        already_approved_payment = None
+        already_amount = int(candidates[0])
+        for amount_toman in candidates:
+            already_approved_payment = userbot_db.find_approved_card_payment_by_sms_event(
+                event_id=event_id,
+                amount_raw=amount_raw,
+                currency_raw=currency_raw,
+                amount_toman=int(amount_toman),
+            )
+            if already_approved_payment:
+                already_amount = int(amount_toman)
+                break
+        if already_approved_payment:
+            payment_id = int((already_approved_payment or {}).get("id") or 0)
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="approved",
+                matched_payment_id=payment_id,
+                message="payment already approved by this bank SMS",
+                amount_toman=already_amount,
+            )
+            return 200, {
+                "ok": True,
+                "matched": True,
+                "status": "approved",
+                "payment_id": payment_id,
+                "tx_code": (already_approved_payment or {}).get("tx_code"),
+                "amount_toman": already_amount,
+                "message": "payment already approved by this bank SMS",
+            }
+
         prior_event = None
         prior_amount = int(candidates[0])
         for amount_toman in candidates:

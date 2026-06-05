@@ -3360,6 +3360,51 @@ def find_prior_approved_sms_webhook_event(
     return None
 
 
+def find_approved_card_payment_by_sms_event(
+    *,
+    event_id: str = "",
+    amount_raw: int = 0,
+    currency_raw: str = "",
+    amount_toman: int = 0,
+) -> Optional[Dict[str, Any]]:
+    init_db()
+    eid = str(event_id or "").strip()
+    if not eid:
+        return None
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        candidates = _sms_amount_candidates_toman(int(amount_raw or 0), str(currency_raw or ""))
+        amount = int(candidates[0]) if candidates else 0
+    if amount <= 0:
+        return None
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT p.*, u.username, u.full_name, u.telegram_id
+            FROM userbot_payments p
+            LEFT JOIN userbot_users u ON u.id = p.user_id
+            WHERE p.status = 'approved'
+              AND p.method = 'card'
+              AND p.amount = ?
+            ORDER BY p.id DESC
+            LIMIT 100
+            """,
+            (amount,),
+        )
+        rows = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    for row in rows:
+        meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
+        if str(meta.get("sms_event_id") or "").strip() == eid:
+            return row
+    return None
+
+
 def _parse_db_datetime(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
