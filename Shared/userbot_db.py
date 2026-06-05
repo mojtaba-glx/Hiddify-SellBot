@@ -3281,7 +3281,7 @@ def find_pending_card_payments_by_amount(
         if last4:
             if payer_last4 != last4:
                 continue
-        elif payer_last4:
+        elif payer_last4 and not _payment_allows_pre_receipt_sms_without_last4(row, meta):
             continue
 
         payment_dt = _parse_db_datetime(row.get("created_at"))
@@ -3472,9 +3472,9 @@ def _meta_int(meta: Dict[str, Any], key: str, default: int = 0) -> int:
 def _payment_allows_pre_receipt_sms_without_last4(payment: Dict[str, Any], meta: Dict[str, Any]) -> bool:
     """
     Banks like Blu may not include payer card last4 in deposit SMS.
-    If the SMS arrived before the user uploaded the receipt, approve only when
-    the payment amount carries our random transaction marker. This keeps fake
-    later receipts from reusing old ordinary SMS messages.
+    When a SMS has no last4, approve only when the payment amount carries our
+    random transaction marker. This keeps fake later receipts from reusing old
+    ordinary SMS messages while allowing Blu-style messages to match safely.
     """
     marker = _meta_int(meta, "tx_marker", 0)
     return 1 <= marker <= 999
@@ -3614,7 +3614,7 @@ def try_approve_payment_from_unmatched_sms(
             if event_last4:
                 if not payment_last4 or payment_last4 != event_last4:
                     continue
-            elif payment_last4 or not _payment_allows_pre_receipt_sms_without_last4(payment, meta):
+            elif not _payment_allows_pre_receipt_sms_without_last4(payment, meta):
                 continue
             if event_time < sms_not_before:
                 continue
@@ -3624,7 +3624,7 @@ def try_approve_payment_from_unmatched_sms(
         if event_last4:
             if not payment_last4 or payment_last4 != event_last4:
                 continue
-        elif payment_last4:
+        elif payment_last4 and not _payment_allows_pre_receipt_sms_without_last4(payment, meta):
             continue
 
         ok, message, updated = approve_pending_card_payment_from_sms(

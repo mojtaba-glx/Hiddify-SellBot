@@ -218,6 +218,41 @@ class TestSmsWebhookPayments(unittest.TestCase):
         payment = userbot_db.get_payment_by_id(payment_id)
         self.assertIn("sms_event_id:sms-before-marker-receipt", payment["receipt_image"])
 
+    def test_previous_blu_sms_without_last4_approves_marker_receipt_even_with_user_entered_last4(self):
+        userbot_db.record_sms_webhook_event(
+            {
+                "event_id": "blu-before-receipt-with-user-last4",
+                "sender": "+989178723364",
+                "amount_raw": 751_610,
+                "currency_raw": "rial",
+                "amount_toman": 75_161,
+                "reference": "",
+                "card_last4": "",
+                "body": "بلو\nواریز پول\nمجتبی عزیز، 751,610 ریال به حساب شما نشست.",
+                "status": "no_pending_match",
+                "message": "no pending yet",
+                "received_at": 1780000000000,
+                "device_time": 1780000001000,
+            }
+        )
+        internal_user_id, payment_id = self._create_pending_payment(
+            amount=75161,
+            receipt_image="base_amount:75000|tx_marker:161|payer_last4:1234",
+            created_at=self._near_fixed_sms_time(),
+        )
+
+        ok, message, updated = userbot_db.try_approve_payment_from_unmatched_sms(
+            payment_id,
+            max_age_minutes=60 * 24 * 365,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(updated["status"], "approved")
+        user = userbot_db.get_user_by_id(internal_user_id)
+        self.assertEqual(int(user["wallet_balance"]), 75161)
+        payment = userbot_db.get_payment_by_id(payment_id)
+        self.assertIn("sms_event_id:blu-before-receipt-with-user-last4", payment["receipt_image"])
+
     def test_find_pending_payment_allows_previous_sms_without_last4_for_marker_amount(self):
         _user_id, payment_id = self._create_pending_payment(
             amount=100573,
@@ -233,6 +268,39 @@ class TestSmsWebhookPayments(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(int(rows[0]["id"]), payment_id)
+
+    def test_find_pending_payment_allows_blu_without_last4_even_when_receipt_has_last4_if_marker_exists(self):
+        _user_id, payment_id = self._create_pending_payment(
+            amount=75161,
+            receipt_image="base_amount:75000|tx_marker:161|payer_last4:1234",
+            created_at=self._near_fixed_sms_time(),
+        )
+
+        rows = userbot_db.find_pending_card_payments_by_amount(
+            75161,
+            card_last4="",
+            max_age_minutes=60 * 24 * 365,
+            sms_time_ms=1780000000000,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(int(rows[0]["id"]), payment_id)
+
+    def test_find_pending_payment_rejects_without_last4_when_receipt_has_last4_and_no_marker(self):
+        _user_id, _payment_id = self._create_pending_payment(
+            amount=75000,
+            receipt_image="payer_last4:1234",
+            created_at=self._near_fixed_sms_time(),
+        )
+
+        rows = userbot_db.find_pending_card_payments_by_amount(
+            75000,
+            card_last4="",
+            max_age_minutes=60 * 24 * 365,
+            sms_time_ms=1780000000000,
+        )
+
+        self.assertEqual(rows, [])
 
     def test_old_unmatched_sms_does_not_auto_approve_fake_later_receipt(self):
         payment_created = datetime.now(timezone.utc).replace(tzinfo=None)
