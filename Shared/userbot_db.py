@@ -3240,6 +3240,8 @@ def find_pending_card_payments_by_amount(
     *,
     card_last4: str = "",
     max_age_minutes: int = 360,
+    sms_time_ms: int = 0,
+    receipt_lookback_minutes: int = 30,
 ) -> List[Dict[str, Any]]:
     init_db()
     amount = int(amount_toman or 0)
@@ -3270,15 +3272,26 @@ def find_pending_card_payments_by_amount(
         conn.close()
 
     last4 = str(card_last4 or "").strip()
-    if not last4:
-        return rows
-
+    sms_dt = _parse_sms_epoch_datetime(sms_time_ms)
+    lookback = max(1, min(120, int(receipt_lookback_minutes or 30)))
     filtered: List[Dict[str, Any]] = []
     for row in rows:
         meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
         payer_last4 = str(meta.get("payer_last4") or "").strip()
-        if payer_last4 == last4:
-            filtered.append(row)
+        if last4:
+            if payer_last4 != last4:
+                continue
+        elif payer_last4:
+            continue
+
+        payment_dt = _parse_db_datetime(row.get("created_at"))
+        if sms_dt is not None and payment_dt is not None and sms_dt < payment_dt:
+            if not last4:
+                continue
+            if sms_dt < payment_dt - timedelta(minutes=lookback):
+                continue
+
+        filtered.append(row)
     return filtered
 
 
@@ -3357,6 +3370,29 @@ def _parse_db_datetime(value: Any) -> Optional[datetime]:
         except Exception:
             continue
     return None
+
+
+def _parse_sms_epoch_datetime(value: Any) -> Optional[datetime]:
+    try:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        stamp = float(raw)
+        if stamp <= 0:
+            return None
+        if stamp > 10_000_000_000:
+            stamp = stamp / 1000.0
+        return datetime.fromtimestamp(stamp, timezone.utc).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _sms_webhook_event_datetime(event: Dict[str, Any]) -> Optional[datetime]:
+    for key in ("device_time", "received_at"):
+        dt = _parse_sms_epoch_datetime((event or {}).get(key))
+        if dt is not None:
+            return dt
+    return _parse_db_datetime((event or {}).get("created_at"))
 
 
 def approve_pending_card_payment_from_sms(
@@ -3459,22 +3495,13 @@ def try_approve_payment_from_unmatched_sms(
         event_created_at = _parse_db_datetime(event.get("created_at"))
         if event_created_at is None:
             continue
-        if event_created_at < sms_not_before:
-            continue
-        if event_created_at > sms_not_after:
-            continue
+        event_time = _sms_webhook_event_datetime(event) or event_created_at
 
         candidates = _sms_amount_candidates_toman(
             int(event.get("amount_raw") or 0),
             str(event.get("currency_raw") or ""),
         )
         if amount not in candidates:
-            continue
-        event_last4 = str(event.get("card_last4") or "").strip()
-        if event_last4:
-            if not payment_last4 or payment_last4 != event_last4:
-                continue
-        elif payment_last4:
             continue
 
         event_id = str(event.get("event_id") or "").strip()
@@ -3496,6 +3523,21 @@ def try_approve_payment_from_unmatched_sms(
                 amount_toman=amount,
             )
             return False, "این SMS قبلاً برای پرداخت دیگری استفاده شده است؛ بررسی دستی لازم است.", payment
+
+        event_last4 = str(event.get("card_last4") or "").strip()
+        if event_time < payment_created_at:
+            if not event_last4 or not payment_last4 or payment_last4 != event_last4:
+                continue
+            if event_time < sms_not_before:
+                continue
+        elif event_time > sms_not_after:
+            continue
+
+        if event_last4:
+            if not payment_last4 or payment_last4 != event_last4:
+                continue
+        elif payment_last4:
+            continue
 
         ok, message, updated = approve_pending_card_payment_from_sms(
             pid,

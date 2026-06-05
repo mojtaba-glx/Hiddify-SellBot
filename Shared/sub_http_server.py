@@ -528,6 +528,8 @@ class _SubHandler(BaseHTTPRequestHandler):
         sender = str(payload.get("sender") or "").strip()
         card_last4 = re.sub(r"\D", "", str(payload.get("card_last4") or ""))[-4:]
         body = str(payload.get("body") or "")
+        received_at_ms = _to_int(payload.get("received_at"), 0)
+        device_time_ms = _to_int(payload.get("device_time"), 0)
         is_test = bool(payload.get("test"))
 
         if not event_id:
@@ -547,8 +549,8 @@ class _SubHandler(BaseHTTPRequestHandler):
                     "body": body,
                     "status": "test_received",
                     "message": "test webhook received",
-                    "received_at": _to_int(payload.get("received_at"), 0),
-                    "device_time": _to_int(payload.get("device_time"), 0),
+                    "received_at": received_at_ms,
+                    "device_time": device_time_ms,
                 }
             )
             self._write_json(200, {"ok": True, "test": True, "duplicate": not inserted, "event": existing or {}})
@@ -568,8 +570,8 @@ class _SubHandler(BaseHTTPRequestHandler):
                     "body": body,
                     "status": "invalid_amount",
                     "message": "amount not found or invalid",
-                    "received_at": _to_int(payload.get("received_at"), 0),
-                    "device_time": _to_int(payload.get("device_time"), 0),
+                    "received_at": received_at_ms,
+                    "device_time": device_time_ms,
                 }
             )
             self._write_json(422, {"ok": False, "error": "invalid_amount"})
@@ -587,8 +589,8 @@ class _SubHandler(BaseHTTPRequestHandler):
                 "body": body,
                 "status": "received",
                 "message": "received",
-                "received_at": _to_int(payload.get("received_at"), 0),
-                "device_time": _to_int(payload.get("device_time"), 0),
+                "received_at": received_at_ms,
+                "device_time": device_time_ms,
             }
         )
         if not inserted:
@@ -602,6 +604,8 @@ class _SubHandler(BaseHTTPRequestHandler):
                     sender=str((existing or {}).get("sender") or sender),
                     card_last4=re.sub(r"\D", "", str((existing or {}).get("card_last4") or card_last4))[-4:],
                     body=str((existing or {}).get("body") or body),
+                    received_at_ms=_to_int((existing or {}).get("received_at"), received_at_ms),
+                    device_time_ms=_to_int((existing or {}).get("device_time"), device_time_ms),
                 )
                 retry_payload["duplicate"] = True
                 retry_payload["retry"] = True
@@ -627,6 +631,8 @@ class _SubHandler(BaseHTTPRequestHandler):
             sender=sender,
             card_last4=card_last4,
             body=body,
+            received_at_ms=received_at_ms,
+            device_time_ms=device_time_ms,
         )
         self._write_json(status_code, response)
         return
@@ -641,6 +647,8 @@ class _SubHandler(BaseHTTPRequestHandler):
         sender: str,
         card_last4: str,
         body: str = "",
+        received_at_ms: int = 0,
+        device_time_ms: int = 0,
     ) -> tuple[int, dict]:
         candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
         if not candidates:
@@ -697,6 +705,7 @@ class _SubHandler(BaseHTTPRequestHandler):
                 int(amount_toman),
                 card_last4=card_last4,
                 max_age_minutes=_sms_webhook_max_pending_age_minutes(),
+                sms_time_ms=int(device_time_ms or received_at_ms or 0),
             )
             if matches:
                 matched_amount = int(amount_toman)

@@ -41,6 +41,10 @@ class TestSmsWebhookPayments(unittest.TestCase):
                 (created_at, event_id),
             )
 
+    def _near_fixed_sms_time(self, minutes_after: int = 1) -> str:
+        dt = datetime.fromtimestamp(1780000001000 / 1000, timezone.utc).replace(tzinfo=None)
+        return (dt + timedelta(minutes=minutes_after)).strftime("%Y-%m-%d %H:%M:%S")
+
     def test_find_pending_payment_by_toman_amount(self):
         _user_id, payment_id = self._create_pending_payment(amount=100000)
 
@@ -77,7 +81,10 @@ class TestSmsWebhookPayments(unittest.TestCase):
         self.assertEqual(int(rows[0]["id"]), payment_id)
 
     def test_approve_payment_from_sms_updates_wallet_and_meta(self):
-        internal_user_id, payment_id = self._create_pending_payment(amount=100000)
+        internal_user_id, payment_id = self._create_pending_payment(
+            amount=100000,
+            created_at=self._near_fixed_sms_time(),
+        )
 
         ok, message, updated = userbot_db.approve_pending_card_payment_from_sms(
             payment_id,
@@ -96,7 +103,7 @@ class TestSmsWebhookPayments(unittest.TestCase):
         self.assertIn("sms_event_id:sms-event-1", payment["receipt_image"])
         self.assertIn("sms_amount_raw:1000000", payment["receipt_image"])
 
-    def test_pending_payment_can_match_previous_unmatched_rial_sms(self):
+    def test_previous_unmatched_sms_without_last4_does_not_approve_later_receipt(self):
         userbot_db.record_sms_webhook_event(
             {
                 "event_id": "sms-before-receipt",
@@ -120,12 +127,11 @@ class TestSmsWebhookPayments(unittest.TestCase):
             max_age_minutes=60 * 24 * 365,
         )
 
-        self.assertTrue(ok, message)
-        self.assertEqual(updated["status"], "approved")
+        self.assertFalse(ok, message)
+        self.assertEqual(updated["status"], "pending")
         user = userbot_db.get_user_by_id(internal_user_id)
-        self.assertEqual(int(user["wallet_balance"]), 100000)
-        payment = userbot_db.get_payment_by_id(payment_id)
-        self.assertIn("sms_event_id:sms-before-receipt", payment["receipt_image"])
+        self.assertEqual(int(user["wallet_balance"]), 0)
+        self.assertEqual(userbot_db.get_payment_by_id(payment_id)["status"], "pending")
 
     def test_old_unmatched_sms_does_not_auto_approve_fake_later_receipt(self):
         payment_created = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -167,6 +173,41 @@ class TestSmsWebhookPayments(unittest.TestCase):
         self.assertEqual(int(user["wallet_balance"]), 0)
         self.assertEqual(userbot_db.get_payment_by_id(payment_id)["status"], "pending")
 
+    def test_pending_payment_can_match_previous_unmatched_rial_sms_with_matching_last4(self):
+        userbot_db.record_sms_webhook_event(
+            {
+                "event_id": "sms-before-receipt-last4",
+                "sender": "BANK",
+                "amount_raw": 1_000_000,
+                "currency_raw": "rial",
+                "amount_toman": 100_000,
+                "reference": "111222",
+                "card_last4": "4188",
+                "body": "انتقال از کارت 4188\n+1,000,000",
+                "status": "no_pending_match",
+                "message": "no pending yet",
+                "received_at": 1780000000000,
+                "device_time": 1780000001000,
+            }
+        )
+        internal_user_id, payment_id = self._create_pending_payment(
+            amount=100000,
+            receipt_image="payer_last4:4188",
+            created_at=self._near_fixed_sms_time(),
+        )
+
+        ok, message, updated = userbot_db.try_approve_payment_from_unmatched_sms(
+            payment_id,
+            max_age_minutes=60 * 24 * 365,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(updated["status"], "approved")
+        user = userbot_db.get_user_by_id(internal_user_id)
+        self.assertEqual(int(user["wallet_balance"]), 100000)
+        payment = userbot_db.get_payment_by_id(payment_id)
+        self.assertIn("sms_event_id:sms-before-receipt-last4", payment["receipt_image"])
+
     def test_unmatched_sms_with_card_last4_requires_receipt_last4(self):
         userbot_db.record_sms_webhook_event(
             {
@@ -184,7 +225,10 @@ class TestSmsWebhookPayments(unittest.TestCase):
                 "device_time": 1780000001000,
             }
         )
-        internal_user_id, payment_id = self._create_pending_payment(amount=100000)
+        internal_user_id, payment_id = self._create_pending_payment(
+            amount=100000,
+            created_at=self._near_fixed_sms_time(),
+        )
 
         ok, message, updated = userbot_db.try_approve_payment_from_unmatched_sms(
             payment_id,
