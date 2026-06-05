@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 public final class WebhookClient {
     public static final class Result {
@@ -67,26 +68,34 @@ public final class WebhookClient {
         if (result == null) {
             return "FAILED";
         }
-        String body = result.body == null ? "" : result.body.toLowerCase();
-        if (body.contains("\"status\":\"approved\"") || body.contains("\"matched\":true")) {
+        String body = compactResponse(result.body);
+        if (body.contains("\"status\":\"sms_reused\"")) {
+            return "SMS_REUSED";
+        }
+        if (body.contains("\"status\":\"no_pending_match\"")) {
+            return "NO_PENDING_MATCH";
+        }
+        if (body.contains("\"error\":\"ambiguous_pending_payments\"")) {
+            return "AMBIGUOUS";
+        }
+        if (body.contains("\"status\":\"approved\"")
+                || body.contains("\"matched\":true")
+                || (body.contains("\"matched_payment_id\":") && !body.contains("\"matched_payment_id\":0"))) {
             if (body.contains("\"duplicate\":true") && !body.contains("\"retry\":true")) {
                 return "APPROVED_DUPLICATE";
             }
             return "APPROVED";
         }
-        if (body.contains("\"status\":\"no_pending_match\"")) {
-            return "NO_PENDING_MATCH";
-        }
-        if (body.contains("\"status\":\"sms_reused\"")) {
-            return "SMS_REUSED";
-        }
-        if (body.contains("\"error\":\"ambiguous_pending_payments\"")) {
-            return "AMBIGUOUS";
-        }
         if (result.ok) {
             return "SENT";
         }
         return "FAILED";
+    }
+
+    public static String compactResponse(String value) {
+        return (value == null ? "" : value)
+                .toLowerCase(Locale.US)
+                .replaceAll("\\s+", "");
     }
 
     public static String persianStatus(Result result) {
@@ -95,7 +104,7 @@ public final class WebhookClient {
             return "✅ تایید شد و به ربات اعلام شد";
         }
         if ("APPROVED_DUPLICATE".equals(label)) {
-            return "✅ این واریزی قبلاً تایید شده بود";
+            return "🟡 این SMS قبلاً تایید شده بود؛ تایید جدید انجام نشد";
         }
         if ("NO_PENDING_MATCH".equals(label)) {
             return "🟡 SMS خوانده شد، اما پرداخت pending با این مبلغ پیدا نشد";

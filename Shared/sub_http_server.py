@@ -178,6 +178,7 @@ def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str
     receipt_photo_id = str(receipt_meta.get("admin_fid") or "").strip()
     receipt_local_path = str(receipt_meta.get("local_path") or "").strip()
     has_receipt = bool(receipt_photo_id or receipt_local_path)
+    _clear_pending_admin_payment_keyboard(token, admin_id, receipt_meta)
 
     text = (
         "✅ پرداخت کارت‌به‌کارت با SMS تایید شد.\n"
@@ -234,6 +235,38 @@ def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str
             )
         except Exception as fallback_error:
             logger.warning("Failed sending fallback SMS payment admin report payment_id=%s: %s", payment_id, fallback_error)
+
+
+def _clear_pending_admin_payment_keyboard(token: str, default_admin_id: int, receipt_meta: dict[str, str]) -> None:
+    try:
+        chat_id = _to_int((receipt_meta or {}).get("admin_chat_id"), default_admin_id)
+        message_id = _to_int((receipt_meta or {}).get("admin_message_id"), 0)
+        if not token or chat_id <= 0 or message_id <= 0:
+            return
+        deleted = False
+        try:
+            _telegram_form_request(
+                token,
+                "deleteMessage",
+                {
+                    "chat_id": str(chat_id),
+                    "message_id": str(message_id),
+                },
+            )
+            deleted = True
+        except Exception:
+            deleted = False
+        if not deleted:
+            _telegram_form_request(
+                token,
+                "editMessageReplyMarkup",
+                {
+                    "chat_id": str(chat_id),
+                    "message_id": str(message_id),
+                },
+            )
+    except Exception as e:
+        logger.warning("Failed clearing pending admin payment keyboard: %s", e)
 
 
 def _send_admin_sms_reused_report(

@@ -18,15 +18,6 @@ public final class SmsProcessor {
         String configuredBankName = settings.getMatchedConfiguredBankName(sender, body);
         String bankName = configuredBankName.isEmpty() ? settings.getMatchedBankName(sender, body) : configuredBankName;
         if (bankName.isEmpty()) {
-            if (PaymentSmsParser.isIncomingPayment(body)) {
-                HistoryStore.add(
-                        context,
-                        "SKIPPED",
-                        "پیامک شبیه واریز بود، اما با هیچ بانک فعالی تطبیق نشد.\n"
-                                + "👤 سرشماره: " + sender
-                                + "\n📄 متن SMS:\n" + body
-                );
-            }
             return;
         }
         if (!settings.canSendWebhook()) {
@@ -85,6 +76,21 @@ public final class SmsProcessor {
         HistoryStore.upsertUnique(context, WebhookClient.statusLabel(result), detail, event.eventId);
     }
 
+    public static boolean isConfiguredBankIncomingPayment(Context context, String sender, String body) {
+        SettingsStore settings = new SettingsStore(context);
+        if (!settings.isEnabled() || !settings.hasSenderFilters()) {
+            return false;
+        }
+        if (!PaymentSmsParser.isIncomingPayment(body)) {
+            return false;
+        }
+        String bankName = settings.getMatchedConfiguredBankName(sender, body);
+        if (bankName.isEmpty()) {
+            bankName = settings.getMatchedBankName(sender, body);
+        }
+        return !bankName.isEmpty();
+    }
+
     private static String estimateToman(long amount, String currency) {
         String c = currency == null ? "" : currency;
         long toman = "rial".equals(c) || "irr".equals(c) ? Math.round(amount / 10.0) : amount;
@@ -100,17 +106,20 @@ public final class SmsProcessor {
             return "-";
         }
         String text = body.trim();
-        if (text.contains("\"status\":\"approved\"")) {
-            return "تایید شد";
-        }
-        if (text.contains("\"status\":\"no_pending_match\"")) {
-            return "پرداخت pending پیدا نشد";
-        }
-        if (text.contains("\"status\":\"sms_reused\"")) {
+        String compact = WebhookClient.compactResponse(text);
+        if (compact.contains("\"status\":\"sms_reused\"")) {
             return "این SMS قبلاً برای پرداخت دیگری استفاده شده است";
         }
-        if (text.contains("\"duplicate\":true")) {
-            return "تکراری/قبلاً ثبت شده";
+        if (compact.contains("\"status\":\"no_pending_match\"")) {
+            return "پرداخت pending پیدا نشد";
+        }
+        if (compact.contains("\"duplicate\":true") && !compact.contains("\"retry\":true")) {
+            return "قبلاً تایید شده بود؛ تایید جدید نیست";
+        }
+        if (compact.contains("\"status\":\"approved\"")
+                || compact.contains("\"matched\":true")
+                || (compact.contains("\"matched_payment_id\":") && !compact.contains("\"matched_payment_id\":0"))) {
+            return "تایید شد";
         }
         if (text.length() > 180) {
             return text.substring(0, 180) + "...";

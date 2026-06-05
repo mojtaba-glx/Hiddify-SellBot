@@ -3386,6 +3386,7 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
                 [InlineKeyboardButton(f"👤 {user_label}", callback_data=f"userbot:user:{uid}")]
             ])
         bot = Bot(token=ADMIN_BOT_TOKEN)
+        await _clear_pending_admin_payment_keyboard(payment, bot=bot)
         if receipt_admin_fid:
             await bot.send_photo(chat_id=ADMIN_ID, photo=receipt_admin_fid, caption=text, reply_markup=kb)
         elif receipt_local_path and os.path.exists(receipt_local_path):
@@ -3490,6 +3491,10 @@ def _build_receipt_meta(meta: dict) -> str:
         "direct_done_at",
         "direct_error",
         "admin_notified_at",
+        "admin_chat_id",
+        "admin_message_id",
+        "admin_message_deleted_at",
+        "admin_keyboard_cleared_at",
         "admin_notify_flow",
         "admin_notify_error",
         "admin_notify_error_at",
@@ -3510,6 +3515,39 @@ def _build_receipt_meta(meta: dict) -> str:
     if not parts:
         return ""
     return "|".join(parts)
+
+
+async def _clear_pending_admin_payment_keyboard(payment: dict, *, bot: Optional[Bot] = None) -> None:
+    try:
+        payment_id = int((payment or {}).get("id") or 0)
+        meta = _parse_receipt_meta(str((payment or {}).get("receipt_image") or ""))
+        chat_id = int(str(meta.get("admin_chat_id") or ADMIN_ID or "0").strip() or 0)
+        message_id = int(str(meta.get("admin_message_id") or "0").strip() or 0)
+        if chat_id <= 0 or message_id <= 0 or not ADMIN_BOT_TOKEN:
+            return
+        admin_bot = bot or Bot(token=ADMIN_BOT_TOKEN)
+        now_s = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        deleted = False
+        try:
+            await admin_bot.delete_message(chat_id=chat_id, message_id=message_id)
+            deleted = True
+        except BadRequest as e:
+            msg = str(e)
+            if "Message to delete not found" in msg or "message to delete not found" in msg:
+                deleted = True
+            elif "message can't be deleted" not in msg and "Message can't be deleted" not in msg:
+                raise
+        try:
+            if not deleted:
+                await admin_bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=None)
+        except BadRequest as e:
+            if "Message is not modified" not in str(e):
+                raise
+        if payment_id > 0:
+            patch = {"admin_message_deleted_at": now_s} if deleted else {"admin_keyboard_cleared_at": now_s}
+            _update_payment_receipt_meta(payment_id, patch)
+    except Exception as e:
+        logger.warning("Failed to clear pending admin keyboard for payment: %s", e)
 
 
 _PERSIAN_ARABIC_DIGITS_TRANS = str.maketrans(
@@ -3752,6 +3790,8 @@ async def _send_admin_pending_card_payment_report(
             int(payment_id),
             {
                 "admin_notified_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                "admin_chat_id": str(getattr(getattr(sent, "chat", None), "id", ADMIN_ID) or ADMIN_ID),
+                "admin_message_id": str(getattr(sent, "message_id", "") or ""),
                 "admin_notify_flow": str(flow or "").strip(),
                 "admin_notify_error": None,
                 "admin_notify_error_at": None,
@@ -3913,12 +3953,6 @@ async def _finalize_pending_card_payment(
             auto_payment or userbot_db.get_payment_by_id(int(payment_id)) or {},
             flow=flow,
         )
-        if str(flow or "").strip().lower() == "direct_buy_payment":
-            try:
-                app = getattr(context, "application", None) or SimpleNamespace(bot=context.bot)
-                await _process_approved_direct_buy_payments(app)
-            except Exception as e:
-                logger.warning("Immediate direct-buy delivery after SMS approval failed payment=%s: %s", payment_id, e)
 
     if (not auto_approved) and payment_id:
         uname = update.effective_user.username
@@ -3936,6 +3970,16 @@ async def _finalize_pending_card_payment(
             flow=flow,
         )
     return bool(auto_approved)
+
+
+async def _deliver_direct_buy_after_sms_notice(context, enabled: bool) -> None:
+    if not enabled:
+        return
+    try:
+        app = getattr(context, "application", None) or SimpleNamespace(bot=context.bot)
+        await _process_approved_direct_buy_payments(app)
+    except Exception as e:
+        logger.warning("Direct-buy delivery after SMS auto-approval notice failed: %s", e)
 
 
 def _update_payment_receipt_meta(payment_id: int, patch: dict) -> None:
@@ -7701,8 +7745,8 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending = context.user_data.pop(f"pending_pay_{user_id}", {})
             amount = int(pending.get("amount") or 0)
             auto_approved = False
+            is_direct_buy = bool(pending.get("direct_buy"))
             if amount > 0:
-                is_direct_buy = bool(pending.get("direct_buy"))
                 flow_kind = "direct_buy_payment" if is_direct_buy else "buy_payment"
                 extra_meta = None
                 if is_direct_buy:
@@ -7733,6 +7777,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ),
                 reply_markup=_main_menu_keyboard()
             )
+            await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
             set_user_step(context, user_id, None)
         else:
              await update.message.reply_text("❌ لطفاً فقط عکس رسید را ارسال کنید یا برای بازگشت «بازگشت» را بزنید.")
@@ -7791,6 +7836,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
             reply_markup=_main_menu_keyboard(),
         )
+        await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
         set_user_step(context, user_id, None)
         return
 

@@ -25,7 +25,7 @@ public final class HistoryStore {
         if (!isBankSmsStatus(status) && !isInboxScanStatus(status)) {
             save(context, KEY_HISTORY, entry, MAX_ITEMS);
         }
-        if ("APPROVED".equals(status) || "APPROVED_DUPLICATE".equals(status)) {
+        if ("APPROVED".equals(status)) {
             save(context, KEY_APPROVED_HISTORY, entry, MAX_APPROVED_ITEMS);
         }
         if (isBankSmsStatus(status) || isInboxScanStatus(status)) {
@@ -183,7 +183,7 @@ public final class HistoryStore {
             return "✅ تایید شد";
         }
         if ("APPROVED_DUPLICATE".equals(status)) {
-            return "✅ قبلاً تایید شده بود";
+            return "🟡 قبلاً تایید شده بود؛ تایید جدید نیست";
         }
         if ("NO_PENDING_MATCH".equals(status)) {
             return "🟡 تایید نشد؛ پرداخت در انتظار پیدا نشد";
@@ -247,7 +247,7 @@ public final class HistoryStore {
             String time = lines.length > 0 ? lines[0].replace("🕒", "").trim() : "";
             String title = lines.length > 1 ? lines[1].trim() : "گزارش";
             String detail = lines.length > 2 ? lines[2].trim() : "";
-            boolean approved = title.contains("✅");
+            boolean approved = title.contains("✅") && !title.contains("قبلاً");
             boolean rejected = title.contains("❌") || title.contains("🔴");
             return new Entry(raw, time, title, detail, approved, rejected);
         }

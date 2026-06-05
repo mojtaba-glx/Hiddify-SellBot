@@ -7363,7 +7363,23 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                     force_text_only=False,
                 )
         else:
-            await query.answer("❌ عملیات نامعتبر (قبلا انجام شده یا وجود ندارد)", show_alert=True)
+            status = str((pay or {}).get("status") or "").strip().lower() if pay else ""
+            try:
+                if status in {"approved", "rejected"}:
+                    await msg.delete()
+                else:
+                    await msg.edit_reply_markup(reply_markup=None)
+            except BadRequest as e:
+                if "Message is not modified" not in str(e):
+                    pass
+            except Exception:
+                pass
+            if status == "approved":
+                await query.answer("✅ این پرداخت قبلاً تایید شده است.", show_alert=True)
+            elif status == "rejected":
+                await query.answer("🚫 این پرداخت قبلاً رد شده است.", show_alert=True)
+            else:
+                await query.answer("❌ عملیات نامعتبر یا تراکنش وجود ندارد.", show_alert=True)
         return
 
     # --- 7. مدیریت تیکت‌ها ---
