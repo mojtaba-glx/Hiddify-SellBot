@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Set;
 import java.util.Locale;
 
 public final class HistoryStore {
@@ -22,13 +23,13 @@ public final class HistoryStore {
 
     public static void add(Context context, String status, String detail) {
         String entry = buildEntry(status, detail);
-        if (!isBankSmsStatus(status) && !isInboxScanStatus(status)) {
+        if (!isBankSmsStatus(status)) {
             save(context, KEY_HISTORY, entry, MAX_ITEMS);
         }
         if ("APPROVED".equals(status)) {
             save(context, KEY_APPROVED_HISTORY, entry, MAX_APPROVED_ITEMS);
         }
-        if (isBankSmsStatus(status) || isInboxScanStatus(status)) {
+        if (isBankSmsStatus(status)) {
             save(context, KEY_BANK_SMS_HISTORY, entry, MAX_BANK_SMS_ITEMS);
         }
     }
@@ -57,6 +58,27 @@ public final class HistoryStore {
                     .apply();
         }
         add(context, status, detail);
+    }
+
+    public static boolean containsUnique(Context context, String uniqueId) {
+        String marker = uniqueMarker(uniqueId);
+        if (marker.isEmpty()) {
+            return false;
+        }
+        String bankHistory = getBankSms(context);
+        String generalHistory = get(context);
+        String approvedHistory = getApproved(context);
+        return (bankHistory != null && bankHistory.contains(marker))
+                || (generalHistory != null && generalHistory.contains(marker))
+                || (approvedHistory != null && approvedHistory.contains(marker));
+    }
+
+    public static void syncBankSmsWithInbox(Context context, Set<String> currentInboxEventIds) {
+        SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString(KEY_BANK_SMS_HISTORY, keepEntriesInCurrentInbox(prefs.getString(KEY_BANK_SMS_HISTORY, ""), currentInboxEventIds))
+                .putString(KEY_APPROVED_HISTORY, keepEntriesInCurrentInbox(prefs.getString(KEY_APPROVED_HISTORY, ""), currentInboxEventIds))
+                .apply();
     }
 
     public static String get(Context context) {
@@ -140,6 +162,60 @@ public final class HistoryStore {
             out.append(part);
         }
         return out.toString();
+    }
+
+    private static String keepEntriesInCurrentInbox(String raw, Set<String> currentInboxEventIds) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return "";
+        }
+        Set<String> allowed = currentInboxEventIds;
+        String[] parts = raw.split(SEP);
+        StringBuilder out = new StringBuilder();
+        for (String part : parts) {
+            if (part == null || part.trim().isEmpty()) {
+                continue;
+            }
+            String eventId = extractUniqueId(part);
+            if (eventId.isEmpty()) {
+                if (isInboxScanRaw(part)) {
+                    continue;
+                }
+                appendPart(out, part);
+                continue;
+            }
+            if (allowed != null && allowed.contains(eventId)) {
+                appendPart(out, part);
+            }
+        }
+        return out.toString();
+    }
+
+    private static void appendPart(StringBuilder out, String part) {
+        if (out.length() > 0) {
+            out.append(SEP);
+        }
+        out.append(part);
+    }
+
+    private static boolean isInboxScanRaw(String raw) {
+        String text = raw == null ? "" : raw;
+        return text.contains("بررسی پیامک‌های قبلی")
+                || text.contains("INBOX_SCAN")
+                || text.contains("پیامک‌های بررسی‌شده");
+    }
+
+    private static String extractUniqueId(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return "";
+        }
+        String[] lines = raw.split("\\n");
+        for (String line : lines) {
+            String text = line == null ? "" : line.trim();
+            if (text.startsWith("🔐 شناسه داخلی:")) {
+                return text.substring("🔐 شناسه داخلی:".length()).trim();
+            }
+        }
+        return "";
     }
 
     private static Entry[] parseEntries(String raw) {

@@ -4,6 +4,11 @@ import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 public final class SmsInboxScanner {
     private static final int PROCESS_LIMIT = 15;
     private static final int LOOKUP_LIMIT = 80;
@@ -17,12 +22,8 @@ public final class SmsInboxScanner {
         long cutoff = System.currentTimeMillis() - DEFAULT_MAX_AGE_MS;
         int checked = 0;
         int processed = 0;
-
-        HistoryStore.add(
-                appContext,
-                "INBOX_SCAN_START",
-                "در حال جستجوی پیامک‌های بانکی در " + LOOKUP_LIMIT + " پیامک آخر inbox از ۷ روز اخیر."
-        );
+        List<SmsCandidate> candidates = new ArrayList<>();
+        Set<String> currentInboxEventIds = new HashSet<>();
 
         Cursor cursor = null;
         try {
@@ -49,11 +50,36 @@ public final class SmsInboxScanner {
                 if (!SmsProcessor.isConfiguredBankIncomingPayment(appContext, sender, body)) {
                     continue;
                 }
-                SmsProcessor.handleIncomingSms(appContext, sender, body, date);
+                long amount = PaymentSmsParser.extractAmount(body);
+                String reference = PaymentSmsParser.extractReference(body);
+                String eventId = PaymentSmsParser.buildEventId(sender, body, amount, reference);
+                if (!eventId.isEmpty()) {
+                    currentInboxEventIds.add(eventId);
+                }
+                candidates.add(new SmsCandidate(sender, body, date, eventId));
+            }
+
+            HistoryStore.syncBankSmsWithInbox(appContext, currentInboxEventIds);
+
+            for (SmsCandidate candidate : candidates) {
+                if (processed >= PROCESS_LIMIT) {
+                    break;
+                }
+                if (!candidate.eventId.isEmpty() && HistoryStore.containsUnique(appContext, candidate.eventId)) {
+                    continue;
+                }
+                SmsProcessor.handleIncomingSms(appContext, candidate.sender, candidate.body, candidate.date);
                 processed++;
             }
 
-            HistoryStore.add(appContext, "INBOX_SCAN_DONE", "پیامک‌های بانکی پردازش‌شده: " + processed + "\nپیامک‌های بررسی‌شده: " + checked);
+            HistoryStore.add(
+                    appContext,
+                    "INBOX_SCAN_DONE",
+                    "همگام‌سازی صندوق پیامک انجام شد."
+                            + "\nپیامک‌های بانکی موجود: " + candidates.size()
+                            + "\nپیامک‌های جدید پردازش‌شده: " + processed
+                            + "\nپیامک‌های بررسی‌شده: " + checked
+            );
             return processed;
         } catch (SecurityException e) {
             HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "اجازه READ_SMS داده نشده است. از تنظیمات گوشی مجوز خواندن SMS را فعال کن.");
@@ -65,6 +91,20 @@ public final class SmsInboxScanner {
             if (cursor != null) {
                 cursor.close();
             }
+        }
+    }
+
+    private static final class SmsCandidate {
+        final String sender;
+        final String body;
+        final long date;
+        final String eventId;
+
+        SmsCandidate(String sender, String body, long date, String eventId) {
+            this.sender = sender == null ? "" : sender;
+            this.body = body == null ? "" : body;
+            this.date = date;
+            this.eventId = eventId == null ? "" : eventId;
         }
     }
 }

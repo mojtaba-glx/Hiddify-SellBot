@@ -3517,6 +3517,22 @@ def _build_receipt_meta(meta: dict) -> str:
     return "|".join(parts)
 
 
+def _has_active_pending_admin_report(meta: dict) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    if not str(meta.get("admin_notified_at") or "").strip():
+        return False
+    if not str(meta.get("admin_message_id") or "").strip():
+        return False
+    if str(meta.get("admin_message_deleted_at") or "").strip():
+        return False
+    if str(meta.get("admin_keyboard_cleared_at") or "").strip():
+        return False
+    if str(meta.get("admin_notify_error") or "").strip():
+        return False
+    return True
+
+
 async def _clear_pending_admin_payment_keyboard(payment: dict, *, bot: Optional[Bot] = None) -> None:
     try:
         payment_id = int((payment or {}).get("id") or 0)
@@ -3713,6 +3729,7 @@ async def _send_admin_pending_card_payment_report(
     internal_user_id: int,
     payer_last4: str = "",
     flow: str = "",
+    force_recreate: bool = False,
 ) -> bool:
     if not payment_id:
         return False
@@ -3730,8 +3747,12 @@ async def _send_admin_pending_card_payment_report(
         if str(payment.get("status") or "").strip().lower() != "pending":
             return False
         meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
-        if str(meta.get("admin_notified_at") or "").strip():
-            return False
+        if _has_active_pending_admin_report(meta):
+            if not force_recreate:
+                return False
+            await _clear_pending_admin_payment_keyboard(payment)
+            payment = userbot_db.get_payment_by_id(int(payment_id)) or payment
+            meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
 
         caption = _build_payment_report_caption(
             tx_code or str(payment.get("tx_code") or ""),
@@ -3795,6 +3816,8 @@ async def _send_admin_pending_card_payment_report(
                 "admin_notify_flow": str(flow or "").strip(),
                 "admin_notify_error": None,
                 "admin_notify_error_at": None,
+                "admin_message_deleted_at": None,
+                "admin_keyboard_cleared_at": None,
             },
         )
         return True
@@ -3839,7 +3862,7 @@ async def _notify_unreported_pending_card_payments(context: ContextTypes.DEFAULT
         if payment_id <= 0:
             continue
         meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
-        if str(meta.get("admin_notified_at") or "").strip():
+        if _has_active_pending_admin_report(meta):
             continue
         user_title = (
             str(row.get("full_name") or "").strip()
@@ -3968,6 +3991,7 @@ async def _finalize_pending_card_payment(
             internal_user_id=int(internal_user_id),
             payer_last4=clean_last4,
             flow=flow,
+            force_recreate=not bool(is_new_payment),
         )
     return bool(auto_approved)
 
