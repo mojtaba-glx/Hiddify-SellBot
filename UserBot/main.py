@@ -4043,7 +4043,7 @@ async def _finalize_pending_card_payment(
             internal_user_id=int(internal_user_id),
             payer_last4=clean_last4,
             flow=flow,
-            force_recreate=not bool(is_new_payment),
+            force_recreate=False,
         )
     return bool(auto_approved), ("auto_approved" if auto_approved else "pending")
 
