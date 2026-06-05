@@ -3366,14 +3366,20 @@ def find_approved_card_payment_by_sms_event(
     amount_raw: int = 0,
     currency_raw: str = "",
     amount_toman: int = 0,
+    sender: str = "",
+    reference: str = "",
 ) -> Optional[Dict[str, Any]]:
     init_db()
     eid = str(event_id or "").strip()
-    if not eid:
+    sender_norm = re.sub(r"\D", "", str(sender or ""))
+    reference_norm = re.sub(r"\D", "", str(reference or ""))
+    raw_amount = int(amount_raw or 0)
+    currency = str(currency_raw or "").strip().lower()
+    if not eid and raw_amount <= 0 and not reference_norm:
         return None
     amount = int(amount_toman or 0)
     if amount <= 0:
-        candidates = _sms_amount_candidates_toman(int(amount_raw or 0), str(currency_raw or ""))
+        candidates = _sms_amount_candidates_toman(raw_amount, currency)
         amount = int(candidates[0]) if candidates else 0
     if amount <= 0:
         return None
@@ -3400,7 +3406,23 @@ def find_approved_card_payment_by_sms_event(
 
     for row in rows:
         meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
-        if str(meta.get("sms_event_id") or "").strip() == eid:
+        meta_event_id = str(meta.get("sms_event_id") or "").strip()
+        if eid and meta_event_id == eid:
+            return row
+        meta_raw_amount = _meta_int(meta, "sms_amount_raw", 0)
+        meta_currency = str(meta.get("sms_currency") or "").strip().lower()
+        meta_sender = re.sub(r"\D", "", str(meta.get("sms_sender") or ""))
+        meta_reference = re.sub(r"\D", "", str(meta.get("sms_reference") or ""))
+
+        same_amount = raw_amount > 0 and meta_raw_amount == raw_amount
+        same_currency = not currency or not meta_currency or currency == meta_currency
+        same_sender = bool(
+            sender_norm
+            and meta_sender
+            and (sender_norm.endswith(meta_sender) or meta_sender.endswith(sender_norm))
+        )
+        same_reference = bool(reference_norm and meta_reference and reference_norm == meta_reference)
+        if same_amount and same_currency and (same_reference or (same_sender and not reference_norm and not meta_reference)):
             return row
     return None
 
