@@ -110,16 +110,13 @@ public final class SmsProcessor {
         if (compact.contains("\"status\":\"sms_reused\"")) {
             return "این SMS قبلاً برای پرداخت دیگری استفاده شده است";
         }
-        if (compact.contains("\"status\":\"no_pending_match\"")) {
-            return "پرداخت pending پیدا نشد";
-        }
-        if (compact.contains("\"duplicate\":true") && !compact.contains("\"retry\":true")) {
-            return "قبلاً تایید شده بود؛ تایید جدید نیست";
-        }
         if (compact.contains("\"status\":\"approved\"")
                 || compact.contains("\"matched\":true")
                 || (compact.contains("\"matched_payment_id\":") && !compact.contains("\"matched_payment_id\":0"))) {
             return "تایید شد";
+        }
+        if (compact.contains("\"status\":\"no_pending_match\"")) {
+            return "پرداخت pending پیدا نشد";
         }
         if (text.length() > 180) {
             return text.substring(0, 180) + "...";

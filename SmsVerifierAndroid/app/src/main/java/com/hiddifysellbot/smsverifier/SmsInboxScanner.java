@@ -65,7 +65,9 @@ public final class SmsInboxScanner {
                 if (processed >= PROCESS_LIMIT) {
                     break;
                 }
-                if (!candidate.eventId.isEmpty() && HistoryStore.containsUnique(appContext, candidate.eventId)) {
+                if (!candidate.eventId.isEmpty()
+                        && HistoryStore.containsUnique(appContext, candidate.eventId)
+                        && !HistoryStore.shouldRetryUnique(appContext, candidate.eventId)) {
                     continue;
                 }
                 SmsProcessor.handleIncomingSms(appContext, candidate.sender, candidate.body, candidate.date);

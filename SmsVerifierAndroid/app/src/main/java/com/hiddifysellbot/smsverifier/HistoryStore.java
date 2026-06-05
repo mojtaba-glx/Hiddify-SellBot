@@ -73,6 +73,31 @@ public final class HistoryStore {
                 || (approvedHistory != null && approvedHistory.contains(marker));
     }
 
+    public static boolean shouldRetryUnique(Context context, String uniqueId) {
+        String marker = uniqueMarker(uniqueId);
+        if (marker.isEmpty()) {
+            return true;
+        }
+        String raw = findEntryContaining(getBankSms(context), marker);
+        if (raw.isEmpty()) {
+            raw = findEntryContaining(get(context), marker);
+        }
+        if (raw.isEmpty()) {
+            raw = findEntryContaining(getApproved(context), marker);
+        }
+        if (raw.isEmpty()) {
+            return true;
+        }
+        String text = raw.toLowerCase(Locale.US);
+        return text.contains("no_pending_match")
+                || raw.contains("پرداخت pending پیدا نشد")
+                || raw.contains("پرداخت در انتظار پیدا نشد")
+                || raw.contains("پرداخت در انتظار با این مبلغ پیدا نشد")
+                || raw.contains("📨 پیامک به ربات ارسال شد")
+                || raw.contains("📨 به ربات ارسال شد")
+                || text.contains("retry\":true");
+    }
+
     public static void syncBankSmsWithInbox(Context context, Set<String> currentInboxEventIds) {
         SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         prefs.edit()
@@ -162,6 +187,19 @@ public final class HistoryStore {
             out.append(part);
         }
         return out.toString();
+    }
+
+    private static String findEntryContaining(String raw, String marker) {
+        if (raw == null || raw.trim().isEmpty() || marker == null || marker.trim().isEmpty()) {
+            return "";
+        }
+        String[] parts = raw.split(SEP);
+        for (String part : parts) {
+            if (part != null && part.contains(marker)) {
+                return part;
+            }
+        }
+        return "";
     }
 
     private static String keepEntriesInCurrentInbox(String raw, Set<String> currentInboxEventIds) {

@@ -1721,17 +1721,14 @@ public class MainActivity extends Activity {
         if (compact.contains("\"status\":\"sms_reused\"") || text.contains("قبلاً برای پرداخت دیگری استفاده")) {
             return "این SMS قبلاً برای پرداخت دیگری استفاده شده است";
         }
-        if (compact.contains("\"status\":\"no_pending_match\"") || lower.contains("no_pending_match") || text.contains("pending پیدا نشد") || text.contains("پرداخت pending پیدا نشد")) {
-            return "پرداخت در انتظار با این مبلغ پیدا نشد";
-        }
         if (compact.contains("\"status\":\"approved\"")
                 || compact.contains("\"matched\":true")
                 || (compact.contains("\"matched_payment_id\":") && !compact.contains("\"matched_payment_id\":0"))
                 || text.contains("تایید شد")) {
-        if ((compact.contains("\"duplicate\":true") && !compact.contains("\"retry\":true")) || text.contains("قبلاً")) {
-                return "قبلاً تایید شده بود؛ تایید جدید نیست";
-            }
             return "پرداخت تایید شد";
+        }
+        if (compact.contains("\"status\":\"no_pending_match\"") || lower.contains("no_pending_match") || text.contains("pending پیدا نشد") || text.contains("پرداخت pending پیدا نشد")) {
+            return "پرداخت در انتظار با این مبلغ پیدا نشد";
         }
         if (lower.contains("ambiguous") || text.contains("چند پرداخت")) {
             return "چند پرداخت مشابه پیدا شد؛ نیازمند بررسی ادمین";
@@ -1778,7 +1775,6 @@ public class MainActivity extends Activity {
     private boolean isDuplicateApprovedEntry(HistoryStore.Entry entry) {
         String text = ((entry == null || entry.title == null ? "" : entry.title) + "\n" + (entry == null || entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
         return text.contains("approved_duplicate")
-                || text.contains("\"duplicate\":true")
                 || text.contains("قبلاً تایید شده بود")
                 || text.contains("تایید جدید نیست");
     }
