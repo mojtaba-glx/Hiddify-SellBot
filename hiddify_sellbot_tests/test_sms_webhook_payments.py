@@ -133,6 +133,57 @@ class TestSmsWebhookPayments(unittest.TestCase):
         self.assertEqual(int(user["wallet_balance"]), 0)
         self.assertEqual(userbot_db.get_payment_by_id(payment_id)["status"], "pending")
 
+    def test_previous_unmatched_sms_without_last4_approves_unique_marker_payment(self):
+        userbot_db.record_sms_webhook_event(
+            {
+                "event_id": "sms-before-marker-receipt",
+                "sender": "BLU",
+                "amount_raw": 1_005_730,
+                "currency_raw": "rial",
+                "amount_toman": 100_573,
+                "reference": "",
+                "card_last4": "",
+                "body": "بلو\nواریز پول\n1,005,730 ریال به حساب شما نشست.",
+                "status": "no_pending_match",
+                "message": "no pending yet",
+                "received_at": 1780000000000,
+                "device_time": 1780000001000,
+            }
+        )
+        internal_user_id, payment_id = self._create_pending_payment(
+            amount=100573,
+            receipt_image="base_amount:100000|tx_marker:573",
+            created_at=self._near_fixed_sms_time(),
+        )
+
+        ok, message, updated = userbot_db.try_approve_payment_from_unmatched_sms(
+            payment_id,
+            max_age_minutes=60 * 24 * 365,
+        )
+
+        self.assertTrue(ok, message)
+        self.assertEqual(updated["status"], "approved")
+        user = userbot_db.get_user_by_id(internal_user_id)
+        self.assertEqual(int(user["wallet_balance"]), 100573)
+        payment = userbot_db.get_payment_by_id(payment_id)
+        self.assertIn("sms_event_id:sms-before-marker-receipt", payment["receipt_image"])
+
+    def test_find_pending_payment_allows_previous_sms_without_last4_for_marker_amount(self):
+        _user_id, payment_id = self._create_pending_payment(
+            amount=100573,
+            receipt_image="base_amount:100000|tx_marker:573",
+            created_at=self._near_fixed_sms_time(),
+        )
+
+        rows = userbot_db.find_pending_card_payments_by_amount(
+            100573,
+            max_age_minutes=60 * 24 * 365,
+            sms_time_ms=1780000000000,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(int(rows[0]["id"]), payment_id)
+
     def test_old_unmatched_sms_does_not_auto_approve_fake_later_receipt(self):
         payment_created = datetime.now(timezone.utc).replace(tzinfo=None)
         old_sms_created = payment_created - timedelta(hours=2)

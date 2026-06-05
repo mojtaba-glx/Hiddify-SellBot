@@ -3364,6 +3364,8 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
         has_receipt = bool(receipt_admin_fid or receipt_local_path)
         flow_label = {
             "wallet_topup": "شارژ کیف پول",
+            "buy_payment": "خرید اشتراک",
+            "direct_buy_payment": "خرید مستقیم",
             "direct_buy": "خرید مستقیم",
             "renew": "تمدید",
         }.get(str(flow or "").strip().lower(), str(flow or "").strip() or "پرداخت")
@@ -3423,6 +3425,11 @@ def _card_payment_result_user_text(amount: int, result: str, *, direct_note: boo
         return (
             "⚠️ این رسید قبلاً ثبت و تایید شده است.\n"
             "برای جلوگیری از تایید اشتباه، رسید تکراری دوباره پردازش نمی‌شود."
+        )
+    if status == "duplicate_rejected":
+        return (
+            "❌ این رسید قبلاً توسط ادمین رد شده است.\n"
+            "اگر پرداخت جدید انجام داده‌اید، لطفاً رسید جدید همان پرداخت را ارسال کنید."
         )
     return "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
 
@@ -3897,20 +3904,12 @@ async def _notify_unreported_pending_card_payments(context: ContextTypes.DEFAULT
         conn.close()
 
     sent_count = 0
-    now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
     for row in rows:
         payment_id = int(row.get("id") or 0)
         if payment_id <= 0:
             continue
         meta = _parse_receipt_meta(str(row.get("receipt_image") or ""))
-        active_report = _has_active_pending_admin_report(meta)
-        notified_at = _parse_admin_notify_time(meta)
-        should_recreate = bool(
-            active_report
-            and notified_at is not None
-            and (now_dt - notified_at).total_seconds() >= 180
-        )
-        if active_report and not should_recreate:
+        if _has_active_pending_admin_report(meta):
             continue
         user_title = (
             str(row.get("full_name") or "").strip()
@@ -3928,7 +3927,7 @@ async def _notify_unreported_pending_card_payments(context: ContextTypes.DEFAULT
             internal_user_id=int(row.get("user_id") or 0),
             payer_last4=str(meta.get("payer_last4") or "").strip(),
             flow=str(meta.get("pay_flow") or meta.get("admin_notify_flow") or "").strip(),
-            force_recreate=should_recreate,
+            force_recreate=False,
         )
         if ok:
             sent_count += 1
@@ -4008,8 +4007,12 @@ async def _finalize_pending_card_payment(
     )
 
     existing_payment = userbot_db.get_payment_by_id(int(payment_id)) if payment_id else None
-    if (not is_new_payment) and str((existing_payment or {}).get("status") or "").strip().lower() == "approved":
-        return False, "duplicate_approved"
+    existing_status = str((existing_payment or {}).get("status") or "").strip().lower()
+    if not is_new_payment:
+        if existing_status == "approved":
+            return False, "duplicate_approved"
+        if existing_status == "rejected":
+            return False, "duplicate_rejected"
 
     auto_approved = False
     auto_payment = None
@@ -7680,6 +7683,11 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     photo_file_id=photo_file_id,
                     flow="wallet_topup",
                     payer_last4="",
+                    extra_meta={
+                        "pay_flow": "wallet_topup",
+                        "base_amount": int(pending.get("base_amount") or amount),
+                        "tx_marker": int(pending.get("tx_marker") or 0),
+                    },
                 )
 
             await update.message.reply_text(
@@ -7722,6 +7730,11 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_file_id=photo_file_id,
             flow="wallet_topup",
             payer_last4=payer_last4,
+            extra_meta={
+                "pay_flow": "wallet_topup",
+                "base_amount": int(pending.get("base_amount") or amount),
+                "tx_marker": int(pending.get("tx_marker") or 0),
+            },
         )
         await update.message.reply_text(
             _card_payment_result_user_text(amount, payment_result),
@@ -7815,16 +7828,19 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_direct_buy = bool(pending.get("direct_buy"))
             if amount > 0:
                 flow_kind = "direct_buy_payment" if is_direct_buy else "buy_payment"
-                extra_meta = None
+                extra_meta = {
+                    "pay_flow": "direct_buy" if is_direct_buy else "buy",
+                    "base_amount": int(pending.get("base_amount") or amount),
+                    "tx_marker": int(pending.get("tx_marker") or 0),
+                }
                 if is_direct_buy:
-                    extra_meta = {
-                        "pay_flow": "direct_buy",
+                    extra_meta.update({
                         "sid": int(pending.get("sid") or 0),
                         "gb": float(pending.get("gb") or 0),
                         "days": int(pending.get("days") or 0),
                         "renew_service_id": int(pending.get("renew_service_id") or 0),
                         "service_name": str(pending.get("direct_service_name") or "").strip(),
-                    }
+                    })
                 auto_approved, payment_result = await _finalize_pending_card_payment(
                     update=update,
                     context=context,
@@ -7871,16 +7887,19 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         is_direct_buy = bool(pending.get("direct_buy"))
         flow_kind = "direct_buy_payment" if is_direct_buy else "buy_payment"
-        extra_meta = None
+        extra_meta = {
+            "pay_flow": "direct_buy" if is_direct_buy else "buy",
+            "base_amount": int(pending.get("base_amount") or amount),
+            "tx_marker": int(pending.get("tx_marker") or 0),
+        }
         if is_direct_buy:
-            extra_meta = {
-                "pay_flow": "direct_buy",
+            extra_meta.update({
                 "sid": int(pending.get("sid") or 0),
                 "gb": float(pending.get("gb") or 0),
                 "days": int(pending.get("days") or 0),
                 "renew_service_id": int(pending.get("renew_service_id") or 0),
                 "service_name": str(pending.get("direct_service_name") or "").strip(),
-            }
+            })
         auto_approved, payment_result = await _finalize_pending_card_payment(
             update=update,
             context=context,
