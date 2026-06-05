@@ -705,7 +705,7 @@ class _SubHandler(BaseHTTPRequestHandler):
                 int(amount_toman),
                 card_last4=card_last4,
                 max_age_minutes=_sms_webhook_max_pending_age_minutes(),
-                sms_time_ms=int(device_time_ms or received_at_ms or 0),
+                sms_time_ms=int(received_at_ms or device_time_ms or 0),
             )
             if matches:
                 matched_amount = int(amount_toman)

@@ -3414,6 +3414,19 @@ def _sms_auto_approval_user_text(amount: int, *, direct_note: bool = False) -> s
         text += "\n⏳ اگر خرید مستقیم بوده، اشتراک تا چند لحظه دیگر ساخته و ارسال می‌شود."
     return text
 
+
+def _card_payment_result_user_text(amount: int, result: str, *, direct_note: bool = False) -> str:
+    status = str(result or "").strip().lower()
+    if status == "auto_approved":
+        return _sms_auto_approval_user_text(amount, direct_note=direct_note)
+    if status == "duplicate_approved":
+        return (
+            "⚠️ این رسید قبلاً ثبت و تایید شده است.\n"
+            "برای جلوگیری از تایید اشتباه، رسید تکراری دوباره پردازش نمی‌شود."
+        )
+    return "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
+
+
 async def _safe_edit_message_text(query, text: str, **kwargs):
     """Ignore Telegram 'Message is not modified' errors for edit_message_text."""
     try:
@@ -3941,9 +3954,9 @@ async def _finalize_pending_card_payment(
     flow: str,
     payer_last4: str = "",
     extra_meta: Optional[dict] = None,
-) -> bool:
+) -> tuple[bool, str]:
     if amount <= 0 or not photo_file_id:
-        return False
+        return False, "invalid"
 
     u_db = userbot_db.get_user_by_telegram_id(user_id)
     internal_user_id = (u_db or {}).get("id")
@@ -3996,7 +4009,7 @@ async def _finalize_pending_card_payment(
 
     existing_payment = userbot_db.get_payment_by_id(int(payment_id)) if payment_id else None
     if (not is_new_payment) and str((existing_payment or {}).get("status") or "").strip().lower() == "approved":
-        return True
+        return False, "duplicate_approved"
 
     auto_approved = False
     auto_payment = None
@@ -4029,7 +4042,7 @@ async def _finalize_pending_card_payment(
             flow=flow,
             force_recreate=not bool(is_new_payment),
         )
-    return bool(auto_approved)
+    return bool(auto_approved), ("auto_approved" if auto_approved else "pending")
 
 
 async def _deliver_direct_buy_after_sms_notice(context, enabled: bool) -> None:
@@ -7657,8 +7670,9 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending = context.user_data.pop(f"pending_wallet_topup_{user_id}", {})
             amount = int(pending.get("amount") or 0)
             auto_approved = False
+            payment_result = "pending"
             if amount > 0:
-                auto_approved = await _finalize_pending_card_payment(
+                auto_approved, payment_result = await _finalize_pending_card_payment(
                     update=update,
                     context=context,
                     user_id=user_id,
@@ -7669,11 +7683,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
             await update.message.reply_text(
-                (
-                    _sms_auto_approval_user_text(amount)
-                    if auto_approved
-                    else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
-                ),
+                _card_payment_result_user_text(amount, payment_result),
                 reply_markup=_main_menu_keyboard(),
             )
             set_user_step(context, user_id, None)
@@ -7704,7 +7714,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ اطلاعات پرداخت ناقص است. لطفا دوباره تلاش کنید.", reply_markup=_main_menu_keyboard())
             return
 
-        auto_approved = await _finalize_pending_card_payment(
+        auto_approved, payment_result = await _finalize_pending_card_payment(
             update=update,
             context=context,
             user_id=user_id,
@@ -7714,11 +7724,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             payer_last4=payer_last4,
         )
         await update.message.reply_text(
-            (
-                _sms_auto_approval_user_text(amount)
-                if auto_approved
-                else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
-            ),
+            _card_payment_result_user_text(amount, payment_result),
             reply_markup=_main_menu_keyboard(),
         )
         set_user_step(context, user_id, None)
@@ -7805,6 +7811,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending = context.user_data.pop(f"pending_pay_{user_id}", {})
             amount = int(pending.get("amount") or 0)
             auto_approved = False
+            payment_result = "pending"
             is_direct_buy = bool(pending.get("direct_buy"))
             if amount > 0:
                 flow_kind = "direct_buy_payment" if is_direct_buy else "buy_payment"
@@ -7818,7 +7825,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "renew_service_id": int(pending.get("renew_service_id") or 0),
                         "service_name": str(pending.get("direct_service_name") or "").strip(),
                     }
-                auto_approved = await _finalize_pending_card_payment(
+                auto_approved, payment_result = await _finalize_pending_card_payment(
                     update=update,
                     context=context,
                     user_id=user_id,
@@ -7830,11 +7837,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             
             await update.message.reply_text(
-                (
-                    _sms_auto_approval_user_text(amount, direct_note=True)
-                    if auto_approved
-                    else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
-                ),
+                _card_payment_result_user_text(amount, payment_result, direct_note=True),
                 reply_markup=_main_menu_keyboard()
             )
             await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
@@ -7878,7 +7881,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "renew_service_id": int(pending.get("renew_service_id") or 0),
                 "service_name": str(pending.get("direct_service_name") or "").strip(),
             }
-        auto_approved = await _finalize_pending_card_payment(
+        auto_approved, payment_result = await _finalize_pending_card_payment(
             update=update,
             context=context,
             user_id=user_id,
@@ -7889,11 +7892,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             extra_meta=extra_meta,
         )
         await update.message.reply_text(
-            (
-                _sms_auto_approval_user_text(amount, direct_note=True)
-                if auto_approved
-                else "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
-            ),
+            _card_payment_result_user_text(amount, payment_result, direct_note=True),
             reply_markup=_main_menu_keyboard(),
         )
         await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)

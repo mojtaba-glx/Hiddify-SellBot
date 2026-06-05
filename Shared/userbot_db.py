@@ -3388,7 +3388,7 @@ def _parse_sms_epoch_datetime(value: Any) -> Optional[datetime]:
 
 
 def _sms_webhook_event_datetime(event: Dict[str, Any]) -> Optional[datetime]:
-    for key in ("device_time", "received_at"):
+    for key in ("received_at", "device_time"):
         dt = _parse_sms_epoch_datetime((event or {}).get(key))
         if dt is not None:
             return dt
