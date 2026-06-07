@@ -15,7 +15,7 @@ from io import BytesIO
 from html import escape as html_escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from telegram import (
@@ -798,6 +798,7 @@ def _relative_last_online(last_online_raw: Optional[str]) -> str:
 def _parse_last_online_dt(last_online_raw: Optional[str]) -> Optional[datetime]:
     if not last_online_raw:
         return None
+    last_online_raw = str(last_online_raw).strip()
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
             return datetime.strptime(last_online_raw, fmt)
@@ -1081,6 +1082,10 @@ def _is_locally_active_service(service: Dict[str, Any]) -> bool:
     return True
 
 
+def _is_display_expired_service(service: Dict[str, Any]) -> bool:
+    return _is_locally_expired_service(service) or bool(service.get("_panel_expired"))
+
+
 def _panel_user_is_active(user_data: Dict[str, Any]) -> bool:
     raw = user_data.get("is_active")
     if raw is None:
@@ -1088,6 +1093,38 @@ def _panel_user_is_active(user_data: Dict[str, Any]) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw).strip().lower() not in {"0", "false", "off", "inactive", "disabled"}
+
+
+def _panel_user_is_expired_or_inactive(user_data: Dict[str, Any]) -> bool:
+    if not _panel_user_is_active(user_data):
+        return True
+
+    for key in ("days_left", "remaining_days"):
+        days_left = _to_int_or_none(user_data.get(key))
+        if days_left is not None and days_left <= 0:
+            return True
+
+    start_dt = _parse_last_online_dt(user_data.get("start_date"))
+    package_days = _to_int_or_none(user_data.get("package_days"))
+    if start_dt and package_days is not None:
+        end_dt = start_dt + timedelta(days=package_days)
+        if (end_dt.date() - datetime.now(timezone.utc).replace(tzinfo=None).date()).days <= 0:
+            return True
+
+    try:
+        usage_limit = float(user_data.get("usage_limit_GB"))
+        usage_current = float(user_data.get("current_usage_GB"))
+        if usage_limit > 0 and usage_current >= usage_limit:
+            return True
+    except Exception:
+        pass
+
+    for key in ("expire", "expire_date", "end_date", "expiration_date", "expires_at"):
+        end_dt = _parse_last_online_dt(user_data.get(key))
+        if end_dt and end_dt.date() <= datetime.now(timezone.utc).replace(tzinfo=None).date():
+            return True
+
+    return False
 
 
 def _service_panel_targets(service: Dict[str, Any]) -> List[Tuple[int, str]]:
@@ -1130,11 +1167,17 @@ def _service_primary_target(service: Dict[str, Any]) -> Tuple[int, str]:
 
 
 async def _service_exists_on_panel(service: Dict[str, Any]) -> bool:
+    state = await _service_panel_state(service)
+    return state in {"active", "unknown"}
+
+
+async def _service_panel_state(service: Dict[str, Any]) -> str:
     targets = _service_panel_targets(service)
     if not targets:
-        return True
+        return "active"
 
     had_unknown_error = False
+    saw_inactive_user = False
     tried = 0
 
     for sid, uuid in targets:
@@ -1147,8 +1190,12 @@ async def _service_exists_on_panel(service: Dict[str, Any]) -> bool:
                 hiddify_api.get_user_by_uuid(server, uuid),
                 timeout=6,
             )
-            if isinstance(panel_user, dict) and _panel_user_is_active(panel_user):
-                return True
+            if isinstance(panel_user, dict):
+                if _panel_user_is_expired_or_inactive(panel_user):
+                    saw_inactive_user = True
+                    continue
+                return "active"
+            had_unknown_error = True
         except asyncio.TimeoutError:
             had_unknown_error = True
         except hiddify_api.HiddifyApiError as e:
@@ -1161,8 +1208,10 @@ async def _service_exists_on_panel(service: Dict[str, Any]) -> bool:
 
     # در خطاهای شبکه/SSL تصمیم قطعی نگیریم که سرویس حذف شده است.
     if tried == 0 or had_unknown_error:
-        return True
-    return False
+        return "unknown"
+    if saw_inactive_user:
+        return "expired"
+    return "missing"
 
 
 def _comment_has_flag(raw_comment: str, flag: str) -> bool:
@@ -1301,7 +1350,9 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
     else:
         usage_line = f"📊مصرف: {usage_current:.2f} از {usage_limit:.1f} گیگابایت"
 
-    if days_left is None:
+    if bool(service.get("_panel_expired")):
+        expire_line = "📆انقضا: منقضی/غیرفعال در پنل"
+    elif days_left is None:
         expire_line = "📆انقضا: نامشخص"
     elif days_left < 0:
         expire_line = f"📆انقضا: منقضی شده ({abs(int(days_left))} روز پیش)"
@@ -5744,12 +5795,19 @@ async def send_user_services_list(user_id: int, chat_id: int, context: ContextTy
     if local_active_services:
         sem = asyncio.Semaphore(5)
 
-        async def _check_visible(service: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        async def _check_visible(service: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
             async with sem:
-                return service if await _service_exists_on_panel(service) else None
+                state = await _service_panel_state(service)
+                return state, service
 
         checked = await asyncio.gather(*[_check_visible(s) for s in local_active_services])
-        services = [s for s in checked if s]
+        for state, service in checked:
+            if state in {"active", "unknown"}:
+                services.append(service)
+            elif state == "expired":
+                expired_service = dict(service)
+                expired_service["_panel_expired"] = True
+                expired_services.append(expired_service)
 
     visible_services = services + expired_services
     active_count = len(services)
@@ -5775,7 +5833,7 @@ async def send_user_services_list(user_id: int, chat_id: int, context: ContextTy
     service_buttons: List[InlineKeyboardButton] = []
     for s in visible_services:
         name = s.get("name") or f"Service #{s['id']}"
-        if _is_locally_expired_service(s):
+        if _is_display_expired_service(s):
             emoji = "🔴"
         elif _comment_has_flag(str(s.get("comment") or ""), "test"):
             emoji = "🟡"
@@ -5923,7 +5981,12 @@ async def send_service_detail(service_id: int, chat_id: int, context: ContextTyp
     if not svc:
         return
     is_expired = _is_locally_expired_service(svc)
-    if _is_locally_deleted_service(svc) or (not is_expired and not await _service_exists_on_panel(svc)):
+    panel_state = "expired" if is_expired else await _service_panel_state(svc)
+    if panel_state == "expired":
+        svc = dict(svc)
+        svc["_panel_expired"] = True
+        is_expired = True
+    if _is_locally_deleted_service(svc) or (not is_expired and panel_state == "missing"):
         text = "❌ این سرویس حذف شده یا غیرفعال است."
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{svc.get('user_id')}")]])
         if message:
