@@ -4189,8 +4189,8 @@ def set_ticket_status(
 
 def auto_close_stale_open_tickets(hours: int = 24) -> int:
     """
-    Close open tickets when the latest message is from user and it is older than `hours`.
-    This means user sent message but no admin reply arrived within the threshold.
+    Close open tickets when their latest message is older than `hours`.
+    This also closes tickets after an admin reply has stayed open past the threshold.
     """
     init_db()
     try:
@@ -4216,7 +4216,7 @@ def auto_close_stale_open_tickets(hours: int = 24) -> int:
                       FROM userbot_ticket_messages
                       GROUP BY ticket_code
                   ) mx ON mx.max_id = lm.id
-                  WHERE lm.sender_type = 'user' AND lm.created_at <= ?
+                  WHERE lm.created_at <= ?
               )
             """,
             (now, cutoff),

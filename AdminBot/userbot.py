@@ -1584,14 +1584,29 @@ def build_ticket_detail_keyboard(
     user_btn = _ticket_user_label(ticket)
     if from_user_id > 0:
         reply_callback = f"userbot:ticketu:reply:{code}:{from_user_id}:{page}"
+        status_callback_base = f"userbot:ticketu:status:{code}"
     else:
         list_status = str(list_status or "pending").strip().lower()
         reply_callback = f"userbot:ticket:reply:{code}:{list_status}:{page}"
+        status_callback_base = f"userbot:ticket:status:{code}"
+
+    current_status = str(ticket.get("status") or "pending").strip().lower()
+    if current_status == "closed":
+        status_title = "📬 باز کردن تیکت"
+        new_status = "open"
+    else:
+        status_title = "📪 بستن تیکت"
+        new_status = "closed"
+    if from_user_id > 0:
+        status_callback = f"{status_callback_base}:{new_status}:{from_user_id}:{page}"
+    else:
+        status_callback = f"{status_callback_base}:{new_status}:{list_status}:{page}"
 
     rows = []
     if user_id > 0:
         rows.append([InlineKeyboardButton(user_btn, callback_data=f"userbot:user:{user_id}")])
     rows.append([InlineKeyboardButton("📩پاسخ", callback_data=reply_callback)])
+    rows.append([InlineKeyboardButton(status_title, callback_data=status_callback)])
     return InlineKeyboardMarkup(rows)
 
 
