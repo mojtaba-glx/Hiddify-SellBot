@@ -82,6 +82,7 @@ from AdminBot.userbot import (
     ZARIN_COUPON_CODE_STATE,
     ZARIN_COUPON_LIMIT_STATE,
     ZARIN_COUPON_EXP_STATE,
+    ZARIN_COUPON_BULK_STATE,
     SUB_TRACKING_STATE,
     TICKET_REPLY_STATE,
     BROADCAST_SEND_STATE,
@@ -5982,6 +5983,7 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
        context.user_data.get(ZARIN_COUPON_CODE_STATE) or \
        context.user_data.get(ZARIN_COUPON_LIMIT_STATE) or \
        context.user_data.get(ZARIN_COUPON_EXP_STATE) or \
+       context.user_data.get(ZARIN_COUPON_BULK_STATE) or \
        context.user_data.get(SUB_TRACKING_STATE) or \
        context.user_data.get(TICKET_REPLY_STATE) or \
        context.user_data.get(BROADCAST_SEND_STATE) or \

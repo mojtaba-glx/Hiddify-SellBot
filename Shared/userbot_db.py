@@ -3672,6 +3672,80 @@ def list_zarin_vouchers(limit: int = 200) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def get_zarin_vouchers_dashboard() -> Dict[str, Any]:
+    init_db()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(amount_toman), 0) AS total_amount,
+                COALESCE(SUM(used_count), 0) AS used_count,
+                COALESCE(SUM(max_uses), 0) AS max_uses
+            FROM userbot_zarin_vouchers
+            """
+        )
+        base = dict(cur.fetchone() or {})
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM userbot_zarin_vouchers
+            WHERE is_active = 1
+              AND amount_toman > 0
+              AND used_count < max_uses
+              AND (expires_at = '' OR expires_at > ?)
+            """,
+            (now,),
+        )
+        active = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM userbot_zarin_vouchers
+            WHERE expires_at <> '' AND expires_at <= ?
+            """,
+            (now,),
+        )
+        expired = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM userbot_zarin_vouchers
+            WHERE used_count >= max_uses
+            """,
+        )
+        full = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_zarin_voucher_redemptions")
+        redemptions = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(v.amount_toman), 0)
+            FROM userbot_zarin_voucher_redemptions r
+            LEFT JOIN userbot_zarin_vouchers v ON v.code = r.code
+            """
+        )
+        redeemed_amount = int((cur.fetchone() or [0])[0] or 0)
+        total = int(base.get("total") or 0)
+        inactive = max(0, total - active)
+        return {
+            "total": total,
+            "active": active,
+            "inactive": inactive,
+            "expired": expired,
+            "full": full,
+            "used_count": int(base.get("used_count") or 0),
+            "max_uses": int(base.get("max_uses") or 0),
+            "total_amount": int(base.get("total_amount") or 0),
+            "redemptions": redemptions,
+            "redeemed_amount": redeemed_amount,
+        }
+    finally:
+        conn.close()
+
+
 def get_zarin_voucher(code: str) -> Optional[Dict[str, Any]]:
     init_db()
     c = str(code or "").strip()
@@ -3831,6 +3905,29 @@ def set_zarin_voucher_expire_hours(code: str, hours: int) -> Dict[str, Any]:
     return get_zarin_voucher(c) or {}
 
 
+def set_zarin_voucher_active(code: str, active: bool) -> Dict[str, Any]:
+    init_db()
+    c = str(code or "").strip()
+    if not c:
+        raise ValueError("code is required")
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE userbot_zarin_vouchers
+            SET is_active = ?, updated_at = ?
+            WHERE code = ?
+            """,
+            (1 if active else 0, now, c),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_zarin_voucher(c) or {}
+
+
 def rename_zarin_voucher(old_code: str, new_code: str) -> Tuple[bool, str]:
     init_db()
     old_c = str(old_code or "").strip()
@@ -3872,6 +3969,47 @@ def delete_zarin_voucher(code: str) -> bool:
         deleted = cur.rowcount > 0
         conn.commit()
         return deleted
+    finally:
+        conn.close()
+
+
+def list_zarin_voucher_redemptions(limit: int = 50, code: str = "") -> List[Dict[str, Any]]:
+    init_db()
+    lim = max(1, min(300, int(limit or 50)))
+    c = str(code or "").strip()
+    params: List[Any] = []
+    where = ""
+    if c:
+        where = "WHERE r.code = ?"
+        params.append(c)
+    params.append(lim)
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""
+            SELECT
+                r.id,
+                r.code,
+                r.user_id,
+                r.redeemed_at,
+                v.amount_toman,
+                v.max_uses,
+                v.used_count,
+                u.telegram_id,
+                u.username,
+                u.full_name
+            FROM userbot_zarin_voucher_redemptions r
+            LEFT JOIN userbot_zarin_vouchers v ON v.code = r.code
+            LEFT JOIN userbot_users u ON u.id = r.user_id
+            {where}
+            ORDER BY r.id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 
