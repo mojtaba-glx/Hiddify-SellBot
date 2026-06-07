@@ -832,10 +832,6 @@ def _panel_user_is_active(user_data: Dict[str, Any]) -> bool:
     return True
 
 
-# مثلا ۵ دقیقه؛ اگر خواستی مثل پنل دقیق‌تر بشه، همین عدد رو بعدا تنظیم می‌کنیم
-ONLINE_WINDOW_SECONDS = 5 * 60
-
-
 # بازه تشخیص آنلاین بودن (اینجا ۱۵ دقیقه در نظر گرفتیم مثل خیلی از پنل‌ها)
 ONLINE_WINDOW_SECONDS = 15 * 60
 # تلورانس برای اختلاف ساعت‌های خیلی کم (۱-۲ دقیقه)
@@ -895,6 +891,69 @@ def classify_user_status(user: Dict[str, Any]) -> str:
 
     # اگر نه منقضی بود و نه تو بازه‌ی آنلاین، می‌شود آفلاین
     return "offline"
+
+
+def _last_online_line(user_data: Dict[str, Any]) -> str:
+    forced_status = str(user_data.get("_user_list_status") or "").lower()
+    if forced_status == "online" or classify_user_status(user_data) == "online":
+        return "📶آخرین اتصال: آنلاین"
+
+    last_dt = _parse_dt(user_data.get("last_online"))
+    if not last_dt:
+        return "📶آخرین اتصال: نامشخص"
+
+    delta = datetime.now() - last_dt
+    seconds_total = delta.total_seconds()
+    if -CLOCK_SKEW_TOLERANCE <= seconds_total <= ONLINE_WINDOW_SECONDS:
+        return "📶آخرین اتصال: آنلاین"
+
+    if seconds_total < 0:
+        rel = "چند ثانیه پیش"
+    else:
+        days = delta.days
+        seconds = delta.seconds
+        if days <= 0:
+            if seconds < 60:
+                rel = "چند ثانیه پیش"
+            elif seconds < 3600:
+                rel = f"{seconds // 60} دقیقه پیش"
+            else:
+                rel = f"{seconds // 3600} ساعت پیش"
+        elif days < 30:
+            rel = f"{days} روز پیش"
+        elif days < 365:
+            rel = f"{days // 30} ماه پیش"
+        else:
+            rel = f"{days // 365} سال پیش"
+
+    return f"📶آخرین اتصال: {rel}"
+
+
+def _merge_user_list_snapshot(
+    user_data: Dict[str, Any],
+    snapshot: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not snapshot:
+        return user_data
+
+    merged = dict(user_data)
+
+    cached_last_online = snapshot.get("last_online")
+    cached_dt = _parse_dt(cached_last_online)
+    current_dt = _parse_dt(merged.get("last_online"))
+    if cached_dt and (not current_dt or cached_dt > current_dt):
+        merged["last_online"] = cached_last_online
+
+    if str(snapshot.get("status") or "").lower() == "online":
+        try:
+            fetched_at = float(snapshot.get("fetched_at") or 0)
+        except (TypeError, ValueError):
+            fetched_at = 0.0
+        cache_age = datetime.now().timestamp() - fetched_at if fetched_at else 0.0
+        if not fetched_at or cache_age <= ONLINE_WINDOW_SECONDS + CLOCK_SKEW_TOLERANCE:
+            merged["_user_list_status"] = "online"
+
+    return merged
 
 
 def make_qr_image(data: str) -> BytesIO:
@@ -1855,6 +1914,8 @@ async def send_user_list(
     total_users = len(users)
     online_users = offline_users = expired_users = 0
     items: List[tuple[str, str, str]] = []
+    fetched_at = datetime.now().timestamp()
+    user_snapshot: Dict[str, Dict[str, Any]] = {}
 
     for u in users:
         user_uuid = u.get("uuid") or u.get("id")
@@ -1867,6 +1928,13 @@ async def send_user_list(
         else:
             offline_users += 1
         items.append((name, status, str(user_uuid)))
+        user_snapshot[str(user_uuid)] = {
+            "status": status,
+            "last_online": u.get("last_online"),
+            "fetched_at": fetched_at,
+        }
+
+    context.user_data[f"user_list_snapshot:{server_id}"] = user_snapshot
 
     if total_users == 0:
         text = (
@@ -1982,7 +2050,6 @@ def build_user_detail_text(
     comment = _display_safe_note(user_data.get("comment") or "—")
 
     _, _, days_left = _compute_package_info(user_data)
-    last_online_raw = user_data.get("last_online")
 
     if usage_current is None:
         usage_line = "📊مصرف: نامشخص"
@@ -2001,27 +2068,7 @@ def build_user_detail_text(
     else:
         expire_line = f"📆انقضا: {days_left} روز دیگر"
 
-    last_dt = _parse_dt(last_online_raw)
-    if not last_dt:
-        last_online_line = "📶آخرین اتصال: نامشخص"
-    else:
-        delta = datetime.now(timezone.utc).replace(tzinfo=None) - last_dt
-        days = delta.days
-        seconds = delta.seconds
-        if days <= 0:
-            if seconds < 60:
-                rel = "چند ثانیه پیش"
-            elif seconds < 3600:
-                rel = f"{seconds // 60} دقیقه پیش"
-            else:
-                rel = f"{seconds // 3600} ساعت پیش"
-        elif days < 30:
-            rel = f"{days} روز پیش"
-        elif days < 365:
-            rel = f"{days // 30} ماه پیش"
-        else:
-            rel = f"{days // 365} سال پیش"
-        last_online_line = f"📶آخرین اتصال: {rel}"
+    last_online_line = _last_online_line(user_data)
 
     header_line = f"👤 کاربر:  {name}"
     sep_line = "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"
@@ -2059,7 +2106,6 @@ def build_user_detail_html_text(
     comment = _display_safe_note(user_data.get("comment") or "—")
 
     _, _, days_left = _compute_package_info(user_data)
-    last_online_raw = user_data.get("last_online")
 
     if usage_current is None:
         usage_line = "📊مصرف: نامشخص"
@@ -2078,27 +2124,7 @@ def build_user_detail_html_text(
     else:
         expire_line = f"📆انقضا: {days_left} روز دیگر"
 
-    last_dt = _parse_dt(last_online_raw)
-    if not last_dt:
-        last_online_line = "📶آخرین اتصال: نامشخص"
-    else:
-        delta = datetime.now(timezone.utc).replace(tzinfo=None) - last_dt
-        days = delta.days
-        seconds = delta.seconds
-        if days <= 0:
-            if seconds < 60:
-                rel = "چند ثانیه پیش"
-            elif seconds < 3600:
-                rel = f"{seconds // 60} دقیقه پیش"
-            else:
-                rel = f"{seconds // 3600} ساعت پیش"
-        elif days < 30:
-            rel = f"{days} روز پیش"
-        elif days < 365:
-            rel = f"{days // 30} ماه پیش"
-        else:
-            rel = f"{days // 365} سال پیش"
-        last_online_line = f"📶آخرین اتصال: {rel}"
+    last_online_line = _last_online_line(user_data)
 
     safe_name = escape(str(name))
     if user_name_link:
@@ -2286,6 +2312,12 @@ async def send_user_detail(
         else:
             await context.bot.send_message(chat_id, text)
         return
+
+    snapshot_cache = context.user_data.get(f"user_list_snapshot:{server_id}") or {}
+    snapshot = snapshot_cache.get(str(user_uuid)) or snapshot_cache.get(
+        str(user_data.get("uuid") or user_data.get("id") or "")
+    )
+    user_data = _merge_user_list_snapshot(user_data, snapshot)
 
     panel_user_uuid = str(user_data.get("uuid") or user_uuid or "")
     user_link_base = _build_user_base_url(server, panel_user_uuid)
