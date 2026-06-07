@@ -1350,7 +1350,8 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
     else:
         usage_line = f"📊مصرف: {usage_current:.2f} از {usage_limit:.1f} گیگابایت"
 
-    if bool(service.get("_panel_expired")):
+    is_display_expired = _is_display_expired_service(service)
+    if is_display_expired:
         expire_line = "📆انقضا: منقضی/غیرفعال در پنل"
     elif days_left is None:
         expire_line = "📆انقضا: نامشخص"
@@ -1359,7 +1360,10 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
     else:
         expire_line = f"📆انقضا: {int(days_left)} روز دیگر"
 
-    last_online_line = _service_last_online_line(last_online_raw)
+    if is_display_expired:
+        last_online_line = "📶آخرین اتصال: غیرفعال/منقضی"
+    else:
+        last_online_line = _service_last_online_line(last_online_raw)
 
     header_line = f"👤 کاربر:  {service_name}"
     sep_line = "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"
