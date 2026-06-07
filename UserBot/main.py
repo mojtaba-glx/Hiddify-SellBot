@@ -3435,12 +3435,31 @@ def _card_payment_result_user_text(amount: int, result: str, *, direct_note: boo
 
 
 async def _safe_edit_message_text(query, text: str, **kwargs):
-    """Ignore Telegram 'Message is not modified' errors for edit_message_text."""
+    """Edit text when possible; fallback for photo/QR messages with inline buttons."""
     try:
         return await query.edit_message_text(text, **kwargs)
     except BadRequest as e:
-        if "Message is not modified" in str(e):
+        err = str(e).lower()
+        if "message is not modified" in err:
             return None
+        photo_or_media_error = any(
+            needle in err
+            for needle in (
+                "there is no text in the message to edit",
+                "message is not a text message",
+                "message can't be edited",
+                "message to edit not found",
+            )
+        )
+        if photo_or_media_error and getattr(query, "message", None):
+            try:
+                await query.message.delete()
+            except Exception:
+                try:
+                    await query.edit_message_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+            return await query.message.reply_text(text, **kwargs)
         raise
 
 async def _safe_edit_message_reply_markup(query, **kwargs):
