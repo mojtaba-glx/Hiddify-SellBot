@@ -1058,6 +1058,19 @@ def _to_int_or_none(value: Any) -> Optional[int]:
         return None
 
 
+def _is_locally_deleted_service(service: Dict[str, Any]) -> bool:
+    status = str(service.get("status") or "").strip().lower()
+    return status in {"deleted", "removed"}
+
+
+def _is_locally_expired_service(service: Dict[str, Any]) -> bool:
+    status = str(service.get("status") or "").strip().lower()
+    if status in {"inactive", "disabled", "expired"}:
+        return True
+    days_left = _to_int_or_none(service.get("days_left"))
+    return days_left is not None and days_left <= 0
+
+
 def _is_locally_active_service(service: Dict[str, Any]) -> bool:
     status = str(service.get("status") or "").strip().lower()
     if status in {"deleted", "removed", "inactive", "disabled", "expired"}:
@@ -5723,7 +5736,9 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
 async def send_user_services_list(user_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     raw_services = userbot_db.get_services_for_user(user_id)
-    local_active_services = [s for s in raw_services if _is_locally_active_service(s)]
+    candidate_services = [s for s in raw_services if not _is_locally_deleted_service(s)]
+    local_active_services = [s for s in candidate_services if _is_locally_active_service(s)]
+    expired_services = [s for s in candidate_services if _is_locally_expired_service(s)]
 
     services: List[Dict[str, Any]] = []
     if local_active_services:
@@ -5736,13 +5751,18 @@ async def send_user_services_list(user_id: int, chat_id: int, context: ContextTy
         checked = await asyncio.gather(*[_check_visible(s) for s in local_active_services])
         services = [s for s in checked if s]
 
-    if not services:
+    visible_services = services + expired_services
+    active_count = len(services)
+    expired_count = len(expired_services)
+
+    if not visible_services:
         text = (
             "#️⃣ لیست سرویس‌ها\n"
             "شما می‌توانید لیست سرویس‌ها و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
             f"📦 تعداد کل سرویس‌ها: {len(raw_services)}\n"
-            "🟢 سرویس‌های فعال: 0\n\n"
-            "❌ سرویس فعال و موجودی برای این کاربر یافت نشد."
+            "🟢 سرویس‌های فعال: 0\n"
+            "🔴 سرویس‌های منقضی: 0\n\n"
+            "❌ سرویسی برای نمایش این کاربر یافت نشد."
         )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{user_id}")]])
         if message:
@@ -5753,9 +5773,14 @@ async def send_user_services_list(user_id: int, chat_id: int, context: ContextTy
 
     rows: List[List[InlineKeyboardButton]] = []
     service_buttons: List[InlineKeyboardButton] = []
-    for s in services:
+    for s in visible_services:
         name = s.get("name") or f"Service #{s['id']}"
-        emoji = "🟡" if _comment_has_flag(str(s.get("comment") or ""), "test") else "🔵"
+        if _is_locally_expired_service(s):
+            emoji = "🔴"
+        elif _comment_has_flag(str(s.get("comment") or ""), "test"):
+            emoji = "🟡"
+        else:
+            emoji = "🔵"
         service_buttons.append(
             InlineKeyboardButton(
                 f"{emoji} |{name}",
@@ -5774,7 +5799,8 @@ async def send_user_services_list(user_id: int, chat_id: int, context: ContextTy
         "#️⃣ لیست سرویس‌ها\n"
         "شما می‌توانید لیست سرویس‌ها و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
         f"📦 تعداد کل سرویس‌ها: {len(raw_services)}\n"
-        f"🟢 سرویس‌های فعال: {len(services)}"
+        f"🟢 سرویس‌های فعال: {active_count}\n"
+        f"🔴 سرویس‌های منقضی: {expired_count}"
     )
     if message:
         try: await message.edit_text(text, reply_markup=kb)
@@ -5896,7 +5922,8 @@ async def send_service_detail(service_id: int, chat_id: int, context: ContextTyp
     svc = userbot_db.get_service_by_id(service_id)
     if not svc:
         return
-    if not _is_locally_active_service(svc) or not await _service_exists_on_panel(svc):
+    is_expired = _is_locally_expired_service(svc)
+    if _is_locally_deleted_service(svc) or (not is_expired and not await _service_exists_on_panel(svc)):
         text = "❌ این سرویس حذف شده یا غیرفعال است."
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{svc.get('user_id')}")]])
         if message:
@@ -7101,11 +7128,11 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                     [
                         InlineKeyboardButton(
                             "✅ بله، حذف شود",
-                            callback_data=f"deluser:{target_server_id}:{target_user_uuid}:yes",
+                            callback_data=f"userbot:svc:{service_id}:delete_yes",
                         ),
                         InlineKeyboardButton(
                             "لغو❌",
-                            callback_data=f"deluser:{target_server_id}:{target_user_uuid}:no",
+                            callback_data=f"userbot:svc:{service_id}:delete_no",
                         ),
                     ]
                 ]
@@ -7115,6 +7142,45 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 "این عملیات قابل بازگشت نیست.",
                 reply_markup=kb,
             )
+            return
+
+        if action == "delete_no":
+            await query.answer("❌ حذف لغو شد.", show_alert=True)
+            await send_service_detail(service_id, cid, context, message=msg)
+            return
+
+        if action == "delete_yes":
+            user_id = int(service.get("user_id") or 0)
+            deleted_server_ids, failed_servers = await server_ops._delete_user_across_related_servers(
+                target_server_id,
+                target_user_uuid,
+            )
+
+            if not deleted_server_ids:
+                details = "\n".join(failed_servers[:3])
+                if details:
+                    await msg.edit_text(f"❌ حذف سرویس روی هیچ سروری موفق نشد:\n{details}")
+                else:
+                    await msg.edit_text("❌ حذف سرویس روی هیچ سروری موفق نشد.")
+                return
+
+            try:
+                userbot_db.delete_service(service_id)
+            except Exception:
+                pass
+
+            if failed_servers:
+                await query.answer(
+                    f"✅ حذف شد، اما {len(failed_servers)} سرور خطا داشت.",
+                    show_alert=True,
+                )
+            else:
+                await query.answer("✅ سرویس با موفقیت حذف شد.", show_alert=True)
+
+            if user_id > 0:
+                await send_user_profile(user_id, cid, context, message=msg)
+            else:
+                await msg.edit_text("✅ سرویس با موفقیت حذف شد.")
             return
 
         await query.answer("❌ گزینه نامعتبر است.", show_alert=True)
