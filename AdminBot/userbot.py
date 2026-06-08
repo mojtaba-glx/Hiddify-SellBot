@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
+import qrcode
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -94,6 +95,41 @@ ZARIN_COUPON_CODE_STATE = "userbot_zarin_coupon_code"
 ZARIN_COUPON_LIMIT_STATE = "userbot_zarin_coupon_limit"
 ZARIN_COUPON_EXP_STATE = "userbot_zarin_coupon_exp"
 ZARIN_COUPON_BULK_STATE = "userbot_zarin_coupon_bulk"
+
+GIFT_CAMPAIGN_PRESETS: Dict[str, Dict[str, Any]] = {
+    "welcome": {
+        "title": "🎁 خوش‌آمدگویی",
+        "prefix": "WELCOME",
+        "amount": 30000,
+        "max_uses": 100,
+        "hours": 168,
+        "note": "برای کاربران تازه و شروع کمپین‌های کوچک.",
+    },
+    "festival": {
+        "title": "🔥 جشنواره فروش",
+        "prefix": "FEST",
+        "amount": 50000,
+        "max_uses": 300,
+        "hours": 48,
+        "note": "هدیه محدود و فوری برای کانال یا گروه.",
+    },
+    "vip": {
+        "title": "💎 مشتری وفادار",
+        "prefix": "VIP",
+        "amount": 100000,
+        "max_uses": 50,
+        "hours": 72,
+        "note": "برای کاربران ارزشمند یا جبران نارضایتی.",
+    },
+    "winback": {
+        "title": "🕒 بازگشت کاربر",
+        "prefix": "BACK",
+        "amount": 40000,
+        "max_uses": 150,
+        "hours": 120,
+        "note": "برای برگرداندن کاربران غیرفعال.",
+    },
+}
 SUB_TRACKING_STATE = "userbot_subscription_tracking"
 TICKET_REPLY_STATE = "userbot_ticket_reply"
 BROADCAST_SEND_STATE = "userbot_broadcast_send"
@@ -577,6 +613,32 @@ def _build_telegram_start_link(username: str, payload: str) -> str:
     if not bot_username or not clean_payload:
         return ""
     return f"https://t.me/{bot_username}?start={clean_payload}"
+
+
+def _make_qr_image(data: str, *, filename: str = "gift-deeplink-qr.png") -> BytesIO:
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M)
+    qr.add_data(str(data or ""))
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    bio = BytesIO()
+    bio.name = filename
+    img.save(bio, "PNG")
+    bio.seek(0)
+    return bio
+
+
+def _build_gift_campaign_copy(code: str, deep_link: str, amount_toman: int, *, title: str = "") -> str:
+    campaign_title = str(title or "هدیه ویژه SELLBOT").strip()
+    link_line = str(deep_link or "").strip() or f"کد هدیه: {code}"
+    return (
+        f"🎁 {campaign_title}\n\n"
+        "یک هدیه شارژ کیف پول برای شما فعال شده است.\n"
+        "برای دریافت هدیه، روی لینک زیر بزنید یا کد هدیه را در بخش کیف پول وارد کنید.\n\n"
+        f"🏷 کد هدیه: {code}\n"
+        f"💰 مبلغ هدیه: {_format_toman(amount_toman)} تومان\n"
+        f"🔗 لینک دریافت: {link_line}\n\n"
+        "⏳ ظرفیت محدود است؛ بعد از تکمیل ظرفیت یا پایان زمان کمپین، کد غیرفعال می‌شود."
+    )
 
 
 async def _get_user_bot_username(context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -1540,12 +1602,31 @@ def build_gifts_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("📊 داشبورد هدایا", callback_data="userbot:gifts:dashboard")],
         [InlineKeyboardButton("🏷 کوپن‌ها و کدهای هدیه", callback_data="userbot:gifts:coupons")],
-        [InlineKeyboardButton("🧩 ساخت گروهی کد هدیه", callback_data="userbot:gifts:bulk")],
+        [
+            InlineKeyboardButton("🎯 قالب‌های آماده کمپین", callback_data="userbot:gifts:presets"),
+            InlineKeyboardButton("🧩 ساخت گروهی کد هدیه", callback_data="userbot:gifts:bulk"),
+        ],
         [InlineKeyboardButton("📜 گزارش مصرف هدایا", callback_data="userbot:gifts:redemptions")],
-        [InlineKeyboardButton("📣 متن آماده کمپین", callback_data="userbot:gifts:campaign")],
+        [
+            InlineKeyboardButton("📣 متن آماده کمپین", callback_data="userbot:gifts:campaign"),
+            InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security"),
+        ],
         [InlineKeyboardButton("📘 راهنمای هدایا", callback_data="userbot:gifts:help")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
     ]
+    return InlineKeyboardMarkup(rows)
+
+
+def build_gift_presets_keyboard() -> InlineKeyboardMarkup:
+    rows: List[List[InlineKeyboardButton]] = []
+    for key, preset in GIFT_CAMPAIGN_PRESETS.items():
+        rows.append([
+            InlineKeyboardButton(
+                f"{preset['title']} | {_format_toman(preset['amount'])} تومان",
+                callback_data=f"userbot:gifts:preset:{key}",
+            )
+        ])
+    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1727,7 +1808,11 @@ def build_zarin_coupon_detail_keyboard(code: str, item: Optional[Dict[str, Any]]
     toggle_title = "⏸ خاموش کردن کوپن" if active else "▶️ روشن کردن کوپن"
     rows = [
         [InlineKeyboardButton("💳تنظیم لینک پرداخت زرین پال", callback_data=f"userbot:gifts:coupon:set_link:{c}")],
-        [InlineKeyboardButton("🚀ایجاد دیپ لینک", callback_data=f"userbot:gifts:coupon:deeplink:{c}")],
+        [
+            InlineKeyboardButton("🚀 دیپ‌لینک", callback_data=f"userbot:gifts:coupon:deeplink:{c}"),
+            InlineKeyboardButton("📱 QR دیپ‌لینک", callback_data=f"userbot:gifts:coupon:qr:{c}"),
+        ],
+        [InlineKeyboardButton("📣 متن تبلیغ همین کوپن", callback_data=f"userbot:gifts:coupon:campaign:{c}")],
         [InlineKeyboardButton(toggle_title, callback_data=f"userbot:gifts:coupon:toggle:{c}")],
         [InlineKeyboardButton("✏️ویرایش کد", callback_data=f"userbot:gifts:coupon:set_code:{c}")],
         [InlineKeyboardButton("👤ویرایش محدودیت کاربر", callback_data=f"userbot:gifts:coupon:set_limit:{c}")],
@@ -6234,6 +6319,11 @@ async def send_orders_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mes
 
 
 async def send_gifts_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    deactivated = 0
+    try:
+        deactivated = userbot_db.deactivate_unusable_zarin_vouchers()
+    except Exception:
+        deactivated = 0
     stats = userbot_db.get_zarin_vouchers_dashboard()
     text = (
         "🎁 مدیریت هدایا\n"
@@ -6242,6 +6332,7 @@ async def send_gifts_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mess
         f"📦 کل کوپن‌ها: {int(stats.get('total') or 0)}\n"
         f"🎯 مصرف‌شده: {int(stats.get('redemptions') or 0)} بار\n"
         f"💰 مجموع هدیه مصرف‌شده: {_format_toman(stats.get('redeemed_amount'))} تومان\n\n"
+        f"🧹 خاموشی خودکار این نوبت: {deactivated} کوپن\n\n"
         "از دکمه‌های زیر برای ساخت، گزارش و مدیریت کمپین هدیه استفاده کنید."
     )
     kb = build_gifts_menu_keyboard()
@@ -6255,6 +6346,11 @@ async def send_gifts_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mess
 
 
 async def send_gifts_dashboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    deactivated = 0
+    try:
+        deactivated = userbot_db.deactivate_unusable_zarin_vouchers()
+    except Exception:
+        deactivated = 0
     stats = userbot_db.get_zarin_vouchers_dashboard()
     used = int(stats.get("used_count") or 0)
     max_uses = int(stats.get("max_uses") or 0)
@@ -6270,12 +6366,15 @@ async def send_gifts_dashboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
         f"🎯 مصرف: {used} از {max_uses} ({percent}٪)\n"
         f"🎁 مجموع ظرفیت هدیه: {_format_toman(stats.get('total_amount'))} تومان\n"
         f"💰 مجموع هدیه مصرف‌شده: {_format_toman(stats.get('redeemed_amount'))} تومان\n\n"
+        f"🧹 خاموشی خودکار این بررسی: {deactivated} کوپن\n\n"
         "💡 پیشنهاد: برای کمپین‌های تلگرام از «ساخت گروهی» و برای بررسی نتیجه از «گزارش مصرف» استفاده کن."
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🏷 مشاهده کوپن‌ها", callback_data="userbot:gifts:coupons")],
+        [InlineKeyboardButton("🎯 قالب‌های آماده", callback_data="userbot:gifts:presets")],
         [InlineKeyboardButton("🧩 ساخت گروهی", callback_data="userbot:gifts:bulk")],
         [InlineKeyboardButton("📜 گزارش مصرف", callback_data="userbot:gifts:redemptions")],
+        [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
     ])
     if message:
@@ -6288,16 +6387,20 @@ async def send_gifts_dashboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
 
 
 async def send_zarin_coupons_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    try:
+        userbot_db.deactivate_unusable_zarin_vouchers()
+    except Exception:
+        pass
     coupons = userbot_db.list_zarin_vouchers(limit=300)
     total = len(coupons)
-    active = len(userbot_db.list_active_zarin_vouchers(limit=500))
+    active = int((userbot_db.get_zarin_vouchers_dashboard() or {}).get("active") or 0)
     text = (
         "💼 کوپن شارژ کیف پول\n"
         "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
         f"◈ تعداد کل: {total}\n"
         f"◈ فعال: {active}\n"
         f"◈ غیرفعال: {max(0, total - active)}\n\n"
-        "راهنما: روی هر کوپن بزن تا جزئیات، خاموش/روشن، دیپ‌لینک و گزارش مصرف همان کوپن را ببینی."
+        "راهنما: روی هر کوپن بزن تا جزئیات، دیپ‌لینک، QR، متن تبلیغ، خاموش/روشن و گزارش مصرف همان کوپن را ببینی."
     )
     kb = build_zarin_coupons_list_keyboard(coupons)
     if message:
@@ -6316,6 +6419,10 @@ async def send_zarin_coupon_detail(
     code: str,
     message=None,
 ) -> None:
+    try:
+        userbot_db.deactivate_unusable_zarin_vouchers()
+    except Exception:
+        pass
     item = userbot_db.get_zarin_voucher(code)
     if not item:
         await context.bot.send_message(chat_id, "❌ کوپن یافت نشد.")
@@ -6344,6 +6451,8 @@ async def send_zarin_coupon_detail(
         except Exception:
             remain = "نامشخص"
     link = str(item.get("zarinpal_link") or "").strip() or "ثبت نشده"
+    bot_username = await _get_user_bot_username(context)
+    deep_link = _build_telegram_start_link(bot_username, c) or "در انتظار تشخیص یوزرنیم ربات کاربران"
     status = "فعال" if int(item.get("is_active") or 0) == 1 else "غیرفعال"
     if remain == "منقضی شده":
         status = "منقضی شده"
@@ -6358,7 +6467,9 @@ async def send_zarin_coupon_detail(
         f"◈ هدیه شارژ کیف پول: {amount:,} تومان\n"
         f"◈ انقضا: {exp}\n"
         f"◈ زمان باقی‌مانده: {remain}\n"
-        f"◈ لینک پرداخت: {link}"
+        f"◈ لینک پرداخت: {link}\n"
+        f"◈ دیپ‌لینک: {deep_link}\n\n"
+        "🛡 محافظت فعال: هر کاربر فقط یک‌بار می‌تواند همین کد را مصرف کند؛ سقف مصرف و تاریخ انقضا هم کنترل می‌شود."
     )
     kb = build_zarin_coupon_detail_keyboard(c, item)
     if message:
@@ -6368,6 +6479,146 @@ async def send_zarin_coupon_detail(
             await context.bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
     else:
         await context.bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
+
+
+async def send_gift_presets_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    text = (
+        "🎯 قالب‌های آماده کمپین هدیه\n"
+        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
+        "با یک لمس، یک کوپن آماده با مبلغ، ظرفیت و زمان انقضای مناسب ساخته می‌شود.\n\n"
+    )
+    for preset in GIFT_CAMPAIGN_PRESETS.values():
+        hours = int(preset.get("hours") or 0)
+        text += (
+            f"{preset['title']}\n"
+            f"◈ مبلغ: {_format_toman(preset['amount'])} تومان\n"
+            f"◈ ظرفیت: {int(preset['max_uses'])} کاربر\n"
+            f"◈ انقضا: {'نامحدود' if hours <= 0 else f'{hours} ساعت'}\n"
+            f"◈ کاربرد: {preset['note']}\n\n"
+        )
+    kb = build_gift_presets_keyboard()
+    if message:
+        try:
+            await message.edit_text(text.strip(), reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text.strip(), reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text.strip(), reply_markup=kb)
+
+
+def _create_gift_preset_coupon(preset_key: str) -> Dict[str, Any]:
+    preset = GIFT_CAMPAIGN_PRESETS.get(str(preset_key or "").strip().lower())
+    if not preset:
+        raise ValueError("preset not found")
+    hours = int(preset.get("hours") or 0)
+    expires_at = ""
+    if hours > 0:
+        expires_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=hours)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+    code = _generate_unique_gift_code(str(preset.get("prefix") or "GIFT"))
+    item = userbot_db.upsert_zarin_voucher(
+        code,
+        int(preset.get("amount") or 0),
+        max_uses=int(preset.get("max_uses") or 1),
+        expires_at=expires_at,
+        is_active=1,
+    )
+    item["_preset_title"] = str(preset.get("title") or "")
+    return item
+
+
+async def send_gifts_security_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    deactivated = 0
+    try:
+        deactivated = userbot_db.deactivate_unusable_zarin_vouchers()
+    except Exception:
+        deactivated = 0
+    stats = userbot_db.get_zarin_vouchers_dashboard()
+    text = (
+        "🛡 کنترل سوءاستفاده هدایا\n"
+        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
+        "محافظت‌های فعال فعلی:\n"
+        "◈ هر کاربر فقط یک‌بار می‌تواند از یک کد مشخص استفاده کند.\n"
+        "◈ ظرفیت مصرف هر کوپن کنترل می‌شود.\n"
+        "◈ تاریخ انقضا کنترل می‌شود.\n"
+        "◈ کوپن‌های منقضی یا تکمیل ظرفیت شده خودکار خاموش می‌شوند.\n\n"
+        f"🧹 خاموشی خودکار همین بررسی: {deactivated} کوپن\n"
+        f"🟢 فعال قابل‌مصرف: {int(stats.get('active') or 0)}\n"
+        f"⏰ منقضی‌شده: {int(stats.get('expired') or 0)}\n"
+        f"🔒 تکمیل ظرفیت: {int(stats.get('full') or 0)}\n\n"
+        "برای امنیت بیشتر، برای کمپین عمومی از ظرفیت محدود و زمان انقضای کوتاه استفاده کنید."
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧹 خاموش کردن کوپن‌های تمام‌شده", callback_data="userbot:gifts:auto_off")],
+        [InlineKeyboardButton("📘 راهنمای هدایا", callback_data="userbot:gifts:help")],
+        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
+    ])
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_coupon_campaign_text(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    code: str,
+    message=None,
+) -> None:
+    item = userbot_db.get_zarin_voucher(code)
+    if not item:
+        await context.bot.send_message(chat_id, "❌ کوپن یافت نشد.")
+        return
+    c = str(item.get("code") or "").strip()
+    bot_username = await _get_user_bot_username(context)
+    deep_link = _build_telegram_start_link(bot_username, c)
+    text = _build_gift_campaign_copy(c, deep_link, int(item.get("amount_toman") or 0))
+    rows: List[List[InlineKeyboardButton]] = []
+    if deep_link:
+        rows.append([InlineKeyboardButton("🚀 باز کردن دیپ‌لینک", url=deep_link)])
+    rows.append([InlineKeyboardButton("📱 QR دیپ‌لینک", callback_data=f"userbot:gifts:coupon:qr:{c}")])
+    rows.append([InlineKeyboardButton("🏷 برگشت به کوپن", callback_data=f"userbot:gifts:coupon:{c}")])
+    kb = InlineKeyboardMarkup(rows)
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb, disable_web_page_preview=True)
+
+
+async def send_coupon_deeplink_qr(chat_id: int, context: ContextTypes.DEFAULT_TYPE, *, code: str) -> None:
+    item = userbot_db.get_zarin_voucher(code)
+    if not item:
+        await context.bot.send_message(chat_id, "❌ کوپن یافت نشد.")
+        return
+    c = str(item.get("code") or "").strip()
+    bot_username = await _get_user_bot_username(context)
+    deep_link = _build_telegram_start_link(bot_username, c)
+    if not deep_link:
+        await context.bot.send_message(
+            chat_id,
+            "❌ یوزرنیم ربات کاربران قابل تشخیص نیست.\n"
+            "لطفاً USER_BOT_TOKEN یا SUB_BOT_USERNAME را در .env بررسی کنید.",
+        )
+        return
+    qr_image = _make_qr_image(deep_link)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 باز کردن دیپ‌لینک", url=deep_link)],
+        [InlineKeyboardButton("🏷 برگشت به کوپن", callback_data=f"userbot:gifts:coupon:{c}")],
+    ])
+    await context.bot.send_photo(
+        chat_id=chat_id,
+        photo=qr_image,
+        caption=f"📱 QR دیپ‌لینک کوپن {c}\n{deep_link}",
+        reply_markup=kb,
+    )
 
 
 def _format_redemption_user(row: Dict[str, Any]) -> str:
@@ -6388,22 +6639,32 @@ async def send_zarin_redemptions_report(
     code: str = "",
     message=None,
 ) -> None:
-    rows = userbot_db.list_zarin_voucher_redemptions(limit=30, code=code)
+    rows = userbot_db.list_zarin_voucher_redemptions(limit=50, code=code)
     title = f"📜 گزارش مصرف کوپن {code}" if code else "📜 گزارش مصرف هدایا"
+    total_amount = sum(int(row.get("amount_toman") or 0) for row in rows)
+    unique_users = len({int(row.get("user_id") or 0) for row in rows if int(row.get("user_id") or 0) > 0})
     lines = [
         title,
         "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖",
+        f"◈ رکوردهای نمایش داده‌شده: {len(rows)}",
+        f"◈ کاربران یکتا: {unique_users}",
+        f"◈ جمع هدیه همین گزارش: {_format_toman(total_amount)} تومان",
+        "",
     ]
     if not rows:
         lines.append("هنوز مصرفی ثبت نشده است.")
     else:
         for idx, row in enumerate(rows, 1):
+            telegram_id = str(row.get("telegram_id") or "-")
+            wallet = _format_toman(row.get("wallet_balance"))
             lines.append(
                 f"{idx}) 🏷 {row.get('code')} | 👤 {_format_redemption_user(row)} | "
-                f"🎁 {_format_toman(row.get('amount_toman'))} تومان | 🕒 {row.get('redeemed_at') or '-'}"
+                f"🆔 {telegram_id} | 🎁 {_format_toman(row.get('amount_toman'))} تومان | "
+                f"💰 کیف پول فعلی: {wallet} | 🕒 {row.get('redeemed_at') or '-'}"
             )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🏷 برگشت به کوپن‌ها", callback_data="userbot:gifts:coupons")],
+        [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
     ])
     text = "\n".join(lines)
@@ -6430,17 +6691,18 @@ async def send_gifts_campaign_text(chat_id: int, context: ContextTypes.DEFAULT_T
     sample_code = active_codes[0] if active_codes else "GIFT-CODE"
     bot_username = await _get_user_bot_username(context)
     deep_link = _build_telegram_start_link(bot_username, sample_code) or f"کد هدیه: {sample_code}"
+    amount = 0
+    if active_codes:
+        item = userbot_db.get_zarin_voucher(sample_code) or {}
+        amount = int(item.get("amount_toman") or 0)
     text = (
         "📣 متن آماده کمپین هدیه\n"
         "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
         "می‌توانی متن زیر را برای کانال یا کاربران ارسال کنی:\n\n"
-        "🎁 هدیه ویژه SELLBOT فعال شد!\n"
-        "برای دریافت هدیه کیف پول، روی لینک زیر بزنید یا کد هدیه را داخل بخش کیف پول وارد کنید.\n\n"
-        f"🏷 کد هدیه: {sample_code}\n"
-        f"🔗 لینک دریافت: {deep_link}\n\n"
-        "⏳ ظرفیت محدود است؛ بعد از تکمیل ظرفیت، کد غیرفعال می‌شود."
+        f"{_build_gift_campaign_copy(sample_code, deep_link, amount or 0)}"
     )
     kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎯 قالب‌های آماده کمپین", callback_data="userbot:gifts:presets")],
         [InlineKeyboardButton("🧩 ساخت گروهی کد", callback_data="userbot:gifts:bulk")],
         [InlineKeyboardButton("🏷 مشاهده کوپن‌ها", callback_data="userbot:gifts:coupons")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
@@ -6458,17 +6720,22 @@ async def send_gifts_help(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mess
     text = (
         "📘 راهنمای مدیریت هدایا\n"
         "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        "1) از «افزودن کوپن» یک کد دستی بساز؛ مبلغ هدیه به کیف پول کاربر اضافه می‌شود.\n"
-        "2) از «ساخت گروهی» چندین کد یک‌بارمصرف برای کمپین بساز.\n"
-        "3) «محدودیت کاربر» یعنی کل دفعات استفاده از همان کد؛ برای کد اختصاصی عدد 1 بگذار.\n"
-        "4) «انقضا» را با ساعت تنظیم کن؛ عدد 0 یعنی نامحدود.\n"
-        "5) «دیپ‌لینک» را به کاربر بده؛ با Start کردن ربات، هدیه خودکار اعمال می‌شود.\n"
-        "6) اگر کوپن لو رفت یا کمپین تمام شد، از جزئیات کوپن دکمه خاموش کردن را بزن.\n"
-        "7) از «گزارش مصرف» ببین چه کسی، چه زمانی و با چه کدی هدیه گرفته است.\n\n"
-        "نکته امنیتی: برای کمپین عمومی، کدها را یک‌بارمصرف بساز تا سوءاستفاده نشود."
+        "1) «داشبورد هدایا» وضعیت کل کمپین‌ها، مصرف، ظرفیت، مبلغ هدیه و خاموشی خودکار را نشان می‌دهد.\n"
+        "2) «قالب‌های آماده کمپین» برای ساخت سریع کدهای مناسبتی مثل خوش‌آمدگویی، جشنواره، VIP و بازگشت کاربر است.\n"
+        "3) «ساخت گروهی» چندین کد یک‌بارمصرف می‌سازد؛ برای کمپین عمومی امن‌ترین گزینه است.\n"
+        "4) داخل جزئیات هر کوپن، «دیپ‌لینک» لینک مستقیم Start ربات کاربران را می‌سازد.\n"
+        "5) «QR دیپ‌لینک» برای چاپ، استوری، کانال یا ارسال تصویری همان لینک است.\n"
+        "6) «متن تبلیغ همین کوپن» متن آماده ارسال به کانال/کاربر را با مبلغ و لینک همان کد می‌سازد.\n"
+        "7) «محدودیت کاربر» سقف کل مصرف آن کد است؛ برای کد اختصاصی عدد 1 بگذار.\n"
+        "8) «مدت زمان انقضا» را به ساعت تنظیم کن؛ عدد 0 یعنی نامحدود.\n"
+        "9) «گزارش مصرف» نشان می‌دهد چه کاربری، چه زمانی، با چه کدی و با چه موجودی کیف پول هدیه گرفته است.\n"
+        "10) «کنترل سوءاستفاده» کوپن‌های منقضی/تکمیل‌شده را خاموش می‌کند و وضعیت محافظت‌ها را نشان می‌دهد.\n\n"
+        "نکته امنیتی: هر کد برای هر کاربر فقط یک‌بار قابل مصرف است. برای کمپین‌های بزرگ، ظرفیت محدود و انقضای کوتاه بگذار."
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 داشبورد هدایا", callback_data="userbot:gifts:dashboard")],
+        [InlineKeyboardButton("🎯 قالب‌های آماده", callback_data="userbot:gifts:presets")],
+        [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
     ])
     if message:
@@ -8214,6 +8481,25 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
+    if data == "userbot:gifts:presets":
+        await query.answer()
+        await send_gift_presets_menu(cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:gifts:preset:"):
+        preset_key = str(data.rsplit(":", 1)[-1] or "").strip()
+        await query.answer()
+        try:
+            item = _create_gift_preset_coupon(preset_key)
+        except Exception as e:
+            await msg.reply_text(f"❌ ساخت قالب آماده ناموفق بود:\n{e}")
+            return
+        code = str(item.get("code") or "").strip()
+        title = str(item.get("_preset_title") or "کمپین آماده").strip()
+        await msg.reply_text(f"✅ {title} ساخته شد.\n🏷 کد: {code}")
+        await send_zarin_coupon_detail(cid, context, code=code, message=msg)
+        return
+
     if data == "userbot:gifts:redemptions":
         await query.answer()
         await send_zarin_redemptions_report(cid, context, message=msg)
@@ -8228,6 +8514,18 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "userbot:gifts:campaign":
         await query.answer()
         await send_gifts_campaign_text(cid, context, message=msg)
+        return
+
+    if data == "userbot:gifts:security":
+        await query.answer()
+        await send_gifts_security_menu(cid, context, message=msg)
+        return
+
+    if data == "userbot:gifts:auto_off":
+        await query.answer()
+        changed = userbot_db.deactivate_unusable_zarin_vouchers()
+        await msg.reply_text(f"🧹 {changed} کوپن منقضی/تکمیل‌شده خاموش شد.")
+        await send_gifts_security_menu(cid, context, message=msg)
         return
 
     if data == "userbot:gifts:help":
@@ -8300,6 +8598,16 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer()
             await msg.reply_text("🎁 مبلغ هدیه کیف پول (تومان) را ارسال کنید:", reply_markup=userbot_cancel_keyboard())
             return
+        if data.startswith("userbot:gifts:coupon:campaign:"):
+            code = str(data.rsplit(":", 1)[-1] or "").strip()
+            await query.answer()
+            await send_coupon_campaign_text(cid, context, code=code, message=msg)
+            return
+        if data.startswith("userbot:gifts:coupon:qr:"):
+            code = str(data.rsplit(":", 1)[-1] or "").strip()
+            await query.answer()
+            await send_coupon_deeplink_qr(cid, context, code=code)
+            return
         if data.startswith("userbot:gifts:coupon:deeplink:"):
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             await query.answer()
@@ -8317,6 +8625,8 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             deep_link = _build_telegram_start_link(bot_username, code)
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🚀 باز کردن دیپ لینک", url=deep_link)],
+                [InlineKeyboardButton("📱 QR دیپ‌لینک", callback_data=f"userbot:gifts:coupon:qr:{code}")],
+                [InlineKeyboardButton("📣 متن تبلیغ همین کوپن", callback_data=f"userbot:gifts:coupon:campaign:{code}")],
                 [InlineKeyboardButton("🏷 برگشت به کوپن", callback_data=f"userbot:gifts:coupon:{code}")],
             ])
             await msg.reply_text(

@@ -3672,8 +3672,38 @@ def list_zarin_vouchers(limit: int = 200) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def deactivate_unusable_zarin_vouchers() -> int:
+    """
+    خاموشی خودکار کوپن‌های منقضی، تکمیل ظرفیت شده، یا بدون مبلغ معتبر.
+    """
+    init_db()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE userbot_zarin_vouchers
+            SET is_active = 0, updated_at = ?
+            WHERE is_active = 1
+              AND (
+                    amount_toman <= 0
+                 OR used_count >= max_uses
+                 OR (expires_at <> '' AND expires_at <= ?)
+              )
+            """,
+            (now, now),
+        )
+        changed = int(cur.rowcount or 0)
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
 def get_zarin_vouchers_dashboard() -> Dict[str, Any]:
     init_db()
+    deactivate_unusable_zarin_vouchers()
     now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
     conn = _get_conn()
     cur = conn.cursor()
@@ -3998,7 +4028,8 @@ def list_zarin_voucher_redemptions(limit: int = 50, code: str = "") -> List[Dict
                 v.used_count,
                 u.telegram_id,
                 u.username,
-                u.full_name
+                u.full_name,
+                u.wallet_balance
             FROM userbot_zarin_voucher_redemptions r
             LEFT JOIN userbot_zarin_vouchers v ON v.code = r.code
             LEFT JOIN userbot_users u ON u.id = r.user_id
@@ -4016,6 +4047,7 @@ def list_zarin_voucher_redemptions(limit: int = 50, code: str = "") -> List[Dict
 
 def list_active_zarin_vouchers(limit: int = 100) -> List[Dict[str, Any]]:
     init_db()
+    deactivate_unusable_zarin_vouchers()
     lim = max(1, int(limit or 100))
     now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
     conn = _get_conn()
