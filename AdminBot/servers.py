@@ -91,7 +91,6 @@ from AdminBot.userbot import (
 
 
 load_dotenv()
-SUB_BOT_USERNAME = os.getenv("SUB_BOT_USERNAME", "")
 PANEL_PREREQ_SCRIPT_URL = (
     os.getenv("PANEL_PREREQ_SCRIPT_URL", "")
     or "https://raw.githubusercontent.com/mojtaba-glx/Hiddify-Panel-Prereq/main/install.sh"
@@ -1029,6 +1028,13 @@ def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str
         base_url = base_url.replace(panel_url, display_domain.rstrip("/"), 1)
 
     return base_url
+
+
+def _panel_user_link_from_base(base_url: Optional[str]) -> str:
+    base = str(base_url or "").strip()
+    if not base:
+        return ""
+    return f"{base.rstrip('/')}/"
 
 
 def _public_origin_from_url(raw_url: str) -> str:
@@ -2525,6 +2531,7 @@ async def send_user_configs_menu(
 
     # لینک پنل کاربر پشت اسم نمایش داده شود.
     user_name_link = _build_user_base_url(server, user_uuid)
+    panel_user_link = _panel_user_link_from_base(user_name_link)
     text = build_user_detail_html_text(
         server_for_display,
         user_data,
@@ -2571,9 +2578,16 @@ async def send_user_configs_menu(
                 )
             ],
             [
-                InlineKeyboardButton(
-                    "🤖 لینک اتصال اشتراک به ربات",
-                    callback_data=f"server:{server_id}:usercfg:{user_uuid}:bot_link",
+                (
+                    InlineKeyboardButton(
+                        "🌐 لینک پنل کاربر",
+                        url=panel_user_link,
+                    )
+                    if panel_user_link
+                    else InlineKeyboardButton(
+                        "🌐 لینک پنل کاربر",
+                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:bot_link",
+                    )
                 )
             ],
             [
@@ -5739,7 +5753,7 @@ async def handle_server_inline_callback(
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🤖 لینک اتصال اشتراک به ربات",
+                                        "🌐 لینک پنل کاربر",
                                         callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}:bot_link",
                                     )
                                 ],
@@ -5753,7 +5767,7 @@ async def handle_server_inline_callback(
                         )
                         await msg.edit_text(
                             "❌ لینک اشتراک هوشمند برای این کاربر هنوز آماده نیست.\n"
-                            "ابتدا اشتراک باید به ربات کاربران متصل شود.",
+                            "می‌توانید لینک پنل کاربر هیدیفای را دریافت کنید.",
                             reply_markup=kb,
                         )
                         return
@@ -5765,7 +5779,7 @@ async def handle_server_inline_callback(
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🤖 لینک اتصال اشتراک به ربات",
+                                        "🌐 لینک پنل کاربر",
                                         callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}:bot_link",
                                     )
                                 ],
@@ -5779,22 +5793,27 @@ async def handle_server_inline_callback(
                         )
                         await msg.edit_text(
                             "❌ لینک اشتراک هوشمند b64 برای این کاربر هنوز آماده نیست.\n"
-                            "ابتدا اشتراک باید به ربات کاربران متصل شود.",
+                            "می‌توانید لینک پنل کاربر هیدیفای را دریافت کنید.",
                             reply_markup=kb,
                         )
                         return
                     caption_title = "لینک اشتراک هوشمند b64"
                 elif cfg_type == "bot_link":
-                    bot_username = SUB_BOT_USERNAME.strip().lstrip("@")
-                    if not bot_username:
+                    if not base:
                         await msg.edit_text(
-                            "❌ متغیر SUB_BOT_USERNAME در فایل .env تنظیم نشده است.",
+                            "❌ تنظیمات panel_url یا user_proxy_path برای این سرور کامل نیست.",
                         )
                         return
-                    url = f"https://t.me/{bot_username}?start={panel_user_uuid}"
-                    text = f"لینک اتصال اشتراک به ربات 🤖\n{url}"
+                    url = _panel_user_link_from_base(base)
+                    text = f"🌐 لینک پنل کاربر هیدیفای\n{url}"
                     kb = InlineKeyboardMarkup(
                         [
+                            [
+                                InlineKeyboardButton(
+                                    "🌐 باز کردن پنل کاربر",
+                                    url=url,
+                                )
+                            ],
                             [
                                 InlineKeyboardButton(
                                     "بازگشت به منوی کانفیگ‌ها",

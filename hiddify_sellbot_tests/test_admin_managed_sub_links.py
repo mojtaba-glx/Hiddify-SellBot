@@ -62,6 +62,16 @@ class TestAdminManagedSubLinks(unittest.TestCase):
         self.assertEqual(b64_link, "")
         self.assertIsNone(owner)
 
+    def test_panel_user_link_keeps_hiddify_trailing_slash_format(self):
+        self.assertEqual(
+            servers._panel_user_link_from_base("https://usser.example.com/eDK1o2wFak/a24674c6-0391-42bd-9d1d-b15a37f609e0"),
+            "https://usser.example.com/eDK1o2wFak/a24674c6-0391-42bd-9d1d-b15a37f609e0/",
+        )
+        self.assertEqual(
+            servers._panel_user_link_from_base("https://usser.example.com/eDK1o2wFak/a24674c6-0391-42bd-9d1d-b15a37f609e0/"),
+            "https://usser.example.com/eDK1o2wFak/a24674c6-0391-42bd-9d1d-b15a37f609e0/",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
