@@ -6632,6 +6632,27 @@ def _format_redemption_user(row: Dict[str, Any]) -> str:
     return telegram_id or f"user_id:{row.get('user_id')}"
 
 
+def _format_gift_redemption_card(idx: int, row: Dict[str, Any]) -> str:
+    code = str(row.get("code") or "-").strip()
+    user_label = _format_redemption_user(row)
+    telegram_id = str(row.get("telegram_id") or "-").strip()
+    amount = int(row.get("amount_toman") or 0)
+    wallet = _format_toman(row.get("wallet_balance"))
+    redeemed_at = str(row.get("redeemed_at") or "-").strip()
+    amount_text = f"{_format_toman(amount)} تومان" if amount > 0 else "نامشخص / بدون مبلغ"
+
+    return "\n".join(
+        [
+            f"#{idx}  🏷 {code}",
+            f"👤 کاربر: {user_label}",
+            f"🆔 تلگرام: {telegram_id}",
+            f"🎁 هدیه: {amount_text}",
+            f"💰 کیف پول فعلی: {wallet} تومان",
+            f"🕒 زمان مصرف: {redeemed_at}",
+        ]
+    )
+
+
 async def send_zarin_redemptions_report(
     chat_id: int,
     context: ContextTypes.DEFAULT_TYPE,
@@ -6646,22 +6667,20 @@ async def send_zarin_redemptions_report(
     lines = [
         title,
         "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖",
-        f"◈ رکوردهای نمایش داده‌شده: {len(rows)}",
-        f"◈ کاربران یکتا: {unique_users}",
-        f"◈ جمع هدیه همین گزارش: {_format_toman(total_amount)} تومان",
+        f"📌 رکوردها: {len(rows)}",
+        f"👥 کاربران یکتا: {unique_users}",
+        f"💰 جمع هدیه: {_format_toman(total_amount)} تومان",
         "",
     ]
     if not rows:
         lines.append("هنوز مصرفی ثبت نشده است.")
     else:
+        lines.append("جزئیات مصرف:")
+        lines.append("━━━━━━━━━━━━━━━━")
         for idx, row in enumerate(rows, 1):
-            telegram_id = str(row.get("telegram_id") or "-")
-            wallet = _format_toman(row.get("wallet_balance"))
-            lines.append(
-                f"{idx}) 🏷 {row.get('code')} | 👤 {_format_redemption_user(row)} | "
-                f"🆔 {telegram_id} | 🎁 {_format_toman(row.get('amount_toman'))} تومان | "
-                f"💰 کیف پول فعلی: {wallet} | 🕒 {row.get('redeemed_at') or '-'}"
-            )
+            lines.append(_format_gift_redemption_card(idx, row))
+            if idx != len(rows):
+                lines.append("────────────")
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🏷 برگشت به کوپن‌ها", callback_data="userbot:gifts:coupons")],
         [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],

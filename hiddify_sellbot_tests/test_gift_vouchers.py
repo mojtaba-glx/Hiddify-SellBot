@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from Shared import userbot_db
+from AdminBot import userbot
 
 
 class TestGiftVouchers(unittest.TestCase):
@@ -51,6 +52,24 @@ class TestGiftVouchers(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(int(rows[0]["telegram_id"]), 123456789)
         self.assertEqual(int(rows[0]["wallet_balance"]), 100000)
+
+    def test_redemption_card_is_multiline_and_readable(self):
+        card = userbot._format_gift_redemption_card(
+            1,
+            {
+                "code": "WELCOME-GS5VGQ",
+                "username": "mojtaba_glx",
+                "telegram_id": 407882018,
+                "amount_toman": 30000,
+                "wallet_balance": 30000,
+                "redeemed_at": "2026-06-08 03:46:02",
+            },
+        )
+
+        self.assertIn("#1  🏷 WELCOME-GS5VGQ", card)
+        self.assertIn("👤 کاربر: @mojtaba_glx", card)
+        self.assertIn("🎁 هدیه: 30,000 تومان", card)
+        self.assertNotIn(" | ", card)
 
 
 if __name__ == "__main__":
