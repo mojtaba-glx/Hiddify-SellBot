@@ -2543,57 +2543,66 @@ async def send_user_configs_menu(
         [
             [
                 InlineKeyboardButton(
-                    "📄 کانفیگ مستقیم",
+                    "📄 کانفیگ‌های مستقیم",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:direct",
+                    style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🔗 لینک اشتراک خودکار",
+                    "🔄 اشتراک خودکار",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:auto_sub",
+                    style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🔗 لینک اشتراک",
+                    "🔗 لینک اشتراک اصلی",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub",
+                    style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🔗 لینک اشتراک b64",
+                    "🧬 لینک اشتراک Base64",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub_b64",
+                    style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "لینک اشتراک هوشمند 🌐",
+                    "🌐 اشتراک هوشمند",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi",
+                    style="success",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "لینک اشتراک هوشمند b64 🌐",
+                    "🌐 اشتراک هوشمند Base64",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi_b64",
+                    style="success",
                 )
             ],
             [
                 (
                     InlineKeyboardButton(
-                        "🌐 لینک پنل کاربر",
+                        "🚪 ورود به پنل کاربر",
                         url=panel_user_link,
+                        style="success",
                     )
                     if panel_user_link
                     else InlineKeyboardButton(
-                        "🌐 لینک پنل کاربر",
+                        "🚪 ورود به پنل کاربر",
                         callback_data=f"server:{server_id}:usercfg:{user_uuid}:bot_link",
+                        style="success",
                     )
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🔙 بازگشت",
+                    "🔙 برگشت به جزئیات کاربر",
                     callback_data=f"server:{server_id}:useruuid:{user_uuid}",
+                    style="primary",
                 )
             ],
         ]
@@ -5753,14 +5762,16 @@ async def handle_server_inline_callback(
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🌐 لینک پنل کاربر",
+                                        "🚪 ورود به پنل کاربر",
                                         callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}:bot_link",
+                                        style="success",
                                     )
                                 ],
                                 [
                                     InlineKeyboardButton(
-                                        "🔙 بازگشت به منوی کانفیگ‌ها",
+                                        "🔙 برگشت به منوی لینک‌ها",
                                         callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}",
+                                        style="primary",
                                     )
                                 ],
                             ]
@@ -5779,14 +5790,16 @@ async def handle_server_inline_callback(
                             [
                                 [
                                     InlineKeyboardButton(
-                                        "🌐 لینک پنل کاربر",
+                                        "🚪 ورود به پنل کاربر",
                                         callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}:bot_link",
+                                        style="success",
                                     )
                                 ],
                                 [
                                     InlineKeyboardButton(
-                                        "🔙 بازگشت به منوی کانفیگ‌ها",
+                                        "🔙 برگشت به منوی لینک‌ها",
                                         callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}",
+                                        style="primary",
                                     )
                                 ],
                             ]
@@ -5810,14 +5823,16 @@ async def handle_server_inline_callback(
                         [
                             [
                                 InlineKeyboardButton(
-                                    "🌐 باز کردن پنل کاربر",
+                                    "🚪 باز کردن پنل کاربر",
                                     url=url,
+                                    style="success",
                                 )
                             ],
                             [
                                 InlineKeyboardButton(
-                                    "بازگشت به منوی کانفیگ‌ها",
+                                    "🔙 برگشت به منوی لینک‌ها",
                                     callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}",
+                                    style="primary",
                                 )
                             ]
                         ]
