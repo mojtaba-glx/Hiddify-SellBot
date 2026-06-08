@@ -1031,6 +1031,99 @@ def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str
     return base_url
 
 
+def _public_origin_from_url(raw_url: str) -> str:
+    raw = str(raw_url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    except Exception:
+        return ""
+    scheme = (parsed.scheme or "https").strip().lower()
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return ""
+    port = parsed.port
+    default_port = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
+    netloc = host if port is None or default_port else f"{host}:{port}"
+    return f"{scheme}://{netloc}"
+
+
+def _public_origin_from_host(raw_host: str, *, default_scheme: str = "https", default_port: int = 443) -> str:
+    raw = str(raw_host or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    except Exception:
+        return ""
+    scheme = (parsed.scheme or default_scheme or "https").strip().lower()
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return ""
+    port = parsed.port if parsed.port is not None else int(default_port or 0)
+    default = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
+    return f"{scheme}://{host}" if default else f"{scheme}://{host}:{port}"
+
+
+def _resolve_managed_sub_base_url_for_admin(server: Optional[Dict[str, Any]] = None, user_uuid: str = "") -> str:
+    try:
+        custom_base = (userbot_db.get_managed_sub_base_url() or "").strip().rstrip("/")
+    except Exception:
+        custom_base = ""
+    if custom_base:
+        return custom_base
+
+    env_base = (os.getenv("SUB_SERVICE_BASE_URL", "") or "").strip().rstrip("/")
+    if env_base:
+        return env_base
+
+    explicit_host = (os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
+    if explicit_host:
+        scheme = (os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower()
+        try:
+            port = int(os.getenv("SUB_SERVER_PUBLIC_PORT", "443") or "443")
+        except (TypeError, ValueError):
+            port = 443
+        explicit_base = _public_origin_from_host(explicit_host, default_scheme=scheme, default_port=port)
+        if explicit_base:
+            return explicit_base
+
+    if server:
+        user_base = _build_user_base_url(server, str(user_uuid or "").strip())
+        origin = _public_origin_from_url(user_base or "")
+        if origin:
+            return origin
+        origin = _public_origin_from_url(server.get("panel_url") or "")
+        if origin:
+            return origin
+
+    return ""
+
+
+def _build_admin_managed_sub_links(
+    server: Dict[str, Any],
+    panel_user_uuid: str,
+) -> tuple[str, str, Optional[Dict[str, Any]]]:
+    user_uuid = str(panel_user_uuid or "").strip()
+    if not user_uuid:
+        return "", "", None
+
+    owner = userbot_db.get_service_owner_by_panel_uuid(user_uuid)
+    if not owner or not owner.get("service_id"):
+        return "", "", owner
+
+    base = _resolve_managed_sub_base_url_for_admin(server, user_uuid)
+    if not base:
+        return "", "", owner
+
+    return (
+        f"{base}/sub/{user_uuid}/all.txt",
+        f"{base}/sub/{user_uuid}/all.txt?base64=1",
+        owner,
+    )
+
+
 # ===============================
 #   سرورها
 # ===============================
@@ -5619,8 +5712,9 @@ async def handle_server_inline_callback(
                     )
                     return
 
-                base = _build_user_base_url(server, user_uuid)
-                if not base:
+                panel_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
+                base = _build_user_base_url(server, panel_user_uuid)
+                if cfg_type in {"auto_sub", "sub", "sub_b64"} and not base:
                     await msg.edit_text(
                         "❌ تنظیمات panel_url یا user_proxy_path برای این سرور کامل نیست.",
                     )
@@ -5639,25 +5733,72 @@ async def handle_server_inline_callback(
                     url = f"{base}/all.txt?base64=True"
                     caption_title = "لینک اشتراک b64"
                 elif cfg_type == "multi":
-                    url = f"{base}/hidybot.txt"
+                    url, _, _owner = _build_admin_managed_sub_links(server, panel_user_uuid)
+                    if not url:
+                        kb = InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "🤖 لینک اتصال اشتراک به ربات",
+                                        callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}:bot_link",
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔙 بازگشت به منوی کانفیگ‌ها",
+                                        callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}",
+                                    )
+                                ],
+                            ]
+                        )
+                        await msg.edit_text(
+                            "❌ لینک اشتراک هوشمند برای این کاربر هنوز آماده نیست.\n"
+                            "ابتدا اشتراک باید به ربات کاربران متصل شود.",
+                            reply_markup=kb,
+                        )
+                        return
                     caption_title = "لینک اشتراک هوشمند"
                 elif cfg_type == "multi_b64":
-                    url = f"{base}/hidybot.txt?base64=True"
+                    _, url, _owner = _build_admin_managed_sub_links(server, panel_user_uuid)
+                    if not url:
+                        kb = InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        "🤖 لینک اتصال اشتراک به ربات",
+                                        callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}:bot_link",
+                                    )
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        "🔙 بازگشت به منوی کانفیگ‌ها",
+                                        callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}",
+                                    )
+                                ],
+                            ]
+                        )
+                        await msg.edit_text(
+                            "❌ لینک اشتراک هوشمند b64 برای این کاربر هنوز آماده نیست.\n"
+                            "ابتدا اشتراک باید به ربات کاربران متصل شود.",
+                            reply_markup=kb,
+                        )
+                        return
                     caption_title = "لینک اشتراک هوشمند b64"
                 elif cfg_type == "bot_link":
-                    if not SUB_BOT_USERNAME:
+                    bot_username = SUB_BOT_USERNAME.strip().lstrip("@")
+                    if not bot_username:
                         await msg.edit_text(
                             "❌ متغیر SUB_BOT_USERNAME در فایل .env تنظیم نشده است.",
                         )
                         return
-                    url = f"https://t.me/{SUB_BOT_USERNAME}?start={user_uuid}"
+                    url = f"https://t.me/{bot_username}?start={panel_user_uuid}"
                     text = f"لینک اتصال اشتراک به ربات 🤖\n{url}"
                     kb = InlineKeyboardMarkup(
                         [
                             [
                                 InlineKeyboardButton(
                                     "بازگشت به منوی کانفیگ‌ها",
-                                    callback_data=f"server:{server_id}:usercfg:{user_uuid}",
+                                    callback_data=f"server:{server_id}:usercfg:{panel_user_uuid}",
                                 )
                             ]
                         ]

@@ -4805,6 +4805,164 @@ async def _process_wallet_purchase(
 
     return True
 
+
+async def _connect_panel_subscription_by_uuid(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    parsed_uuid: str,
+    internal_user_id: int,
+) -> bool:
+    parsed_uuid = str(parsed_uuid or "").strip().lower()
+    if not parsed_uuid:
+        return False
+
+    user = update.effective_user
+    if not user:
+        return False
+    user_id = int(user.id)
+    msg_obj = update.callback_query.message if update.callback_query else update.message
+    if not msg_obj:
+        return False
+
+    internal_user_id = int(internal_user_id or 0)
+    if internal_user_id <= 0:
+        internal_user_id = int(userbot_db.upsert_user(user.id, user.username, user.full_name) or 0)
+    if internal_user_id <= 0:
+        await msg_obj.reply_text("❌ کاربر یافت نشد.", reply_markup=_main_menu_keyboard())
+        set_user_step(context, user_id, None)
+        return True
+
+    owner = userbot_db.get_service_owner_by_panel_uuid(parsed_uuid)
+    if owner and int(owner.get("user_id") or 0) != int(internal_user_id):
+        await msg_obj.reply_text(
+            "⛔ این اشتراک قبلاً توسط کاربر دیگری متصل شده است و قابل اتصال مجدد نیست.",
+            reply_markup=_main_menu_keyboard(),
+        )
+        set_user_step(context, user_id, None)
+        return True
+
+    existing_self = userbot_db.get_user_service_by_panel_uuid(internal_user_id, parsed_uuid)
+    if existing_self:
+        set_user_step(context, user_id, None)
+        service = await _sync_service_runtime_from_panels(existing_self)
+        settings = _get_subscription_settings()
+        await msg_obj.reply_text(
+            "ℹ️ این اشتراک قبلاً به حساب شما متصل شده است.",
+            reply_markup=_main_menu_keyboard(),
+        )
+        await msg_obj.reply_text(
+            _build_subscription_status_text(service),
+            parse_mode="Markdown",
+            reply_markup=subscription_status_keyboard(
+                service.get("id"),
+                show_direct_config=settings.get("show_direct_config", True),
+                show_sub_link=settings.get("show_sub_link", True),
+                show_configs=_should_show_configs_button(settings),
+                show_detach=_is_connected_service(service),
+            ),
+        )
+        return True
+
+    await msg_obj.reply_text("⏳ در حال بررسی اشتراک...")
+    targets = await _find_panel_user_targets_by_uuid(parsed_uuid)
+    if not targets:
+        await msg_obj.reply_text(
+            "❌ اشتراکی با این UUID روی سرورهای ربات پیدا نشد.",
+            reply_markup=_main_menu_keyboard(),
+        )
+        set_user_step(context, user_id, None)
+        return True
+
+    primary_server, primary_user = targets[0]
+    service_name = str(primary_user.get("name") or "اشتراک متصل‌شده").strip() or "اشتراک متصل‌شده"
+    usage_limit = _to_float(primary_user.get("usage_limit_GB"), 0.0)
+    total_usage = 0.0
+    min_days_left: Optional[int] = None
+    latest_last_online: Optional[datetime] = None
+    for _srv, pu in targets:
+        total_usage += _to_float(pu.get("current_usage_GB"), 0.0)
+        dleft = _days_left_from_panel_user(pu)
+        if dleft is not None:
+            min_days_left = dleft if min_days_left is None else min(min_days_left, dleft)
+        dt = _parse_panel_datetime(pu.get("last_online"))
+        if dt and (latest_last_online is None or dt > latest_last_online):
+            latest_last_online = dt
+
+    server_id = int(primary_server.get("id") or 0)
+    server_title = str(primary_server.get("title") or f"سرور #{server_id}").strip()
+    service_code = _generate_service_code()
+    service_comment = f"uuid:{parsed_uuid}|code:{service_code}|linked:1|source:connect"
+    service_db_id = None
+
+    try:
+        with userbot_db._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO userbot_services
+                (user_id, name, server_id, server_title, usage_current, usage_limit, days_left, last_online, comment)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(internal_user_id),
+                    service_name,
+                    int(server_id),
+                    server_title,
+                    float(total_usage),
+                    float(usage_limit),
+                    int(min_days_left if min_days_left is not None else 0),
+                    (latest_last_online.strftime("%Y-%m-%d %H:%M:%S") if latest_last_online else None),
+                    service_comment,
+                ),
+            )
+            service_db_id = int(cur.lastrowid)
+    except Exception as e:
+        logger.exception("Failed persisting connected subscription (telegram_id=%s)", user_id)
+        await msg_obj.reply_text(
+            f"❌ اتصال اشتراک با خطا مواجه شد: {e}",
+            reply_markup=_main_menu_keyboard(),
+        )
+        set_user_step(context, user_id, None)
+        return True
+
+    for srv, pu in targets:
+        try:
+            sid = int(srv.get("id") or 0)
+            if sid <= 0:
+                continue
+            userbot_db.add_service_node(
+                service_id=int(service_db_id),
+                server_id=sid,
+                panel_user_uuid=parsed_uuid,
+                server_title=str(srv.get("title") or ""),
+                panel_user_id=(str(pu.get("id")).strip() if pu.get("id") is not None else None),
+                is_active=1,
+            )
+        except Exception:
+            pass
+
+    set_user_step(context, user_id, None)
+    service = userbot_db.get_service_by_id(int(service_db_id)) or {}
+    service = await _sync_service_runtime_from_panels(service)
+    settings = _get_subscription_settings()
+    await msg_obj.reply_text(
+        "✅ اشتراک شما با موفقیت متصل شد.",
+        reply_markup=_main_menu_keyboard(),
+    )
+    await msg_obj.reply_text(
+        _build_subscription_status_text(service),
+        parse_mode="Markdown",
+        reply_markup=subscription_status_keyboard(
+            service.get("id"),
+            show_direct_config=settings.get("show_direct_config", True),
+            show_sub_link=settings.get("show_sub_link", True),
+            show_configs=_should_show_configs_button(settings),
+            show_detach=_is_connected_service(service),
+        ),
+    )
+    return True
+
+
 # --- 5. هندلر دستور استارت ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -4879,6 +5037,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if shot_handled:
             return
+
+        parsed_uuid = _extract_uuid_from_user_input(start_payload)
+        if parsed_uuid:
+            connect_handled = await _connect_panel_subscription_by_uuid(
+                update,
+                context,
+                parsed_uuid,
+                int(internal_user_id),
+            )
+            if connect_handled:
+                return
     
     text_settings = _get_text_settings()
     welcome_text = (
