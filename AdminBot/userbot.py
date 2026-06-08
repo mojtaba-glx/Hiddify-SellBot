@@ -571,6 +571,45 @@ async def _get_admin_bot_username(context: ContextTypes.DEFAULT_TYPE) -> str:
         return ""
 
 
+def _build_telegram_start_link(username: str, payload: str) -> str:
+    bot_username = str(username or "").strip().lstrip("@")
+    clean_payload = str(payload or "").strip()
+    if not bot_username or not clean_payload:
+        return ""
+    return f"https://t.me/{bot_username}?start={clean_payload}"
+
+
+async def _get_user_bot_username(context: ContextTypes.DEFAULT_TYPE) -> str:
+    cached = str(context.bot_data.get("_user_bot_username") or "").strip().lstrip("@")
+    if cached:
+        return cached
+
+    env_name = str(os.getenv("SUB_BOT_USERNAME", "") or "").strip().lstrip("@")
+    if env_name:
+        context.bot_data["_user_bot_username"] = env_name
+        return env_name
+
+    token = str(os.getenv("USER_BOT_TOKEN", "") or USER_BOT_TOKEN or "").strip()
+    if not token:
+        return ""
+
+    try:
+        user_bot = Bot(token=token)
+        me = await user_bot.get_me()
+        username = str(getattr(me, "username", "") or "").strip().lstrip("@")
+    except Exception as e:
+        logger.warning("Failed resolving user bot username from USER_BOT_TOKEN: %s", e)
+        return ""
+
+    if username:
+        context.bot_data["_user_bot_username"] = username
+        try:
+            _write_env_values({"SUB_BOT_USERNAME": username})
+        except Exception as e:
+            logger.warning("Failed caching SUB_BOT_USERNAME in .env: %s", e)
+    return username
+
+
 async def _build_ticket_screenshot_links(
     context: ContextTypes.DEFAULT_TYPE,
     ticket_code: int,
@@ -5148,7 +5187,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 await msg.reply_text(f"❌ خطا در ساخت کدها:\n{e}", reply_markup=userbot_cancel_keyboard())
                 return
             context.user_data.pop(ZARIN_COUPON_BULK_STATE, None)
-            bot_username = os.getenv("SUB_BOT_USERNAME", "").strip().lstrip("@")
+            bot_username = await _get_user_bot_username(context)
             lines = [
                 "✅ کدهای هدیه ساخته شدند.",
                 f"🧩 تعداد: {len(codes)}",
@@ -5158,8 +5197,9 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 "🏷 لیست کدها:",
             ]
             for code in codes:
-                if bot_username:
-                    lines.append(f"{code} | https://t.me/{bot_username}?start={code}")
+                deep_link = _build_telegram_start_link(bot_username, code)
+                if deep_link:
+                    lines.append(f"{code} | {deep_link}")
                 else:
                     lines.append(code)
             output = "\n".join(lines)
@@ -6388,8 +6428,8 @@ async def send_gifts_campaign_text(chat_id: int, context: ContextTypes.DEFAULT_T
         if len(active_codes) >= 5:
             break
     sample_code = active_codes[0] if active_codes else "GIFT-CODE"
-    bot_username = os.getenv("SUB_BOT_USERNAME", "").strip().lstrip("@")
-    deep_link = f"https://t.me/{bot_username}?start={sample_code}" if bot_username else f"کد هدیه: {sample_code}"
+    bot_username = await _get_user_bot_username(context)
+    deep_link = _build_telegram_start_link(bot_username, sample_code) or f"کد هدیه: {sample_code}"
     text = (
         "📣 متن آماده کمپین هدیه\n"
         "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
@@ -8262,13 +8302,28 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             return
         if data.startswith("userbot:gifts:coupon:deeplink:"):
             code = str(data.rsplit(":", 1)[-1] or "").strip()
-            bot_username = os.getenv("SUB_BOT_USERNAME", "").strip().lstrip("@")
             await query.answer()
-            if not bot_username:
-                await msg.reply_text("❌ متغیر `SUB_BOT_USERNAME` در `.env` تنظیم نشده است.")
+            if not code:
+                await msg.reply_text("❌ کد کوپن نامعتبر است.")
                 return
-            deep_link = f"https://t.me/{bot_username}?start={code}"
-            await msg.reply_text(f"🚀 دیپ لینک کوپن:\n{deep_link}", disable_web_page_preview=True)
+            bot_username = await _get_user_bot_username(context)
+            if not bot_username:
+                await msg.reply_text(
+                    "❌ یوزرنیم ربات کاربران قابل تشخیص نیست.\n"
+                    "لطفاً `USER_BOT_TOKEN` یا `SUB_BOT_USERNAME` را در `.env` بررسی کنید.",
+                    parse_mode="Markdown",
+                )
+                return
+            deep_link = _build_telegram_start_link(bot_username, code)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 باز کردن دیپ لینک", url=deep_link)],
+                [InlineKeyboardButton("🏷 برگشت به کوپن", callback_data=f"userbot:gifts:coupon:{code}")],
+            ])
+            await msg.reply_text(
+                f"🚀 دیپ لینک کوپن:\n{deep_link}",
+                reply_markup=kb,
+                disable_web_page_preview=True,
+            )
             await send_zarin_coupon_detail(cid, context, code=code, message=msg)
             return
         code = str(data.rsplit(":", 1)[-1] or "").strip()

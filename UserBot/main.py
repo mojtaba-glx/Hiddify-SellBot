@@ -5402,7 +5402,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=_main_menu_keyboard(),
             )
             return
-        bot_username = os.getenv("SUB_BOT_USERNAME", "").strip().lstrip("@")
+        bot_username = await _get_user_bot_username(context)
         invite_link = f"https://t.me/{bot_username}" if bot_username else "لینک دعوت هنوز تنظیم نشده است."
         await update.message.reply_text(
             _format_text_template(
@@ -5535,7 +5535,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         action = data.split(":", 1)[1].strip().lower() if ":" in data else ""
         if action == "get_banner":
-            bot_username = os.getenv("SUB_BOT_USERNAME", "").strip().lstrip("@")
+            bot_username = await _get_user_bot_username(context)
             invite_link = f"https://t.me/{bot_username}" if bot_username else "لینک دعوت هنوز تنظیم نشده است."
             banner_text = _format_text_template(
                 text_settings.get("invite_banner_text")
