@@ -32,6 +32,7 @@ import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -76,6 +77,7 @@ public class MainActivity extends Activity {
     private EditText manualBodyInput;
     private TextView connectionStatusView;
     private TextView dashboardStatsView;
+    private TextView revenueStatsView;
     private TextView todayMetricView;
     private TextView approvedMetricView;
     private TextView reviewMetricView;
@@ -321,6 +323,19 @@ public class MainActivity extends Activity {
         dashboardStatsView.setPadding(dp(12), dp(9), dp(12), dp(9));
         styleGradientRounded(dashboardStatsView, softGreenColor, inputColor, greenColor, dp(18));
         dashboard.addView(dashboardStatsView, matchWrap());
+
+        revenueStatsView = new TextView(this);
+        revenueStatsView.setText("درآمد تاییدشده در حال محاسبه...");
+        revenueStatsView.setTextSize(12);
+        revenueStatsView.setTextColor(textColor);
+        revenueStatsView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        revenueStatsView.setGravity(Gravity.CENTER);
+        revenueStatsView.setLineSpacing(0, 1.14f);
+        revenueStatsView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        styleGradientRounded(revenueStatsView, softGoldColor, inputColor, goldColor, dp(18));
+        LinearLayout.LayoutParams revenueLp = matchWrap();
+        revenueLp.setMargins(0, dp(8), 0, 0);
+        dashboard.addView(revenueStatsView, revenueLp);
 
         LinearLayout metricRowOne = new LinearLayout(this);
         metricRowOne.setOrientation(LinearLayout.HORIZONTAL);
@@ -1121,6 +1136,108 @@ public class MainActivity extends Activity {
         approvedMetricView.setText(String.valueOf(approved));
         reviewMetricView.setText(String.valueOf(review));
         conversationsMetricView.setText(String.valueOf(conversations));
+        renderRevenueStats(entries, settings);
+    }
+
+    private void renderRevenueStats(HistoryStore.Entry[] entries, SettingsStore settings) {
+        if (revenueStatsView == null) {
+            return;
+        }
+        Calendar now = Calendar.getInstance();
+        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now.getTime());
+        String month = new SimpleDateFormat("yyyy-MM", Locale.US).format(now.getTime());
+        long todayTotal = 0;
+        long weekTotal = 0;
+        long monthTotal = 0;
+        int approvedCount = 0;
+
+        for (HistoryStore.Entry entry : entries) {
+            if (!isConfirmedPaymentEntry(entry) || isSystemSmsEntry(entry) || !shouldDisplayBankEntry(entry, settings)) {
+                continue;
+            }
+            long amount = extractEntryTomanAmount(entry);
+            if (amount <= 0) {
+                continue;
+            }
+            approvedCount++;
+            String time = entry.time == null ? "" : entry.time.trim();
+            if (time.startsWith(today)) {
+                todayTotal += amount;
+            }
+            if (time.startsWith(month)) {
+                monthTotal += amount;
+            }
+            if (isEntryInLastDays(time, 7)) {
+                weekTotal += amount;
+            }
+        }
+
+        revenueStatsView.setText("💰 درآمد تاییدشده"
+                + "\nامروز: " + formatToman(todayTotal)
+                + "   |   ۷ روز اخیر: " + formatToman(weekTotal)
+                + "\nماه جاری: " + formatToman(monthTotal)
+                + "   |   تعداد تاییدها: " + approvedCount);
+    }
+
+    private long extractEntryTomanAmount(HistoryStore.Entry entry) {
+        if (entry == null) {
+            return 0;
+        }
+        String amount = extractDetailLine(entry.detail, "💵 معادل تقریبی:");
+        if (!amount.isEmpty()) {
+            return parseMoneyAmount(amount, false);
+        }
+        amount = extractDetailLine(entry.detail, "💰 مبلغ ربات:");
+        if (!amount.isEmpty()) {
+            return parseMoneyAmount(amount, false);
+        }
+        amount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
+        if (!amount.isEmpty()) {
+            boolean rial = amount.toLowerCase(Locale.US).contains("rial")
+                    || amount.toLowerCase(Locale.US).contains("irr")
+                    || amount.contains("ریال");
+            return parseMoneyAmount(amount, rial);
+        }
+        return 0;
+    }
+
+    private long parseMoneyAmount(String text, boolean rawIsRial) {
+        String normalized = PaymentSmsParser.normalizeDigits(text == null ? "" : text);
+        String digits = normalized.replaceAll("[^0-9]", "");
+        if (digits.isEmpty()) {
+            return 0;
+        }
+        try {
+            long value = Long.parseLong(digits);
+            return rawIsRial ? Math.round(value / 10.0) : value;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private boolean isEntryInLastDays(String time, int days) {
+        if (time == null || time.trim().length() < 10) {
+            return false;
+        }
+        try {
+            Date date = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(time.trim());
+            if (date == null) {
+                return false;
+            }
+            Calendar from = Calendar.getInstance();
+            from.add(Calendar.DAY_OF_YEAR, -Math.max(1, days) + 1);
+            from.set(Calendar.HOUR_OF_DAY, 0);
+            from.set(Calendar.MINUTE, 0);
+            from.set(Calendar.SECOND, 0);
+            from.set(Calendar.MILLISECOND, 0);
+            return !date.before(from.getTime());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String formatToman(long amount) {
+        return String.format(Locale.US, "%,d تومان", Math.max(0, amount));
     }
 
     private void showSmsScreen() {
@@ -1433,6 +1550,14 @@ public class MainActivity extends Activity {
         row.setPadding(0, dp(5), 0, dp(5));
         parent.addView(row, matchWrap());
 
+        LinearLayout stack = new LinearLayout(this);
+        stack.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                (int) (getResources().getDisplayMetrics().widthPixels * 0.82f),
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        row.addView(stack, lp);
+
         TextView bubble = new TextView(this);
         bubble.setText(formatSmsBubble(entry));
         bubble.setTextSize(13);
@@ -1445,11 +1570,22 @@ public class MainActivity extends Activity {
         int fill = confirmed ? approvedColor : (entry.rejected && !softReview ? rejectedColor : neutralColor);
         int border = confirmed ? greenColor : (entry.rejected && !softReview ? Color.parseColor("#EF4444") : goldColor);
         styleGradientRounded(bubble, fill, inputColor, border, dp(22));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                (int) (getResources().getDisplayMetrics().widthPixels * 0.82f),
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        row.addView(bubble, lp);
+        stack.addView(bubble, matchWrap());
+
+        if (isManualApproveCandidate(entry)) {
+            Button approveButton = new Button(this);
+            approveButton.setText("✅ تایید دستی و افزودن به درآمد");
+            styleButton(approveButton, true);
+            LinearLayout.LayoutParams buttonLp = matchWrap();
+            buttonLp.setMargins(0, dp(6), 0, 0);
+            stack.addView(approveButton, buttonLp);
+            approveButton.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    approveEntryManually(entry);
+                }
+            });
+        }
     }
 
     private String formatSmsBubble(HistoryStore.Entry entry) {
@@ -1489,6 +1625,53 @@ public class MainActivity extends Activity {
         }
         out.append("🕒 ").append(entry.time);
         return out.toString();
+    }
+
+    private boolean isManualApproveCandidate(HistoryStore.Entry entry) {
+        if (entry == null || isConfirmedPaymentEntry(entry) || isDuplicateApprovedEntry(entry)) {
+            return false;
+        }
+        String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
+        if (eventId.isEmpty()) {
+            return false;
+        }
+        if (extractEntryTomanAmount(entry) <= 0) {
+            return false;
+        }
+        String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+        if (rawSms.isEmpty()) {
+            rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+        }
+        if (!rawSms.isEmpty() && !PaymentSmsParser.isIncomingPayment(rawSms)) {
+            return false;
+        }
+        String text = ((entry.title == null ? "" : entry.title) + "\n" + (entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
+        if (text.contains("sms_reused") || text.contains("قبلاً برای پرداخت دیگری استفاده")) {
+            return false;
+        }
+        return entry.rejected
+                || text.contains("no_pending_match")
+                || text.contains("pending پیدا نشد")
+                || text.contains("پرداخت در انتظار پیدا نشد")
+                || text.contains("ambiguous")
+                || text.contains("چند پرداخت")
+                || text.contains("ارسال/ثبت شده")
+                || text.contains("به ربات ارسال شد");
+    }
+
+    private void approveEntryManually(HistoryStore.Entry entry) {
+        String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
+        if (eventId.isEmpty()) {
+            Toast.makeText(this, "شناسه داخلی این پیامک پیدا نشد", Toast.LENGTH_LONG).show();
+            return;
+        }
+        boolean ok = HistoryStore.markBankSmsManuallyApproved(this, eventId);
+        if (ok) {
+            refreshHistory();
+            Toast.makeText(this, "پیامک دستی تایید شد و به درآمد اضافه شد", Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(this, "این پیامک برای تایید دستی پیدا نشد", Toast.LENGTH_LONG).show();
+        }
     }
 
     private String summaryStatus(ConversationSummary summary) {
@@ -1783,10 +1966,19 @@ public class MainActivity extends Activity {
         return entry != null && entry.approved && !isDuplicateApprovedEntry(entry);
     }
 
+    private boolean isManualApprovedEntry(HistoryStore.Entry entry) {
+        String text = (entry == null || entry.title == null ? "" : entry.title)
+                + "\n" + (entry == null || entry.detail == null ? "" : entry.detail);
+        return text.contains("تایید دستی داخل اپ");
+    }
+
     private String smsStatusText(HistoryStore.Entry entry) {
         String text = ((entry.title == null ? "" : entry.title) + "\n" + (entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
         if (isDuplicateApprovedEntry(entry)) {
             return "🟡 SMS تکراری؛ تایید جدید نیست";
+        }
+        if (isManualApprovedEntry(entry)) {
+            return "✅ تایید دستی توسط شما";
         }
         if (isConfirmedPaymentEntry(entry)) {
             return "✅ تایید شده توسط اپ";

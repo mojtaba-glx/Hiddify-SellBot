@@ -26,7 +26,7 @@ public final class HistoryStore {
         if (!isBankSmsStatus(status)) {
             save(context, KEY_HISTORY, entry, MAX_ITEMS);
         }
-        if ("APPROVED".equals(status)) {
+        if ("APPROVED".equals(status) || "MANUAL_APPROVED".equals(status)) {
             save(context, KEY_APPROVED_HISTORY, entry, MAX_APPROVED_ITEMS);
         }
         if (isBankSmsStatus(status)) {
@@ -96,6 +96,33 @@ public final class HistoryStore {
                 || raw.contains("📨 پیامک به ربات ارسال شد")
                 || raw.contains("📨 به ربات ارسال شد")
                 || text.contains("retry\":true");
+    }
+
+    public static boolean markBankSmsManuallyApproved(Context context, String uniqueId) {
+        String marker = uniqueMarker(uniqueId);
+        if (marker.isEmpty()) {
+            return false;
+        }
+        String raw = findEntryContaining(getBankSms(context), marker);
+        if (raw.isEmpty()) {
+            raw = findEntryContaining(get(context), marker);
+        }
+        if (raw.isEmpty()) {
+            raw = findEntryContaining(getApproved(context), marker);
+        }
+        if (raw.isEmpty()) {
+            return false;
+        }
+        Entry entry = Entry.fromRaw(raw);
+        String now = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
+        String detail = entry.detail == null ? "" : entry.detail.trim();
+        detail = detail.replaceAll("(?m)^✋ تایید دستی داخل اپ:.*\\n?", "").trim();
+        if (!detail.isEmpty()) {
+            detail += "\n";
+        }
+        detail += "✋ تایید دستی داخل اپ: " + now;
+        upsertUnique(context, "MANUAL_APPROVED", detail, uniqueId);
+        return true;
     }
 
     public static void syncBankSmsWithInbox(Context context, Set<String> currentInboxEventIds) {
@@ -277,6 +304,7 @@ public final class HistoryStore {
 
     private static boolean isBankSmsStatus(String status) {
         return "APPROVED".equals(status)
+                || "MANUAL_APPROVED".equals(status)
                 || "APPROVED_DUPLICATE".equals(status)
                 || "NO_PENDING_MATCH".equals(status)
                 || "SMS_REUSED".equals(status)
@@ -295,6 +323,9 @@ public final class HistoryStore {
     private static String statusTitle(String status) {
         if ("APPROVED".equals(status)) {
             return "✅ تایید شد";
+        }
+        if ("MANUAL_APPROVED".equals(status)) {
+            return "✅ تایید دستی داخل اپ";
         }
         if ("APPROVED_DUPLICATE".equals(status)) {
             return "🟡 قبلاً تایید شده بود؛ تایید جدید نیست";
