@@ -318,7 +318,9 @@ SUB_SERVER_PUBLIC_PORT = int(os.getenv("SUB_SERVER_PUBLIC_PORT", str(SUB_SERVER_
 SUB_SERVER_PUBLIC_HOST = (os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
 USERBOT_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_ACTION_COOLDOWN_SECONDS", "1.5") or "1.5")
 USERBOT_RATE_LIMIT_NOTICE_SECONDS = float(os.getenv("USERBOT_RATE_LIMIT_NOTICE_SECONDS", "5.0") or "5.0")
-BUY_MENU_HOLD_SECONDS = float(os.getenv("USERBOT_BUY_MENU_HOLD_SECONDS", "10") or "10")
+BUY_MENU_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_MENU_ACTION_COOLDOWN_SECONDS", "0.8") or "0.8")
+BUY_CALLBACK_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_CALLBACK_COOLDOWN_SECONDS", "0.2") or "0.2")
+BUY_MENU_HOLD_SECONDS = float(os.getenv("USERBOT_BUY_MENU_HOLD_SECONDS", "1.0") or "1.0")
 USERBOT_STATUS_PROBE_CONCURRENCY = int(os.getenv("USERBOT_STATUS_PROBE_CONCURRENCY", "3") or "3")
 USERBOT_STATUS_SYNC_CONCURRENCY = int(os.getenv("USERBOT_STATUS_SYNC_CONCURRENCY", "2") or "2")
 USERBOT_MISSING_SERVICE_DELETE_DAYS = int(
@@ -5101,7 +5103,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "وضعیت اشتراک" in normalized_text:
         menu_cd = 8.0
     elif "خرید اشتراک" in normalized_text:
-        menu_cd = 8.0
+        menu_cd = BUY_MENU_ACTION_COOLDOWN_SECONDS
     else:
         menu_cd = USERBOT_ACTION_COOLDOWN_SECONDS
     limited, wait_s = _check_action_rate_limit(
@@ -5431,8 +5433,8 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cb_cd = USERBOT_ACTION_COOLDOWN_SECONDS
     if data.startswith("status:"):
         cb_cd = 2.0
-    elif data.startswith("wiz:"):
-        cb_cd = 0.35
+    elif data.startswith(("buy:", "wiz:")):
+        cb_cd = BUY_CALLBACK_COOLDOWN_SECONDS
     limited, wait_s = _check_action_rate_limit(
         context,
         user_id,
