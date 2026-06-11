@@ -101,22 +101,22 @@ public final class HistoryStore {
 
     public static boolean markBankSmsManuallyApproved(Context context, String uniqueId) {
         String marker = uniqueMarker(uniqueId);
-        if (marker.isEmpty()) {
+        String value = uniqueId == null ? "" : uniqueId.trim();
+        if (value.isEmpty()) {
             return false;
         }
-        String raw = findEntryContaining(getBankSms(context), marker);
-        if (raw.isEmpty()) {
-            raw = findEntryContaining(get(context), marker);
-        }
-        if (raw.isEmpty()) {
-            raw = findEntryContaining(getApproved(context), marker);
-        }
-        if (raw.isEmpty()) {
-            return false;
+        if (!marker.isEmpty()) {
+            String raw = findEntryContaining(getBankSms(context), marker);
+            if (raw.isEmpty()) {
+                raw = findEntryContaining(get(context), marker);
+            }
+            if (raw.isEmpty()) {
+                raw = findEntryContaining(getApproved(context), marker);
+            }
         }
         SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         Set<String> ids = new java.util.HashSet<>(prefs.getStringSet(KEY_MANUAL_APPROVED_IDS, new java.util.HashSet<String>()));
-        ids.add(uniqueId.trim());
+        ids.add(value);
         prefs.edit().putStringSet(KEY_MANUAL_APPROVED_IDS, ids).apply();
         return true;
     }

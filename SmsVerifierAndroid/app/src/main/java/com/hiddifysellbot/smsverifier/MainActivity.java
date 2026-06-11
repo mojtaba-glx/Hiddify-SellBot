@@ -1381,16 +1381,21 @@ public class MainActivity extends Activity {
             if (entry == null || isConfirmedPaymentEntry(entry) || isDuplicateApprovedEntry(entry)) {
                 continue;
             }
-            String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
-            if (eventId.isEmpty() || seen.contains(eventId) || !HistoryStore.shouldRetryUnique(this, eventId)) {
-                continue;
-            }
             String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
             if (rawSms.isEmpty()) {
                 rawSms = extractDetailBlock(entry.detail, "متن SMS:");
             }
             String sender = entrySender(entry);
             if (sender.trim().isEmpty() || rawSms.trim().isEmpty() || !PaymentSmsParser.isIncomingPayment(rawSms)) {
+                continue;
+            }
+            long amount = PaymentSmsParser.extractAmount(rawSms);
+            String reference = PaymentSmsParser.extractReference(rawSms);
+            String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
+            if (eventId.isEmpty()) {
+                eventId = PaymentSmsParser.buildEventId(sender, rawSms, amount, reference);
+            }
+            if (eventId.isEmpty() || seen.contains(eventId) || !HistoryStore.shouldRetryUnique(this, eventId)) {
                 continue;
             }
             seen.add(eventId);
@@ -1983,10 +1988,6 @@ public class MainActivity extends Activity {
         if (entry == null || isConfirmedPaymentEntry(entry) || isDuplicateApprovedEntry(entry)) {
             return false;
         }
-        String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
-        if (eventId.isEmpty()) {
-            return false;
-        }
         if (extractEntryTomanAmount(entry) <= 0) {
             return false;
         }
@@ -2014,7 +2015,10 @@ public class MainActivity extends Activity {
     private void approveEntryManually(HistoryStore.Entry entry) {
         String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
         if (eventId.isEmpty()) {
-            Toast.makeText(this, "شناسه داخلی این پیامک پیدا نشد", Toast.LENGTH_LONG).show();
+            eventId = entryFingerprint(entry);
+        }
+        if (eventId.isEmpty()) {
+            Toast.makeText(this, "شناسه این پیامک پیدا نشد", Toast.LENGTH_LONG).show();
             return;
         }
         boolean ok = HistoryStore.markBankSmsManuallyApproved(this, eventId);
@@ -2174,10 +2178,6 @@ public class MainActivity extends Activity {
     }
 
     private String entryFingerprint(HistoryStore.Entry entry) {
-        String internalId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
-        if (!internalId.isEmpty()) {
-            return "id:" + internalId;
-        }
         String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
         if (rawSms.isEmpty()) {
             rawSms = extractDetailBlock(entry.detail, "متن SMS:");
@@ -2185,6 +2185,10 @@ public class MainActivity extends Activity {
         String sender = conversationKey(entrySender(entry));
         if (!rawSms.isEmpty()) {
             return "sms:" + sender + ":" + rawSms.hashCode();
+        }
+        String internalId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
+        if (!internalId.isEmpty()) {
+            return "id:" + internalId;
         }
         String amount = extractDetailLine(entry.detail, "💰 مبلغ SMS:");
         String reference = extractDetailLine(entry.detail, "🔖 پیگیری:");
@@ -2320,12 +2324,11 @@ public class MainActivity extends Activity {
     private boolean isDuplicateApprovedEntry(HistoryStore.Entry entry) {
         String text = ((entry == null || entry.title == null ? "" : entry.title) + "\n" + (entry == null || entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
         return text.contains("approved_duplicate")
-                || text.contains("قبلاً تایید شده بود")
                 || text.contains("تایید جدید نیست");
     }
 
     private boolean isConfirmedPaymentEntry(HistoryStore.Entry entry) {
-        return entry != null && (entry.approved || isManualApprovedEntry(entry)) && !isDuplicateApprovedEntry(entry);
+        return entry != null && (entry.approved || isManualApprovedEntry(entry) || hasApprovedRobotResult(entry)) && !isDuplicateApprovedEntry(entry);
     }
 
     private boolean isManualApprovedEntry(HistoryStore.Entry entry) {
@@ -2333,9 +2336,40 @@ public class MainActivity extends Activity {
         if (!eventId.isEmpty() && HistoryStore.isManuallyApproved(this, eventId)) {
             return true;
         }
+        if ((eventId == null || eventId.isEmpty()) && entry != null) {
+            String fingerprint = entryFingerprint(entry);
+            if (!fingerprint.isEmpty() && HistoryStore.isManuallyApproved(this, fingerprint)) {
+                return true;
+            }
+        }
         String text = (entry == null || entry.title == null ? "" : entry.title)
                 + "\n" + (entry == null || entry.detail == null ? "" : entry.detail);
         return text.contains("تایید دستی داخل اپ");
+    }
+
+    private boolean hasApprovedRobotResult(HistoryStore.Entry entry) {
+        if (entry == null) {
+            return false;
+        }
+        String text = ((entry.title == null ? "" : entry.title) + "\n" + (entry.detail == null ? "" : entry.detail));
+        String lower = text.toLowerCase(Locale.US);
+        String compact = WebhookClient.compactResponse(text);
+        if (compact.contains("\"status\":\"sms_reused\"")
+                || compact.contains("\"status\":\"no_pending_match\"")
+                || lower.contains("no_pending_match")
+                || lower.contains("ambiguous")
+                || text.contains("پرداخت در انتظار پیدا نشد")
+                || text.contains("pending پیدا نشد")
+                || text.contains("قبلاً برای پرداخت دیگری استفاده")
+                || text.contains("چند پرداخت")) {
+            return false;
+        }
+        return compact.contains("\"status\":\"approved\"")
+                || compact.contains("\"matched\":true")
+                || (compact.contains("\"matched_payment_id\":") && !compact.contains("\"matched_payment_id\":0"))
+                || text.contains("پاسخ ربات: تایید شد")
+                || text.contains("نتیجه ربات: تایید شد")
+                || text.contains("قبلاً تایید شده بود");
     }
 
     private String smsStatusText(HistoryStore.Entry entry) {
