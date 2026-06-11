@@ -2,6 +2,7 @@ package com.hiddifysellbot.smsverifier;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -113,6 +114,8 @@ public class MainActivity extends Activity {
     private boolean addingCustomBank = false;
     private boolean suppressThemeChange = false;
     private boolean suppressBankSelection = false;
+    private boolean appUnlocked = false;
+    private boolean lockDialogShowing = false;
     private String selectedConversationKey = "";
     private String bankSmsFilter = "all";
     private SharedPreferences historyPreferences;
@@ -126,6 +129,7 @@ public class MainActivity extends Activity {
         buildUi();
         loadSettings();
         registerHistoryAutoRefresh();
+        maybeAskAppPassword();
         requestSmsPermission();
         ensureMonitorServiceState();
     }
@@ -133,7 +137,16 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        maybeAskAppPassword();
         refreshHistory();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (AppLockStore.isEnabled(this) && !isChangingConfigurations()) {
+            appUnlocked = false;
+        }
     }
 
     @Override
@@ -220,6 +233,150 @@ public class MainActivity extends Activity {
             buffer.write(chunk, 0, read);
         }
         return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    private String appLockStatusText() {
+        if (AppLockStore.isEnabled(this)) {
+            return "✅ قفل ورود فعال است.\nهر بار اپ باز شود، رمز دلخواه شما پرسیده می‌شود.";
+        }
+        if (AppLockStore.hasPassword(this)) {
+            return "🟡 رمز ذخیره شده ولی قفل فعلاً خاموش است.\nمی‌توانی دوباره روشنش کنی یا رمز را تغییر بدهی.";
+        }
+        return "⚪ قفل ورود خاموش است.\nبرای امنیت اطلاعات کارت، SMS و درآمدها بهتر است رمز فعال باشد.";
+    }
+
+    private void maybeAskAppPassword() {
+        if (!AppLockStore.isEnabled(this) || appUnlocked || lockDialogShowing) {
+            return;
+        }
+        showUnlockDialog();
+    }
+
+    private void showUnlockDialog() {
+        lockDialogShowing = true;
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("رمز ورود اپ");
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        input.setPadding(dp(18), dp(10), dp(18), dp(10));
+
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("🔐 ورود به SellBot SMS Verifier")
+                .setMessage("برای مشاهده اطلاعات بانکی، رمز اپ را وارد کن.")
+                .setView(input)
+                .setCancelable(false)
+                .setPositiveButton("ورود", null)
+                .setNegativeButton("خروج", null)
+                .create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                if (AppLockStore.verify(MainActivity.this, input.getText().toString())) {
+                    appUnlocked = true;
+                    lockDialogShowing = false;
+                    dialog.dismiss();
+                    Toast.makeText(MainActivity.this, "ورود تایید شد ✅", Toast.LENGTH_SHORT).show();
+                } else {
+                    input.setText("");
+                    input.setError("رمز اشتباه است");
+                    Toast.makeText(MainActivity.this, "رمز اشتباه است", Toast.LENGTH_SHORT).show();
+                }
+            });
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+                lockDialogShowing = false;
+                finish();
+            });
+        });
+        dialog.show();
+    }
+
+    private void showSetAppPasswordDialog() {
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(8), 0, dp(8), 0);
+
+        final EditText pass1 = new EditText(this);
+        pass1.setHint("رمز جدید، حداقل ۴ کاراکتر");
+        pass1.setSingleLine(true);
+        pass1.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        box.addView(pass1, matchWrap());
+
+        final EditText pass2 = new EditText(this);
+        pass2.setHint("تکرار رمز");
+        pass2.setSingleLine(true);
+        pass2.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        box.addView(pass2, matchWrap());
+
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("🔑 تنظیم رمز ورود")
+                .setMessage("رمز فقط به صورت هش ذخیره می‌شود و خود متن رمز داخل اپ ذخیره نمی‌شود.")
+                .setView(box)
+                .setPositiveButton("ذخیره و فعال‌سازی", null)
+                .setNegativeButton("انصراف", null)
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String first = pass1.getText().toString();
+            String second = pass2.getText().toString();
+            if (first.trim().length() < 4) {
+                pass1.setError("حداقل ۴ کاراکتر وارد کن");
+                return;
+            }
+            if (!first.equals(second)) {
+                pass2.setError("تکرار رمز یکی نیست");
+                return;
+            }
+            if (AppLockStore.setPassword(MainActivity.this, first)) {
+                appUnlocked = true;
+                dialog.dismiss();
+                recreate();
+                Toast.makeText(MainActivity.this, "قفل ورود فعال شد ✅", Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(MainActivity.this, "رمز معتبر نیست", Toast.LENGTH_LONG).show();
+            }
+        }));
+        dialog.show();
+    }
+
+    private void toggleAppLock() {
+        if (AppLockStore.isEnabled(this)) {
+            confirmDisableAppLock();
+            return;
+        }
+        if (!AppLockStore.hasPassword(this)) {
+            showSetAppPasswordDialog();
+            return;
+        }
+        AppLockStore.enable(this);
+        appUnlocked = true;
+        recreate();
+        Toast.makeText(this, "قفل ورود روشن شد ✅", Toast.LENGTH_LONG).show();
+    }
+
+    private void confirmDisableAppLock() {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("برای خاموش کردن، رمز فعلی را وارد کن");
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("🔓 خاموش کردن قفل")
+                .setMessage("برای امنیت، اول رمز فعلی را وارد کن.")
+                .setView(input)
+                .setPositiveButton("خاموش کن", null)
+                .setNegativeButton("انصراف", null)
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            if (!AppLockStore.verify(MainActivity.this, input.getText().toString())) {
+                input.setText("");
+                input.setError("رمز اشتباه است");
+                return;
+            }
+            AppLockStore.disable(MainActivity.this);
+            appUnlocked = true;
+            dialog.dismiss();
+            recreate();
+            Toast.makeText(MainActivity.this, "قفل ورود خاموش شد", Toast.LENGTH_LONG).show();
+        }));
+        dialog.show();
     }
 
     private void registerHistoryAutoRefresh() {
@@ -693,10 +850,37 @@ public class MainActivity extends Activity {
                         }
                 });
 
-        LinearLayout backupCard = addCard(reportsContent);
+        LinearLayout lockCard = addCard(securityContent);
+        addSectionTitle(lockCard, "🔐 قفل ورود به اپ");
+        TextView lockHelp = new TextView(this);
+        lockHelp.setText(appLockStatusText());
+        lockHelp.setTextColor(textColor);
+        lockHelp.setTextSize(13);
+        lockHelp.setLineSpacing(0, 1.16f);
+        lockHelp.setPadding(dp(10), dp(10), dp(10), dp(10));
+        styleGradientRounded(lockHelp, softGoldColor, inputColor, goldColor, dp(18));
+        lockCard.addView(lockHelp, matchWrap());
+        addButtonRow(lockCard,
+                new String[]{"🔑 تنظیم/تغییر رمز", AppLockStore.isEnabled(this) ? "🔓 خاموش کردن قفل" : "🔒 روشن کردن قفل"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                showSetAppPasswordDialog();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                toggleAppLock();
+                            }
+                        }
+                });
+
+        LinearLayout backupCard = addCard(securityContent);
         addSectionTitle(backupCard, "📦 بکاپ اپ");
         TextView backupHelp = new TextView(this);
-        backupHelp.setText("بکاپ شامل تنظیمات تلگرام، بانک‌ها، پیامک‌های بانکی و دفتر درآمد است. فایل را جای امن نگه دار؛ Secret هم داخل بکاپ ذخیره می‌شود.");
+        backupHelp.setText("بکاپ شامل تنظیمات تلگرام، بانک‌ها، پیامک‌های بانکی، دفتر درآمد و تنظیمات قفل است. فایل را جای امن نگه دار؛ Secret هم داخل بکاپ ذخیره می‌شود.");
         backupHelp.setTextColor(mutedColor);
         backupHelp.setTextSize(12);
         backupHelp.setLineSpacing(0, 1.15f);

@@ -17,7 +17,8 @@ public final class BackupStore {
     private static final String SETTINGS_PREF = "sellbot_sms_verifier";
     private static final String HISTORY_PREF = "sellbot_sms_history";
     private static final String INCOME_PREF = IncomeStore.PREF_NAME;
-    private static final String[] PREF_NAMES = {SETTINGS_PREF, HISTORY_PREF, INCOME_PREF};
+    private static final String SECURITY_PREF = AppLockStore.PREF_NAME;
+    private static final String[] PREF_NAMES = {SETTINGS_PREF, HISTORY_PREF, INCOME_PREF, SECURITY_PREF};
 
     private BackupStore() {
     }
