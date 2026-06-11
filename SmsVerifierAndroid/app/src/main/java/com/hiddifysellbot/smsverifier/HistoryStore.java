@@ -61,6 +61,19 @@ public final class HistoryStore {
         add(context, status, detail);
     }
 
+    public static void upsertUniqueSms(Context context, String status, String detail, String uniqueId, String sender, String body) {
+        String marker = uniqueMarker(uniqueId);
+        String senderKey = normalizeSender(sender);
+        String bodyKey = normalizeSmsBody(body);
+        SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString(KEY_HISTORY, removeEntriesMatchingSms(prefs.getString(KEY_HISTORY, ""), marker, senderKey, bodyKey))
+                .putString(KEY_APPROVED_HISTORY, removeEntriesMatchingSms(prefs.getString(KEY_APPROVED_HISTORY, ""), marker, senderKey, bodyKey))
+                .putString(KEY_BANK_SMS_HISTORY, removeEntriesMatchingSms(prefs.getString(KEY_BANK_SMS_HISTORY, ""), marker, senderKey, bodyKey))
+                .apply();
+        add(context, status, detail);
+    }
+
     public static boolean containsUnique(Context context, String uniqueId) {
         String marker = uniqueMarker(uniqueId);
         if (marker.isEmpty()) {
@@ -223,6 +236,31 @@ public final class HistoryStore {
         return out.toString();
     }
 
+    private static String removeEntriesMatchingSms(String raw, String marker, String senderKey, String bodyKey) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return "";
+        }
+        String[] parts = raw.split(SEP);
+        StringBuilder out = new StringBuilder();
+        for (String part : parts) {
+            if (part == null || part.trim().isEmpty()) {
+                continue;
+            }
+            if (marker != null && !marker.trim().isEmpty() && part.contains(marker)) {
+                continue;
+            }
+            String oldBody = normalizeSmsBody(extractSmsBody(part));
+            String oldSender = normalizeSender(extractLine(part, "👤 سرشماره:"));
+            boolean sameBody = !bodyKey.isEmpty() && bodyKey.equals(oldBody);
+            boolean sameSender = senderKey.isEmpty() || oldSender.isEmpty() || senderKey.equals(oldSender);
+            if (sameBody && sameSender) {
+                continue;
+            }
+            appendPart(out, part);
+        }
+        return out.toString();
+    }
+
     private static String findEntryContaining(String raw, String marker) {
         if (raw == null || raw.trim().isEmpty() || marker == null || marker.trim().isEmpty()) {
             return "";
@@ -302,6 +340,53 @@ public final class HistoryStore {
             }
         }
         return "";
+    }
+
+    private static String extractLine(String raw, String prefix) {
+        if (raw == null || prefix == null || prefix.trim().isEmpty()) {
+            return "";
+        }
+        String[] lines = raw.split("\\n");
+        for (String line : lines) {
+            String text = line == null ? "" : line.trim();
+            if (text.startsWith(prefix)) {
+                return text.substring(prefix.length()).trim();
+            }
+        }
+        return "";
+    }
+
+    private static String extractSmsBody(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return "";
+        }
+        String marker = "📄 متن SMS:";
+        int index = raw.indexOf(marker);
+        if (index < 0) {
+            marker = "متن SMS:";
+            index = raw.indexOf(marker);
+        }
+        if (index < 0) {
+            return "";
+        }
+        return raw.substring(index + marker.length()).trim();
+    }
+
+    private static String normalizeSmsBody(String body) {
+        return PaymentSmsParser.normalizeDigits(body == null ? "" : body)
+                .replace("\r", "\n")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private static String normalizeSender(String sender) {
+        String digits = PaymentSmsParser.normalizeDigits(sender == null ? "" : sender).replaceAll("[^0-9]", "");
+        if (digits.startsWith("0098") && digits.length() > 6) {
+            digits = "0" + digits.substring(4);
+        } else if (digits.startsWith("98") && digits.length() > 10) {
+            digits = "0" + digits.substring(2);
+        }
+        return digits;
     }
 
     private static Entry[] parseEntries(String raw) {

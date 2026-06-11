@@ -75,7 +75,7 @@ public final class SmsProcessor {
                 + "\n⚠️ خطا: " + emptyDash(result.error)
                 + "\n🔐 شناسه داخلی: " + event.eventId
                 + "\n📄 متن SMS:\n" + event.body;
-        HistoryStore.upsertUnique(context, resultLabel, detail, event.eventId);
+        HistoryStore.upsertUniqueSms(context, resultLabel, detail, event.eventId, event.sender, event.body);
         if ("APPROVED".equals(resultLabel) && !isDuplicateResponse(result.body)) {
             IncomeStore.record(
                     context,
