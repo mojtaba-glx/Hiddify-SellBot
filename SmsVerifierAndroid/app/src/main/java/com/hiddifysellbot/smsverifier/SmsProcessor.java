@@ -61,11 +61,13 @@ public final class SmsProcessor {
         event.eventId = PaymentSmsParser.buildEventId(event.sender, event.body, event.amount, event.reference);
 
         WebhookClient.Result result = WebhookClient.post(settings.getWebhookUrl(), settings.getSecret(), event);
+        String resultLabel = WebhookClient.statusLabel(result);
+        long amountToman = estimateTomanValue(event.amount, event.currency);
         String detail = "📨 نتیجه: " + WebhookClient.persianStatus(result)
                 + "\n🏦 بانک: " + bankName
                 + "\n👤 سرشماره: " + event.sender
                 + "\n💰 مبلغ SMS: " + event.amount + " " + event.currency
-                + "\n💵 معادل تقریبی: " + estimateToman(event.amount, event.currency) + " تومان"
+                + "\n💵 معادل تقریبی: " + amountToman + " تومان"
                 + "\n🔖 پیگیری: " + emptyDash(event.reference)
                 + "\n💳 چهار رقم کارت: " + emptyDash(event.cardLast4)
                 + "\n🌐 کد HTTP: " + result.statusCode
@@ -73,7 +75,19 @@ public final class SmsProcessor {
                 + "\n⚠️ خطا: " + emptyDash(result.error)
                 + "\n🔐 شناسه داخلی: " + event.eventId
                 + "\n📄 متن SMS:\n" + event.body;
-        HistoryStore.upsertUnique(context, WebhookClient.statusLabel(result), detail, event.eventId);
+        HistoryStore.upsertUnique(context, resultLabel, detail, event.eventId);
+        if ("APPROVED".equals(resultLabel) && !isDuplicateResponse(result.body)) {
+            IncomeStore.record(
+                    context,
+                    event.eventId,
+                    amountToman,
+                    "تایید خودکار SMS",
+                    bankName,
+                    event.sender,
+                    event.reference,
+                    System.currentTimeMillis()
+            );
+        }
     }
 
     public static boolean isConfiguredBankIncomingPayment(Context context, String sender, String body) {
@@ -92,9 +106,19 @@ public final class SmsProcessor {
     }
 
     private static String estimateToman(long amount, String currency) {
+        return String.valueOf(estimateTomanValue(amount, currency));
+    }
+
+    private static long estimateTomanValue(long amount, String currency) {
         String c = currency == null ? "" : currency;
-        long toman = "rial".equals(c) || "irr".equals(c) ? Math.round(amount / 10.0) : amount;
-        return String.valueOf(toman);
+        return "rial".equals(c) || "irr".equals(c) ? Math.round(amount / 10.0) : amount;
+    }
+
+    private static boolean isDuplicateResponse(String body) {
+        String compact = WebhookClient.compactResponse(body);
+        return compact.contains("\"duplicate\":true")
+                || compact.contains("approved_duplicate")
+                || compact.contains("\"status\":\"sms_reused\"");
     }
 
     private static String emptyDash(String value) {

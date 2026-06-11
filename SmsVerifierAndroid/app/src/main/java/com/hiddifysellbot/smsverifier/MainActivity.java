@@ -30,6 +30,10 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -46,6 +50,8 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int REQ_SMS_PERMISSION = 1001;
     private static final int REQ_NOTIFICATION_PERMISSION = 1002;
+    private static final int REQ_EXPORT_BACKUP = 2001;
+    private static final int REQ_IMPORT_BACKUP = 2002;
     private static final int MAX_VISIBLE_BANK_SMS = 15;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -110,6 +116,7 @@ public class MainActivity extends Activity {
     private String selectedConversationKey = "";
     private String bankSmsFilter = "all";
     private SharedPreferences historyPreferences;
+    private SharedPreferences incomePreferences;
     private SharedPreferences.OnSharedPreferenceChangeListener historyChangeListener;
 
     @Override
@@ -134,7 +141,85 @@ public class MainActivity extends Activity {
         if (historyPreferences != null && historyChangeListener != null) {
             historyPreferences.unregisterOnSharedPreferenceChangeListener(historyChangeListener);
         }
+        if (incomePreferences != null && historyChangeListener != null) {
+            incomePreferences.unregisterOnSharedPreferenceChangeListener(historyChangeListener);
+        }
         super.onDestroy();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        if (requestCode == REQ_EXPORT_BACKUP) {
+            writeBackupToUri(data.getData());
+        } else if (requestCode == REQ_IMPORT_BACKUP) {
+            restoreBackupFromUri(data.getData());
+        }
+    }
+
+    private void exportBackupFile() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/json");
+            intent.putExtra(Intent.EXTRA_TITLE, BackupStore.suggestedFileName());
+            startActivityForResult(intent, REQ_EXPORT_BACKUP);
+        } catch (Exception e) {
+            Toast.makeText(this, "امکان باز کردن ذخیره‌ساز بکاپ نیست: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void importBackupFile() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/json");
+            startActivityForResult(intent, REQ_IMPORT_BACKUP);
+        } catch (Exception e) {
+            Toast.makeText(this, "امکان باز کردن فایل بکاپ نیست: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void writeBackupToUri(Uri uri) {
+        try (OutputStream output = getContentResolver().openOutputStream(uri)) {
+            if (output == null) {
+                Toast.makeText(this, "مسیر ذخیره بکاپ باز نشد", Toast.LENGTH_LONG).show();
+                return;
+            }
+            output.write(BackupStore.exportJson(this).getBytes(StandardCharsets.UTF_8));
+            output.flush();
+            Toast.makeText(this, "بکاپ اپ ذخیره شد ✅", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "خطا در ذخیره بکاپ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void restoreBackupFromUri(Uri uri) {
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) {
+                Toast.makeText(this, "فایل بکاپ باز نشد", Toast.LENGTH_LONG).show();
+                return;
+            }
+            int restored = BackupStore.importJson(this, readAllText(input));
+            loadSettings();
+            refreshHistory();
+            Toast.makeText(this, "بکاپ بازیابی شد ✅ بخش‌های بازیابی‌شده: " + restored, Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "خطا در بازیابی بکاپ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String readAllText(InputStream input) throws Exception {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        int read;
+        while ((read = input.read(chunk)) != -1) {
+            buffer.write(chunk, 0, read);
+        }
+        return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private void registerHistoryAutoRefresh() {
@@ -142,7 +227,10 @@ public class MainActivity extends Activity {
         historyChangeListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
             @Override
             public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
-                if (!"bank_sms_history".equals(key) && !"history".equals(key) && !"approved_history".equals(key)) {
+                if (!"bank_sms_history".equals(key)
+                        && !"history".equals(key)
+                        && !"approved_history".equals(key)
+                        && !"income_ledger".equals(key)) {
                     return;
                 }
                 runOnUiThread(new Runnable() {
@@ -154,6 +242,8 @@ public class MainActivity extends Activity {
             }
         };
         historyPreferences.registerOnSharedPreferenceChangeListener(historyChangeListener);
+        incomePreferences = getApplicationContext().getSharedPreferences(IncomeStore.PREF_NAME, MODE_PRIVATE);
+        incomePreferences.registerOnSharedPreferenceChangeListener(historyChangeListener);
     }
 
     @Override
@@ -329,8 +419,8 @@ public class MainActivity extends Activity {
         revenueStatsView.setTextSize(12);
         revenueStatsView.setTextColor(textColor);
         revenueStatsView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        revenueStatsView.setGravity(Gravity.CENTER);
-        revenueStatsView.setLineSpacing(0, 1.14f);
+        revenueStatsView.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        revenueStatsView.setLineSpacing(dp(2), 1.12f);
         revenueStatsView.setPadding(dp(12), dp(10), dp(12), dp(10));
         styleGradientRounded(revenueStatsView, softGoldColor, inputColor, goldColor, dp(18));
         LinearLayout.LayoutParams revenueLp = matchWrap();
@@ -599,6 +689,32 @@ public class MainActivity extends Activity {
                             @Override
                             public void onClick(View v) {
                                 showReportsScreen();
+                            }
+                        }
+                });
+
+        LinearLayout backupCard = addCard(reportsContent);
+        addSectionTitle(backupCard, "📦 بکاپ اپ");
+        TextView backupHelp = new TextView(this);
+        backupHelp.setText("بکاپ شامل تنظیمات تلگرام، بانک‌ها، پیامک‌های بانکی و دفتر درآمد است. فایل را جای امن نگه دار؛ Secret هم داخل بکاپ ذخیره می‌شود.");
+        backupHelp.setTextColor(mutedColor);
+        backupHelp.setTextSize(12);
+        backupHelp.setLineSpacing(0, 1.15f);
+        backupHelp.setPadding(0, 0, 0, dp(8));
+        backupCard.addView(backupHelp, matchWrap());
+        addButtonRow(backupCard,
+                new String[]{"📥 بازیابی بکاپ", "📤 ذخیره بکاپ"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                importBackupFile();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                exportBackupFile();
                             }
                         }
                 });
@@ -1143,14 +1259,19 @@ public class MainActivity extends Activity {
         if (revenueStatsView == null) {
             return;
         }
-        Calendar now = Calendar.getInstance();
-        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now.getTime());
-        String month = new SimpleDateFormat("yyyy-MM", Locale.US).format(now.getTime());
-        long todayTotal = 0;
-        long weekTotal = 0;
-        long monthTotal = 0;
-        int approvedCount = 0;
+        syncIncomeLedgerFromHistory(entries, settings);
+        IncomeStore.Stats stats = IncomeStore.getStats(this);
+        revenueStatsView.setText("💰 درآمد تاییدشده"
+                + "\n▫️ امروز: " + formatToman(stats.todayTotal)
+                + "\n▫️ ۷ روز اخیر: " + formatToman(stats.weekTotal)
+                + "\n▫️ ماه جاری: " + formatToman(stats.monthTotal)
+                + "\n▫️ تعداد تاییدها: " + stats.approvedCount);
+    }
 
+    private void syncIncomeLedgerFromHistory(HistoryStore.Entry[] entries, SettingsStore settings) {
+        if (entries == null || entries.length == 0) {
+            return;
+        }
         for (HistoryStore.Entry entry : entries) {
             if (!isConfirmedPaymentEntry(entry) || isSystemSmsEntry(entry) || !shouldDisplayBankEntry(entry, settings)) {
                 continue;
@@ -1159,24 +1280,21 @@ public class MainActivity extends Activity {
             if (amount <= 0) {
                 continue;
             }
-            approvedCount++;
-            String time = entry.time == null ? "" : entry.time.trim();
-            if (time.startsWith(today)) {
-                todayTotal += amount;
+            String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
+            if (eventId.isEmpty()) {
+                eventId = entryFingerprint(entry);
             }
-            if (time.startsWith(month)) {
-                monthTotal += amount;
-            }
-            if (isEntryInLastDays(time, 7)) {
-                weekTotal += amount;
-            }
+            IncomeStore.record(
+                    this,
+                    eventId,
+                    amount,
+                    isManualApprovedEntry(entry) ? "تایید دستی داخل اپ" : "تایید خودکار SMS",
+                    entryBank(entry),
+                    entrySender(entry),
+                    extractDetailLine(entry.detail, "🔖 پیگیری:"),
+                    parseEntryTimeMillis(entry.time)
+            );
         }
-
-        revenueStatsView.setText("💰 درآمد تاییدشده"
-                + "\nامروز: " + formatToman(todayTotal)
-                + "   |   ۷ روز اخیر: " + formatToman(weekTotal)
-                + "\nماه جاری: " + formatToman(monthTotal)
-                + "   |   تعداد تاییدها: " + approvedCount);
     }
 
     private long extractEntryTomanAmount(HistoryStore.Entry entry) {
@@ -1212,6 +1330,18 @@ public class MainActivity extends Activity {
             return rawIsRial ? Math.round(value / 10.0) : value;
         } catch (Exception ignored) {
             return 0;
+        }
+    }
+
+    private long parseEntryTimeMillis(String time) {
+        if (time == null || time.trim().length() < 10) {
+            return System.currentTimeMillis();
+        }
+        try {
+            Date date = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(time.trim());
+            return date == null ? System.currentTimeMillis() : date.getTime();
+        } catch (Exception ignored) {
+            return System.currentTimeMillis();
         }
     }
 
@@ -1667,6 +1797,16 @@ public class MainActivity extends Activity {
         }
         boolean ok = HistoryStore.markBankSmsManuallyApproved(this, eventId);
         if (ok) {
+            IncomeStore.record(
+                    this,
+                    eventId,
+                    extractEntryTomanAmount(entry),
+                    "تایید دستی داخل اپ",
+                    entryBank(entry),
+                    entrySender(entry),
+                    extractDetailLine(entry.detail, "🔖 پیگیری:"),
+                    System.currentTimeMillis()
+            );
             refreshHistory();
             Toast.makeText(this, "پیامک دستی تایید شد و به درآمد اضافه شد", Toast.LENGTH_LONG).show();
         } else {
@@ -1963,10 +2103,14 @@ public class MainActivity extends Activity {
     }
 
     private boolean isConfirmedPaymentEntry(HistoryStore.Entry entry) {
-        return entry != null && entry.approved && !isDuplicateApprovedEntry(entry);
+        return entry != null && (entry.approved || isManualApprovedEntry(entry)) && !isDuplicateApprovedEntry(entry);
     }
 
     private boolean isManualApprovedEntry(HistoryStore.Entry entry) {
+        String eventId = extractDetailLine(entry == null ? "" : entry.detail, "🔐 شناسه داخلی:");
+        if (!eventId.isEmpty() && HistoryStore.isManuallyApproved(this, eventId)) {
+            return true;
+        }
         String text = (entry == null || entry.title == null ? "" : entry.title)
                 + "\n" + (entry == null || entry.detail == null ? "" : entry.detail);
         return text.contains("تایید دستی داخل اپ");

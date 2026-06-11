@@ -13,6 +13,7 @@ public final class HistoryStore {
     private static final String KEY_HISTORY = "history";
     private static final String KEY_APPROVED_HISTORY = "approved_history";
     private static final String KEY_BANK_SMS_HISTORY = "bank_sms_history";
+    private static final String KEY_MANUAL_APPROVED_IDS = "manual_approved_ids";
     private static final String SEP = "\n---\n";
     private static final int MAX_ITEMS = 80;
     private static final int MAX_APPROVED_ITEMS = 40;
@@ -113,16 +114,20 @@ public final class HistoryStore {
         if (raw.isEmpty()) {
             return false;
         }
-        Entry entry = Entry.fromRaw(raw);
-        String now = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
-        String detail = entry.detail == null ? "" : entry.detail.trim();
-        detail = detail.replaceAll("(?m)^✋ تایید دستی داخل اپ:.*\\n?", "").trim();
-        if (!detail.isEmpty()) {
-            detail += "\n";
-        }
-        detail += "✋ تایید دستی داخل اپ: " + now;
-        upsertUnique(context, "MANUAL_APPROVED", detail, uniqueId);
+        SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        Set<String> ids = new java.util.HashSet<>(prefs.getStringSet(KEY_MANUAL_APPROVED_IDS, new java.util.HashSet<String>()));
+        ids.add(uniqueId.trim());
+        prefs.edit().putStringSet(KEY_MANUAL_APPROVED_IDS, ids).apply();
         return true;
+    }
+
+    public static boolean isManuallyApproved(Context context, String uniqueId) {
+        String value = uniqueId == null ? "" : uniqueId.trim();
+        if (value.isEmpty()) {
+            return false;
+        }
+        SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+        return prefs.getStringSet(KEY_MANUAL_APPROVED_IDS, new java.util.HashSet<String>()).contains(value);
     }
 
     public static void syncBankSmsWithInbox(Context context, Set<String> currentInboxEventIds) {
@@ -130,6 +135,7 @@ public final class HistoryStore {
         prefs.edit()
                 .putString(KEY_BANK_SMS_HISTORY, keepEntriesInCurrentInbox(prefs.getString(KEY_BANK_SMS_HISTORY, ""), currentInboxEventIds))
                 .putString(KEY_APPROVED_HISTORY, keepEntriesInCurrentInbox(prefs.getString(KEY_APPROVED_HISTORY, ""), currentInboxEventIds))
+                .putStringSet(KEY_MANUAL_APPROVED_IDS, keepManualApprovedIdsInCurrentInbox(prefs.getStringSet(KEY_MANUAL_APPROVED_IDS, new java.util.HashSet<String>()), currentInboxEventIds))
                 .apply();
     }
 
@@ -162,6 +168,7 @@ public final class HistoryStore {
                 .remove(KEY_HISTORY)
                 .remove(KEY_APPROVED_HISTORY)
                 .remove(KEY_BANK_SMS_HISTORY)
+                .remove(KEY_MANUAL_APPROVED_IDS)
                 .apply();
     }
 
@@ -253,6 +260,20 @@ public final class HistoryStore {
             }
         }
         return out.toString();
+    }
+
+    private static Set<String> keepManualApprovedIdsInCurrentInbox(Set<String> rawIds, Set<String> currentInboxEventIds) {
+        Set<String> out = new java.util.HashSet<>();
+        if (rawIds == null || rawIds.isEmpty() || currentInboxEventIds == null || currentInboxEventIds.isEmpty()) {
+            return out;
+        }
+        for (String id : rawIds) {
+            String value = id == null ? "" : id.trim();
+            if (!value.isEmpty() && currentInboxEventIds.contains(value)) {
+                out.add(value);
+            }
+        }
+        return out;
     }
 
     private static void appendPart(StringBuilder out, String part) {
