@@ -318,7 +318,7 @@ SUB_SERVER_PUBLIC_PORT = int(os.getenv("SUB_SERVER_PUBLIC_PORT", str(SUB_SERVER_
 SUB_SERVER_PUBLIC_HOST = (os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
 USERBOT_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_ACTION_COOLDOWN_SECONDS", "1.5") or "1.5")
 USERBOT_RATE_LIMIT_NOTICE_SECONDS = float(os.getenv("USERBOT_RATE_LIMIT_NOTICE_SECONDS", "5.0") or "5.0")
-BUY_MENU_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_MENU_ACTION_COOLDOWN_SECONDS", "0.8") or "0.8")
+BUY_MENU_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_MENU_ACTION_COOLDOWN_SECONDS", "0") or "0")
 BUY_CALLBACK_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_CALLBACK_COOLDOWN_SECONDS", "0.2") or "0.2")
 BUY_MENU_HOLD_SECONDS = float(os.getenv("USERBOT_BUY_MENU_HOLD_SECONDS", "1.0") or "1.0")
 USERBOT_STATUS_PROBE_CONCURRENCY = int(os.getenv("USERBOT_STATUS_PROBE_CONCURRENCY", "3") or "3")
@@ -5099,20 +5099,23 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         event_ts = None
 
-    # Anti-spam for all menu buttons
-    if "وضعیت اشتراک" in normalized_text:
-        menu_cd = 8.0
-    elif "خرید اشتراک" in normalized_text:
-        menu_cd = BUY_MENU_ACTION_COOLDOWN_SECONDS
-    else:
-        menu_cd = USERBOT_ACTION_COOLDOWN_SECONDS
-    limited, wait_s = _check_action_rate_limit(
-        context,
-        user_id,
-        f"menu:{normalized_text}",
-        cooldown=menu_cd,
-        event_ts=event_ts,
-    )
+    # Anti-spam for all menu buttons.
+    # خرید اشتراک نباید پیام «لطفاً چند ثانیه صبر کنید» نشان بدهد؛
+    # جلوگیری از تکرار خرید پایین‌تر با buy_loading/buy_open انجام می‌شود.
+    is_buy_menu_action = "خرید اشتراک" in normalized_text
+    limited, wait_s = False, 0.0
+    if not is_buy_menu_action:
+        if "وضعیت اشتراک" in normalized_text:
+            menu_cd = 8.0
+        else:
+            menu_cd = USERBOT_ACTION_COOLDOWN_SECONDS
+        limited, wait_s = _check_action_rate_limit(
+            context,
+            user_id,
+            f"menu:{normalized_text}",
+            cooldown=menu_cd,
+            event_ts=event_ts,
+        )
     if limited:
         # از ارسال پیام ضداسپم به‌صورت پشت‌سرهم جلوگیری می‌کنیم.
         notice_key = f"_rl_notice_menu_{user_id}_{normalized_text}"
