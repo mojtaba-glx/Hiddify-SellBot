@@ -4259,6 +4259,19 @@ async def _make_full_backup_zip() -> Tuple[Path, int, int, List[str]]:
             pass
 
 
+def _should_report_auto_panel_backup_errors(context: ContextTypes.DEFAULT_TYPE, panel_err_count: int) -> bool:
+    key = "_userbot_auto_backup_panel_error_streak"
+    if panel_err_count <= 0:
+        context.bot_data[key] = 0
+        return False
+    try:
+        streak = int(context.bot_data.get(key) or 0) + 1
+    except Exception:
+        streak = 1
+    context.bot_data[key] = streak
+    return streak >= 2
+
+
 async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = _get_backup_restore_settings()
     if not bool(settings.get("auto_backup_enabled", True)):
@@ -4314,7 +4327,9 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logger.warning("Auto backup send to admin failed: %s", e)
 
-    if panel_errors:
+    should_report_panel_errors = _should_report_auto_panel_backup_errors(context, panel_err_count)
+
+    if panel_errors and should_report_panel_errors:
         preview = "\n".join(panel_errors[:5])
         extra = f"\n... و {len(panel_errors) - 5} خطای دیگر" if len(panel_errors) > 5 else ""
         try:
@@ -4324,6 +4339,8 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         except Exception as e:
             logger.warning("Auto backup error report to admin failed: %s", e)
+    elif panel_errors:
+        logger.warning("Auto backup panel errors suppressed for transient failure: %s", panel_errors[:2])
 
     if bool(settings.get("event_channel_enabled", False)):
         target = str(settings.get("event_channel_id") or "").strip()
@@ -4342,7 +4359,7 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
                     )
             except Exception as e:
                 logger.warning("Auto backup send to event channel failed: %s", e)
-            if panel_errors:
+            if panel_errors and should_report_panel_errors:
                 preview = "\n".join(panel_errors[:5])
                 extra = f"\n... و {len(panel_errors) - 5} خطای دیگر" if len(panel_errors) > 5 else ""
                 try:

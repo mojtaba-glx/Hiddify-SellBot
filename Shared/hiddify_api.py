@@ -15,6 +15,8 @@ SSL_MODE_AUTO = "auto"
 SSL_MODE_SECURE = "secure"
 SSL_MODE_INSECURE = "insecure"
 API_TIMEOUT_ENV = "HIDDIFY_API_TIMEOUT_SECONDS"
+BACKUP_RETRY_ATTEMPTS_ENV = "HIDDIFY_BACKUP_RETRY_ATTEMPTS"
+BACKUP_RETRY_DELAY_ENV = "HIDDIFY_BACKUP_RETRY_DELAY_SECONDS"
 CREATE_USER_STABILIZE_ENV = "HIDDIFY_CREATE_USER_STABILIZE_MODE"
 CREATE_USER_STABILIZE_OFF = "off"
 CREATE_USER_STABILIZE_UPDATE = "update"
@@ -85,6 +87,22 @@ def _default_server_backup_filename(server: Dict[str, Any]) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H_%M_%S.%f")
     # نمونه: hiddify-user.example.com-2026-02-09 22_02_54.465460.json
     return _safe_filename(f"hiddify-{host}-{ts}.json")
+
+
+def _get_backup_retry_attempts() -> int:
+    try:
+        value = int(os.getenv(BACKUP_RETRY_ATTEMPTS_ENV, "3") or "3")
+    except Exception:
+        value = 3
+    return max(1, min(value, 5))
+
+
+def _get_backup_retry_delay() -> float:
+    try:
+        value = float(os.getenv(BACKUP_RETRY_DELAY_ENV, "2.0") or "2.0")
+    except Exception:
+        value = 2.0
+    return max(0.2, min(value, 10.0))
 
 
 def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
@@ -308,26 +326,44 @@ async def _request_bytes(
                 json=json,
             )
 
-    try:
-        if mode == SSL_MODE_SECURE:
-            resp = await _send_request(True)
-        elif mode == SSL_MODE_INSECURE:
-            resp = await _send_request(_build_insecure_ssl_context())
-        else:
-            try:
+    attempts = _get_backup_retry_attempts()
+    delay = _get_backup_retry_delay()
+    last_error: Optional[Exception] = None
+    resp: Optional[httpx.Response] = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            if mode == SSL_MODE_SECURE:
                 resp = await _send_request(True)
-            except httpx.RequestError as e:
-                if not _looks_like_tls_error(e):
-                    raise
-                logger.warning(
-                    "TLS verification failed for %s; retrying insecure because %s=%s",
-                    url,
-                    SSL_MODE_ENV,
-                    SSL_MODE_AUTO,
-                )
+            elif mode == SSL_MODE_INSECURE:
                 resp = await _send_request(_build_insecure_ssl_context())
-    except httpx.RequestError as e:
-        raise HiddifyApiError(f"خطا در اتصال به Hiddify API: {e}") from e
+            else:
+                try:
+                    resp = await _send_request(True)
+                except httpx.RequestError as e:
+                    if not _looks_like_tls_error(e):
+                        raise
+                    logger.warning(
+                        "TLS verification failed for %s; retrying insecure because %s=%s",
+                        url,
+                        SSL_MODE_ENV,
+                        SSL_MODE_AUTO,
+                    )
+                    resp = await _send_request(_build_insecure_ssl_context())
+
+            if resp.status_code in {408, 425, 429, 500, 502, 503, 504} and attempt < attempts:
+                last_error = HiddifyApiError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                await asyncio.sleep(delay * attempt)
+                continue
+            break
+        except httpx.RequestError as e:
+            last_error = e
+            if attempt >= attempts:
+                break
+            await asyncio.sleep(delay * attempt)
+
+    if resp is None:
+        raise HiddifyApiError(f"خطا در اتصال به Hiddify API بعد از {attempts} تلاش: {last_error}") from last_error
 
     if resp.status_code >= 400:
         raise HiddifyApiError(f"HTTP {resp.status_code}: {resp.text}")
