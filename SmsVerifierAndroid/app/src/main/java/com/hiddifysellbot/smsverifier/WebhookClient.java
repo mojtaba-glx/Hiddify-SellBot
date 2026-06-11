@@ -72,6 +72,9 @@ public final class WebhookClient {
         if (body.contains("\"status\":\"sms_reused\"")) {
             return "SMS_REUSED";
         }
+        if (body.contains("\"status\":\"approved_duplicate\"") || body.contains("approved_duplicate")) {
+            return "APPROVED_DUPLICATE";
+        }
         if (body.contains("\"status\":\"approved\"")
                 || body.contains("\"matched\":true")
                 || (body.contains("\"matched_payment_id\":") && !body.contains("\"matched_payment_id\":0"))) {
@@ -99,6 +102,9 @@ public final class WebhookClient {
         String label = statusLabel(result);
         if ("APPROVED".equals(label)) {
             return "✅ تایید شد و به ربات اعلام شد";
+        }
+        if ("APPROVED_DUPLICATE".equals(label)) {
+            return "✅ این SMS قبلاً توسط ربات تایید شده بود";
         }
         if ("NO_PENDING_MATCH".equals(label)) {
             return "🟡 SMS خوانده شد، اما پرداخت pending با این مبلغ پیدا نشد";

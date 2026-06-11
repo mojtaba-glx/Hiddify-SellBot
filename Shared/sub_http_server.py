@@ -711,24 +711,19 @@ class _SubHandler(BaseHTTPRequestHandler):
         if prior_event:
             userbot_db.update_sms_webhook_event(
                 event_id,
-                status="sms_reused",
+                status="approved_duplicate",
                 matched_payment_id=int((prior_event or {}).get("matched_payment_id") or 0),
-                message="same bank SMS was already used for another approved payment",
+                message="same bank SMS was already approved before",
                 amount_toman=prior_amount,
             )
-            _send_admin_sms_reused_report(
-                prior_event=prior_event,
-                amount_toman=prior_amount,
-                sender=sender,
-                reference=reference,
-            )
-            return 202, {
+            return 200, {
                 "ok": True,
-                "matched": False,
-                "status": "sms_reused",
-                "message": "bank_sms_already_used",
+                "matched": True,
+                "duplicate": True,
+                "status": "approved_duplicate",
+                "message": "bank_sms_already_approved",
                 "amount_toman": prior_amount,
-                "previous_payment_id": int((prior_event or {}).get("matched_payment_id") or 0),
+                "matched_payment_id": int((prior_event or {}).get("matched_payment_id") or 0),
             }
 
         matches: list[dict] = []

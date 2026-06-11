@@ -27,7 +27,7 @@ public final class HistoryStore {
         if (!isBankSmsStatus(status)) {
             save(context, KEY_HISTORY, entry, MAX_ITEMS);
         }
-        if ("APPROVED".equals(status) || "MANUAL_APPROVED".equals(status)) {
+        if ("APPROVED".equals(status) || "APPROVED_DUPLICATE".equals(status) || "MANUAL_APPROVED".equals(status)) {
             save(context, KEY_APPROVED_HISTORY, entry, MAX_APPROVED_ITEMS);
         }
         if (isBankSmsStatus(status)) {
@@ -434,7 +434,7 @@ public final class HistoryStore {
             return "✅ تایید دستی داخل اپ";
         }
         if ("APPROVED_DUPLICATE".equals(status)) {
-            return "🟡 قبلاً تایید شده بود؛ تایید جدید نیست";
+            return "✅ قبلاً تایید شده بود؛ درآمد جدید نیست";
         }
         if ("NO_PENDING_MATCH".equals(status)) {
             return "🟡 تایید نشد؛ پرداخت در انتظار پیدا نشد";

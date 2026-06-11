@@ -1500,7 +1500,10 @@ public class MainActivity extends Activity {
             return;
         }
         for (HistoryStore.Entry entry : entries) {
-            if (!isConfirmedPaymentEntry(entry) || isSystemSmsEntry(entry) || !shouldDisplayBankEntry(entry, settings)) {
+            if (!isConfirmedPaymentEntry(entry)
+                    || isNoIncomeApprovedEntry(entry)
+                    || isSystemSmsEntry(entry)
+                    || !shouldDisplayBankEntry(entry, settings)) {
                 continue;
             }
             long amount = extractEntryTomanAmount(entry);
@@ -2323,12 +2326,19 @@ public class MainActivity extends Activity {
 
     private boolean isDuplicateApprovedEntry(HistoryStore.Entry entry) {
         String text = ((entry == null || entry.title == null ? "" : entry.title) + "\n" + (entry == null || entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
-        return text.contains("approved_duplicate")
-                || text.contains("تایید جدید نیست");
+        return text.contains("sms_reused")
+                || text.contains("قبلاً برای پرداخت دیگری استفاده");
     }
 
     private boolean isConfirmedPaymentEntry(HistoryStore.Entry entry) {
         return entry != null && (entry.approved || isManualApprovedEntry(entry) || hasApprovedRobotResult(entry)) && !isDuplicateApprovedEntry(entry);
+    }
+
+    private boolean isNoIncomeApprovedEntry(HistoryStore.Entry entry) {
+        String text = ((entry == null || entry.title == null ? "" : entry.title) + "\n" + (entry == null || entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
+        return text.contains("approved_duplicate")
+                || text.contains("قبلاً تایید شده بود")
+                || text.contains("درآمد جدید نیست");
     }
 
     private boolean isManualApprovedEntry(HistoryStore.Entry entry) {
@@ -2365,6 +2375,7 @@ public class MainActivity extends Activity {
             return false;
         }
         return compact.contains("\"status\":\"approved\"")
+                || compact.contains("\"status\":\"approved_duplicate\"")
                 || compact.contains("\"matched\":true")
                 || (compact.contains("\"matched_payment_id\":") && !compact.contains("\"matched_payment_id\":0"))
                 || text.contains("پاسخ ربات: تایید شد")
