@@ -988,14 +988,14 @@ public class MainActivity extends Activity {
                 });
 
         Button refreshSmsButton = new Button(this);
-        refreshSmsButton.setText("🔄 بروزرسانی صندوق پیامک‌ها");
+        refreshSmsButton.setText("🔄 همگام‌سازی با ربات و صندوق");
         styleButton(refreshSmsButton, false);
         smsCard.addView(refreshSmsButton, matchWrap());
         refreshSmsButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                refreshHistory();
-                Toast.makeText(MainActivity.this, "پیامک‌ها بروزرسانی شد", Toast.LENGTH_SHORT).show();
+                saveSettings(false);
+                scanInboxNow();
             }
         });
 
@@ -1353,16 +1353,54 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 final int scanned = SmsInboxScanner.scanRecent(MainActivity.this);
+                final int retried = retryPendingStoredSmsEntries();
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
                         refreshHistory();
                         showSmsScreen();
-                        Toast.makeText(MainActivity.this, "بررسی تمام شد: " + scanned + " پیامک", Toast.LENGTH_LONG).show();
+                        Toast.makeText(
+                                MainActivity.this,
+                                "بررسی تمام شد: " + scanned + " پیامک، " + retried + " استعلام دوباره",
+                                Toast.LENGTH_LONG
+                        ).show();
                     }
                 });
             }
         });
+    }
+
+    private int retryPendingStoredSmsEntries() {
+        HistoryStore.Entry[] entries = HistoryStore.getBankSmsEntries(this);
+        if (entries == null || entries.length == 0) {
+            return 0;
+        }
+        int retried = 0;
+        Set<String> seen = new HashSet<>();
+        for (HistoryStore.Entry entry : entries) {
+            if (entry == null || isConfirmedPaymentEntry(entry) || isDuplicateApprovedEntry(entry)) {
+                continue;
+            }
+            String eventId = extractDetailLine(entry.detail, "🔐 شناسه داخلی:");
+            if (eventId.isEmpty() || seen.contains(eventId) || !HistoryStore.shouldRetryUnique(this, eventId)) {
+                continue;
+            }
+            String rawSms = extractDetailBlock(entry.detail, "📄 متن SMS:");
+            if (rawSms.isEmpty()) {
+                rawSms = extractDetailBlock(entry.detail, "متن SMS:");
+            }
+            String sender = entrySender(entry);
+            if (sender.trim().isEmpty() || rawSms.trim().isEmpty() || !PaymentSmsParser.isIncomingPayment(rawSms)) {
+                continue;
+            }
+            seen.add(eventId);
+            SmsProcessor.handleIncomingSms(this, sender, rawSms, parseEntryTimeMillis(entry.time));
+            retried++;
+            if (retried >= 10) {
+                break;
+            }
+        }
+        return retried;
     }
 
     private void sendManualSmsTest() {
