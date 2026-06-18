@@ -10,6 +10,7 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
+from AdminBot.keyboards import admin_main_keyboard
 from Shared import database, plans_storage
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
@@ -40,6 +41,10 @@ CANCEL_WORDS = {"لغو❌", "لغو", "/cancel"}
 def _cancel_kb() -> ReplyKeyboardMarkup:
     """کیبورد لغو برای هنگام دریافت ورودی متنی."""
     return ReplyKeyboardMarkup([[KeyboardButton("لغو❌")]], resize_keyboard=True)
+
+
+def _finish_reply_kb() -> ReplyKeyboardMarkup:
+    return admin_main_keyboard()
 
 
 # ===============================
@@ -882,6 +887,8 @@ async def handle_plans_message(
 
     # لغو
     if text in CANCEL_WORDS:
+        cancel_server_id = context.user_data.get("plans_server_id")
+        return_to_dynamic_menu = state == PLANS_STATE_EDIT_DYNAMIC_FIELD and cancel_server_id
         for key in (
             "state",
             "plans_server_id",
@@ -894,7 +901,9 @@ async def handle_plans_message(
             "plans_new_cat_title",
         ):
             context.user_data.pop(key, None)
-        await message.reply_text("❌ عملیات لغو شد.")
+        await message.reply_text("❌ عملیات لغو شد.", reply_markup=_finish_reply_kb())
+        if return_to_dynamic_menu:
+            await _send_dynamic_settings_menu(int(cancel_server_id), message.chat_id, context)
         return
 
     server_id = context.user_data.get("plans_server_id")
@@ -1115,7 +1124,10 @@ async def handle_plans_message(
                         discount_percent_step=0,
                         discount_percent_max=0,
                     )
-                    await message.reply_text("✅ تخفیف حجمی غیرفعال شد.")
+                    await message.reply_text(
+                        "✅ تخفیف حجمی غیرفعال شد.",
+                        reply_markup=_finish_reply_kb(),
+                    )
                 else:
                     plans_storage.set_plan_dynamic_settings(
                         server_id,
@@ -1125,7 +1137,8 @@ async def handle_plans_message(
                     )
                     await message.reply_text(
                         f"✅ تخفیف ذخیره شد.\n"
-                        f"از {threshold} گیگ به بالا، {percent}٪ تخفیف روی قیمت نهایی اعمال می‌شود."
+                        f"از {threshold} گیگ به بالا، {percent}٪ تخفیف روی قیمت نهایی اعمال می‌شود.",
+                        reply_markup=_finish_reply_kb(),
                     )
 
                 # بعد از ذخیره، دوباره منوی تنظیمات پویا را نمایش بده
@@ -1177,7 +1190,10 @@ async def handle_plans_message(
             )
             return
 
-        await message.reply_text("✅ تنظیمات با موفقیت ذخیره شد.")
+        await message.reply_text(
+            "✅ تنظیمات با موفقیت ذخیره شد.",
+            reply_markup=_finish_reply_kb(),
+        )
 
         # بعد از ذخیره سایر مقادیر پویا، دوباره منوی تنظیم پلن پویا را بفرست
         await _send_dynamic_settings_menu(server_id, chat_id, context)
