@@ -37,6 +37,15 @@ PLANS_STATE_EDIT_DYNAMIC_FIELD = "plans:edit_dynamic_field"
 
 CANCEL_WORDS = {"لغو❌", "لغو", "/cancel"}
 
+_PERSIAN_DIGITS_TRANS = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+    "01234567890123456789",
+)
+
+
+def _normalize_digit_text(value: Any) -> str:
+    return str(value or "").translate(_PERSIAN_DIGITS_TRANS)
+
 
 def _cancel_kb() -> ReplyKeyboardMarkup:
     """کیبورد لغو برای هنگام دریافت ورودی متنی."""
@@ -45,6 +54,50 @@ def _cancel_kb() -> ReplyKeyboardMarkup:
 
 def _finish_reply_kb() -> ReplyKeyboardMarkup:
     return admin_main_keyboard()
+
+
+def _format_discount_tiers(tiers: List[Dict[str, int]]) -> str:
+    normalized = plans_storage.normalize_discount_tiers(tiers)
+    if not normalized:
+        return "غیرفعال"
+    return " | ".join(f"از {item['gb']} گیگ: {item['percent']}٪" for item in normalized)
+
+
+def _parse_discount_tiers_text(text: str) -> List[Dict[str, int]]:
+    raw = _normalize_digit_text(text).strip()
+    if raw in {"0", "۰", "خاموش", "غیرفعال"}:
+        return []
+
+    items = []
+    normalized = raw.replace("،", ",").replace("\n", ",").replace("؛", ",")
+    for part in normalized.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        separator = next((sep for sep in (":", "=", "-") if sep in part), None)
+        if not separator:
+            raise ValueError
+        gb_text, percent_text = part.split(separator, 1)
+        gb = int(
+            _normalize_digit_text(
+                gb_text.replace("گیگ", "").replace("gb", "").replace("GB", "")
+            ).replace(",", "").strip()
+        )
+        percent = int(
+            _normalize_digit_text(percent_text)
+            .replace("%", "")
+            .replace("٪", "")
+            .replace(",", "")
+            .strip()
+        )
+        if gb <= 0 or percent <= 0:
+            raise ValueError
+        items.append({"gb": gb, "percent": percent})
+
+    tiers = plans_storage.normalize_discount_tiers(items)
+    if not tiers:
+        raise ValueError
+    return tiers
 
 
 # ===============================
@@ -538,6 +591,14 @@ async def _send_dynamic_settings_menu(
 ) -> None:
     """نمایش و ویرایش تنظیمات پلن پویا."""
     s = plans_storage.get_plan_dynamic_settings(server_id)
+    discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
+    if discount_tiers:
+        discount_line = f"🎚 تخفیف پلاکانی: {_format_discount_tiers(discount_tiers)}"
+    else:
+        discount_line = (
+            f"🎁 تخفیف حجمی ساده: هر {s['discount_step_gb']} گیگ +{s['discount_percent_step']}٪ "
+            f"تا سقف {s['discount_percent_max']}٪"
+        )
 
     lines = [
         "📈 تنظیم مقادیر پلن پویا",
@@ -548,8 +609,7 @@ async def _send_dynamic_settings_menu(
         f"📊 حجم قابل فروش: از {s['min_gb']} تا {s['max_gb']} گیگ (گام: {s['step_gb']})",
         f"⌛ زمان اشتراک: از {s['min_month']} تا {s['max_month']} ماه (گام: {s['step_month']})",
         "",
-        f"🎁 تخفیف حجمی: هر {s['discount_step_gb']} گیگ +{s['discount_percent_step']}٪ "
-        f"تا سقف {s['discount_percent_max']}٪",
+        discount_line,
         "",
         "برای تغییر هر مقدار از دکمه‌های زیر استفاده کنید.",
     ]
@@ -582,8 +642,14 @@ async def _send_dynamic_settings_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "🎁 تنظیم تخفیف حجمی",
+                    "🎁 تنظیم تخفیف حجمی ساده",
                     callback_data=f"plans:{server_id}:dyn_edit:discount",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎚 تنظیم تخفیف پلاکانی",
+                    callback_data=f"plans:{server_id}:dyn_edit:discount_tiers",
                 )
             ],
             [
@@ -698,6 +764,15 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 "ابتدا بنویس از چه حجمی به بالا تخفیف فعال شود (بر حسب گیگ).\n"
                 "مثال: 50\n"
                 "برای خاموش کردن کامل تخفیف، عدد 0 بفرست."
+            )
+        elif dyn_action == "discount_tiers":
+            prompt = (
+                "🎚 تنظیم تخفیف پله‌ای\n"
+                "هر پله را با فرمت `حجم:درصد` وارد کن و پله‌ها را با کاما یا خط جدید جدا کن.\n"
+                "مثال: 50:5, 100:10, 200:15\n"
+                "یعنی: از ۵۰ گیگ ۵٪، از ۱۰۰ گیگ ۱۰٪ و از ۲۰۰ گیگ ۱۵٪ تخفیف.\n"
+                "برای خاموش کردن تخفیف، عدد 0 بفرست.\n"
+                "می‌توانی از `-` یا `=` هم به جای `:` استفاده کنی."
             )
         else:
             prompt = "لطفاً مقدار جدید را ارسال کنید:"
@@ -1072,6 +1147,39 @@ async def handle_plans_message(
     if state == PLANS_STATE_EDIT_DYNAMIC_FIELD:
         dyn_action = context.user_data.get("plans_dyn_action")
 
+        if dyn_action == "discount_tiers":
+            try:
+                tiers = _parse_discount_tiers_text(text)
+            except ValueError:
+                await message.reply_text(
+                    "❌ فرمت پله‌ها معتبر نیست. مثال درست: 50:5,100:10,200:15",
+                    reply_markup=_cancel_kb(),
+                )
+                return
+
+            plans_storage.set_plan_dynamic_settings(
+                server_id,
+                discount_tiers=tiers,
+                discount_step_gb=0,
+                discount_percent_step=0,
+                discount_percent_max=0,
+            )
+            if tiers:
+                await message.reply_text(
+                    f"✅ تخفیف پلاکانی ذخیره شد.\n{_format_discount_tiers(tiers)}",
+                    reply_markup=_finish_reply_kb(),
+                )
+            else:
+                await message.reply_text(
+                    "✅ تخفیف حجمی غیرفعال شد.",
+                    reply_markup=_finish_reply_kb(),
+                )
+
+            await _send_dynamic_settings_menu(server_id, chat_id, context)
+            context.user_data.pop("plans_dyn_action", None)
+            context.user_data.pop("state", None)
+            return
+
         # --- تخفیف حجمی (دو مرحله‌ای، طبق ایده ساده) ---
         if dyn_action == "discount":
             phase = context.user_data.get("plans_dyn_discount_phase", "threshold")
@@ -1123,6 +1231,7 @@ async def handle_plans_message(
                         discount_step_gb=0,
                         discount_percent_step=0,
                         discount_percent_max=0,
+                        discount_tiers=[],
                     )
                     await message.reply_text(
                         "✅ تخفیف حجمی غیرفعال شد.",
@@ -1134,6 +1243,7 @@ async def handle_plans_message(
                         discount_step_gb=threshold,
                         discount_percent_step=percent,
                         discount_percent_max=percent,
+                        discount_tiers=[],
                     )
                     await message.reply_text(
                         f"✅ تخفیف ذخیره شد.\n"

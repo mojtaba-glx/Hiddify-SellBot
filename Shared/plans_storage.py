@@ -7,6 +7,11 @@ from typing import Dict, Any, List, Optional
 
 _PLANS_FILE = Path(__file__).with_name("plans.json")
 
+_PERSIAN_DIGITS_TRANS = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+    "01234567890123456789",
+)
+
 # ساختار plans.json:
 # {
 #   "servers": {
@@ -305,7 +310,50 @@ _DEFAULT_DYNAMIC_SETTINGS = {
     "discount_step_gb": 50,
     "discount_percent_step": 5,
     "discount_percent_max": 50,
+    "discount_tiers": [],
 }
+
+
+def _normalize_digit_text(value: Any) -> str:
+    return str(value or "").translate(_PERSIAN_DIGITS_TRANS)
+
+
+def normalize_discount_tiers(raw: Any) -> List[Dict[str, int]]:
+    tiers_by_gb: Dict[int, int] = {}
+    if isinstance(raw, dict):
+        raw = raw.items()
+    if not isinstance(raw, list) and not isinstance(raw, tuple):
+        return []
+
+    for item in raw:
+        try:
+            if isinstance(item, dict):
+                gb = item.get("gb", item.get("threshold_gb", item.get("threshold")))
+                percent = item.get("percent", item.get("discount_percent"))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                gb, percent = item[0], item[1]
+            else:
+                continue
+            gb = int(float(_normalize_digit_text(gb).replace(",", "").strip()))
+            percent = int(
+                float(
+                    _normalize_digit_text(percent)
+                    .replace("%", "")
+                    .replace("٪", "")
+                    .replace(",", "")
+                    .strip()
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+        if gb <= 0 or percent <= 0:
+            continue
+        tiers_by_gb[gb] = max(0, min(percent, 100))
+
+    return [
+        {"gb": gb, "percent": tiers_by_gb[gb]}
+        for gb in sorted(tiers_by_gb)
+    ]
 
 
 def get_plan_dynamic_settings(server_id: int) -> Dict[str, Any]:
@@ -314,6 +362,7 @@ def get_plan_dynamic_settings(server_id: int) -> Dict[str, Any]:
     dyn = block.get("dynamic_settings") or {}
     for k, v in _DEFAULT_DYNAMIC_SETTINGS.items():
         dyn.setdefault(k, v)
+    dyn["discount_tiers"] = normalize_discount_tiers(dyn.get("discount_tiers", []))
     block["dynamic_settings"] = dyn
     _save_all_plans(data)
     return dyn
@@ -327,7 +376,9 @@ def set_plan_dynamic_settings(server_id: int, **kwargs: Any) -> Dict[str, Any]:
     for k, v in kwargs.items():
         if k not in _DEFAULT_DYNAMIC_SETTINGS:
             continue
-        if isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], int):
+        if isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], list):
+            dyn[k] = normalize_discount_tiers(v)
+        elif isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], int):
             dyn[k] = int(v)
         else:
             dyn[k] = float(v)
