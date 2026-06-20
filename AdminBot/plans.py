@@ -726,12 +726,14 @@ async def _send_discount_settings_menu(
                 InlineKeyboardButton(
                     f"{'خاموش کن' if simple_enabled else 'روشن کن'} تخفیف حجمی ساده",
                     callback_data=f"plans:{server_id}:dyn_toggle:discount",
+                    style="danger" if simple_enabled else "success",
                 )
             ],
             [
                 InlineKeyboardButton(
                     f"{'خاموش کن' if tiered_enabled else 'روشن کن'} تخفیف پلاکانی",
                     callback_data=f"plans:{server_id}:dyn_toggle:discount_tiers",
+                    style="danger" if tiered_enabled else "success",
                 )
             ],
             [
