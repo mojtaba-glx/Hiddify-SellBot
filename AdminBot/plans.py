@@ -63,6 +63,24 @@ def _format_discount_tiers(tiers: List[Dict[str, int]]) -> str:
     return " | ".join(f"از {item['gb']} گیگ: {item['percent']}٪" for item in normalized)
 
 
+def _is_simple_discount_enabled(settings: Dict[str, Any]) -> bool:
+    if "discount_simple_enabled" in settings:
+        return bool(settings.get("discount_simple_enabled"))
+    discount_tiers = plans_storage.normalize_discount_tiers(settings.get("discount_tiers", []))
+    return (
+        not discount_tiers
+        and int(settings.get("discount_step_gb", 0)) > 0
+        and int(settings.get("discount_percent_step", 0)) > 0
+        and int(settings.get("discount_percent_max", 0)) > 0
+    )
+
+
+def _is_tiered_discount_enabled(settings: Dict[str, Any]) -> bool:
+    if "discount_tiered_enabled" in settings:
+        return bool(settings.get("discount_tiered_enabled"))
+    return bool(plans_storage.normalize_discount_tiers(settings.get("discount_tiers", [])))
+
+
 def _parse_discount_tiers_text(text: str) -> List[Dict[str, int]]:
     raw = _normalize_digit_text(text).strip()
     if raw in {"0", "۰", "خاموش", "غیرفعال"}:
@@ -592,6 +610,8 @@ async def _send_dynamic_settings_menu(
     """نمایش و ویرایش تنظیمات پلن پویا."""
     s = plans_storage.get_plan_dynamic_settings(server_id)
     discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
+    simple_enabled = _is_simple_discount_enabled(s)
+    tiered_enabled = _is_tiered_discount_enabled(s)
     if discount_tiers:
         discount_line = f"🎚 تخفیف پلاکانی: {_format_discount_tiers(discount_tiers)}"
     else:
@@ -612,6 +632,7 @@ async def _send_dynamic_settings_menu(
         discount_line,
         "",
         "برای تغییر هر مقدار از دکمه‌های زیر استفاده کنید.",
+        "برای مدیریت و ویرایش تنظیمات تخفیف‌ها، از دکمه‌ی اختصاصی استفاده کنید.",
     ]
 
     kb = InlineKeyboardMarkup(
@@ -642,20 +663,93 @@ async def _send_dynamic_settings_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "🎁 تنظیم تخفیف حجمی ساده",
-                    callback_data=f"plans:{server_id}:dyn_edit:discount",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🎚 تنظیم تخفیف پلاکانی",
-                    callback_data=f"plans:{server_id}:dyn_edit:discount_tiers",
+                    "🎛 مدیریت تخفیف‌ها",
+                    callback_data=f"plans:{server_id}:dyn_discount_settings",
                 )
             ],
             [
                 InlineKeyboardButton(
                     "بازگشت🔙",
                     callback_data=f"plans:{server_id}:settings",
+                )
+            ],
+        ]
+    )
+
+    text = "\n".join(lines)
+    if message:
+        await message.edit_text(text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def _send_discount_settings_menu(
+    server_id: int,
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    message=None,
+) -> None:
+    """منوی اختصاصی مدیریت روشن/خاموش کردن تخفیف‌ها."""
+    s = plans_storage.get_plan_dynamic_settings(server_id)
+    discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
+    simple_enabled = _is_simple_discount_enabled(s)
+    tiered_enabled = _is_tiered_discount_enabled(s)
+
+    lines = [
+        "🎛 مدیریت حرفه‌ای تخفیف‌ها",
+        "",
+        f"🎁 تخفیف حجمی ساده: {'فعال ✅' if simple_enabled else 'غیرفعال ❌'}",
+        f"🎚 تخفیف پلاکانی: {'فعال ✅' if tiered_enabled else 'غیرفعال ❌'}",
+        "",
+        "در این بخش می‌توانی تنظیمات ذخیره‌شده هر نوع تخفیف را ببینی و تنها در صورت نیاز آن را تغییر بدهی.",
+    ]
+
+    if simple_enabled:
+        lines.append(
+            f"• تخفیف حجمی ساده: از {s['discount_step_gb']} گیگ به بالا، {s['discount_percent_step']}٪ تا سقف {s['discount_percent_max']}٪"
+        )
+    elif int(s.get('discount_step_gb', 0)) > 0 and int(s.get('discount_percent_step', 0)) > 0:
+        lines.append(
+            f"• تنظیمات ذخیره‌شده تخفیف حجمی ساده: از {s['discount_step_gb']} گیگ به بالا، {s['discount_percent_step']}٪ تا سقف {s['discount_percent_max']}٪ (غیرفعال)"
+        )
+
+    if tiered_enabled:
+        lines.append(f"• پله‌های تخفیف پلاکانی: {_format_discount_tiers(discount_tiers)}")
+    elif discount_tiers:
+        lines.append(
+            f"• پله‌های تخفیف پلاکانی ذخیره شده: {_format_discount_tiers(discount_tiers)} (غیرفعال)"
+        )
+
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"{'خاموش کن' if simple_enabled else 'روشن کن'} تخفیف حجمی ساده",
+                    callback_data=f"plans:{server_id}:dyn_toggle:discount",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    f"{'خاموش کن' if tiered_enabled else 'روشن کن'} تخفیف پلاکانی",
+                    callback_data=f"plans:{server_id}:dyn_toggle:discount_tiers",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "✏️ ویرایش تخفیف حجمی ساده",
+                    callback_data=f"plans:{server_id}:dyn_edit:discount",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "✏️ ویرایش تخفیف پله‌ای",
+                    callback_data=f"plans:{server_id}:dyn_edit:discount_tiers",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "بازگشت🔙",
+                    callback_data=f"plans:{server_id}:dyn_settings",
                 )
             ],
         ]
@@ -734,6 +828,66 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if action == "dyn_settings":
         await _send_dynamic_settings_menu(server_id, chat_id, context, message=msg)
         return
+
+    if action == "dyn_discount_settings":
+        await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
+        return
+
+    if action == "dyn_toggle":
+        dyn_action = rest[1] if len(rest) > 1 else ""
+        s = plans_storage.get_plan_dynamic_settings(server_id)
+        discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
+        simple_enabled = _is_simple_discount_enabled(s)
+        tiered_enabled = _is_tiered_discount_enabled(s)
+
+        if dyn_action == "discount":
+            if simple_enabled:
+                plans_storage.set_plan_dynamic_settings(
+                    server_id,
+                    discount_simple_enabled=False,
+                )
+            else:
+                update_kwargs = {"discount_simple_enabled": True}
+                if (
+                    int(s.get("discount_step_gb", 0)) <= 0
+                    or int(s.get("discount_percent_step", 0)) <= 0
+                    or int(s.get("discount_percent_max", 0)) <= 0
+                ):
+                    update_kwargs["discount_step_gb"] = s.get("discount_step_gb", 50) or 50
+                    update_kwargs["discount_percent_step"] = s.get("discount_percent_step", 5) or 5
+                    update_kwargs["discount_percent_max"] = s.get("discount_percent_max", 50) or 50
+                plans_storage.set_plan_dynamic_settings(
+                    server_id,
+                    **update_kwargs,
+                )
+
+            await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
+            return
+
+        if dyn_action == "discount_tiers":
+            if tiered_enabled:
+                plans_storage.set_plan_dynamic_settings(
+                    server_id,
+                    discount_tiered_enabled=False,
+                )
+                await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
+                return
+
+            if discount_tiers:
+                plans_storage.set_plan_dynamic_settings(
+                    server_id,
+                    discount_tiered_enabled=True,
+                )
+                await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
+                return
+
+            await context.bot.send_message(
+                chat_id,
+                "⚠️ هیچ پله‌ای برای تخفیف پلاکانی تنظیم نشده است. برای فعال کردن ابتدا روی «🎚 ویرایش تخفیف پله‌ای» بزن و پله‌ها را وارد کن.",
+                reply_markup=_cancel_kb(),
+            )
+            await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
+            return
 
     if action == "dyn_edit":
         dyn_action = rest[1] if len(rest) > 1 else ""
@@ -1160,9 +1314,7 @@ async def handle_plans_message(
             plans_storage.set_plan_dynamic_settings(
                 server_id,
                 discount_tiers=tiers,
-                discount_step_gb=0,
-                discount_percent_step=0,
-                discount_percent_max=0,
+                discount_tiered_enabled=True,
             )
             if tiers:
                 await message.reply_text(

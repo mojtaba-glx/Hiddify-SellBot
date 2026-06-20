@@ -307,9 +307,11 @@ _DEFAULT_DYNAMIC_SETTINGS = {
     "min_month": 1,
     "max_month": 12,
     "step_month": 1,
+    "discount_simple_enabled": True,
     "discount_step_gb": 50,
     "discount_percent_step": 5,
     "discount_percent_max": 50,
+    "discount_tiered_enabled": False,
     "discount_tiers": [],
 }
 
@@ -378,6 +380,11 @@ def set_plan_dynamic_settings(server_id: int, **kwargs: Any) -> Dict[str, Any]:
             continue
         if isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], list):
             dyn[k] = normalize_discount_tiers(v)
+        elif isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], bool):
+            if isinstance(v, bool):
+                dyn[k] = v
+            else:
+                dyn[k] = str(v).strip().lower() in {"1", "true", "yes", "on"}
         elif isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], int):
             dyn[k] = int(v)
         else:

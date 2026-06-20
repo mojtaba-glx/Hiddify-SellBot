@@ -76,7 +76,7 @@ public final class SmsProcessor {
                 + "\n🔐 شناسه داخلی: " + event.eventId
                 + "\n📄 متن SMS:\n" + event.body;
         HistoryStore.upsertUniqueSms(context, resultLabel, detail, event.eventId, event.sender, event.body);
-        if ("APPROVED".equals(resultLabel) && !isDuplicateResponse(result.body)) {
+        if (("APPROVED".equals(resultLabel) || "APPROVED_DUPLICATE".equals(resultLabel)) && !isRejectedDuplicateResponse(result.body)) {
             IncomeStore.record(
                     context,
                     event.eventId,
@@ -114,11 +114,10 @@ public final class SmsProcessor {
         return "rial".equals(c) || "irr".equals(c) ? Math.round(amount / 10.0) : amount;
     }
 
-    private static boolean isDuplicateResponse(String body) {
+    private static boolean isRejectedDuplicateResponse(String body) {
         String compact = WebhookClient.compactResponse(body);
-        return compact.contains("\"duplicate\":true")
-                || compact.contains("approved_duplicate")
-                || compact.contains("\"status\":\"sms_reused\"");
+        return compact.contains("\"status\":\"sms_reused\"")
+                || compact.contains("قبلاً برای پرداخت دیگری استفاده");
     }
 
     private static String emptyDash(String value) {

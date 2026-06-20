@@ -110,14 +110,35 @@ class TestAdminDynamicPlanReplyKeyboard(unittest.IsolatedAsyncioTestCase):
         set_settings.assert_called_once_with(
             1,
             discount_tiers=[{"gb": 50, "percent": 5}, {"gb": 100, "percent": 10}],
-            discount_step_gb=0,
-            discount_percent_step=0,
-            discount_percent_max=0,
+            discount_tiered_enabled=True,
         )
         send_menu.assert_awaited_once()
         self.assert_admin_keyboard_restored(message.replies[0][1].get("reply_markup"))
         self.assertNotIn("state", context.user_data)
         self.assertNotIn("plans_dyn_action", context.user_data)
+
+    async def test_discount_tier_toggle_enables_saved_tiers_without_edit(self):
+        fake_query = SimpleNamespace(
+            data="plans:1:dyn_toggle:discount_tiers",
+            message=SimpleNamespace(chat_id=1234),
+            answer=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=fake_query)
+        context = SimpleNamespace()
+
+        with (
+            patch.object(plans.plans_storage, "get_plan_dynamic_settings", return_value={
+                "discount_tiered_enabled": False,
+                "discount_tiers": [{"gb": 50, "percent": 5}],
+            }) as get_settings,
+            patch.object(plans.plans_storage, "set_plan_dynamic_settings") as set_settings,
+            patch.object(plans, "_send_discount_settings_menu", new=AsyncMock()) as send_menu,
+        ):
+            await plans.handle_plans_callback(update, context)
+
+        get_settings.assert_called_once_with(1)
+        set_settings.assert_called_once_with(1, discount_tiered_enabled=True)
+        send_menu.assert_awaited_once()
 
     async def test_dynamic_setting_cancel_returns_to_dynamic_menu(self):
         message = FakeMessage("لغو❌")

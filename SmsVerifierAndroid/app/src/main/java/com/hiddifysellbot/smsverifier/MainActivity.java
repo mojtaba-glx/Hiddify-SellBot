@@ -1501,7 +1501,6 @@ public class MainActivity extends Activity {
         }
         for (HistoryStore.Entry entry : entries) {
             if (!isConfirmedPaymentEntry(entry)
-                    || isNoIncomeApprovedEntry(entry)
                     || isSystemSmsEntry(entry)
                     || !shouldDisplayBankEntry(entry, settings)) {
                 continue;
@@ -2332,13 +2331,6 @@ public class MainActivity extends Activity {
 
     private boolean isConfirmedPaymentEntry(HistoryStore.Entry entry) {
         return entry != null && (entry.approved || isManualApprovedEntry(entry) || hasApprovedRobotResult(entry)) && !isDuplicateApprovedEntry(entry);
-    }
-
-    private boolean isNoIncomeApprovedEntry(HistoryStore.Entry entry) {
-        String text = ((entry == null || entry.title == null ? "" : entry.title) + "\n" + (entry == null || entry.detail == null ? "" : entry.detail)).toLowerCase(Locale.US);
-        return text.contains("approved_duplicate")
-                || text.contains("قبلاً تایید شده بود")
-                || text.contains("درآمد جدید نیست");
     }
 
     private boolean isManualApprovedEntry(HistoryStore.Entry entry) {

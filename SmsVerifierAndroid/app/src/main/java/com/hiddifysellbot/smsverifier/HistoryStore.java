@@ -434,7 +434,7 @@ public final class HistoryStore {
             return "✅ تایید دستی داخل اپ";
         }
         if ("APPROVED_DUPLICATE".equals(status)) {
-            return "✅ قبلاً تایید شده بود؛ درآمد جدید نیست";
+            return "✅ قبلاً تایید شده بود؛ درآمد یک‌بار ثبت می‌شود";
         }
         if ("NO_PENDING_MATCH".equals(status)) {
             return "🟡 تایید نشد؛ پرداخت در انتظار پیدا نشد";

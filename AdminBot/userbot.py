@@ -2859,6 +2859,7 @@ def _legacy_default_dynamic_settings(data: Dict[str, Any], money_scale: int) -> 
         "discount_step_gb": 50,
         "discount_percent_step": 5,
         "discount_percent_max": 50,
+        "discount_tiers": [],
     }
     custom_list = data.get("custom_plans") if isinstance(data.get("custom_plans"), list) else []
     if not custom_list:
@@ -2878,6 +2879,7 @@ def _legacy_default_dynamic_settings(data: Dict[str, Any], money_scale: int) -> 
         "discount_step_gb": max(1, _legacy_to_int(row.get("volume_discount_stage_size"), 50)),
         "discount_percent_step": max(0, _legacy_to_int(row.get("volume_discount_per_stage"), 0)),
         "discount_percent_max": max(0, _legacy_to_int(row.get("volume_max_discount"), 0)),
+        "discount_tiers": [],
     }
 
 

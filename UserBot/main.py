@@ -1434,7 +1434,9 @@ def _calc_dynamic_price(gb: int, months: int, dyn_settings: Optional[Dict[str, A
     """
     Calculate dynamic plan final price and applied discount percent.
     Discount model:
-      floor(gb / discount_step_gb) * discount_percent_step, capped by discount_percent_max
+      discount_tiers uses the highest threshold reached.
+      Legacy fallback: floor(gb / discount_step_gb) * discount_percent_step,
+      capped by discount_percent_max.
     """
     settings = dyn_settings or {}
 
@@ -1450,12 +1452,31 @@ def _calc_dynamic_price(gb: int, months: int, dyn_settings: Optional[Dict[str, A
     discount_percent_max = max(0, _to_int(settings.get("discount_percent_max"), 0))
 
     off_percent = 0
-    if discount_step_gb > 0 and discount_percent_step > 0 and gb_val >= discount_step_gb:
+    discount_tiered_enabled = bool(settings.get("discount_tiered_enabled", False))
+    discount_simple_enabled = bool(settings.get("discount_simple_enabled", False))
+    discount_tiers = plans_storage.normalize_discount_tiers(settings.get("discount_tiers", []))
+    
+    # محاسبه تخفیف پلاکانی اگر فعال باشد
+    tiered_off = 0
+    if discount_tiered_enabled and discount_tiers:
+        for tier in discount_tiers:
+            if gb_val >= int(tier["gb"]):
+                tiered_off = int(tier["percent"])
+            else:
+                break
+        tiered_off = max(0, min(tiered_off, 100))
+    
+    # محاسبه تخفیف حجمی ساده اگر فعال باشد
+    simple_off = 0
+    if discount_simple_enabled and discount_step_gb > 0 and discount_percent_step > 0 and gb_val >= discount_step_gb:
         stages = gb_val // discount_step_gb
-        off_percent = stages * discount_percent_step
+        simple_off = stages * discount_percent_step
         if discount_percent_max > 0:
-            off_percent = min(off_percent, discount_percent_max)
-        off_percent = max(0, min(off_percent, 100))
+            simple_off = min(simple_off, discount_percent_max)
+        simple_off = max(0, min(simple_off, 100))
+    
+    # انتخاب بهترین (بیشترین) تخفیف
+    off_percent = max(tiered_off, simple_off)
 
     final_price = int(round(base_price * (100 - off_percent) / 100))
     final_price = max(0, final_price)
