@@ -1116,9 +1116,6 @@ def _build_admin_managed_sub_links(
         return "", "", None
 
     owner = userbot_db.get_service_owner_by_panel_uuid(user_uuid)
-    if not owner or not owner.get("service_id"):
-        return "", "", owner
-
     base = _resolve_managed_sub_base_url_for_admin(server, user_uuid)
     if not base:
         return "", "", owner

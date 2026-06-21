@@ -48,7 +48,7 @@ class TestAdminManagedSubLinks(unittest.TestCase):
         self.assertNotIn("hidybot.txt", text_link)
         self.assertNotIn("user-path", text_link)
 
-    def test_links_are_empty_when_subscription_is_not_connected_to_userbot(self):
+    def test_links_are_built_even_without_userbot_mapping(self):
         server = {"panel_url": "https://panel.example.com", "user_proxy_path": "u"}
         user_uuid = "a24674c6-0391-42bd-9d1d-b153a3f609e0"
 
@@ -58,8 +58,8 @@ class TestAdminManagedSubLinks(unittest.TestCase):
         ):
             text_link, b64_link, owner = servers._build_admin_managed_sub_links(server, user_uuid)
 
-        self.assertEqual(text_link, "")
-        self.assertEqual(b64_link, "")
+        self.assertEqual(text_link, f"https://sell.example.com/sub/{user_uuid}/all.txt")
+        self.assertEqual(b64_link, f"https://sell.example.com/sub/{user_uuid}/all.txt?base64=1")
         self.assertIsNone(owner)
 
     def test_panel_user_link_keeps_hiddify_trailing_slash_format(self):
