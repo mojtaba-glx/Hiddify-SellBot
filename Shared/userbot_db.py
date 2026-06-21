@@ -2543,6 +2543,67 @@ def update_service_name(service_id: int, new_name: str) -> bool:
         conn.close()
 
 
+def update_service_comment(service_id: int, new_comment: str) -> bool:
+    init_db()
+    sid = int(service_id or 0)
+    comment = str(new_comment or "").strip()
+    if sid <= 0:
+        return False
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE userbot_services SET comment = ? WHERE id = ?",
+            (comment, sid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_service_node_uuid(
+    service_id: int,
+    server_id: int,
+    old_uuid: str,
+    new_uuid: str,
+) -> int:
+    init_db()
+    sid = int(service_id or 0)
+    srv_id = int(server_id or 0)
+    old_uuid_val = str(old_uuid or "").strip()
+    new_uuid_val = str(new_uuid or "").strip()
+    if sid <= 0 or srv_id <= 0 or not old_uuid_val or not new_uuid_val:
+        return 0
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE userbot_service_nodes
+            SET
+                panel_user_uuid = ?,
+                panel_user_id = CASE
+                    WHEN panel_user_id IS NULL OR TRIM(panel_user_id) = '' OR panel_user_id = ?
+                    THEN ?
+                    ELSE panel_user_id
+                END,
+                updated_at = ?
+            WHERE service_id = ?
+              AND server_id = ?
+              AND (panel_user_uuid = ? OR panel_user_id = ?)
+            """,
+            (new_uuid_val, old_uuid_val, new_uuid_val, now, sid, srv_id, old_uuid_val, old_uuid_val),
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def update_service_note_by_panel_user(
     server_id: int,
     panel_user_uuid: str,

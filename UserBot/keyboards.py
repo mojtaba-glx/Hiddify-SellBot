@@ -288,16 +288,37 @@ def subscription_status_keyboard(
     - کانفیگ‌ها
     - تمدید اشتراک
     - تغییر نام اشتراک
+    - تغییر لینک اشتراک
     - جداسازی اشتراک (فقط برای اشتراک‌های متصل‌شده دستی)
     """
     keyboard = [
         [InlineKeyboardButton("کانفیگ ها📝", callback_data=f"status:configs:{service_id}")],
         [InlineKeyboardButton("تمدید اشتراک♾", callback_data=f"status:renew:{service_id}")],
         [InlineKeyboardButton("تغییر نام اشتراک✏️", callback_data=f"status:rename:{service_id}")],
+        [
+            InlineKeyboardButton(
+                "تغییر لینک اشتراک🚨",
+                callback_data=f"status:replace_link:{service_id}",
+                style="danger",
+            )
+        ],
     ]
     if show_detach:
         keyboard.append([InlineKeyboardButton("جداسازی اشتراک⭕", callback_data=f"status:detach:{service_id}")])
     return InlineKeyboardMarkup(keyboard)
+
+
+def replace_subscription_link_confirm_keyboard(service_id=None):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "تایید تغییر لینک🚨",
+                callback_data=f"status:replace_link:{service_id}:confirm",
+                style="danger",
+            )
+        ],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"status:menu:{service_id}")],
+    ])
 
 
 def direct_configs_keyboard(

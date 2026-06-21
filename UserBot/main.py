@@ -169,6 +169,7 @@ try:
         confirm_payment_inline_keyboard, cancel_inline_keyboard,
         subscription_status_keyboard, direct_configs_keyboard,
         subscription_links_keyboard, subscription_configs_keyboard,
+        replace_subscription_link_confirm_keyboard,
         services_list_keyboard, guide_os_keyboard, invite_banner_keyboard, force_join_keyboard,
         support_panel_keyboard, ticket_skip_screenshot_keyboard, ticket_confirm_keyboard,
         user_tickets_list_keyboard, user_ticket_detail_keyboard,
@@ -1345,26 +1346,24 @@ def _resolve_sub_service_base_url(service: Optional[dict] = None) -> str:
 
 def _resolve_service_uuid_for_managed_sub_link(service_id: int, service: Optional[dict] = None) -> str:
     service_obj = service or {}
-    uuid = _extract_uuid_from_comment(service_obj.get("comment") or "")
-    if uuid:
-        return str(uuid).strip()
-
     try:
         sid = int(service_id or 0)
     except (TypeError, ValueError):
         sid = 0
-    if sid <= 0:
-        return ""
+    if sid > 0:
+        try:
+            mappings = userbot_db.get_service_nodes(sid) or []
+        except Exception:
+            mappings = []
 
-    try:
-        mappings = userbot_db.get_service_nodes(sid) or []
-    except Exception:
-        mappings = []
+        for m in mappings:
+            candidate = str((m or {}).get("panel_user_uuid") or "").strip()
+            if candidate:
+                return candidate
 
-    for m in mappings:
-        candidate = str((m or {}).get("panel_user_uuid") or "").strip()
-        if candidate:
-            return candidate
+    uuid = _extract_uuid_from_comment(service_obj.get("comment") or "")
+    if uuid:
+        return str(uuid).strip()
     return ""
 
 
@@ -2163,6 +2162,106 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> 
         return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
 
     return True, "✅ نام اشتراک با موفقیت بروزرسانی شد."
+
+
+async def _regenerate_service_uuid_for_service(service: dict) -> tuple[bool, str, Optional[str]]:
+    service_id = int(service.get("id") or 0)
+    if service_id <= 0:
+        return False, "❌ سرویس نامعتبر است.", None
+
+    current_uuid = _resolve_service_uuid_for_managed_sub_link(service_id, service=service)
+    if not current_uuid:
+        return False, "❌ UUID فعلی اشتراک تعیین نشده است.", None
+
+    targets = _get_service_panel_targets(service)
+    if not targets:
+        return False, "❌ مسیرهای پنل این اشتراک پیدا نشد.", None
+
+    desired_uuid = str(uuid4())
+    final_uuid: Optional[str] = None
+    updated_targets: list[tuple[dict, str, str]] = []
+
+    for srv, old_uuid in targets:
+        if not old_uuid:
+            continue
+        patch_data = {"uuid": desired_uuid}
+        patched = None
+        try:
+            patched = await hiddify_api.patch_user(srv, old_uuid, patch_data)
+        except Exception as e:
+            if _is_panel_unauthorized_error(e):
+                for alt_srv in _find_auth_fallback_servers_for_panel(srv):
+                    try:
+                        patched = await hiddify_api.patch_user(alt_srv, old_uuid, patch_data)
+                        break
+                    except Exception:
+                        continue
+        if not isinstance(patched, dict):
+            # rollback any successful target modifications
+            for srv2, old_uuid2, new_uuid2 in updated_targets:
+                try:
+                    await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
+                except Exception:
+                    pass
+            return False, "❌ بازسازی UUID روی همه سرورها انجام نشد. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.", None
+
+        returned_uuid = str(patched.get("uuid") or patched.get("id") or "").strip()
+        if not returned_uuid:
+            returned_uuid = desired_uuid
+
+        if final_uuid is None:
+            final_uuid = returned_uuid
+        elif returned_uuid != final_uuid:
+            for srv2, old_uuid2, new_uuid2 in updated_targets:
+                try:
+                    await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
+                except Exception:
+                    pass
+            return False, "❌ UUID جدید روی همه سرورها همگن نشد. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.", None
+
+        updated_targets.append((srv, old_uuid, returned_uuid))
+
+    if not final_uuid:
+        return False, "❌ UUID جدید تهیه نشد.", None
+
+    # Persist new UUID in local DB mappings and service comment.
+    comment = str(service.get("comment") or "").strip()
+    comment_parts = [p.strip() for p in comment.split("|") if p.strip()]
+    kept_parts = [p for p in comment_parts if not p.split(":", 1)[0].strip().lower() == "uuid"]
+    kept_parts.insert(0, f"uuid:{final_uuid}")
+    new_comment = "|".join(kept_parts)
+
+    had_node_mappings = bool(userbot_db.get_service_nodes(service_id))
+    comment_saved = False
+    node_updates = 0
+    try:
+        comment_saved = bool(userbot_db.update_service_comment(service_id, new_comment))
+    except Exception as e:
+        logger.warning("Failed updating regenerated service UUID in comment (service_id=%s): %s", service_id, e)
+
+    for srv, old_uuid, new_uuid in updated_targets:
+        try:
+            node_updates += int(userbot_db.update_service_node_uuid(service_id, int(srv.get("id") or 0), old_uuid, new_uuid) or 0)
+        except Exception as e:
+            logger.warning(
+                "Failed updating regenerated service UUID in node mapping (service_id=%s, server_id=%s): %s",
+                service_id,
+                srv.get("id"),
+                e,
+            )
+
+    if (had_node_mappings and node_updates < len(updated_targets)) or (not had_node_mappings and not comment_saved):
+        for srv, old_uuid, new_uuid in updated_targets:
+            try:
+                await hiddify_api.patch_user(srv, new_uuid, {"uuid": old_uuid})
+            except Exception:
+                pass
+        return False, "❌ لینک در پنل تغییر کرد اما ذخیره در دیتابیس کامل نشد. تغییرات پنل تا حد امکان برگردانده شد؛ لطفاً دوباره تلاش کنید.", None
+
+    return True, (
+        "✅ لینک اشتراک با موفقیت تغییر کرد.\n"
+        "لینک و کانفیگ قبلی از کار می‌افتد؛ لطفاً لینک جدید را دوباره دریافت و در برنامه وارد کنید."
+    ), final_uuid
 
 
 async def _service_probe_state(service: dict) -> str:
@@ -6122,6 +6221,44 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "برای انصراف، روی دکمه «بازگشت» بزنید."
                 ),
                 reply_markup=cancel_keyboard(),
+            )
+            return
+
+        if action == "replace_link":
+            confirmed = len(parts) > 3 and parts[3] == "confirm"
+            if not confirmed:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "⚠️ هشدار تغییر لینک اشتراک\n\n"
+                        "با تغییر لینک اشتراک، لینک و کانفیگ قبلی از کار می‌افتد و باید لینک جدید را دوباره در برنامه وارد کنید.\n\n"
+                        "اگر مطمئن هستید، تایید تغییر لینک را بزنید."
+                    ),
+                    reply_markup=replace_subscription_link_confirm_keyboard(service_id),
+                )
+                return
+
+            await context.bot.send_message(chat_id=user_id, text="⏳ در حال تغییر لینک اشتراک...")
+            ok, result_text, new_uuid = await _regenerate_service_uuid_for_service(service)
+            if not ok:
+                await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
+                return
+
+            refreshed = userbot_db.get_service_by_id(service_id) or service
+            refreshed = await _sync_service_runtime_from_panels(refreshed)
+            settings = _get_subscription_settings()
+            await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=_build_subscription_status_text(refreshed),
+                parse_mode="Markdown",
+                reply_markup=subscription_status_keyboard(
+                    service_id,
+                    show_direct_config=settings.get("show_direct_config", True),
+                    show_sub_link=settings.get("show_sub_link", True),
+                    show_configs=_should_show_configs_button(settings),
+                    show_detach=_is_connected_service(refreshed),
+                ),
             )
             return
 
