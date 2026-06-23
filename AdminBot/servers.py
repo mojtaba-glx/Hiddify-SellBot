@@ -1120,6 +1120,22 @@ def _build_admin_managed_sub_links(
     if not base:
         return "", "", owner
 
+    try:
+        server_id = int((server or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        server_id = 0
+
+    if server_id > 0:
+        # Admin-created panel users may not have a local UserBot service/token yet.
+        # Include the source server id so the managed subscription endpoint can
+        # resolve the panel user directly instead of returning "subscription token not found".
+        panel_token = f"panel-srv-{server_id}"
+        return (
+            f"{base}/sub/{panel_token}/{user_uuid}/all.txt",
+            f"{base}/sub/{panel_token}/{user_uuid}/all.txt?base64=1",
+            owner,
+        )
+
     return (
         f"{base}/sub/{user_uuid}/all.txt",
         f"{base}/sub/{user_uuid}/all.txt?base64=1",

@@ -1,4 +1,5 @@
 import base64
+import asyncio
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from Shared import sub_aggregator, userbot_db
+from Shared import database, hiddify_api, sub_aggregator, userbot_db
 
 logger = logging.getLogger(__name__)
 BYTES_PER_GB = 1024 ** 3
@@ -329,6 +330,117 @@ def _detect_file_format(file_part: str, query: str = ""):
     return None
 
 
+def _panel_server_id_from_token(token: str) -> int:
+    """
+    Resolve admin-panel fallback tokens like ``panel-srv-12``.
+
+    These tokens are intentionally distinct from persisted UserBot subscription
+    tokens. They let AdminBot-generated smart links serve a panel user by
+    ``server_id + uuid`` even when that user was created only from AdminBot and
+    has no local userbot_services row yet.
+    """
+    raw = str(token or "").strip().lower()
+    match = re.fullmatch(r"(?:panel[-_])?(?:srv|server)[-_](\d+)", raw)
+    if not match:
+        return 0
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool) -> tuple[str, dict]:
+    """
+    Build a managed subscription directly from a Hiddify panel user.
+
+    This is a fallback for AdminBot-created users. Normal UserBot services still
+    use the persisted service id/token path above, but AdminBot can now generate
+    links in the form ``/sub/panel-srv-{server_id}/{uuid}/all.txt`` and this
+    function serves configs without requiring a pre-existing UserBot mapping.
+    """
+    server_id = _panel_server_id_from_token(token)
+    user_uuid = str(uuid_hint or "").strip()
+    if server_id <= 0 or not user_uuid:
+        return "", {}
+
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return "", {}
+
+    service: dict = {
+        "id": 0,
+        "name": user_uuid,
+        "server_id": server_id,
+        "server_title": str(server.get("title") or f"server-{server_id}"),
+        "usage_current": 0,
+        "usage_limit": 0,
+    }
+
+    try:
+        panel_user = asyncio.run(hiddify_api.get_user_by_uuid(server, user_uuid)) or {}
+    except Exception as e:
+        logger.warning("Failed fetching panel user for managed admin sub server_id=%s uuid=%s: %s", server_id, user_uuid, e)
+        panel_user = {}
+
+    if isinstance(panel_user, dict) and panel_user:
+        service["name"] = str(panel_user.get("name") or panel_user.get("username") or user_uuid).strip() or user_uuid
+        service["usage_current"] = _to_float(panel_user.get("current_usage_GB"), 0.0)
+        try:
+            service["usage_limit"] = sub_aggregator._usage_limit_from_panel_user(panel_user) or 0
+        except Exception:
+            service["usage_limit"] = _to_float(panel_user.get("usage_limit_GB") or panel_user.get("usage_limit"), 0.0)
+        try:
+            days_left = sub_aggregator._days_left_from_panel_user(panel_user)
+            if days_left is not None:
+                service["days_left"] = int(days_left)
+        except Exception:
+            pass
+
+    fetched: list[str] = []
+    try:
+        base_url = sub_aggregator._build_user_base_url(server, user_uuid)
+    except Exception:
+        base_url = None
+    if base_url:
+        fetched = sub_aggregator._fetch_subscription_lines(base_url)
+    if not fetched:
+        fetched = sub_aggregator._fetch_lines_from_admin_api(server, user_uuid)
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in fetched or []:
+        ln = str(line or "").strip()
+        if not ln:
+            continue
+        if not sub_aggregator._is_config_line(ln):
+            continue
+        if sub_aggregator._is_panel_status_config_line(ln):
+            continue
+        if ln in seen:
+            continue
+        seen.add(ln)
+        lines.append(ln)
+
+    if not lines:
+        return "", service
+
+    status_line = sub_aggregator._build_status_config_line(service)
+    if status_line:
+        lines.insert(0, status_line)
+
+    body = "\n".join(lines)
+    if is_b64:
+        body = base64.b64encode(body.encode("utf-8")).decode("ascii")
+    return body, service
+
+
 class _SubHandler(BaseHTTPRequestHandler):
     def _write(
         self,
@@ -453,6 +565,13 @@ class _SubHandler(BaseHTTPRequestHandler):
                 if owner and owner.get("service_id"):
                     sid = int(owner["service_id"])
             if not sid:
+                panel_body, panel_service = _build_panel_uuid_subscription_body(token, uuid_hint, is_b64)
+                if panel_body:
+                    self._write(200, panel_body, headers=self._subscription_headers(panel_service, is_b64))
+                    return
+                if _panel_server_id_from_token(token) and uuid_hint:
+                    self._write(404, "subscription is empty")
+                    return
                 self._write(404, "subscription token not found")
                 return
             service = (

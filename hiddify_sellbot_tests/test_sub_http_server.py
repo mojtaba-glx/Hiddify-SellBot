@@ -1,6 +1,11 @@
 import unittest
 
-from Shared.sub_http_server import _detect_file_format, _query_requests_base64, _sms_amount_candidates_toman
+from Shared.sub_http_server import (
+    _detect_file_format,
+    _panel_server_id_from_token,
+    _query_requests_base64,
+    _sms_amount_candidates_toman,
+)
 
 
 class TestSubHttpServer(unittest.TestCase):
@@ -22,3 +27,8 @@ class TestSubHttpServer(unittest.TestCase):
         self.assertEqual(_sms_amount_candidates_toman(1_000_000, "rial"), [100_000])
         self.assertEqual(_sms_amount_candidates_toman(100_000, "toman"), [100_000])
         self.assertEqual(_sms_amount_candidates_toman(1_000_000, "unknown"), [1_000_000, 100_000])
+
+    def test_panel_server_token_is_detected(self):
+        self.assertEqual(_panel_server_id_from_token("panel-srv-12"), 12)
+        self.assertEqual(_panel_server_id_from_token("srv_34"), 34)
+        self.assertEqual(_panel_server_id_from_token("not-a-panel-token"), 0)
