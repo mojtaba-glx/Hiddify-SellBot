@@ -1280,6 +1280,79 @@ def _node_sync_targets(server_id: int) -> tuple[Optional[Dict[str, Any]], List[D
     return source, targets, warnings
 
 
+async def _auto_propagate_user_to_nodes(
+    server_id: int,
+    *,
+    user_uuid: str,
+    user_name: str = "",
+    usage_limit_GB: float = 0.0,
+    package_days: int = 0,
+    start_date: str = "",
+    comment: str = "",
+) -> str:
+    """
+    بعد از ساخت کاربر روی سرور اصلی، اون رو روی تمام نودهای متصل هم بسازه.
+    همون UUID رو استفاده می‌کنه تا لینک هوشمند روی همه سرورها کار کنه.
+    """
+    source, targets, warnings = _node_sync_targets(server_id)
+    if not targets:
+        return ""
+
+    if not start_date:
+        start_date = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+    payload = {
+        "uuid": user_uuid,
+        "name": user_name or f"user-{user_uuid[:8]}",
+        "usage_limit_GB": float(usage_limit_GB),
+        "current_usage_GB": 0,
+    }
+    if package_days > 0:
+        payload["package_days"] = int(package_days)
+    payload["start_date"] = start_date
+    payload["last_reset_time"] = now_dt
+    payload["is_active"] = True
+    if comment:
+        payload["comment"] = comment
+
+    success_nodes: List[str] = []
+    failed_nodes: List[str] = []
+
+    for target in targets:
+        node_title = str(target.get("title") or f"سرور #{target.get('id')}")
+        try:
+            created = await hiddify_api.create_user(target, payload)
+            created_uuid = str(created.get("uuid") or created.get("id") or user_uuid).strip()
+            success_nodes.append(node_title)
+
+            # ثبت mapping در دیتابیس userbot_service_nodes
+            owner = _node_sync_service_owner(user_uuid)
+            if owner:
+                try:
+                    target_sid = int(target.get("id") or 0)
+                    userbot_db.add_service_node(
+                        service_id=int(owner.get("service_id") or 0),
+                        server_id=target_sid,
+                        server_title=node_title,
+                        panel_user_uuid=created_uuid,
+                        panel_user_id=(str(created.get("id")).strip() if created.get("id") else None),
+                        is_active=1,
+                    )
+                except Exception as map_err:
+                    logger.warning("Failed to record node mapping for %s: %s", node_title, map_err)
+        except Exception as e:
+            err_msg = str(e).strip().splitlines()[0] if str(e).strip() else "خطای نامشخص"
+            failed_nodes.append(f"{node_title}: {err_msg}")
+
+    parts: List[str] = []
+    if success_nodes:
+        parts.append(f"✅ ساخته شد روی نودها: {', '.join(success_nodes)}")
+    if failed_nodes:
+        parts.append(f"❌ خطا روی نودها:\n" + "\n".join(f"  • {f}" for f in failed_nodes))
+    return "\n".join(parts) if parts else ""
+
+
 def build_node_sync_menu_keyboard(server_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -4159,12 +4232,26 @@ async def handle_add_user_flow(
                 }
                 try:
                     created = await hiddify_api.create_user(server, payload)
+                    created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
                     success.append(
                         {
                             "name": user_name,
-                            "uuid": str(created.get("uuid") or created.get("id") or "").strip(),
+                            "uuid": created_uuid,
                         }
                     )
+                    # ساخت خودکار روی نودهای متصل (با همان UUID)
+                    if created_uuid:
+                        try:
+                            await _auto_propagate_user_to_nodes(
+                                int(server_id),
+                                user_uuid=created_uuid,
+                                user_name=user_name,
+                                usage_limit_GB=float(usage_gb or 0),
+                                package_days=int(days or 0),
+                                start_date=now_date,
+                            )
+                        except Exception as node_err:
+                            logger.warning("Auto node propagation failed for %s: %s", user_name, node_err)
                 except Exception as e:
                     err = str(e).strip().splitlines()[0] if str(e).strip() else "خطای نامشخص"
                     failed.append(f"{user_name}: {err}")
@@ -4305,6 +4392,26 @@ async def handle_add_user_flow(
                 f"📅 مدت: {days} روز",
                 reply_markup=admin_main_keyboard(),
             )
+
+            # ساخت خودکار کاربر روی نودهای متصل (با همان UUID)
+            if uuid:
+                try:
+                    node_report = await _auto_propagate_user_to_nodes(
+                        int(server_id),
+                        user_uuid=uuid,
+                        user_name=name,
+                        usage_limit_GB=float(usage_gb or 0),
+                        package_days=int(days or 0),
+                        start_date=str(payload.get("start_date") or ""),
+                    )
+                except Exception as node_err:
+                    logger.exception("Auto node propagation failed for uuid=%s: %s", uuid, node_err)
+                    node_report = ""
+                if node_report:
+                    try:
+                        await message.reply_text(node_report)
+                    except Exception:
+                        pass
 
             context.user_data.pop("state", None)
             context.user_data.pop("add_user", None)

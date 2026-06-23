@@ -364,6 +364,9 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
     use the persisted service id/token path above, but AdminBot can now generate
     links in the form ``/sub/panel-srv-{server_id}/{uuid}/all.txt`` and this
     function serves configs without requiring a pre-existing UserBot mapping.
+
+    بهبود: کانفیگ‌های همه نودهای متصل به سرور اصلی هم جمع می‌شود تا لینک هوشمند
+    کامل باشد.
     """
     server_id = _panel_server_id_from_token(token)
     user_uuid = str(uuid_hint or "").strip()
@@ -383,50 +386,108 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
         "usage_limit": 0,
     }
 
-    try:
-        panel_user = asyncio.run(hiddify_api.get_user_by_uuid(server, user_uuid)) or {}
-    except Exception as e:
-        logger.warning("Failed fetching panel user for managed admin sub server_id=%s uuid=%s: %s", server_id, user_uuid, e)
-        panel_user = {}
-
-    if isinstance(panel_user, dict) and panel_user:
-        service["name"] = str(panel_user.get("name") or panel_user.get("username") or user_uuid).strip() or user_uuid
-        service["usage_current"] = _to_float(panel_user.get("current_usage_GB"), 0.0)
+    # ---- ساخت لیست سرورهای هدف (اصلی + نودها) ----
+    target_servers: list[dict] = [server]
+    seen_ids: set[int] = {server_id}
+    for node in (server.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
         try:
-            service["usage_limit"] = sub_aggregator._usage_limit_from_panel_user(panel_user) or 0
-        except Exception:
-            service["usage_limit"] = _to_float(panel_user.get("usage_limit_GB") or panel_user.get("usage_limit"), 0.0)
-        try:
-            days_left = sub_aggregator._days_left_from_panel_user(panel_user)
-            if days_left is not None:
-                service["days_left"] = int(days_left)
-        except Exception:
-            pass
+            target_sid = int(node.get("target_server_id") or 0)
+        except (TypeError, ValueError):
+            target_sid = 0
+        if target_sid <= 0 or target_sid in seen_ids:
+            continue
+        child = database.get_server_by_id(target_sid)
+        if not child:
+            continue
+        seen_ids.add(target_sid)
+        target_servers.append(child)
 
-    fetched: list[str] = []
-    try:
-        base_url = sub_aggregator._build_user_base_url(server, user_uuid)
-    except Exception:
-        base_url = None
-    if base_url:
-        fetched = sub_aggregator._fetch_subscription_lines(base_url)
-    if not fetched:
-        fetched = sub_aggregator._fetch_lines_from_admin_api(server, user_uuid)
+    # ---- جمع‌آوری اطلاعات و کانفیگ‌ها از همه سرورها ----
+    total_usage = 0.0
+    primary_limit: float | None = None
+    min_days_left = None
+    primary_name = ""
+    primary_fetched = False
 
     lines: list[str] = []
-    seen: set[str] = set()
-    for line in fetched or []:
-        ln = str(line or "").strip()
-        if not ln:
-            continue
-        if not sub_aggregator._is_config_line(ln):
-            continue
-        if sub_aggregator._is_panel_status_config_line(ln):
-            continue
-        if ln in seen:
-            continue
-        seen.add(ln)
-        lines.append(ln)
+    seen_lines: set[str] = set()
+
+    for idx, srv in enumerate(target_servers):
+        is_primary = idx == 0
+        # اطلاعات کاربر از پنل
+        try:
+            panel_user = asyncio.run(hiddify_api.get_user_by_uuid(srv, user_uuid)) or {}
+        except Exception as e:
+            logger.warning(
+                "Failed fetching panel user for managed admin sub server_id=%s uuid=%s: %s",
+                srv.get("id"), user_uuid, e,
+            )
+            panel_user = {}
+
+        if isinstance(panel_user, dict) and panel_user:
+            total_usage += _to_float(panel_user.get("current_usage_GB"), 0.0)
+            if is_primary:
+                primary_name = (
+                    str(panel_user.get("name") or panel_user.get("username") or user_uuid).strip()
+                    or user_uuid
+                )
+                try:
+                    primary_limit = sub_aggregator._usage_limit_from_panel_user(panel_user)
+                except Exception:
+                    primary_limit = _to_float(
+                        panel_user.get("usage_limit_GB") or panel_user.get("usage_limit"), 0.0
+                    )
+                try:
+                    days_left = sub_aggregator._days_left_from_panel_user(panel_user)
+                    if days_left is not None:
+                        min_days_left = int(days_left)
+                except Exception:
+                    pass
+            else:
+                try:
+                    days_left = sub_aggregator._days_left_from_panel_user(panel_user)
+                    if days_left is not None:
+                        min_days_left = (
+                            days_left if min_days_left is None else min(min_days_left, int(days_left))
+                        )
+                except Exception:
+                    pass
+
+        # کانفیگ‌های این سرور
+        fetched: list[str] = []
+        try:
+            base_url = sub_aggregator._build_user_base_url(srv, user_uuid)
+        except Exception:
+            base_url = None
+        if base_url:
+            fetched = sub_aggregator._fetch_subscription_lines(base_url)
+        if not fetched:
+            fetched = sub_aggregator._fetch_lines_from_admin_api(srv, user_uuid)
+
+        for line in fetched or []:
+            ln = str(line or "").strip()
+            if not ln:
+                continue
+            if not sub_aggregator._is_config_line(ln):
+                continue
+            if sub_aggregator._is_panel_status_config_line(ln):
+                continue
+            if ln in seen_lines:
+                continue
+            seen_lines.add(ln)
+            lines.append(ln)
+
+        if is_primary:
+            primary_fetched = True
+
+    # نرم‌سازی مقادیر سرویس
+    service["name"] = primary_name or user_uuid
+    service["usage_current"] = total_usage
+    service["usage_limit"] = primary_limit if primary_limit is not None else 0.0
+    if min_days_left is not None:
+        service["days_left"] = int(min_days_left)
 
     if not lines:
         return "", service
