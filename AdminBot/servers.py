@@ -1317,14 +1317,20 @@ async def _auto_propagate_user_to_nodes(
         payload["comment"] = comment
 
     success_nodes: List[str] = []
+    updated_nodes: List[str] = []
     failed_nodes: List[str] = []
 
     for target in targets:
         node_title = str(target.get("title") or f"سرور #{target.get('id')}")
         try:
-            created = await hiddify_api.create_user(target, payload)
+            created, action = await _create_or_patch_user_on_node(
+                target, user_uuid, payload
+            )
             created_uuid = str(created.get("uuid") or created.get("id") or user_uuid).strip()
-            success_nodes.append(node_title)
+            if action == "updated":
+                updated_nodes.append(node_title)
+            else:
+                success_nodes.append(node_title)
 
             # ثبت mapping در دیتابیس userbot_service_nodes
             owner = _node_sync_service_owner(user_uuid)
@@ -1348,9 +1354,55 @@ async def _auto_propagate_user_to_nodes(
     parts: List[str] = []
     if success_nodes:
         parts.append(f"✅ ساخته شد روی نودها: {', '.join(success_nodes)}")
+    if updated_nodes:
+        parts.append(f"🔁 به‌روز شد (موجود بود) روی نودها: {', '.join(updated_nodes)}")
     if failed_nodes:
-        parts.append(f"❌ خطا روی نودها:\n" + "\n".join(f"  • {f}" for f in failed_nodes))
+        parts.append("❌ خطا روی نودها:\n" + "\n".join(f"  • {f}" for f in failed_nodes))
     return "\n".join(parts) if parts else ""
+
+
+async def _create_or_patch_user_on_node(
+    target: Dict[str, Any],
+    user_uuid: str,
+    payload: Dict[str, Any],
+) -> tuple[Dict[str, Any], str]:
+    """
+    روی نود مقصد، کاربر را ایجاد می‌کند یا اگر از قبل وجود داشت به‌روز می‌کند.
+
+    این تابع propagation را idempotent می‌کند: اگر کاربر قبلاً روی نود ساخته شده
+    باشد (مثلاً پس از re-sync یا برای کاربران قدیمی)، به جای خطای 400 یک PATCH
+    انجام می‌شود. payload ورودی فقط فیلدهای هدف را دارد و شامل current_usage_GB
+    نیست (تا مصرف شمرده‌شده روی نود صفر نشود).
+
+    برمی‌گرداند: (پاسخ پنل, "created" | "updated")
+    """
+    patch_payload = {k: v for k, v in payload.items() if k != "current_usage_GB"}
+
+    # ۱) ابتدا بررسی می‌کنیم آیا کاربر از قبل روی نود وجود دارد.
+    try:
+        existing = await hiddify_api.get_user_by_uuid(target, user_uuid)
+        if isinstance(existing, dict) and existing:
+            updated = await hiddify_api.patch_user(target, user_uuid, patch_payload)
+            return (updated or existing), "updated"
+    except Exception as e:
+        err_lower = str(e).lower()
+        if "404" not in err_lower and "not found" not in err_lower and "not exist" not in err_lower:
+            logger.debug(
+                "get_user_by_uuid probe failed on node %s for uuid=%s: %s",
+                target.get("title") or target.get("id"), user_uuid, e,
+            )
+
+    # ۲) کاربر وجود نداشت؛ ایجاد می‌کنیم.
+    try:
+        created = await hiddify_api.create_user(target, payload)
+        return created, "created"
+    except Exception as e:
+        err_lower = str(e).lower()
+        # ۳) رقابتی: بین probe و create، کاربر ساخته شد. fallback به patch.
+        if "already exists" in err_lower or "uuid" in err_lower and "exist" in err_lower:
+            updated = await hiddify_api.patch_user(target, user_uuid, patch_payload)
+            return updated, "updated"
+        raise
 
 
 def build_node_sync_menu_keyboard(server_id: int) -> InlineKeyboardMarkup:
