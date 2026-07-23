@@ -6415,12 +6415,15 @@ async def handle_server_inline_callback(
             await msg.edit_text("🔄 در حال ثبت سرویس کاربران قدیمی ادمین در دیتابیس...")
             try:
                 result = await _run_admin_user_migration(server_id)
+                errors = result.get("errors") or []
+                error_lines = "\n".join(f"- {e}" for e in errors[:5]) if errors else ""
                 await msg.edit_text(
                     f"✅ ثبت سرویس کاربران قدیمی ادمین به پایان رسید.\n\n"
                     f"👤 کل کاربران بررسی‌شده: {result['total']}\n"
                     f"🆕 سرویس جدید ساخته شد: {result['created']}\n"
                     f"⏭ از قبل وجود داشت: {result['skipped']}\n"
-                    f"❌ خطا: {result['errors_count']}",
+                    f"❌ خطا: {result['errors_count']}"
+                    f"{chr(10) + chr(10) + 'جزئیات خطا:' + chr(10) + error_lines if error_lines else ''}",
                     reply_markup=build_node_sync_menu_keyboard(server_id),
                 )
             except Exception as e:
