@@ -53,7 +53,7 @@ def location_keyboard(servers, columns: int = 1):
         else:
             btn_text = f"لوکیشن {flag} {title}" if flag != "🏳️" else f"لوکیشن {title}"
 
-        btns.append(InlineKeyboardButton(btn_text, callback_data=f"buy:loc:{s['id']}"))
+        btns.append(InlineKeyboardButton(btn_text, callback_data=f"buy:loc:{s.get('id', '')}"))
 
     for i in range(0, len(btns), cols):
         chunk = btns[i:i + cols]
@@ -143,7 +143,7 @@ def category_keyboard(categories, server_id):
     rows = []
     # مرتب‌سازی بر اساس priority
     for cat in sorted(categories, key=lambda x: x.get('priority', 0)):
-        rows.append([InlineKeyboardButton(cat['title'], callback_data=f"buy:cat:{server_id}:{cat['id']}")])
+        rows.append([InlineKeyboardButton(cat.get('title', ''), callback_data=f"buy:cat:{server_id}:{cat.get('id', '')}")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به لوکیشن‌ها", callback_data="buy:back_main")])
     return InlineKeyboardMarkup(rows)
 

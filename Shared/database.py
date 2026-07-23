@@ -1,11 +1,11 @@
 import json
 import os
+import random
 import threading
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
 USERBOT_SET_WELCOME = "userbot_set_welcome"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "servers.json")
@@ -15,20 +15,39 @@ _lock = threading.Lock()
 
 def _load_db() -> Dict[str, Any]:
     """بارگذاری دیتابیس از فایل JSON"""
-    if not os.path.exists(DB_PATH):
-        return {"servers": []}
+    with _lock:
+        if not os.path.exists(DB_PATH):
+            return {"servers": []}
+        try:
+            with open(DB_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not isinstance(data, dict):
+                    return {"servers": []}
+                if "servers" not in data or not isinstance(data.get("servers"), list):
+                    data["servers"] = []
+                return data
+        except (json.JSONDecodeError, OSError):
+            return {"servers": []}
 
-    try:
-        with open(DB_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if not isinstance(data, dict):
-                return {"servers": []}
-            if "servers" not in data or not isinstance(data.get("servers"), list):
-                data["servers"] = []
-            return data
-    except (json.JSONDecodeError, OSError):
-        # اگر فایل خراب بود، از صفر شروع می‌کنیم
-        return {"servers": []}
+
+def _update_db(updater):
+    with _lock:
+        if not os.path.exists(DB_PATH):
+            data = {"servers": []}
+        else:
+            try:
+                with open(DB_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    data = {"servers": []}
+            except (json.JSONDecodeError, OSError):
+                data = {"servers": []}
+        if "servers" not in data or not isinstance(data.get("servers"), list):
+            data["servers"] = []
+        data = updater(data)
+        with open(DB_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return data
 
 
 def _save_db(data: Dict[str, Any]) -> None:
@@ -391,8 +410,6 @@ def delete_server_domain(server_id: int, domain_id: int) -> bool:
 #   ذخیره‌سازی پلن‌ها و تنظیمات پلن‌ها
 #   فایل ذخیره: Shared/plans.json
 # ===============================
-import json
-from pathlib import Path
 
 _PLANS_FILE = Path(__file__).with_name("plans.json")
 
@@ -419,11 +436,15 @@ def _save_plans_data(data: dict) -> None:
 def _get_server_plans_block(data: dict, server_id: int) -> dict:
     servers = data.setdefault("servers", {})
     server = servers.setdefault(str(server_id), {})
-    server.setdefault("mode", "dynamic")
+    mode = server.get("display_mode") or server.get("mode", "dynamic")
+    if mode not in ("fixed", "dynamic", "mixed"):
+        mode = "dynamic"
+    server["display_mode"] = mode
+    server.pop("mode", None)
     server.setdefault("dynamic_settings", {})
     server.setdefault("categories", [])
     server.setdefault("plans", [])
-    server.setdefault("next_cat_id", 1)
+    server.setdefault("next_category_id", 1)
     server.setdefault("next_plan_id", 1)
     return server
 
@@ -517,13 +538,14 @@ def get_plan_mode(server_id: int, default: str = "dynamic") -> str:
     server = data.get("servers", {}).get(str(server_id))
     if not server:
         return default
-    return server.get("mode", default)
+    return server.get("display_mode") or server.get("mode", default)
 
 
 def set_plan_mode(server_id: int, mode: str) -> None:
     data = _load_plans_data()
     server = _get_server_plans_block(data, server_id)
-    server["mode"] = mode
+    server["display_mode"] = mode
+    server.pop("mode", None)
     _save_plans_data(data)
 
 
@@ -753,72 +775,6 @@ import random
 # ===============================
 
 def get_settings() -> Dict[str, Any]:
-    """دریافت کل تنظیمات (کارت‌ها، روش‌های پرداخت و...)"""
-    data = _load_all_plans()  # از همان فایل plans/servers استفاده می‌کنیم یا می‌توان جدا کرد
-    # اگر تنظیمات وجود نداشت، پیش‌فرض بساز
-    if "bot_settings" not in data:
-        data["bot_settings"] = {
-            "payment_methods": {
-                "card": True,      # کارت به کارت فعال است
-                "gateway": False   # درگاه غیرفعال است
-            },
-            "cards": [
-                {
-                    "bank": "Mellat",
-                    "owner": "نام پیش‌فرض",
-                    "number": "6104337000000000"
-                }
-            ]
-        }
-        _save_all_plans(data)
-    
-    return data["bot_settings"]
-
-def get_active_payment_methods() -> Dict[str, bool]:
-    """کدام روش‌ها فعال هستند؟"""
-    return get_settings().get("payment_methods", {"card": True})
-
-def get_random_card() -> Optional[Dict[str, str]]:
-    """انتخاب یک کارت به صورت تصادفی"""
-    cards = get_settings().get("cards", [])
-    if not cards:
-        return None
-    return random.choice(cards)
-
-def add_card(owner: str, number: str, bank_name: str = "") -> None:
-    """افزودن کارت جدید"""
-    data = _load_all_plans()
-    settings = data.get("bot_settings", {})
-    cards = settings.get("cards", [])
-    
-    cards.append({"owner": owner, "number": number, "bank": bank_name})
-    
-    settings["cards"] = cards
-    data["bot_settings"] = settings
-    _save_all_plans(data)
-
-def get_payment_settings() -> Dict[str, Any]:
-    """تنظیمات پرداخت (بدون تزریق کارت پیش‌فرض)"""
-    settings = get_settings()
-    cards = settings.get("cards", [])
-    if not isinstance(cards, list):
-        cards = []
-    return {
-        "cards": cards,
-        "card_active": bool(settings.get("card_active", True)),
-        "gateway_active": bool(settings.get("gateway_active", False)),
-    }
-
-def get_random_admin_card() -> Optional[Dict[str, str]]:
-    settings = get_payment_settings()
-    cards = settings.get("cards", [])
-    if not cards: return None
-    return random.choice(cards)
-
-# Shared/database.py
-# (این کدها را جایگزین توابع آخر فایل کنید یا اگر نیستند به آخر فایل اضافه کنید)
-
-def get_settings() -> Dict[str, Any]:
     """تنظیمات کلی (مثل کارت‌ها، متن خوش‌آمد و...) را برمی‌گرداند."""
     # اصلاح مهم: اینجا باید از _load_db استفاده شود چون در فایل database.py هستیم
     data = _load_db() 
@@ -857,7 +813,7 @@ def get_random_card() -> Optional[Dict[str, str]]:
     cards = settings.get("cards", [])
     if not cards:
         return None
-    return __import__("random").choice(cards)
+    return random.choice(cards)
 
 
 def get_next_card() -> Optional[Dict[str, str]]:

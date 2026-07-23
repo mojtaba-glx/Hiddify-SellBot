@@ -3900,6 +3900,55 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
             )
             restored_files.append("Shared/plans.json")
 
+        # v4.0.0: Restore agency database
+        agency_db_member = _find_member(["Shared/agency.db", "agency.db"])
+        if agency_db_member:
+            tmp_db = Path(tempfile.gettempdir()) / f"restore_agency_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
+            try:
+                with zf.open(members[agency_db_member], "r") as src, tmp_db.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                _restore_sqlite_db_from_file(tmp_db, shared_dir / "agency.db")
+                restored_files.append("Shared/agency.db")
+            finally:
+                try:
+                    tmp_db.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # v4.0.0: Restore customer bot database
+        customer_db_member = _find_member(["CustomerBot/customer_bot.db", "customer_bot.db"])
+        if customer_db_member:
+            customer_dir = root_dir / "CustomerBot"
+            customer_dir.mkdir(parents=True, exist_ok=True)
+            tmp_db = Path(tempfile.gettempdir()) / f"restore_customer_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
+            try:
+                with zf.open(members[customer_db_member], "r") as src, tmp_db.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                _restore_sqlite_db_from_file(tmp_db, customer_dir / "customer_bot.db")
+                restored_files.append("CustomerBot/customer_bot.db")
+            finally:
+                try:
+                    tmp_db.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # v4.0.0: Restore agent bot database
+        agent_db_member = _find_member(["AgentBot/agent_bot.db", "agent_bot.db"])
+        if agent_db_member:
+            agent_dir = root_dir / "AgentBot"
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            tmp_db = Path(tempfile.gettempdir()) / f"restore_agent_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
+            try:
+                with zf.open(members[agent_db_member], "r") as src, tmp_db.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                _restore_sqlite_db_from_file(tmp_db, agent_dir / "agent_bot.db")
+                restored_files.append("AgentBot/agent_bot.db")
+            finally:
+                try:
+                    tmp_db.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
         receipts_members = [
             name for name in members.keys()
             if name.startswith("Receiptions/") and len(name) > len("Receiptions/")
@@ -3926,7 +3975,7 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
 
         if not any(
             item in restored_files
-            for item in {"Shared/hiddify_sellbot.db", "Shared/servers.json", "Shared/plans.json"}
+            for item in {"Shared/hiddify_sellbot.db", "Shared/servers.json", "Shared/plans.json", "Shared/agency.db", "CustomerBot/customer_bot.db", "AgentBot/agent_bot.db"}
         ):
             legacy_payload = _extract_legacy_payload_from_zip(zf, members)
             if legacy_payload:
@@ -4084,6 +4133,10 @@ def _make_bot_backup_zip() -> Path:
         (root_dir / "Shared" / "userbot.db", "Shared/userbot.db"),
         (root_dir / "Shared" / "servers.json", "Shared/servers.json"),
         (root_dir / "Shared" / "plans.json", "Shared/plans.json"),
+        # v4.0.0: Agency + Customer + Agent databases
+        (root_dir / "Shared" / "agency.db", "Shared/agency.db"),
+        (root_dir / "CustomerBot" / "customer_bot.db", "CustomerBot/customer_bot.db"),
+        (root_dir / "AgentBot" / "agent_bot.db", "AgentBot/agent_bot.db"),
     ]
 
     added: List[Dict[str, Any]] = []
@@ -8105,7 +8158,8 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 tg_id = pay.get('telegram_id')
                 if tg_id and USER_BOT_TOKEN:
                     user_bot = Bot(token=USER_BOT_TOKEN)
-                    amount_txt = _format_toman(pay.get('amount') or 0)
+                    amount_value = int(pay.get('amount') or 0)
+                    amount_txt = _format_toman(amount_value)
                     pay_meta = _parse_receipt_meta(str(pay.get("receipt_image") or ""))
                     is_direct_buy = str(pay_meta.get("pay_flow") or "").strip().lower() == "direct_buy"
                     if new_st == "approved":
@@ -8116,12 +8170,14 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                             )
                         else:
                             notify_text = (
-                                "✅ پرداخت شما تایید شد.\n\n"
-                                f"مبلغ {amount_txt} تومان به کیف پول شما اضافه شد."
+                                "✅ پرداخت شما تایید شد.\n"
+                                f"💰 مبلغ شارژ: {amount_txt} تومان\n"
+                                "🎉 کیف پول شما با موفقیت شارژ شد."
                             )
                     else:
                         notify_text = (
-                            "🚫 پرداخت شما رد شد.\n\n"
+                            "❌ پرداخت شما رد شد.\n"
+                            "مبلغ به کیف پول شما اضافه نشد.\n"
                             "در صورت نیاز با پشتیبانی تماس بگیرید."
                         )
                     await user_bot.send_message(chat_id=tg_id, text=notify_text)

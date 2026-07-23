@@ -36,6 +36,7 @@ from AdminBot.keyboards import (
     BTN_USERBOT,
     BTN_STATUS,
     BTN_BACKUP,
+    BTN_AGENCIES,
     cancel_keyboard,
 )
 
@@ -89,6 +90,12 @@ from AdminBot.userbot import (
     SUB_BASE_URL_EDIT_STATE,
 )
 
+from AdminBot.agencies import (
+    handle_agencies_entry,
+    handle_agencies_callback,
+    handle_agencies_text,
+)
+
 
 load_dotenv()
 PANEL_PREREQ_SCRIPT_URL = (
@@ -137,23 +144,27 @@ def _is_confirm_text(text: str) -> bool:
 
 
 def _is_servers_button(text: str, text_key: str) -> bool:
-    return text in {BTN_SERVERS, "مدیریت سرورها🖥️"} or "مدیریتسرورها" in text_key
+    return text in {BTN_SERVERS, "مدیریت سرورها🖥", "🖥️ سرورها"} or "مدیریتسرورها" in text_key or "سرورها" in text_key
 
 
 def _is_search_button(text: str, text_key: str) -> bool:
-    return text in {BTN_SEARCH_USER, "جستجوی کاربر🔍"} or "جستجویکاربر" in text_key
+    return text in {BTN_SEARCH_USER, "🔍 جستجوی کاربر", "جستجوی کاربر🔍"} or "جستجویکاربر" in text_key
 
 
 def _is_userbot_button(text: str, text_key: str) -> bool:
-    return text == BTN_USERBOT or "مدیریترباتکاربران" in text_key
+    return text in {BTN_USERBOT, "🤖 مدیریت ربات کاربران", "🤖 ربات کاربران"} or "مدیریترباتکاربران" in text_key or "ربات کاربران" in text_key
 
 
 def _is_status_button(text: str, text_key: str) -> bool:
-    return text in {BTN_STATUS, "وضعیت سرور📈"} or "وضعیتسرور" in text_key
+    return text in {BTN_STATUS, "📊 وضعیت سرور", "📈 وضعیت سرور", "🖥 وضعیت سرور"} or "وضعیتسرور" in text_key
 
 
 def _is_backup_button(text: str, text_key: str) -> bool:
-    return text in {BTN_BACKUP, "دریافت بکاپ📬"} or "دریافتبکاپ" in text_key
+    return text in {BTN_BACKUP, "📫 دریافت بکاپ", "📣 دریافت بکاپ", "📬 دریافت بکاپ"} or "دریافتبکاپ" in text_key
+
+
+def _is_agencies_button(text: str, text_key: str) -> bool:
+    return text in {BTN_AGENCIES, "🏢 نمایندگی", "🏢 نمایندگی‌ها"} or "نمایندگی" in text_key or "مدیریتنمایندهها" in text_key
 
 
 def _is_any_main_menu_button(text: str, text_key: str) -> bool:
@@ -163,6 +174,7 @@ def _is_any_main_menu_button(text: str, text_key: str) -> bool:
         or _is_userbot_button(text, text_key)
         or _is_status_button(text, text_key)
         or _is_backup_button(text, text_key)
+        or _is_agencies_button(text, text_key)
     )
 
 
@@ -1347,6 +1359,32 @@ async def _auto_propagate_user_to_nodes(
                     )
                 except Exception as map_err:
                     logger.warning("Failed to record node mapping for %s: %s", node_title, map_err)
+            else:
+                try:
+                    target_sid = int(target.get("id") or 0)
+                    existing_svc = userbot_db.get_service_by_panel_uuid(user_uuid)
+                    if existing_svc:
+                        svc_id = int(existing_svc["id"])
+                    else:
+                        svc_id = userbot_db.create_admin_service(
+                            panel_user_uuid=user_uuid,
+                            name=user_name or f"admin-{user_uuid[:8]}",
+                            server_id=target_sid,
+                            server_title=str(target.get("title") or f"سرور #{target_sid}"),
+                            usage_limit=int(usage_limit_GB),
+                            days=package_days,
+                        )
+                    if svc_id:
+                        userbot_db.add_service_node(
+                            service_id=svc_id,
+                            server_id=target_sid,
+                            server_title=node_title,
+                            panel_user_uuid=created_uuid,
+                            panel_user_id=(str(created.get("id")).strip() if created.get("id") else None),
+                            is_active=1,
+                        )
+                except Exception as map_err:
+                    logger.warning("Failed to create admin service record for %s: %s", node_title, map_err)
         except Exception as e:
             err_msg = str(e).strip().splitlines()[0] if str(e).strip() else "خطای نامشخص"
             failed_nodes.append(f"{node_title}: {err_msg}")
@@ -1412,6 +1450,7 @@ def build_node_sync_menu_keyboard(server_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🧩 ساخت کاربران جاافتاده", callback_data=f"server:{server_id}:sync_nodes_missing")],
             [InlineKeyboardButton("🔁 همسان‌سازی مشخصات موجودها", callback_data=f"server:{server_id}:sync_nodes_details")],
             [InlineKeyboardButton("✅ اجرای کامل امن", callback_data=f"server:{server_id}:sync_nodes_full")],
+            [InlineKeyboardButton("🔄 ثبت سرویس کاربران قدیمی ادمین", callback_data=f"server:{server_id}:sync_nodes_migrate_users")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")],
         ]
     )
@@ -1643,6 +1682,99 @@ async def _run_node_sync(
                     result["errors"].append(err)
 
         result["targets"].append(target_summary)
+
+    return result
+
+
+def _admin_user_has_mapping(panel_user_uuid: str) -> bool:
+    conn = userbot_db._get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT 1 FROM userbot_service_nodes WHERE panel_user_uuid = ? LIMIT 1", (panel_user_uuid,))
+        if cur.fetchone():
+            return True
+        cur.execute("SELECT 1 FROM userbot_services WHERE comment LIKE ? LIMIT 1", (f"%uuid:{panel_user_uuid}%",))
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+async def _run_admin_user_migration(server_id: int) -> Dict[str, Any]:
+    source, targets, warnings = _node_sync_targets(server_id)
+    result: Dict[str, Any] = {"total": 0, "created": 0, "skipped": 0, "errors_count": 0, "warnings": warnings}
+    if not source:
+        return result
+
+    all_servers = [source] + targets
+    seen_uuids: set[str] = set()
+
+    for srv in all_servers:
+        sid = int(srv.get("id") or 0)
+        srv_title = str(srv.get("title") or f"#{sid}")
+        if sid <= 0:
+            continue
+        try:
+            users = await hiddify_api.list_users(srv)
+        except Exception as e:
+            result["errors_count"] += 1
+            result.setdefault("errors", []).append(f"{srv_title}: {_short_error(e)}")
+            continue
+
+        for user in users or []:
+            uuid = str((user.get("uuid") or user.get("id") or "")).strip()
+            if not uuid or uuid in seen_uuids:
+                continue
+            seen_uuids.add(uuid)
+            result["total"] += 1
+
+            if _admin_user_has_mapping(uuid):
+                result["skipped"] += 1
+                continue
+
+            name = str(user.get("name") or f"user-{uuid[:8]}")
+            usage_limit = float(user.get("usage_limit_GB") or 0)
+            current_usage = float(user.get("current_usage_GB") or 0)
+            package_days = int(user.get("package_days") or 0)
+            last_online = str(user.get("last_online") or "")
+            panel_user_id = str(user.get("id") or "").strip()
+            comment = f"uuid:{uuid}|admin:1|migrated:1"
+
+            conn = userbot_db._get_conn()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "INSERT INTO userbot_services (user_id, name, server_id, usage_current, usage_limit, days_left, last_online, comment) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (0, name, sid, current_usage, usage_limit, package_days, last_online, comment),
+                )
+                service_id = int(cur.lastrowid)
+                for tgt in all_servers:
+                    tgt_sid = int(tgt.get("id") or 0)
+                    if tgt_sid <= 0:
+                        continue
+                    tgt_title = str(tgt.get("title") or f"#{tgt_sid}")
+                    tgt_uuid = uuid
+                    try:
+                        tu = await hiddify_api.get_user_by_uuid(tgt, uuid)
+                        tgt_uuid = str(tu.get("uuid") or tu.get("id") or uuid)
+                    except Exception:
+                        pass
+                    conn2 = userbot_db._get_conn()
+                    try:
+                        conn2.execute(
+                            "INSERT OR IGNORE INTO userbot_service_nodes (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                            (service_id, tgt_sid, tgt_title, tgt_uuid, panel_user_id or None, last_online or None),
+                        )
+                        conn2.commit()
+                    finally:
+                        conn2.close()
+                conn.commit()
+                result["created"] += 1
+            except Exception as e:
+                conn.rollback()
+                result["errors_count"] += 1
+                result.setdefault("errors", []).append(f"{uuid[:8]}...: {_short_error(e)}")
+            finally:
+                conn.close()
 
     return result
 
@@ -6278,6 +6410,19 @@ async def handle_server_inline_callback(
             )
             return
 
+        if action == "sync_nodes_migrate_users":
+            await msg.edit_text("🔄 در حال ثبت سرویس کاربران قدیمی ادمین در دیتابیس...")
+            result = await _run_admin_user_migration(server_id)
+            await msg.edit_text(
+                f"✅ ثبت سرویس کاربران قدیمی ادمین به پایان رسید.\n\n"
+                f"👤 کل کاربران بررسی‌شده: {result['total']}\n"
+                f"🆕 سرویس جدید ساخته شد: {result['created']}\n"
+                f"⏭ از قبل وجود داشت: {result['skipped']}\n"
+                f"❌ خطا: {result['errors_count']}",
+                reply_markup=build_node_sync_menu_keyboard(server_id),
+            )
+            return
+
 # ===============================
 #   هندلر اصلی منوی ادمین
 # ===============================
@@ -6308,6 +6453,14 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # مسیرهای ورودی متنی ادمین (ویزاردها)
     # NOTE: کلید متنی userbot_sub_reminder_edit هم عمداً چک می‌شود
     # تا در هر شرایطی ویزارد یادآور از دست نرود.
+
+    # ویزارد‌های مدیریت نماینده‌ها (agency)
+    state_val = context.user_data.get("state") or ""
+    if isinstance(state_val, str) and state_val.startswith("agency:"):
+        consumed = await handle_agencies_text(update, context)
+        if consumed:
+            return
+
     if context.user_data.get(WALLET_EDIT_STATE) or \
        context.user_data.get(MESSAGE_SEND_STATE) or \
        context.user_data.get(SUB_REMINDER_EDIT_STATE) or \
@@ -6363,6 +6516,11 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_userbot_entry(update, context)
         return
 
+    # اگر مدیر روی دکمه «مدیریت نماینده‌ها🏢» کلیک کرد
+    if _is_agencies_button(text, text_key):
+        await handle_agencies_entry(update, context)
+        return
+
     if _is_backup_button(text, text_key):
         await send_admin_full_backup(chat_id, context, message=message)
         return
@@ -6408,6 +6566,11 @@ async def admin_inline_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     data = (query.data or "").strip()
     msg = query.message
+
+    # --- هندلر مدیریت نماینده‌ها (agency) ---
+    if data.startswith("agency:"):
+        await handle_agencies_callback(update, context)
+        return
 
     # --- هندلرهای وضعیت سرور ---
     if data == "status:back":

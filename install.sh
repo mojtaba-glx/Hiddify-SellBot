@@ -13,15 +13,25 @@ VERSION_FILE="$ROOT_DIR/VERSION"
 
 ADMIN_MAIN="$ROOT_DIR/AdminBot/main.py"
 USER_MAIN="$ROOT_DIR/UserBot/main.py"
+AGENT_MAIN="$ROOT_DIR/AgentBot/main.py"
+CUSTOMER_MAIN="$ROOT_DIR/CustomerBot/main.py"
 
 ADMIN_PID_FILE="$LOG_DIR/adminbot.pid"
 USER_PID_FILE="$LOG_DIR/userbot.pid"
+AGENT_PID_FILE="$LOG_DIR/agentbot.pid"
+CUSTOMER_PID_FILE="$LOG_DIR/customerbot.pid"
 ADMIN_LOG_FILE="$LOG_DIR/adminbot.log"
 USER_LOG_FILE="$LOG_DIR/userbot.log"
+AGENT_LOG_FILE="$LOG_DIR/agentbot.log"
+CUSTOMER_LOG_FILE="$LOG_DIR/customerbot.log"
 SYSTEMD_ADMIN_UNIT="hiddify-sellbot-admin.service"
 SYSTEMD_USER_UNIT="hiddify-sellbot-user.service"
+SYSTEMD_AGENT_UNIT="hiddify-sellbot-agent.service"
+SYSTEMD_CUSTOMER_UNIT="hiddify-sellbot-customer.service"
 SYSTEMD_ADMIN_UNIT_FILE="/etc/systemd/system/${SYSTEMD_ADMIN_UNIT}"
 SYSTEMD_USER_UNIT_FILE="/etc/systemd/system/${SYSTEMD_USER_UNIT}"
+SYSTEMD_AGENT_UNIT_FILE="/etc/systemd/system/${SYSTEMD_AGENT_UNIT}"
+SYSTEMD_CUSTOMER_UNIT_FILE="/etc/systemd/system/${SYSTEMD_CUSTOMER_UNIT}"
 HIDDIFY_STABILIZER_ENV_KEY="HIDDIFY_CREATE_USER_STABILIZE_MODE"
 
 APP_VERSION="dev"
@@ -39,6 +49,7 @@ refresh_app_version
 ADMIN_ID=""
 ADMIN_BOT_TOKEN=""
 USER_BOT_TOKEN=""
+AGENT_BOT_TOKEN=""
 SUB_BOT_USERNAME=""
 ENV_CONFIGURED_IN_RUN=0
 ENV_WAS_MISSING=0
@@ -78,7 +89,7 @@ USAGE
 
 ensure_dirs() {
   mkdir -p "$LOG_DIR" "$BACKUP_DIR" "$RECEIPT_DIR"
-  touch "$ADMIN_LOG_FILE" "$USER_LOG_FILE"
+  touch "$ADMIN_LOG_FILE" "$USER_LOG_FILE" "$AGENT_LOG_FILE" "$CUSTOMER_LOG_FILE"
 }
 
 load_env_file() {
@@ -145,7 +156,7 @@ configure_env() {
 
   if [ ! -t 0 ]; then
     _red "ERROR: config mode requires an interactive terminal."
-    _yellow "Please set these keys manually in .env: ADMIN_ID, ADMIN_BOT_TOKEN, USER_BOT_TOKEN"
+    _yellow "Please set these keys manually in .env: ADMIN_ID, ADMIN_BOT_TOKEN, USER_BOT_TOKEN, AGENT_BOT_TOKEN"
     return 1
   fi
 
@@ -153,9 +164,11 @@ configure_env() {
   ADMIN_ID="$(prompt_required "ADMIN_ID" "Admin numeric ID" "${ADMIN_ID:-}")"
   ADMIN_BOT_TOKEN="$(prompt_required "ADMIN_BOT_TOKEN" "Admin bot token" "${ADMIN_BOT_TOKEN:-}")"
   USER_BOT_TOKEN="$(prompt_required "USER_BOT_TOKEN" "User bot token" "${USER_BOT_TOKEN:-}")"
+  AGENT_BOT_TOKEN="$(prompt_required "AGENT_BOT_TOKEN" "Agent bot token" "${AGENT_BOT_TOKEN:-}")"
   set_env_var "ADMIN_ID" "$ADMIN_ID" "$ENV_FILE"
   set_env_var "ADMIN_BOT_TOKEN" "$ADMIN_BOT_TOKEN" "$ENV_FILE"
   set_env_var "USER_BOT_TOKEN" "$USER_BOT_TOKEN" "$ENV_FILE"
+  set_env_var "AGENT_BOT_TOKEN" "$AGENT_BOT_TOKEN" "$ENV_FILE"
 
   ENV_CONFIGURED_IN_RUN=1
   _green "OK: .env updated."
@@ -212,9 +225,10 @@ send_telegram_message() {
 
 send_first_install_welcome() {
   load_env_file "$ENV_FILE" || true
-  local msg_admin msg_user
+  local msg_admin msg_user msg_agent
   local admin_ok=0
   local user_ok=0
+  local agent_ok=0
 
   [ -n "${ADMIN_ID:-}" ] || return 0
   [ -n "${ADMIN_BOT_TOKEN:-}" ] || return 0
@@ -236,7 +250,16 @@ send_first_install_welcome() {
     fi
   fi
 
-  if [ "$admin_ok" -eq 1 ] || [ "$user_ok" -eq 1 ]; then
+  if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
+    msg_agent="✅ نصب و راه‌اندازی Hiddify-SellBot با موفقیت انجام شد.
+🤝 توکن ربات نمایندگی تنظیم شد.
+🔖 نسخه: ${APP_VERSION}"
+    if send_telegram_message "$AGENT_BOT_TOKEN" "$ADMIN_ID" "$msg_agent"; then
+      agent_ok=1
+    fi
+  fi
+
+  if [ "$admin_ok" -eq 1 ] || [ "$user_ok" -eq 1 ] || [ "$agent_ok" -eq 1 ]; then
     _green "OK: first-install welcome message sent."
   else
     _yellow "WARN: could not deliver welcome message to ADMIN_ID."
@@ -307,6 +330,9 @@ create_snapshot_backup() {
     Shared/hiddify_sellbot.db \
     Shared/servers.json \
     Shared/plans.json \
+    Shared/agency.db \
+    CustomerBot/customer_bot.db \
+    AgentBot/agent_bot.db \
     Receiptions \
     2>/dev/null || true
 
@@ -328,6 +354,9 @@ list_local_change_paths() {
 RUNTIME_GIT_PRESERVE_PATHS=(
   "Shared/servers.json"
   "Shared/plans.json"
+  "Shared/agency.db"
+  "CustomerBot/customer_bot.db"
+  "AgentBot/agent_bot.db"
 )
 
 create_runtime_git_preserve_snapshot() {
@@ -377,7 +406,7 @@ is_runtime_local_path() {
     .env|.env.bak*|.env.*.bak|logs|logs/*|backups|backups/*|Receiptions|Receiptions/*)
       return 0
       ;;
-    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db|Shared/*.db-*)
+    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db|Shared/*.db-*|Shared/agency.db|CustomerBot/customer_bot.db|AgentBot/agent_bot.db)
       return 0
       ;;
     *.pid|*.log|*.bak|*.tmp|Backup_Bot_*|Backup_All_*|Pre*.tar.gz|Pre*.zip)
@@ -538,27 +567,39 @@ show_diagnostics() {
     echo "Git: unavailable"
   fi
 
-  local admin_err admin_warn user_err user_warn
+  local admin_err admin_warn user_err user_warn agent_err agent_warn customer_err customer_warn
   admin_err="$(grep -Eci 'error|traceback|exception' "$ADMIN_LOG_FILE" 2>/dev/null || true)"
   admin_warn="$(grep -Eci 'warn|warning' "$ADMIN_LOG_FILE" 2>/dev/null || true)"
   user_err="$(grep -Eci 'error|traceback|exception' "$USER_LOG_FILE" 2>/dev/null || true)"
   user_warn="$(grep -Eci 'warn|warning' "$USER_LOG_FILE" 2>/dev/null || true)"
+  agent_err="$(grep -Eci 'error|traceback|exception' "$AGENT_LOG_FILE" 2>/dev/null || true)"
+  agent_warn="$(grep -Eci 'warn|warning' "$AGENT_LOG_FILE" 2>/dev/null || true)"
+  customer_err="$(grep -Eci 'error|traceback|exception' "$CUSTOMER_LOG_FILE" 2>/dev/null || true)"
+  customer_warn="$(grep -Eci 'warn|warning' "$CUSTOMER_LOG_FILE" 2>/dev/null || true)"
   admin_err="${admin_err:-0}"
   admin_warn="${admin_warn:-0}"
   user_err="${user_err:-0}"
   user_warn="${user_warn:-0}"
+  agent_err="${agent_err:-0}"
+  agent_warn="${agent_warn:-0}"
+  customer_err="${customer_err:-0}"
+  customer_warn="${customer_warn:-0}"
 
-  echo "Logs: admin(error=$admin_err warn=$admin_warn) user(error=$user_err warn=$user_warn)"
+  echo "Logs: admin(error=$admin_err warn=$admin_warn) user(error=$user_err warn=$user_warn) agent(error=$agent_err warn=$agent_warn) customer(error=$customer_err warn=$customer_warn)"
   echo "Recent AdminBot issues:"
   (grep -Ein 'error|traceback|exception|warn|warning' "$ADMIN_LOG_FILE" | tail -n 12) || true
   echo "Recent UserBot issues:"
   (grep -Ein 'error|traceback|exception|warn|warning' "$USER_LOG_FILE" | tail -n 12) || true
+  echo "Recent AgentBot issues:"
+  (grep -Ein 'error|traceback|exception|warn|warning' "$AGENT_LOG_FILE" | tail -n 12) || true
+  echo "Recent CustomerBot issues:"
+  (grep -Ein 'error|traceback|exception|warn|warning' "$CUSTOMER_LOG_FILE" | tail -n 12) || true
 }
 
 show_live_logs() {
   ensure_dirs
   _blue "Streaming logs (Ctrl+C to stop)..."
-  tail -n 60 -F "$ADMIN_LOG_FILE" "$USER_LOG_FILE"
+  tail -n 60 -F "$ADMIN_LOG_FILE" "$USER_LOG_FILE" "$AGENT_LOG_FILE" "$CUSTOMER_LOG_FILE"
 }
 
 reinstall_all() {
@@ -601,7 +642,7 @@ systemd_available() {
 }
 
 systemd_units_installed() {
-  [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && [ -f "$SYSTEMD_USER_UNIT_FILE" ]
+  [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && [ -f "$SYSTEMD_USER_UNIT_FILE" ] && [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ]
 }
 
 require_root() {
@@ -648,6 +689,42 @@ Environment=PYTHONUNBUFFERED=1
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  cat > "$SYSTEMD_AGENT_UNIT_FILE" <<EOF
+[Unit]
+Description=Hiddify SellBot AgentBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${ROOT_DIR}
+ExecStart=${VENV_DIR}/bin/python ${AGENT_MAIN}
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > "$SYSTEMD_CUSTOMER_UNIT_FILE" <<EOF
+[Unit]
+Description=Hiddify SellBot CustomerBot (multi-bot runner)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${ROOT_DIR}
+ExecStart=${VENV_DIR}/bin/python ${CUSTOMER_MAIN}
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
 autostart_on() {
@@ -666,10 +743,12 @@ autostart_on() {
   _blue "Configuring systemd autostart"
   stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot"
   stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot"
+  stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot"
+  stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot"
   write_systemd_units
   systemctl daemon-reload
-  systemctl enable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
-  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+  systemctl enable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
+  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
   _green "OK: autostart enabled."
   autostart_status
 }
@@ -686,8 +765,8 @@ autostart_off() {
   fi
 
   _blue "Stopping and disabling systemd autostart"
-  systemctl disable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" || true
-  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+  systemctl disable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT" || true
+  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
   _green "OK: autostart disabled."
 }
 
@@ -699,11 +778,11 @@ autostart_rm() {
   fi
 
   _blue "Removing systemd autostart services"
-  systemctl disable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" 2>/dev/null || true
-  rm -f "$SYSTEMD_ADMIN_UNIT_FILE" "$SYSTEMD_USER_UNIT_FILE"
+  systemctl disable --now "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
+  rm -f "$SYSTEMD_ADMIN_UNIT_FILE" "$SYSTEMD_USER_UNIT_FILE" "$SYSTEMD_AGENT_UNIT_FILE" "$SYSTEMD_CUSTOMER_UNIT_FILE"
   systemctl daemon-reload
   systemctl reset-failed 2>/dev/null || true
-  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+  rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
   _green "OK: autostart services removed."
 }
 
@@ -717,18 +796,28 @@ autostart_status() {
     return 0
   fi
 
-  local admin_active admin_enabled user_active user_enabled admin_pid user_pid
+  local admin_active admin_enabled user_active user_enabled agent_active agent_enabled customer_active customer_enabled admin_pid user_pid agent_pid customer_pid
   admin_active="$(systemctl is-active "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
   admin_enabled="$(systemctl is-enabled "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
   user_active="$(systemctl is-active "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
   user_enabled="$(systemctl is-enabled "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
+  agent_active="$(systemctl is-active "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true)"
+  agent_enabled="$(systemctl is-enabled "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true)"
+  customer_active="$(systemctl is-active "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true)"
+  customer_enabled="$(systemctl is-enabled "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true)"
   admin_pid="$(systemctl show -p MainPID --value "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
   user_pid="$(systemctl show -p MainPID --value "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
+  agent_pid="$(systemctl show -p MainPID --value "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true)"
+  customer_pid="$(systemctl show -p MainPID --value "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true)"
 
   admin_pid="${admin_pid:-0}"
   user_pid="${user_pid:-0}"
-  echo "autostart(admin): active=${admin_active:-unknown} enabled=${admin_enabled:-unknown} pid=$admin_pid"
-  echo "autostart(user):  active=${user_active:-unknown} enabled=${user_enabled:-unknown} pid=$user_pid"
+  agent_pid="${agent_pid:-0}"
+  customer_pid="${customer_pid:-0}"
+  echo "autostart(admin):    active=${admin_active:-unknown} enabled=${admin_enabled:-unknown} pid=$admin_pid"
+  echo "autostart(user):     active=${user_active:-unknown} enabled=${user_enabled:-unknown} pid=$user_pid"
+  echo "autostart(agent):    active=${agent_active:-unknown} enabled=${agent_enabled:-unknown} pid=$agent_pid"
+  echo "autostart(customer): active=${customer_active:-unknown} enabled=${customer_enabled:-unknown} pid=$customer_pid"
 }
 
 autostart_menu() {
@@ -901,6 +990,21 @@ stabilizer_menu() {
   done
 }
 
+wait_for_process_exit() {
+  local pid="$1"
+  local timeout="${2:-15}"
+  local i=0
+  [ -n "$pid" ] || return 0
+  while kill -0 "$pid" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -ge "$timeout" ]; then
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
 stop_single_bot() {
   local pid_file="$1"
   local main_py="$2"
@@ -911,15 +1015,46 @@ stop_single_bot() {
     pid="$(cat "$pid_file" 2>/dev/null || true)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
-      sleep 1
-      if kill -0 "$pid" 2>/dev/null; then
+      if ! wait_for_process_exit "$pid" 5; then
         kill -9 "$pid" 2>/dev/null || true
+        wait_for_process_exit "$pid" 5 || true
       fi
     fi
     rm -f "$pid_file"
   fi
 
-  pkill -f "$main_py" 2>/dev/null || true
+  if command -v pgrep >/dev/null 2>&1; then
+    local matched_pids
+    matched_pids="$(pgrep -f "$main_py" || true)"
+    if [ -n "$matched_pids" ]; then
+      while IFS= read -r mpid; do
+        [ -n "$mpid" ] || continue
+        kill "$mpid" 2>/dev/null || true
+      done <<< "$matched_pids"
+      sleep 1
+      matched_pids="$(pgrep -f "$main_py" || true)"
+      if [ -n "$matched_pids" ]; then
+        while IFS= read -r mpid; do
+          [ -n "$mpid" ] || continue
+          kill -9 "$mpid" 2>/dev/null || true
+        done <<< "$matched_pids"
+      fi
+    fi
+  else
+    pkill -f "$main_py" 2>/dev/null || true
+    sleep 1
+    pkill -9 -f "$main_py" 2>/dev/null || true
+  fi
+
+  local wait_i=0
+  while pgrep -f "$main_py" >/dev/null 2>&1; do
+    wait_i=$((wait_i + 1))
+    if [ "$wait_i" -ge 10 ]; then
+      break
+    fi
+    sleep 1
+  done
+
   _green "OK: $title stopped (if running)."
 }
 
@@ -931,15 +1066,19 @@ stop_bots() {
       return 1
     fi
     _blue "Stopping bots via systemd"
-    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
-    rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
+    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
+    rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
     _green "OK: AdminBot stopped (systemd)."
     _green "OK: UserBot stopped (systemd)."
+    _green "OK: AgentBot stopped (systemd)."
+    _green "OK: CustomerBot stopped (systemd)."
     return 0
   fi
   _blue "Stopping bots"
   stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot"
   stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot"
+  stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot"
+  stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot"
 }
 
 start_single_bot() {
@@ -998,15 +1137,19 @@ start_bots() {
       return 1
     fi
     _blue "Starting bots via systemd"
-    systemctl start "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
+    systemctl start "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
     _green "OK: AdminBot started (systemd)"
     _green "OK: UserBot started (systemd)"
+    _green "OK: AgentBot started (systemd)"
+    _green "OK: CustomerBot started (systemd)"
     return 0
   fi
 
   _blue "Starting bots"
   start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot"
   start_single_bot "$USER_MAIN" "$USER_PID_FILE" "$USER_LOG_FILE" "UserBot"
+  start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot"
+  start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot"
 }
 
 status_single_bot() {
@@ -1040,6 +1183,8 @@ show_status() {
   fi
   status_single_bot "$ADMIN_PID_FILE" "AdminBot"
   status_single_bot "$USER_PID_FILE" "UserBot"
+  status_single_bot "$AGENT_PID_FILE" "AgentBot"
+  status_single_bot "$CUSTOMER_PID_FILE" "CustomerBot"
 }
 
 factory_reset() {
@@ -1247,8 +1392,10 @@ install_all() {
   fi
   show_status
   _green "OK: install completed."
-  echo "Admin log: tail -f $ADMIN_LOG_FILE"
-  echo "User log:  tail -f $USER_LOG_FILE"
+  echo "Admin log:     tail -f $ADMIN_LOG_FILE"
+  echo "User log:      tail -f $USER_LOG_FILE"
+  echo "Agent log:     tail -f $AGENT_LOG_FILE"
+  echo "Customer log:  tail -f $CUSTOMER_LOG_FILE"
 }
 
 update_all() {

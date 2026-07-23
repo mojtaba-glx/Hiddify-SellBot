@@ -3,12 +3,13 @@ from telegram import ReplyKeyboardMarkup
 
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
-# متن دکمه‌ها
-BTN_SERVERS = "🖥️مدیریت سرورها"
-BTN_SEARCH_USER = "🔍جستجوی کاربر"
-BTN_USERBOT = "🤖مدیریت ربات کاربران"
-BTN_STATUS = "📈وضعیت سرور"
-BTN_BACKUP = "📬دریافت بکاپ"
+# Button labels
+BTN_SERVERS = "🖥 مدیریت سرورها"
+BTN_SEARCH_USER = "🔍 جستجوی کاربر"
+BTN_USERBOT = "🤖 مدیریت ربات کاربران"
+BTN_STATUS = "📊 وضعیت سرور"
+BTN_BACKUP = "📫 دریافت بکاپ"
+BTN_AGENCIES = "🏢 نمایندگی"
 
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
@@ -16,14 +17,14 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(BTN_SERVERS)],
         [KeyboardButton(BTN_SEARCH_USER)],
         [KeyboardButton(BTN_USERBOT)],
-        [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_BACKUP)],
+        [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_AGENCIES), KeyboardButton(BTN_BACKUP)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, selective=True)
 
 
 def cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("❌لغو")]],
+        [[KeyboardButton("❌ لغو")]],
         resize_keyboard=True,
         one_time_keyboard=True,
         selective=True,
@@ -33,8 +34,8 @@ def cancel_keyboard() -> ReplyKeyboardMarkup:
 def confirm_add_user_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("✅تایید")],
-            [KeyboardButton("❌لغو")],
+            [KeyboardButton("✅ تایید")],
+            [KeyboardButton("❌ لغو")],
         ],
         resize_keyboard=True,
         selective=True,

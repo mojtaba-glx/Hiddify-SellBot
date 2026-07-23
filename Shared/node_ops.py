@@ -306,6 +306,14 @@ async def monitor_and_recover_nodes() -> Dict[str, int]:
                 summary["nodes_down"] += 1
 
                 if auto_recover and int(node.get("fail_count") or 0) >= recover_fail_threshold:
+                    last_recovery = node.get("last_recovery", "")
+                    if last_recovery:
+                        try:
+                            last_recovery_dt = datetime.strptime(last_recovery, "%Y-%m-%d %H:%M:%S")
+                            if (datetime.now() - last_recovery_dt).total_seconds() < 300:
+                                continue
+                        except (ValueError, TypeError):
+                            pass
                     try:
                         provider = (node.get("provider") or (child.get("infra") or {}).get("provider") or "").lower()
                         provider_server_id = str(
@@ -316,6 +324,7 @@ async def monitor_and_recover_nodes() -> Dict[str, int]:
                         if provider == "hetzner" and provider_server_id:
                             await _hetzner_reboot(provider_server_id)
                             node["last_recovery"] = _now_str()
+                            node["fail_count"] = 0
                             summary["recoveries"] += 1
                     except Exception as e:
                         summary["errors"] += 1

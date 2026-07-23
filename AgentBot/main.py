@@ -1,0 +1,92 @@
+import logging
+import os
+import sys
+import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+from telegram import Update, BotCommand
+from telegram.error import NetworkError, TimedOut
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from AgentBot.handlers.main_menu import handle_start, handle_main_menu_callback, handle_agent_text
+from AgentBot.database import init_db as init_agent_db
+
+load_dotenv()
+AGENT_BOT_TOKEN = os.getenv("AGENT_BOT_TOKEN")
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+async def _post_init(application) -> None:
+    commands = [
+        BotCommand("start", "Agent panel"),
+        BotCommand("cancel", "Cancel current operation"),
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+    except Exception as e:
+        logger.warning("Failed setting bot commands: %s", e)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("AgentBot error:", exc_info=context.error)
+
+
+def main() -> None:
+    if not AGENT_BOT_TOKEN:
+        raise RuntimeError("AGENT_BOT_TOKEN is not set in .env")
+
+    init_agent_db()
+
+    backoff_seconds = 5
+    max_backoff_seconds = 60
+
+    while True:
+        application = (
+            ApplicationBuilder()
+            .token(AGENT_BOT_TOKEN)
+            .post_init(_post_init)
+            .connect_timeout(15)
+            .read_timeout(30)
+            .write_timeout(30)
+            .pool_timeout(30)
+            .build()
+        )
+
+        application.add_handler(CommandHandler("start", handle_start))
+        application.add_handler(CommandHandler("cancel", handle_agent_text))
+        application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_agent_text))
+        application.add_handler(CallbackQueryHandler(handle_main_menu_callback))
+        application.add_error_handler(error_handler)
+
+        try:
+            logger.info("AgentBot started and polling...")
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=False,
+                poll_interval=1.0,
+                timeout=30,
+            )
+            logger.warning("AgentBot polling stopped unexpectedly; restarting in %s seconds.", backoff_seconds)
+        except (TimedOut, NetworkError) as e:
+            logger.warning("AgentBot polling network error: %s. Restarting in %s seconds.", e, backoff_seconds)
+        except Exception as e:
+            logger.exception("AgentBot fatal polling error: %s. Restarting in %s seconds.", e, backoff_seconds)
+
+        time.sleep(backoff_seconds)
+        backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)
+
+
+if __name__ == "__main__":
+    main()

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
-from Shared import database, userbot_db, hiddify_api
+from Shared import database, userbot_db, hiddify_api, marzban_api, multi_panel
 
 
 ALLOWED_CONFIG_SCHEMES = (
@@ -307,9 +307,18 @@ async def _sync_service_runtime_from_panels_async(service_id: int) -> dict:
     return userbot_db.get_service_by_id(int(service_id)) or service
 
 
+def _run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
+
+
 def sync_service_runtime_from_panels(service_id: int) -> dict:
     try:
-        return asyncio.run(_sync_service_runtime_from_panels_async(int(service_id)))
+        return _run_async(_sync_service_runtime_from_panels_async(int(service_id)))
     except Exception:
         return userbot_db.get_service_by_id(int(service_id)) or {}
 
@@ -478,6 +487,7 @@ def _service_targets(service: dict) -> List[dict]:
     for m in mappings:
         sid = int(m.get("server_id") or 0)
         uuid = str(m.get("panel_user_uuid") or "").strip()
+        marzban_un = str(m.get("marzban_username") or "").strip()
         if sid <= 0 or not uuid:
             continue
         srv = database.get_server_by_id(sid)
@@ -494,6 +504,7 @@ def _service_targets(service: dict) -> List[dict]:
                 "server": srv,
                 "uuid": uuid,
                 "base_url": base,
+                "marzban_username": marzban_un,
             }
         )
 
@@ -513,21 +524,37 @@ def _service_targets(service: dict) -> List[dict]:
     return out
 
 
-def _fetch_lines_from_admin_api(server: dict, user_uuid: str) -> List[str]:
+def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: str = "") -> List[str]:
     """
     Fallback: fetch user configs via admin API and extract direct links.
+    Also fetches from Marzban if marzban_username is provided.
     """
-    try:
-        configs = asyncio.run(hiddify_api.get_user_configs(server, user_uuid))
-    except Exception:
-        return []
     lines: List[str] = []
-    for item in configs or []:
-        if not isinstance(item, dict):
-            continue
-        link = str(item.get("link") or "").strip()
-        if "://" in link:
-            lines.append(link)
+    # Hiddify configs
+    try:
+        configs = _run_async(hiddify_api.get_user_configs(server, user_uuid))
+        for item in configs or []:
+            if not isinstance(item, dict):
+                continue
+            link = str(item.get("link") or "").strip()
+            if "://" in link:
+                lines.append(link)
+    except Exception:
+        pass
+
+    # Marzban configs
+    if marzban_username:
+        try:
+            marzban_links = _run_async(marzban_api.get_user_configs(server, marzban_username))
+            existing = set(lines)
+            for link in marzban_links or []:
+                link_str = str(link or "").strip()
+                if link_str and "://" in link_str and link_str not in existing:
+                    lines.append(link_str)
+                    existing.add(link_str)
+        except Exception:
+            pass
+
     return lines
 
 
@@ -548,6 +575,7 @@ def build_subscription_text_for_service(service_id: int) -> str:
             fetched = _fetch_lines_from_admin_api(
                 target.get("server") or {},
                 str(target.get("uuid") or ""),
+                marzban_username=str(target.get("marzban_username") or ""),
             )
         for ln in fetched:
             if not _is_config_line(ln):

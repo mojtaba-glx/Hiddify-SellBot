@@ -27,7 +27,6 @@ if str(project_root) not in sys.path:
 
 # --- 3. ایمپورت ماژول‌های خارجی با مدیریت خطا و اعتبارسنجی نسخه ---
 import importlib
-import sys
 from typing import Optional, Any, List, Dict
 
 # Version compatibility matrix
@@ -157,7 +156,7 @@ def _validate_internal_modules():
     return validation_errors
 
 try:
-    from Shared import database, plans_storage, userbot_db, hiddify_api, sub_http_server
+    from Shared import database, plans_storage, userbot_db, hiddify_api, multi_panel, sub_http_server
     from Shared.qr_utils import make_qr_image
     from UserBot.keyboards import (
         main_menu_keyboard, cancel_keyboard, location_keyboard, 
@@ -317,7 +316,7 @@ SUB_SERVER_PORT = int(os.getenv("SUB_SERVER_PORT", "8787") or "8787")
 SUB_SERVER_PUBLIC_SCHEME = (os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower()
 SUB_SERVER_PUBLIC_PORT = int(os.getenv("SUB_SERVER_PUBLIC_PORT", str(SUB_SERVER_PORT)) or str(SUB_SERVER_PORT))
 SUB_SERVER_PUBLIC_HOST = (os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
-USERBOT_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_ACTION_COOLDOWN_SECONDS", "1.5") or "1.5")
+USERBOT_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_ACTION_COOLDOWN_SECONDS", "0.5") or "0.5")
 USERBOT_RATE_LIMIT_NOTICE_SECONDS = float(os.getenv("USERBOT_RATE_LIMIT_NOTICE_SECONDS", "5.0") or "5.0")
 BUY_MENU_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_MENU_ACTION_COOLDOWN_SECONDS", "0") or "0")
 BUY_CALLBACK_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_CALLBACK_COOLDOWN_SECONDS", "0.2") or "0.2")
@@ -1708,7 +1707,7 @@ async def _resolve_service_access_lock(service: dict) -> tuple[dict, Optional[st
     refreshed = await _sync_service_runtime_from_panels(service)
     refreshed_reason = _service_local_lock_reason(refreshed)
     if refreshed_reason == "nodes_inactive":
-        return refreshed, None
+        return refreshed, "nodes_inactive"
     return refreshed, refreshed_reason
 
 
@@ -2116,8 +2115,18 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> 
     errors: list[str] = []
 
     for srv, uuid in targets:
+        marzban_un = ""
         try:
-            await hiddify_api.patch_user(srv, uuid, {"name": new_name})
+            service_id_tmp = int(service.get("id") or 0)
+            if service_id_tmp > 0:
+                for node in userbot_db.get_service_nodes(service_id_tmp):
+                    if int(node.get("server_id") or 0) == int(srv.get("id") or 0):
+                        marzban_un = str(node.get("marzban_username") or "").strip()
+                        break
+        except Exception:
+            pass
+        try:
+            await multi_panel.patch_user(srv, uuid, {"name": new_name}, marzban_username=marzban_un)
             updated_targets.append((srv, uuid))
         except Exception as e:
             # Retry with sibling server records (same panel/proxy, different admin key).
@@ -2125,7 +2134,7 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> 
             if _is_panel_unauthorized_error(e):
                 for alt_srv in _find_auth_fallback_servers_for_panel(srv):
                     try:
-                        await hiddify_api.patch_user(alt_srv, uuid, {"name": new_name})
+                        await multi_panel.patch_user(alt_srv, uuid, {"name": new_name}, marzban_username=marzban_un)
                         updated_targets.append((alt_srv, uuid))
                         patched = True
                         break
@@ -2423,10 +2432,18 @@ async def _create_service_users_on_targets(
     payload_base["uuid"] = shared_uuid
     try:
         for idx, srv in enumerate(targets):
-            created = await hiddify_api.create_user(srv, payload_base)
+            try:
+                created = await multi_panel.create_user(srv, payload_base)
+            except Exception as e:
+                if idx == 0:
+                    raise
+                logger.warning("Node create_user failed server=%s: %s", srv.get("id"), e)
+                continue
             user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if not user_uuid:
-                raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
+                if idx == 0:
+                    raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
+                continue
             if user_uuid != shared_uuid:
                 logger.warning(
                     "Panel returned a different uuid than requested (server_id=%s requested=%s returned=%s)",
@@ -2434,12 +2451,14 @@ async def _create_service_users_on_targets(
                     shared_uuid,
                     user_uuid,
                 )
+            marzban_username = str(created.get("_marzban_username") or "").strip()
             created_nodes.append(
                 {
                     "server_id": int(srv.get("id") or 0),
                     "server_title": srv.get("title") or f"سرور #{srv.get('id')}",
                     "panel_user_uuid": user_uuid,
                     "panel_user_id": created.get("id"),
+                    "marzban_username": marzban_username,
                     "created": created,
                     "is_primary": idx == 0,
                 }
@@ -2456,12 +2475,19 @@ async def _deactivate_created_users(created_nodes: list[dict]) -> None:
         try:
             sid = int(item.get("server_id") or 0)
             uuid = str(item.get("panel_user_uuid") or "").strip()
+            marzban_un = str(item.get("marzban_username") or "").strip()
             if sid <= 0 or not uuid:
                 continue
             server = database.get_server_by_id(sid)
             if not server:
                 continue
             await hiddify_api.disable_user(server, uuid)
+            if marzban_un:
+                try:
+                    from Shared import marzban_api
+                    await marzban_api.disable_user(server, marzban_un)
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(
                 "Rollback deactivate failed for sid=%s uuid=%s: %s",
@@ -2581,17 +2607,27 @@ async def _apply_service_renewal_on_targets(
     payload["name"] = service_name
     payload["comment"] = _build_panel_user_comment(user_id, is_test=False)
 
-    last_online = None
-    for srv, uuid in targets:
-        patched = await hiddify_api.patch_user(srv, uuid, payload)
-        await hiddify_api.enable_user(srv, uuid)
-        if last_online is None:
-            last_online = patched.get("last_online")
-
     try:
         service_id = int(service.get("id") or 0)
     except (TypeError, ValueError):
         service_id = 0
+
+    last_online = None
+    for srv, uuid in targets:
+        # Look up marzban_username for this target
+        marzban_un = ""
+        try:
+            for node in userbot_db.get_service_nodes(service_id) if service_id > 0 else []:
+                if int(node.get("server_id") or 0) == int(srv.get("id") or 0):
+                    marzban_un = str(node.get("marzban_username") or "").strip()
+                    break
+        except Exception:
+            pass
+        patched = await multi_panel.patch_user(srv, uuid, payload, marzban_username=marzban_un)
+        await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+        if last_online is None:
+            last_online = patched.get("last_online")
+
     if service_id > 0:
         try:
             userbot_db.set_service_nodes_active(service_id, 1)
@@ -3239,8 +3275,17 @@ async def _collect_direct_configs_map_from_api(
             targets.append((server, uuid))
 
     for server, uuid in targets:
+        marzban_un = ""
         try:
-            configs_raw = await hiddify_api.get_user_configs(server, uuid)
+            if service_id > 0:
+                for node in userbot_db.get_service_nodes(service_id):
+                    if int(node.get("server_id") or 0) == int(server.get("id") or 0):
+                        marzban_un = str(node.get("marzban_username") or "").strip()
+                        break
+        except Exception:
+            pass
+        try:
+            configs_raw = await multi_panel.get_user_configs(server, uuid, marzban_username=marzban_un)
         except Exception:
             continue
 
@@ -4236,6 +4281,31 @@ def _parse_number_meta(value: Any, as_int: bool = True):
         return 0 if as_int else 0.0
 
 
+def _try_claim_direct_buy_payment(payment_id: int) -> bool:
+    conn = userbot_db._get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT receipt_image FROM userbot_payments WHERE id = ? AND status = 'approved' LIMIT 1", (payment_id,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        current = str(row["receipt_image"] or "")
+        meta = _parse_receipt_meta(current)
+        if str(meta.get("direct_done") or "").strip().lower() in {"1", "processing", "err"}:
+            return False
+        meta["direct_done"] = "processing"
+        meta["direct_error"] = ""
+        new_raw = _build_receipt_meta(meta)
+        cur.execute(
+            "UPDATE userbot_payments SET receipt_image = ?, updated_at = ? WHERE id = ? AND status = 'approved'",
+            (new_raw, datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"), payment_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 async def _process_approved_direct_buy_payments(application) -> None:
     conn = userbot_db._get_conn()
     cur = conn.cursor()
@@ -4269,8 +4339,7 @@ async def _process_approved_direct_buy_payments(application) -> None:
             if str(meta.get("pay_flow") or "").strip().lower() != "direct_buy":
                 continue
             done_state = str(meta.get("direct_done") or "").strip().lower()
-            direct_error = str(meta.get("direct_error") or "").strip().lower()
-            if done_state in {"1", "processing"} or (done_state == "err" and direct_error == "invalid_meta"):
+            if done_state in {"1", "processing", "err"}:
                 continue
 
             internal_user_id = int(row.get("user_id") or 0)
@@ -4291,10 +4360,9 @@ async def _process_approved_direct_buy_payments(application) -> None:
                 _update_payment_receipt_meta(payment_id, {"direct_done": "err", "direct_error": "invalid_meta"})
                 continue
 
-            _update_payment_receipt_meta(
-                payment_id,
-                {"direct_done": "processing", "direct_error": None},
-            )
+            if not _try_claim_direct_buy_payment(payment_id):
+                continue
+
             tg_user = SimpleNamespace(
                 id=tg_id,
                 username=str(row.get("username") or ""),
@@ -4337,7 +4405,6 @@ async def _process_approved_direct_buy_payments(application) -> None:
                     },
                 )
         except Exception as e:
-            # یک پرداخت خراب نباید کل صف پرداخت مستقیم را متوقف کند.
             _update_payment_receipt_meta(
                 payment_id,
                 {
@@ -4846,6 +4913,7 @@ async def _process_wallet_purchase(
                         if node_item.get("panel_user_id") is not None
                         else None
                     ),
+                    marzban_username=str(node_item.get("marzban_username") or "").strip(),
                     is_active=1,
                 )
             except Exception as e:
@@ -5107,7 +5175,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context,
         user_id,
         "cmd:start",
-        cooldown=2.0,
+        cooldown=0.5,
         event_ts=event_ts,
     )
     if limited:
@@ -5226,7 +5294,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     limited, wait_s = False, 0.0
     if not is_buy_menu_action:
         if "وضعیت اشتراک" in normalized_text:
-            menu_cd = 8.0
+            menu_cd = 0.5
         else:
             menu_cd = USERBOT_ACTION_COOLDOWN_SECONDS
         limited, wait_s = _check_action_rate_limit(
@@ -5348,17 +5416,16 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         services, _ = await _filter_existing_services(services)
-        active_services = [s for s in services if int(s.get("days_left") or 0) > 0]
-        if not active_services:
+        visible_services = [s for s in services if int(s.get("days_left") or 0) > -30]
+        if not visible_services:
             await update.message.reply_text("❌ اشتراک وجود ندارد.", reply_markup=_main_menu_keyboard())
             return
 
         await update.message.reply_text(
             "👇 لطفا یکی از اشتراک‌های خود را برای تمدید انتخاب نمایید",
-            reply_markup=renew_services_keyboard(active_services),
+reply_markup=renew_services_keyboard(visible_services),
         )
-
-        if not any(_service_is_renewable(s) for s in active_services):
+        if not any(_service_is_renewable(s) for s in visible_services):
             await update.message.reply_text(_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
 
     elif "کیف پول" in text:
@@ -5441,10 +5508,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 limit=USERBOT_STATUS_SYNC_CONCURRENCY,
             )
 
-            # نمایش سرویس‌های فعال (با روزهای باقی‌مانده > 0)
-            active_services = [s for s in synced_services if _to_int(s.get("days_left"), 0) > 0]
+            # نمایش سرویس‌های فعال و منقضی (تا ۳۰ روز قبل)
+            visible_services = [s for s in synced_services if _to_int(s.get("days_left"), 0) > -30]
 
-            if not active_services:
+            if not visible_services:
                 await update.message.reply_text(
                     "❌ اشتراک وجود ندارد.",
                     reply_markup=_main_menu_keyboard()
@@ -5452,10 +5519,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             settings = _get_subscription_settings()
-            if len(active_services) > 3:
+            if len(visible_services) > 3:
                 await update.message.reply_text(
                     "👇 لطفا یکی از اشتراک‌های خود را انتخاب نمایید",
-                    reply_markup=services_list_keyboard(active_services),
+                    reply_markup=services_list_keyboard(visible_services),
                 )
                 if removed_count > 0:
                     await update.message.reply_text(
@@ -5464,7 +5531,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 return
 
-            for service in active_services:
+            for service in visible_services:
                 msg = _build_subscription_status_text(service)
                 await update.message.reply_text(
                     msg,
@@ -5555,7 +5622,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Anti-spam for inline callbacks
     cb_cd = USERBOT_ACTION_COOLDOWN_SECONDS
     if data.startswith("status:"):
-        cb_cd = 2.0
+        cb_cd = 0.5
     elif data.startswith(("buy:", "wiz:")):
         cb_cd = BUY_CALLBACK_COOLDOWN_SECONDS
     limited, wait_s = _check_action_rate_limit(
@@ -7802,6 +7869,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if node_item.get("panel_user_id") is not None
                             else None
                         ),
+                        marzban_username=str(node_item.get("marzban_username") or "").strip(),
                         is_active=1,
                     )
                 except Exception as e:
@@ -8314,18 +8382,6 @@ async def _post_init_set_menu(application):
             application.bot_data["_direct_buy_delivery_task"] = task
     except Exception as e:
         logger.warning(f"Failed to start direct-buy delivery loop: {e}")
-
-    try:
-        if application.job_queue is not None and not application.bot_data.get("_direct_buy_delivery_job_registered"):
-            application.job_queue.run_repeating(
-                _direct_buy_delivery_job,
-                interval=10,
-                first=5,
-                name="userbot-direct-buy-delivery",
-            )
-            application.bot_data["_direct_buy_delivery_job_registered"] = True
-    except Exception as e:
-        logger.warning(f"Failed to register direct-buy delivery job: {e}")
 
     try:
         if application.job_queue is not None and not application.bot_data.get("_pending_card_admin_notify_job_registered"):

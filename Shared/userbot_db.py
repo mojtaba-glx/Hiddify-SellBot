@@ -232,6 +232,7 @@ def init_db() -> None:
             server_title TEXT,
             panel_user_uuid TEXT NOT NULL,
             panel_user_id TEXT,
+            marzban_username TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
             created_at TEXT,
             updated_at TEXT
@@ -459,7 +460,17 @@ def _migrate_db():
             print("Migrated: first_missing_at column added to userbot_service_probe.")
         except sqlite3.OperationalError:
             pass
-    
+
+    # Marzban integration: add marzban_username column to service_nodes
+    try:
+        cur.execute("SELECT marzban_username FROM userbot_service_nodes LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE userbot_service_nodes ADD COLUMN marzban_username TEXT DEFAULT ''")
+            print("Migrated: marzban_username column added to userbot_service_nodes.")
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()
 
@@ -1535,6 +1546,61 @@ def set_trial_spec_value(name: str, value: Any) -> Dict[str, Any]:
         settings["days"] = max(1, int(value))
     return set_trial_spec_settings(settings)
 
+
+# ======================== تنظیمات توکن ربات نماینده ========================
+
+DEFAULT_AGENT_BOT_SETTINGS = {
+    "agent_bot_token": "",
+}
+
+
+def get_agent_bot_settings() -> Dict[str, Any]:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT value FROM userbot_settings WHERE key = 'agent_bot_settings' LIMIT 1")
+        row = cur.fetchone()
+        settings = dict(DEFAULT_AGENT_BOT_SETTINGS)
+        if row and row["value"]:
+            try:
+                raw = json.loads(row["value"])
+                if isinstance(raw, dict):
+                    for key in DEFAULT_AGENT_BOT_SETTINGS.keys():
+                        if key in raw:
+                            settings[key] = str(raw.get(key) or "").strip()
+            except Exception:
+                pass
+        return settings
+    finally:
+        conn.close()
+
+
+def set_agent_bot_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    current = dict(DEFAULT_AGENT_BOT_SETTINGS)
+    if isinstance(settings, dict):
+        for key in DEFAULT_AGENT_BOT_SETTINGS.keys():
+            if key in settings:
+                current[key] = str(settings.get(key) or "").strip()
+
+    payload = json.dumps(current, ensure_ascii=False)
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO userbot_settings (key, value) VALUES ('agent_bot_settings', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (payload,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return current
+
+
 # ======================== توابع جدید پروفایل ========================
 
 def toggle_ban_user(user_id: int) -> int:
@@ -1645,6 +1711,7 @@ def get_users_page(page: int, page_size: int) -> Tuple[List[Dict[str, Any]], int
 
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+    init_db()
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM userbot_users WHERE id = ?", (user_id,))
@@ -1661,26 +1728,6 @@ def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
-
-def get_full_user_stats(user_id: int) -> Dict[str, Any]:
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM userbot_services WHERE user_id = ?", (user_id,))
-    subs_bought = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM userbot_payments WHERE user_id = ?", (user_id,))
-    tx_total = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM userbot_payments WHERE user_id = ? AND status = 'approved'", (user_id,))
-    tx_approved = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) as cnt, COALESCE(SUM(volume_gb), 0) as gb, COALESCE(SUM(price), 0) as price FROM userbot_orders WHERE user_id = ?", (user_id,))
-    orders = cur.fetchone()
-    conn.close()
-    return {
-        "subs_bought": subs_bought, "subs_connected": subs_bought,
-        "tx_total": tx_total, "tx_approved": tx_approved,
-        "orders_count": orders['cnt'] if orders else 0,
-        "orders_gb": orders['gb'] if orders else 0,
-        "orders_price": orders['price'] if orders else 0
-    }
 
 
 def search_users_by_telegram_id(telegram_id: int) -> List[Dict[str, Any]]:
@@ -1954,6 +2001,80 @@ def get_service_by_code(service_code: str) -> Optional[Dict[str, Any]]:
         return None
     conn = _get_conn()
     cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT *
+            FROM userbot_services
+            WHERE comment LIKE ?
+            ORDER BY id DESC
+            LIMIT 200
+            """,
+            (f"%code:{code}%",),
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            comment = str((row["comment"] if "comment" in row.keys() else "") or "")
+            for part in comment.split("|"):
+                if ":" not in part:
+                    continue
+                k, v = part.split(":", 1)
+                if k.strip().lower() == "code" and v.strip() == code:
+                    return dict(row)
+        return None
+    finally:
+        conn.close()
+
+
+def get_service_by_panel_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    uuid = str(panel_user_uuid or "").strip()
+    if not uuid:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT s.* FROM userbot_services s JOIN userbot_service_nodes n ON n.service_id = s.id WHERE n.panel_user_uuid = ? LIMIT 1",
+            (uuid,),
+        )
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+        cur.execute(
+            "SELECT s.* FROM userbot_services s WHERE s.comment LIKE ? LIMIT 1",
+            (f"%uuid:{uuid}%",),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_admin_service(
+    panel_user_uuid: str,
+    name: str,
+    server_id: int,
+    server_title: str,
+    usage_limit: int,
+    days: int,
+) -> Optional[int]:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        comment = f"uuid:{panel_user_uuid}|admin:1"
+        cur.execute(
+            "INSERT INTO userbot_services (user_id, name, server_id, server_title, usage_current, usage_limit, days_left, comment) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (0, name, server_id, server_title, 0.0, float(usage_limit), days, comment),
+        )
+        service_id = int(cur.lastrowid)
+        conn.commit()
+        return service_id
+    except Exception:
+        return None
+    finally:
+        conn.close()
     try:
         cur.execute(
             """
@@ -2296,6 +2417,7 @@ def add_service_node(
     server_title: str = "",
     panel_user_id: Optional[str] = None,
     is_active: int = 1,
+    marzban_username: str = "",
 ) -> None:
     init_db()
     now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
@@ -2305,12 +2427,13 @@ def add_service_node(
         cur.execute(
             """
             INSERT INTO userbot_service_nodes
-            (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(service_id, server_id, panel_user_uuid)
             DO UPDATE SET
                 server_title=excluded.server_title,
                 panel_user_id=excluded.panel_user_id,
+                marzban_username=CASE WHEN excluded.marzban_username != '' THEN excluded.marzban_username ELSE userbot_service_nodes.marzban_username END,
                 is_active=excluded.is_active,
                 updated_at=excluded.updated_at
             """,
@@ -2320,6 +2443,7 @@ def add_service_node(
                 server_title or "",
                 str(panel_user_uuid).strip(),
                 (str(panel_user_id).strip() if panel_user_id is not None else None),
+                str(marzban_username or "").strip(),
                 int(bool(is_active)),
                 now,
                 now,
