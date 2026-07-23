@@ -1709,19 +1709,28 @@ async def _run_admin_user_migration(server_id: int) -> Dict[str, Any]:
     all_servers = [source] + targets
     seen_uuids: set[str] = set()
 
-    for srv in all_servers:
+    # مرحله ۱: دریافت همزمان کاربران از همه سرورها
+    async def _fetch_users(srv):
         sid = int(srv.get("id") or 0)
-        srv_title = str(srv.get("title") or f"#{sid}")
         if sid <= 0:
-            continue
+            return sid, [], None
         try:
             users = await hiddify_api.list_users(srv)
+            return sid, users or [], None
         except Exception as e:
+            return sid, [], e
+
+    fetch_results = await asyncio.gather(*[_fetch_users(s) for s in all_servers])
+
+    # مرحله ۲: پردازش کاربران
+    for sid, users, fetch_error in fetch_results:
+        srv_title = next((str(s.get("title") or f"#{s.get('id')}") for s in all_servers if int(s.get("id") or 0) == sid), f"#{sid}")
+        if fetch_error:
             result["errors_count"] += 1
-            result.setdefault("errors", []).append(f"{srv_title}: {_short_error(e)}")
+            result.setdefault("errors", []).append(f"{srv_title}: {_short_error(fetch_error)}")
             continue
 
-        for user in users or []:
+        for user in users:
             uuid = str((user.get("uuid") or user.get("id") or "")).strip()
             if not uuid or uuid in seen_uuids:
                 continue
@@ -1753,15 +1762,9 @@ async def _run_admin_user_migration(server_id: int) -> Dict[str, Any]:
                     if tgt_sid <= 0:
                         continue
                     tgt_title = str(tgt.get("title") or f"#{tgt_sid}")
-                    tgt_uuid = uuid
-                    try:
-                        tu = await hiddify_api.get_user_by_uuid(tgt, uuid)
-                        tgt_uuid = str(tu.get("uuid") or tu.get("id") or uuid)
-                    except Exception:
-                        pass
                     cur.execute(
                         "INSERT OR IGNORE INTO userbot_service_nodes (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-                        (service_id, tgt_sid, tgt_title, tgt_uuid, panel_user_id or None, last_online or None),
+                        (service_id, tgt_sid, tgt_title, uuid, panel_user_id or None, last_online or None),
                     )
                 conn.commit()
                 result["created"] += 1
