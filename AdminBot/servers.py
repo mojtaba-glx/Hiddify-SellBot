@@ -6412,15 +6412,21 @@ async def handle_server_inline_callback(
 
         if action == "sync_nodes_migrate_users":
             await msg.edit_text("🔄 در حال ثبت سرویس کاربران قدیمی ادمین در دیتابیس...")
-            result = await _run_admin_user_migration(server_id)
-            await msg.edit_text(
-                f"✅ ثبت سرویس کاربران قدیمی ادمین به پایان رسید.\n\n"
-                f"👤 کل کاربران بررسی‌شده: {result['total']}\n"
-                f"🆕 سرویس جدید ساخته شد: {result['created']}\n"
-                f"⏭ از قبل وجود داشت: {result['skipped']}\n"
-                f"❌ خطا: {result['errors_count']}",
-                reply_markup=build_node_sync_menu_keyboard(server_id),
-            )
+            try:
+                result = await _run_admin_user_migration(server_id)
+                await msg.edit_text(
+                    f"✅ ثبت سرویس کاربران قدیمی ادمین به پایان رسید.\n\n"
+                    f"👤 کل کاربران بررسی‌شده: {result['total']}\n"
+                    f"🆕 سرویس جدید ساخته شد: {result['created']}\n"
+                    f"⏭ از قبل وجود داشت: {result['skipped']}\n"
+                    f"❌ خطا: {result['errors_count']}",
+                    reply_markup=build_node_sync_menu_keyboard(server_id),
+                )
+            except Exception as e:
+                await msg.edit_text(
+                    f"❌ خطا در مایگریشن کاربران قدیمی:\n\n{e}",
+                    reply_markup=build_node_sync_menu_keyboard(server_id),
+                )
             return
 
 # ===============================
