@@ -1066,19 +1066,25 @@ stop_bots() {
       return 1
     fi
     _blue "Stopping bots via systemd"
-    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
-    rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
+    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
+    rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
     _green "OK: AdminBot stopped (systemd)."
     _green "OK: UserBot stopped (systemd)."
-    _green "OK: AgentBot stopped (systemd)."
-    _green "OK: CustomerBot stopped (systemd)."
+    if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
+      systemctl stop "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
+      rm -f "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
+      _green "OK: AgentBot stopped (systemd)."
+      _green "OK: CustomerBot stopped (systemd)."
+    fi
     return 0
   fi
   _blue "Stopping bots"
   stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot"
   stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot"
-  stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot"
-  stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot"
+  if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
+    stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot"
+    stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot"
+  fi
 }
 
 start_single_bot() {
@@ -1194,8 +1200,10 @@ show_status() {
   fi
   status_single_bot "$ADMIN_PID_FILE" "AdminBot"
   status_single_bot "$USER_PID_FILE" "UserBot"
-  status_single_bot "$AGENT_PID_FILE" "AgentBot"
-  status_single_bot "$CUSTOMER_PID_FILE" "CustomerBot"
+  if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
+    status_single_bot "$AGENT_PID_FILE" "AgentBot"
+    status_single_bot "$CUSTOMER_PID_FILE" "CustomerBot"
+  fi
 }
 
 factory_reset() {
