@@ -6413,7 +6413,7 @@ async def handle_server_inline_callback(
                 errors = result.get("errors") or []
                 error_lines = "\n".join(f"- {e}" for e in errors[:5]) if errors else ""
                 await msg.edit_text(
-                    f"✅ ثبت سرویس کاربران قدیمی ادمین به پایان رسید.\n\n"
+                    "✅ ثبت سرویس کاربران قدیمی ادمین به پایان رسید.\n\n"
                     f"👤 کل کاربران بررسی‌شده: {result['total']}\n"
                     f"🆕 سرویس جدید ساخته شد: {result['created']}\n"
                     f"⏭ از قبل وجود داشت: {result['skipped']}\n"
