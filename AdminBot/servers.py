@@ -1759,15 +1759,10 @@ async def _run_admin_user_migration(server_id: int) -> Dict[str, Any]:
                         tgt_uuid = str(tu.get("uuid") or tu.get("id") or uuid)
                     except Exception:
                         pass
-                    conn2 = userbot_db._get_conn()
-                    try:
-                        conn2.execute(
-                            "INSERT OR IGNORE INTO userbot_service_nodes (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-                            (service_id, tgt_sid, tgt_title, tgt_uuid, panel_user_id or None, last_online or None),
-                        )
-                        conn2.commit()
-                    finally:
-                        conn2.close()
+                    cur.execute(
+                        "INSERT OR IGNORE INTO userbot_service_nodes (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                        (service_id, tgt_sid, tgt_title, tgt_uuid, panel_user_id or None, last_online or None),
+                    )
                 conn.commit()
                 result["created"] += 1
             except Exception as e:
