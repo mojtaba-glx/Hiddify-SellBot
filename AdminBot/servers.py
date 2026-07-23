@@ -18,6 +18,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest, NetworkError
 from pathlib import Path
+from AdminBot.nodes import _short_error
 import sys
 from urllib.parse import urlparse
 
