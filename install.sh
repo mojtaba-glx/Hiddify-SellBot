@@ -1137,19 +1137,30 @@ start_bots() {
       return 1
     fi
     _blue "Starting bots via systemd"
-    systemctl start "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
+    systemctl start "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
     _green "OK: AdminBot started (systemd)"
     _green "OK: UserBot started (systemd)"
-    _green "OK: AgentBot started (systemd)"
-    _green "OK: CustomerBot started (systemd)"
+    if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
+      systemctl start "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
+      _green "OK: AgentBot started (systemd)"
+      _green "OK: CustomerBot started (systemd)"
+    else
+      _yellow "SKIP: AgentBot (AGENT_BOT_TOKEN not set)"
+      _yellow "SKIP: CustomerBot (AGENT_BOT_TOKEN not set)"
+    fi
     return 0
   fi
 
   _blue "Starting bots"
   start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot"
   start_single_bot "$USER_MAIN" "$USER_PID_FILE" "$USER_LOG_FILE" "UserBot"
-  start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot"
-  start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot"
+  if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
+    start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot"
+    start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot"
+  else
+    _yellow "SKIP: AgentBot (AGENT_BOT_TOKEN not set)"
+    _yellow "SKIP: CustomerBot (AGENT_BOT_TOKEN not set)"
+  fi
 }
 
 status_single_bot() {
