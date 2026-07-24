@@ -506,10 +506,21 @@ update_source_if_git() {
       UPDATE_SOURCE_STATUS="updated"
       _green "OK: source updated."
     fi
+  elif [ "${EUID:-$(id -u)}" -eq 0 ]; then
+    _yellow "WARN: git pull --ff-only failed; trying reset to origin/$branch ..."
+    git -C "$ROOT_DIR" reset --hard "origin/$branch" 2>/dev/null
+    after_head="$(git -C "$ROOT_DIR" rev-parse --verify HEAD 2>/dev/null || echo "")"
+    if [ -n "$before_head" ] && [ "$before_head" = "$after_head" ]; then
+      UPDATE_SOURCE_STATUS="already-latest"
+      _blue "Source is already up-to-date."
+    else
+      UPDATE_SOURCE_STATUS="updated"
+      _green "OK: source updated via reset."
+    fi
   else
     UPDATE_SOURCE_STATUS="pull-failed"
     _yellow "WARN: git pull failed; continuing with current source."
-    _yellow "Hint: run ./install.sh update-force if you want to force-sync code."
+    _yellow "Hint: run ./install.sh update-force or run with sudo."
   fi
   restore_runtime_git_preserve_snapshot "$preserve_snapshot"
   refresh_app_version
