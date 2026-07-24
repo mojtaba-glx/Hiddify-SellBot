@@ -2080,7 +2080,7 @@ def create_admin_service(
 def fix_admin_services_missing_source_mapping() -> int:
     """
     Migration: برای سرویس‌های ادمینی که فقط mapping نود دارن و mapping سرور اصلی ندارن،
-    سرور اصلی (server_id خود سرویس) رو به عنوان node mapping اضافه کن.
+    سرور اصلی (parent) رو به عنوان node mapping اضافه کن.
     تعداد fix های انجام شده رو برمیگرداند.
     """
     init_db()
@@ -2088,6 +2088,24 @@ def fix_admin_services_missing_source_mapping() -> int:
     cur = conn.cursor()
     fixed = 0
     try:
+        # build child_id -> parent_ids map
+        child_to_parents: Dict[int, list[int]] = {}
+        try:
+            from Shared import database
+            servers = database.get_servers() or []
+            for s in servers:
+                pid = int(s.get("id") or 0)
+                if pid <= 0:
+                    continue
+                for n in (s.get("nodes") or []):
+                    if not isinstance(n, dict):
+                        continue
+                    cid = int(n.get("target_server_id") or 0)
+                    if cid > 0:
+                        child_to_parents.setdefault(cid, []).append(pid)
+        except Exception:
+            pass
+
         # پیدا کردن سرویس‌های ادمین (user_id=0) که service_node دارن
         cur.execute("""
             SELECT s.id, s.server_id, s.server_title, s.comment
@@ -2101,19 +2119,6 @@ def fix_admin_services_missing_source_mapping() -> int:
 
         for svc in services:
             svc_id = int(svc["id"])
-            main_server_id = int(svc["server_id"] or 0)
-            if main_server_id <= 0:
-                continue
-
-            # چک کن آیا mapping سرور اصلی از قبل وجود داره
-            cur.execute(
-                "SELECT 1 FROM userbot_service_nodes WHERE service_id = ? AND server_id = ? LIMIT 1",
-                (svc_id, main_server_id),
-            )
-            if cur.fetchone():
-                continue  # از قبل وجود داره
-
-            # UUID رو از comment استخراج کن
             comment = str(svc["comment"] or "")
             uuid = ""
             for part in comment.split("|"):
@@ -2123,21 +2128,42 @@ def fix_admin_services_missing_source_mapping() -> int:
             if not uuid:
                 continue
 
-            # سرور اصلی رو به عنوان node mapping اضافه کن
+            # همه server_id هایی که از قبل mapping دارن
+            cur.execute(
+                "SELECT DISTINCT server_id FROM userbot_service_nodes WHERE service_id = ?",
+                (svc_id,),
+            )
+            mapped_ids = {int(r["server_id"]) for r in cur.fetchall() if r["server_id"]}
+
+            # برای هر mapped server_id، parent هاش رو پیدا کن و اضافه کن
             now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-            cur.execute("""
-                INSERT INTO userbot_service_nodes
-                (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(service_id, server_id, panel_user_uuid)
-                DO UPDATE SET is_active = excluded.is_active, updated_at = excluded.updated_at
-            """, (svc_id, main_server_id, str(svc["server_title"] or ""), uuid, None, "", 1, now, now))
-            fixed += 1
+            for mapped_sid in list(mapped_ids):
+                for parent_sid in child_to_parents.get(mapped_sid, []):
+                    if parent_sid in mapped_ids:
+                        continue
+                    server_title = ""
+                    try:
+                        for s in servers:
+                            if int(s.get("id") or 0) == parent_sid:
+                                server_title = str(s.get("title") or f"سرور #{parent_sid}")
+                                break
+                    except Exception:
+                        server_title = f"سرور #{parent_sid}"
+                    cur.execute("""
+                        INSERT INTO userbot_service_nodes
+                        (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username, is_active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(service_id, server_id, panel_user_uuid)
+                        DO UPDATE SET is_active = excluded.is_active, updated_at = excluded.updated_at
+                    """, (svc_id, parent_sid, server_title, uuid, None, "", 1, now, now))
+                    mapped_ids.add(parent_sid)
+                    fixed += 1
 
         if fixed > 0:
             conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("fix_admin_services failed: %s", e)
     finally:
         conn.close()
     return fixed
