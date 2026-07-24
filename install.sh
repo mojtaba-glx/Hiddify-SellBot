@@ -471,6 +471,14 @@ update_source_if_git() {
       git -C "$ROOT_DIR" clean -fd 2>/dev/null || true
       non_runtime_changes="$(list_non_runtime_local_changes || true)"
       if [ -n "$non_runtime_changes" ]; then
+        _blue "Initial clean insufficient; trying hard reset to origin..."
+        local _branch
+        _branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+        git -C "$ROOT_DIR" reset --hard "origin/$_branch" 2>/dev/null || true
+        git -C "$ROOT_DIR" clean -fd 2>/dev/null || true
+        non_runtime_changes="$(list_non_runtime_local_changes || true)"
+      fi
+      if [ -n "$non_runtime_changes" ]; then
         _yellow "WARN: real local changes remain; skipping git pull."
         _yellow "Hint: run ./install.sh update-force"
         UPDATE_SOURCE_STATUS="skipped-local-changes"
