@@ -2167,6 +2167,9 @@ def fix_admin_services_missing_source_mapping() -> int:
     finally:
         conn.close()
     return fixed
+
+
+def get_service_owner_by_panel_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
     """
     پیدا کردن مالک فعلی یک UUID در دیتابیس ربات کاربران.
     برای جلوگیری از اتصال یک اشتراک به چند کاربر.
