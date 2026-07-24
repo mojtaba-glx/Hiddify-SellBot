@@ -18,6 +18,14 @@ def get_agent_plans(agent_id: int, server_id: Optional[int] = None) -> List[Dict
     return agent_db.get_agent_plans(agent_id, server_id)
 
 
+async def revoke_user_link_on_panel(panel_user_uuid: str, server_id: int, marzban_username: str = "") -> Dict[str, Any]:
+    """Revoke / regenerate user subscription links."""
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return {"new_uuid": "", "marzban_revoked": False}
+    return await multi_panel.revoke_user_link(server, panel_user_uuid, marzban_username=marzban_username)
+
+
 async def create_user_on_panel(server_id: int, server: Dict[str, Any], name: str, usage_limit_gb: float, days: int) -> Dict[str, Any]:
     payload = {
         "name": name,

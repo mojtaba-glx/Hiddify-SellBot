@@ -284,6 +284,58 @@ async def get_subscription_url(
 # These functions are re-exported for convenience so callers can use
 # multi_panel as a single import point.
 
+# ---------------------------------------------------------------------------
+# REVOKE USER LINK (regenerate configs / change UUID)
+# ---------------------------------------------------------------------------
+async def revoke_user_link(
+    server: Dict[str, Any],
+    user_uuid: str,
+    *,
+    marzban_username: str = "",
+) -> Dict[str, Any]:
+    """
+    Revoke / regenerate user subscription links.
+
+    - Hiddify: deletes existing user and creates a new one with the same
+      name / usage / days so a fresh UUID is generated.
+    - Marzban: calls ``revoke_user_subscription`` which rotates the
+      subscription token.
+
+    Returns dict with ``new_uuid`` (str, empty if unchanged) and
+    ``marzban_revoked`` (bool).
+    """
+    result: Dict[str, Any] = {"new_uuid": "", "marzban_revoked": False}
+
+    # --- Hiddify: delete + recreate to get a new UUID ---
+    try:
+        current = await hiddify_api.get_user_by_uuid(server, user_uuid)
+        if current:
+            payload = {
+                "name": str(current.get("name") or ""),
+                "usage_limit_GB": float(current.get("usage_limit_GB") or 0),
+                "package_days": int(current.get("package_days") or 0),
+                "is_active": True,
+            }
+            new_user = await hiddify_api.create_user(server, payload)
+            new_uuid = str((new_user or {}).get("uuid") or "")
+            if new_uuid:
+                result["new_uuid"] = new_uuid
+                await hiddify_api.delete_user(server, user_uuid)
+    except Exception as e:
+        logger.error("Hiddify revoke_user_link failed: %s", e)
+        raise
+
+    # --- Marzban: revoke subscription ---
+    if has_marzban(server) and marzban_username:
+        try:
+            await marzban_api.revoke_user_subscription(server, marzban_username)
+            result["marzban_revoked"] = True
+        except Exception as e:
+            logger.warning("Marzban revoke_user_subscription failed: %s", e)
+
+    return result
+
+
 list_users = hiddify_api.list_users
 get_user_by_uuid = hiddify_api.get_user_by_uuid
 get_server_stats = hiddify_api.get_server_stats

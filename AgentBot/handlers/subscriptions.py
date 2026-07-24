@@ -23,6 +23,7 @@ from AgentBot.utils.helpers import _escape, _fmt_toman, _fmt_gb, _normalize_digi
 from AgentBot.services.subscription_service import (
     create_subscription, renew_subscription,
     disable_subscription, enable_subscription, delete_subscription, get_configs,
+    change_subscription_link,
 )
 from AgentBot.database import create_order as db_create_order
 
@@ -46,15 +47,10 @@ async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
     agent_id = get_agent_id(context)
     if page < 1:
         page = 1
-    all_services, total_all = agent_db.get_services_by_agent(agent_id, page=1, page_size=10000)
-    now_str = datetime.now().strftime("%Y-%m-%d")
-    expired = [s for s in all_services if str(s.get("end_date", "") or "")[:10] < now_str] if all_services else []
-    total_expired = len(expired)
+    page_expired, total_expired = agent_db.get_expired_services_by_agent(agent_id, page=page, page_size=_PAGE_SIZE)
     total_pages = max(1, (total_expired + _PAGE_SIZE - 1) // _PAGE_SIZE)
     if page > total_pages:
         page = total_pages
-    offset = (page - 1) * _PAGE_SIZE
-    page_expired = expired[offset: offset + _PAGE_SIZE]
 
     lines = [f"\U0001f51c <b>\u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0645\u0646\u0642\u0636\u06cc \u0634\u062f\u0647</b> (\u0635\u0641\u062d\u0647 {page}/{total_pages})\n"]
     if not page_expired:
@@ -270,6 +266,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer("\u062d\u0630\u0641 \u0634\u062f \u2705" if ok else "\u062e\u0637\u0627!", show_alert=not ok)
         if ok:
             await show_menu(update, context)
+        return
+
+    if action == "newlink":
+        svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        svc = agent_db.get_service_by_id(svc_id)
+        if not svc:
+            await query.answer("\u0633\u0631\u0648\u06cc\u0633 \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.", show_alert=True)
+            return
+        await query.edit_message_text(
+            "\u23f3 \u062f\u0631 \u062d\u0627\u0644 \u062a\u063a\u06cc\u06cc\u0631 \u0644\u06cc\u0646\u06a9... \u0644\u0637\u0641\u0627 \u0635\u0628\u0631 \u06a9\u0646\u06cc\u062f.",
+            parse_mode="HTML",
+        )
+        result = await change_subscription_link(agent_id, svc_id)
+        if result:
+            is_active = bool(int(result.get("is_active", 0) or 0))
+            text = (
+                f"\u2705 <b>\u0644\u06cc\u0646\u06a9 \u0628\u0627 \u0645\u0648\u0641\u0642\u06cc\u062a \u062a\u063a\u06cc\u06cc\u0631 \u06a9\u0631\u062f!</b>\n\n"
+                f"\U0001f4e1 \u0633\u0631\u0648\u06cc\u0633: {_escape(result.get('name') or '')}\n"
+                f"\U0001f4e1 \u06cc\u0648\u06cc\u06cc\u062f\u06cc \u062c\u062f\u06cc\u062f: <code>{_escape(result.get('panel_user_uuid') or '')}</code>\n\n"
+                "\U0001f447 \u0627\u0632 \u062f\u06a9\u0645\u0647 \u0632\u06cc\u0631 \u06a9\u0627\u0646\u0641\u06cc\u06af \u0647\u0627\u06cc \u062c\u062f\u06cc\u062f \u0631\u0627 \u062f\u0631\u06cc\u0627\u0641\u062a \u06a9\u0646\u06cc\u062f."
+            )
+            try:
+                await query.edit_message_text(text, reply_markup=service_detail_keyboard(svc_id, is_active), parse_mode="HTML")
+            except Exception:
+                pass
+        else:
+            await query.edit_message_text(
+                "\u274c \u062e\u0637\u0627 \u062f\u0631 \u062a\u063a\u06cc\u06cc\u0631 \u0644\u06cc\u0646\u06a9. \u0644\u0637\u0641\u0627 \u062f\u0648\u0628\u0627\u0631\u0647 \u062a\u0644\u0627\u0634 \u06a9\u0646\u06cc\u062f.",
+                reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0))),
+                parse_mode="HTML",
+            )
         return
 
 

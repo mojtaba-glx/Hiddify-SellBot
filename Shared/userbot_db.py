@@ -2075,29 +2075,6 @@ def create_admin_service(
         return None
     finally:
         conn.close()
-    try:
-        cur.execute(
-            """
-            SELECT *
-            FROM userbot_services
-            WHERE comment LIKE ?
-            ORDER BY id DESC
-            LIMIT 200
-            """,
-            (f"%code:{code}%",),
-        )
-        rows = cur.fetchall()
-        for row in rows:
-            comment = str((row["comment"] if "comment" in row.keys() else "") or "")
-            for part in comment.split("|"):
-                if ":" not in part:
-                    continue
-                k, v = part.split(":", 1)
-                if k.strip().lower() == "code" and v.strip() == code:
-                    return dict(row)
-        return None
-    finally:
-        conn.close()
 
 
 def get_service_owner_by_panel_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
@@ -2114,10 +2091,11 @@ def get_service_owner_by_panel_uuid(panel_user_uuid: str) -> Optional[Dict[str, 
     try:
         cur.execute(
             """
-            SELECT s.id AS service_id, s.user_id, s.name AS service_name, u.telegram_id, u.username, u.full_name
+            SELECT s.id AS service_id, s.user_id, s.name AS service_name,
+                   u.telegram_id, u.username, u.full_name
             FROM userbot_service_nodes n
             JOIN userbot_services s ON s.id = n.service_id
-            JOIN userbot_users u ON u.id = s.user_id
+            LEFT JOIN userbot_users u ON u.id = s.user_id
             WHERE n.panel_user_uuid = ? OR n.panel_user_id = ?
             ORDER BY s.id DESC
             LIMIT 1
@@ -2131,9 +2109,10 @@ def get_service_owner_by_panel_uuid(panel_user_uuid: str) -> Optional[Dict[str, 
         # fallback برای سرویس‌های قدیمی که نگاشت نود ندارند و UUID در comment ثبت شده
         cur.execute(
             """
-            SELECT s.id AS service_id, s.user_id, s.name AS service_name, u.telegram_id, u.username, u.full_name
+            SELECT s.id AS service_id, s.user_id, s.name AS service_name,
+                   u.telegram_id, u.username, u.full_name
             FROM userbot_services s
-            JOIN userbot_users u ON u.id = s.user_id
+            LEFT JOIN userbot_users u ON u.id = s.user_id
             WHERE s.comment LIKE ?
             ORDER BY s.id DESC
             LIMIT 1

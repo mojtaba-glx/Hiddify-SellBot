@@ -1,11 +1,11 @@
 import logging
 from typing import Any, Dict, Optional
 
-from Shared import agent_db
+from Shared import agent_db, multi_panel
 from AgentBot.services.hiddify_service import (
     get_available_servers, get_server_by_id, get_agent_plans,
     create_user_on_panel, disable_user_on_panel, enable_user_on_panel,
-    delete_user_on_panel, get_user_configs,
+    delete_user_on_panel, get_user_configs, revoke_user_link_on_panel,
 )
 from AgentBot.database import create_order as db_create_order
 
@@ -72,7 +72,27 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             return None
 
     agent_db.renew_service(service_id, extra_days, extra_gb)
-    return agent_db.get_service_by_id(service_id)
+    updated = agent_db.get_service_by_id(service_id)
+
+    # Sync with panel (update usage_limit_GB and package_days)
+    if updated:
+        sid = int(updated.get("server_id") or 0)
+        server = get_server_by_id(sid)
+        if server and updated.get("panel_user_uuid"):
+            marzban_un = _lookup_marzban_username(service_id, sid)
+            new_usage = float(updated.get("usage_limit", 0) or 0)
+            new_days = int(updated.get("days_left", 0) or 0)
+            try:
+                await multi_panel.patch_user(
+                    server,
+                    updated["panel_user_uuid"],
+                    {"usage_limit_GB": new_usage, "package_days": new_days},
+                    marzban_username=marzban_un,
+                )
+            except Exception as e:
+                logger.error("panel sync failed on renew svc=%s: %s", service_id, e)
+
+    return updated
 
 
 def _lookup_marzban_username(service_id: int, server_id: int) -> str:
@@ -126,6 +146,32 @@ async def delete_subscription(agent_id: int, service_id: int) -> bool:
     except Exception as e:
         logger.error("delete panel API failed svc=%s: %s", service_id, e)
     return agent_db.delete_service(service_id)
+
+
+async def change_subscription_link(agent_id: int, service_id: int) -> Optional[Dict[str, Any]]:
+    """Regenerate user config links (new UUID on Hiddify, revoke sub on Marzban)."""
+    svc = agent_db.get_service_by_id(service_id)
+    if not svc or int(svc.get("agent_id", 0)) != agent_id:
+        return None
+
+    sid = int(svc.get("server_id") or 0)
+    old_uuid = str(svc.get("panel_user_uuid") or "")
+    if not old_uuid:
+        return None
+
+    marzban_un = _lookup_marzban_username(service_id, sid)
+    try:
+        result = await revoke_user_link_on_panel(old_uuid, sid, marzban_username=marzban_un)
+    except Exception as e:
+        logger.error("change_subscription_link panel failed svc=%s: %s", service_id, e)
+        return None
+
+    new_uuid = str(result.get("new_uuid") or "")
+    if new_uuid and new_uuid != old_uuid:
+        agent_db.update_service(service_id, {"panel_user_uuid": new_uuid})
+        agent_db.update_service_node_uuid(service_id, sid, old_uuid, new_uuid)
+
+    return agent_db.get_service_by_id(service_id)
 
 
 async def get_configs(agent_id: int, service_id: int) -> list:

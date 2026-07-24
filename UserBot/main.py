@@ -8500,7 +8500,9 @@ def _acquire_pid_lock() -> bool:
                 old_pid_str = f.read().strip()
             if old_pid_str:
                 old_pid = int(old_pid_str)
-                if os.path.exists(f"/proc/{old_pid}"):
+                if old_pid == os.getpid():
+                    logger.debug("PID file contains our own PID (written by start script). Overwriting.")
+                elif os.path.exists(f"/proc/{old_pid}"):
                     logger.warning("Stale UserBot PID %s found. Sending SIGTERM...", old_pid)
                     try:
                         os.kill(old_pid, 15)

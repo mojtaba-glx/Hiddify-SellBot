@@ -19,6 +19,7 @@ SUBS_DISABLE = "subs:disable"
 SUBS_ENABLE = "subs:enable"
 SUBS_DELETE = "subs:delete"
 SUBS_DODELETE = "subs:dodelete"
+SUBS_NEWLINK = "subs:newlink"
 
 WALLET_VIEW = "wallet:view"
 WALLET_CREATE = "wallet:create"

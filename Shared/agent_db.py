@@ -966,6 +966,29 @@ def get_all_active_services() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_expired_services_by_agent(agent_id: int, page: int = 1, page_size: int = 20) -> Tuple[List[Dict[str, Any]], int]:
+    """لیست سرویس‌های منقضی شده یک نماینده با صفحه‌بندی."""
+    init_db()
+    if page < 1:
+        page = 1
+    offset = (page - 1) * page_size
+    conn = _get_conn()
+    cur = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute(
+        "SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND end_date != '' AND end_date < ?",
+        (agent_id, now_str),
+    )
+    total = int(cur.fetchone()["c"] or 0)
+    cur.execute(
+        "SELECT * FROM agent_services WHERE agent_id = ? AND end_date != '' AND end_date < ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        (agent_id, now_str, page_size, offset),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows], total
+
+
 def update_service(service_id: int, updates: Dict[str, Any]) -> bool:
     """بروزرسانی فیلدهای سرویس."""
     if not updates:
@@ -1124,6 +1147,21 @@ def get_service_nodes(service_id: int) -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def update_service_node_uuid(service_id: int, server_id: int, old_uuid: str, new_uuid: str) -> bool:
+    """بروزرسانی UUID یک نود سرویس."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE agent_service_nodes SET panel_user_uuid = ?, updated_at = ? WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?",
+        (new_uuid, _now(), service_id, server_id, old_uuid),
+    )
+    affected = cur.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
 
 
 def delete_service_node(service_id: int, server_id: int, panel_user_uuid: str = "") -> bool:

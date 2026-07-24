@@ -67,6 +67,7 @@ def service_detail_keyboard(service_id: int, is_active: bool):
         rows.append([IButton("\u274c \u063a\u06cc\u0631\u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:disable:{service_id}")])
     else:
         rows.append([IButton("\u2705 \u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:enable:{service_id}")])
+    rows.append([IButton("\U0001f504 \u0644\u06cc\u0646\u06a9 \u062c\u062f\u06cc\u062f", callback_data=f"agbot:subs:newlink:{service_id}")])
     rows.append([IButton("\U0001f5d1 \u062d\u0630\u0641", callback_data=f"agbot:subs:delete:{service_id}")])
     rows.append([IButton(BTN_BACK, callback_data="agbot:subs:back")])
     return _ikb(rows)
