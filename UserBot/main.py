@@ -8488,7 +8488,43 @@ def _attach_userbot_handlers(app) -> None:
     app.add_error_handler(_userbot_error_handler)
 
 # --- 9. راه‌اندازی ربات ---
+_USERBOT_PID_FILE = os.path.join(LOG_DIR, "userbot.pid")
+
+def _acquire_pid_lock() -> bool:
+    """Prevent multiple UserBot instances by PID file locking."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        if os.path.exists(_USERBOT_PID_FILE):
+            with open(_USERBOT_PID_FILE) as f:
+                old_pid_str = f.read().strip()
+            if old_pid_str:
+                old_pid = int(old_pid_str)
+                if os.path.exists(f"/proc/{old_pid}"):
+                    logger.error("Another UserBot instance is running (PID %s). Exiting.", old_pid)
+                    return False
+                logger.warning("Stale PID file found for PID %s. Removing.", old_pid)
+        with open(_USERBOT_PID_FILE, "w") as f:
+            f.write(str(os.getpid()))
+        return True
+    except Exception as e:
+        logger.warning("Failed to acquire PID lock: %s", e)
+        return True
+
+def _release_pid_lock() -> None:
+    try:
+        if os.path.exists(_USERBOT_PID_FILE):
+            with open(_USERBOT_PID_FILE) as f:
+                content = f.read().strip()
+            if content == str(os.getpid()):
+                os.remove(_USERBOT_PID_FILE)
+    except Exception:
+        pass
+
 def main():
+    if not _acquire_pid_lock():
+        sys.exit(1)
+    import atexit
+    atexit.register(_release_pid_lock)
     if SUB_SERVER_ENABLED:
         try:
             sub_http_server.start_sub_server(SUB_SERVER_HOST, SUB_SERVER_PORT)
