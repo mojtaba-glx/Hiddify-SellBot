@@ -458,14 +458,30 @@ update_source_if_git() {
   runtime_changes="$(list_runtime_local_changes || true)"
 
   if [ -n "$non_runtime_changes" ]; then
-    _yellow "WARN: local code/config changes detected; skipping git pull for safety."
+    _yellow "WARN: local code changes detected."
     _yellow "Changed paths:"
     while IFS= read -r path; do
       [ -n "$path" ] && _yellow "  - $path"
     done <<< "$non_runtime_changes"
-    _yellow "Hint: commit/stash your changes, or run ./install.sh update-force"
-    UPDATE_SOURCE_STATUS="skipped-local-changes"
-    return 0
+
+    # اگه با sudo اجرا شده، احتمالاً تغییرات ownership کاذبه — ریست کن
+    if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+      _blue "Running as root: resetting local changes for clean pull..."
+      git -C "$ROOT_DIR" checkout -- . 2>/dev/null || true
+      git -C "$ROOT_DIR" clean -fd 2>/dev/null || true
+      non_runtime_changes="$(list_non_runtime_local_changes || true)"
+      if [ -n "$non_runtime_changes" ]; then
+        _yellow "WARN: real local changes remain; skipping git pull."
+        _yellow "Hint: run ./install.sh update-force"
+        UPDATE_SOURCE_STATUS="skipped-local-changes"
+        return 0
+      fi
+      _green "Local changes cleaned. Proceeding with git pull..."
+    else
+      _yellow "Hint: commit/stash your changes, or run ./install.sh update-force"
+      UPDATE_SOURCE_STATUS="skipped-local-changes"
+      return 0
+    fi
   fi
 
   if [ -n "$runtime_changes" ]; then
