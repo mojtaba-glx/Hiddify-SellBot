@@ -1333,6 +1333,43 @@ async def _auto_propagate_user_to_nodes(
     updated_nodes: List[str] = []
     failed_nodes: List[str] = []
 
+    # ثبت mapping سرور اصلی (source) — بدون این، enforcer مصرف سرور اصلی رو نمیبینه
+    source_id = int(source.get("id") or 0) if source else 0
+    if source_id > 0:
+        try:
+            existing_owner = _node_sync_service_owner(user_uuid)
+            if existing_owner:
+                userbot_db.add_service_node(
+                    service_id=int(existing_owner.get("service_id") or 0),
+                    server_id=source_id,
+                    server_title=str(source.get("title") or f"سرور #{source_id}"),
+                    panel_user_uuid=user_uuid,
+                    is_active=1,
+                )
+            else:
+                existing_svc = userbot_db.get_service_by_panel_uuid(user_uuid)
+                if existing_svc:
+                    svc_id = int(existing_svc["id"])
+                else:
+                    svc_id = userbot_db.create_admin_service(
+                        panel_user_uuid=user_uuid,
+                        name=user_name or f"admin-{user_uuid[:8]}",
+                        server_id=source_id,
+                        server_title=str(source.get("title") or f"سرور #{source_id}"),
+                        usage_limit=int(usage_limit_GB),
+                        days=package_days,
+                    )
+                if svc_id:
+                    userbot_db.add_service_node(
+                        service_id=svc_id,
+                        server_id=source_id,
+                        server_title=str(source.get("title") or f"سرور #{source_id}"),
+                        panel_user_uuid=user_uuid,
+                        is_active=1,
+                    )
+        except Exception as src_err:
+            logger.warning("Failed to record source server mapping for %s: %s", user_uuid, src_err)
+
     for target in targets:
         node_title = str(target.get("title") or f"سرور #{target.get('id')}")
         try:
