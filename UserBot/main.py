@@ -8491,7 +8491,8 @@ def _attach_userbot_handlers(app) -> None:
 _USERBOT_PID_FILE = os.path.join(LOG_DIR, "userbot.pid")
 
 def _acquire_pid_lock() -> bool:
-    """Prevent multiple UserBot instances by PID file locking."""
+    """Prevent multiple UserBot instances by PID file locking.
+    If an old instance is found, kill it and take over."""
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
         if os.path.exists(_USERBOT_PID_FILE):
@@ -8500,9 +8501,23 @@ def _acquire_pid_lock() -> bool:
             if old_pid_str:
                 old_pid = int(old_pid_str)
                 if os.path.exists(f"/proc/{old_pid}"):
-                    logger.error("Another UserBot instance is running (PID %s). Exiting.", old_pid)
-                    return False
-                logger.warning("Stale PID file found for PID %s. Removing.", old_pid)
+                    logger.warning("Stale UserBot PID %s found. Sending SIGTERM...", old_pid)
+                    try:
+                        os.kill(old_pid, 15)
+                        for _ in range(10):
+                            if not os.path.exists(f"/proc/{old_pid}"):
+                                break
+                            time.sleep(0.5)
+                        if os.path.exists(f"/proc/{old_pid}"):
+                            os.kill(old_pid, 9)
+                            time.sleep(0.5)
+                        logger.info("Old UserBot instance (PID %s) terminated.", old_pid)
+                    except ProcessLookupError:
+                        pass
+                    except Exception as e:
+                        logger.warning("Failed to kill old PID %s: %s", old_pid, e)
+                else:
+                    logger.warning("Stale PID file found for PID %s. Removing.", old_pid)
         with open(_USERBOT_PID_FILE, "w") as f:
             f.write(str(os.getpid()))
         return True
