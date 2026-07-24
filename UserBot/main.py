@@ -68,7 +68,7 @@ def _check_package_version(package_name: str, min_version: str) -> bool:
 def _safe_import_with_validation():
     """Safely import external packages with validation."""
     global load_dotenv, Update, InlineKeyboardMarkup, InlineKeyboardButton, Bot, ApplicationBuilder, CommandHandler, MessageHandler
-    global CallbackQueryHandler, ContextTypes, filters, TelegramError, BadRequest, NetworkError, BotCommand, MenuButtonCommands, HTTPXRequest
+    global CallbackQueryHandler, ContextTypes, filters, TelegramError, BadRequest, NetworkError, Conflict, BotCommand, MenuButtonCommands, HTTPXRequest
     
     try:
         # Check versions first
@@ -83,7 +83,7 @@ def _safe_import_with_validation():
             ApplicationBuilder, CommandHandler, MessageHandler, 
             CallbackQueryHandler, ContextTypes, filters
         )
-        from telegram.error import TelegramError, BadRequest, NetworkError
+        from telegram.error import TelegramError, BadRequest, NetworkError, Conflict
         from telegram.request import HTTPXRequest
         
         # Validate critical components
@@ -8355,6 +8355,8 @@ async def _post_init_set_menu(application):
 
     # Snapshot صف اولیه: برای هر کاربر فقط آخرین آپدیت pending را نگه می‌داریم
     # تا بعد از استارت، پیام‌های قدیمی او اجرا نشوند.
+    # NOTE: get_updates قبل از run_polling می‌تواند Conflict ایجاد کند
+    # اگر instance دیگری هنوز polling دارد. در صورت خطا رد می‌شویم.
     try:
         pending_updates = await application.bot.get_updates(
             timeout=0,
@@ -8376,6 +8378,8 @@ async def _post_init_set_menu(application):
                 "Startup pending filter prepared for %s user(s).",
                 len(latest_per_user),
             )
+    except Conflict:
+        logger.warning("Startup pending filter skipped due to active polling session.")
     except Exception as e:
         logger.warning(f"Failed to prepare startup pending filter: {e}")
 
@@ -8530,6 +8534,9 @@ def main():
         except NetworkError as e:
             logger.warning("Polling stopped by transient network error: %s | retry in 5s", e)
             time.sleep(5)
+        except Conflict as e:
+            logger.error("Polling conflict — another bot instance is running with the same token: %s | retry in 30s", e)
+            time.sleep(30)
         except Exception as e:
             logger.error("Polling crashed: %s | retry in 5s", e, exc_info=True)
             time.sleep(5)
