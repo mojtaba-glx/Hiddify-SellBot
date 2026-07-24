@@ -18,6 +18,10 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from types import SimpleNamespace
+from collections import defaultdict
+
+# قفل (lock) برای جلوگیری از race condition در ویزارد خرید
+_USER_WIZARD_LOCKS: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # --- 1. مسیردهی پروژه (بسیار مهم برای پیدا کردن پوشه Shared) ---
 current_file = Path(__file__).resolve()
@@ -6903,94 +6907,97 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ویزارد پویا (دکمه‌های مثبت و منفی)
     elif data.startswith("wiz:"):
-        parts = data.split(":")
-        sid, action = int(parts[1]), parts[2]
-        
-        wiz_data = context.user_data.get(f"wiz_{user_id}")
-        if not wiz_data: 
-            await query.answer("❌ زمان نشست تمام شده، لطفا دوباره تلاش کنید.", show_alert=True)
-            return
-            
-        data_plans = plans_storage._load_all_plans()
-        server_block = data_plans.get("servers", {}).get(str(sid), {})
-        dyn_settings = server_block.get("dynamic_settings", {})
-        display_mode = _resolve_plan_display_mode(server_block)
-        gb, months = wiz_data['gb'], wiz_data['months']
+        async with _USER_WIZARD_LOCKS[user_id]:
+            parts = data.split(":")
+            sid, action = int(parts[1]), parts[2]
 
-        min_gb = max(1, int(dyn_settings.get('min_gb', 10) or 10))
-        max_gb = max(min_gb, int(dyn_settings.get('max_gb', 500) or 500))
-        min_month = max(1, int(dyn_settings.get('min_month', 1) or 1))
-        max_month = max(min_month, int(dyn_settings.get('max_month', 12) or 12))
-        step_gb = max(1, int(dyn_settings.get('step_gb', 10) or 10))
-        step_month = max(1, int(dyn_settings.get('step_month', 1) or 1))
+            wiz_data = context.user_data.get(f"wiz_{user_id}")
+            if not wiz_data:
+                data_plans = plans_storage._load_all_plans()
+                server_block = data_plans.get("servers", {}).get(str(sid), {})
+                dyn_settings = server_block.get("dynamic_settings", {})
+                default_gb = dyn_settings.get("min_gb", 20)
+                default_months = dyn_settings.get("min_month", 1)
+                wiz_data = {"gb": default_gb, "months": default_months}
+                context.user_data[f"wiz_{user_id}"] = wiz_data
 
-        if action == "gb_inc":
-            if gb >= max_gb:
-                await query.answer(f"حداکثر حجم {max_gb} گیگابایت می‌باشد.", show_alert=True)
-                return
-            gb = min(max_gb, gb + step_gb)
-        elif action == "gb_dec":
-            if gb <= min_gb:
-                await query.answer(f"حداقل حجم {min_gb} گیگابایت می‌باشد.", show_alert=True)
-                return
-            gb = max(min_gb, gb - step_gb)
-        elif action == "month_inc":
-            if months >= max_month:
-                await query.answer(f"حداکثر دوره {max_month} ماه می‌باشد.", show_alert=True)
-                return
-            months = min(max_month, months + step_month)
-        elif action == "month_dec":
-            if months <= min_month:
-                await query.answer(f"حداقل دوره {min_month} ماه می‌باشد.", show_alert=True)
-                return
-            months = max(min_month, months - step_month)
-        elif action == "show_fixed":
-            # نمایش لیست پلن‌های آماده (طبق اسکرین‌شات)
-            if display_mode != "mixed":
-                await query.answer("این گزینه فقط در حالت ترکیبی فعال است.", show_alert=True)
-                return
-            plans = server_block.get("plans", [])
-            if not plans:
-                await query.answer("❌ پلن آماده‌ای برای این سرور وجود ندارد.", show_alert=True)
+            data_plans = plans_storage._load_all_plans()
+            server_block = data_plans.get("servers", {}).get(str(sid), {})
+            dyn_settings = server_block.get("dynamic_settings", {})
+            display_mode = _resolve_plan_display_mode(server_block)
+            gb, months = wiz_data['gb'], wiz_data['months']
+
+            min_gb = max(1, int(dyn_settings.get('min_gb', 10) or 10))
+            max_gb = max(min_gb, int(dyn_settings.get('max_gb', 500) or 500))
+            min_month = max(1, int(dyn_settings.get('min_month', 1) or 1))
+            max_month = max(min_month, int(dyn_settings.get('max_month', 12) or 12))
+            step_gb = max(1, int(dyn_settings.get('step_gb', 10) or 10))
+            step_month = max(1, int(dyn_settings.get('step_month', 1) or 1))
+
+            if action == "gb_inc":
+                if gb >= max_gb:
+                    await query.answer(f"حداکثر حجم {max_gb} گیگابایت می‌باشد.", show_alert=True)
+                    return
+                gb = min(max_gb, gb + step_gb)
+            elif action == "gb_dec":
+                if gb <= min_gb:
+                    await query.answer(f"حداقل حجم {min_gb} گیگابایت می‌باشد.", show_alert=True)
+                    return
+                gb = max(min_gb, gb - step_gb)
+            elif action == "month_inc":
+                if months >= max_month:
+                    await query.answer(f"حداکثر دوره {max_month} ماه می‌باشد.", show_alert=True)
+                    return
+                months = min(max_month, months + step_month)
+            elif action == "month_dec":
+                if months <= min_month:
+                    await query.answer(f"حداقل دوره {min_month} ماه می‌باشد.", show_alert=True)
+                    return
+                months = max(min_month, months - step_month)
+            elif action == "show_fixed":
+                if display_mode != "mixed":
+                    await query.answer("این گزینه فقط در حالت ترکیبی فعال است.", show_alert=True)
+                    return
+                plans = server_block.get("plans", [])
+                if not plans:
+                    await query.answer("❌ پلن آماده‌ای برای این سرور وجود ندارد.", show_alert=True)
+                    return
+                txp = _get_tx_plans_settings()
+                ordered = _sort_plans(plans, txp)
+                plan_columns = int(br.get("plan_columns") or 1)
+                uv = bool(br.get("renew_unlimited_volume", False))
+                ut = bool(br.get("renew_unlimited_time", False))
+                uv_from = int(br.get("renew_unlimited_volume_from_gb") or 1000)
+                ut_from = int(br.get("renew_unlimited_time_from_days") or 365)
+                await _safe_edit_message_text(
+                    query,
+                    text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
+                    parse_mode="Markdown",
+                    reply_markup=plans_keyboard(
+                        ordered,
+                        sid,
+                        0,
+                        columns=plan_columns,
+                        unlimited_volume=uv,
+                        unlimited_volume_from=uv_from,
+                        unlimited_time=ut,
+                        unlimited_time_from=ut_from,
+                        sort_by_priority=False,
+                        back_to_categories=False,
+                        rtl_rows=bool(txp.get("plan_sort_desc", False)),
+                    ),
+                )
                 return
 
-            txp = _get_tx_plans_settings()
-            ordered = _sort_plans(plans, txp)
-            plan_columns = int(br.get("plan_columns") or 1)
-            uv = bool(br.get("renew_unlimited_volume", False))
-            ut = bool(br.get("renew_unlimited_time", False))
-            uv_from = int(br.get("renew_unlimited_volume_from_gb") or 1000)
-            ut_from = int(br.get("renew_unlimited_time_from_days") or 365)
+            wiz_data['gb'], wiz_data['months'] = gb, months
+            context.user_data[f"wiz_{user_id}"] = wiz_data
 
-            await _safe_edit_message_text(
-                query,
-                text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
-                parse_mode="Markdown",
-                reply_markup=plans_keyboard(
-                    ordered,
-                    sid,
-                    0,
-                    columns=plan_columns,
-                    unlimited_volume=uv,
-                    unlimited_volume_from=uv_from,
-                    unlimited_time=ut,
-                    unlimited_time_from=ut_from,
-                    sort_by_priority=False,
-                    back_to_categories=False,
-                    rtl_rows=bool(txp.get("plan_sort_desc", False)),
-                ),
-            )
-            return
-        
-        wiz_data['gb'], wiz_data['months'] = gb, months
-        context.user_data[f"wiz_{user_id}"] = wiz_data
-        
-        price, off_percent = _calc_dynamic_price(gb, months, dyn_settings)
-        if display_mode == "mixed":
-            markup = mixed_buy_keyboard(sid, gb, months, price, off_percent=off_percent)
-        else:
-            markup = buy_wizard_keyboard(sid, gb, months, price, off_percent=off_percent)
-        await _safe_edit_message_reply_markup(query, reply_markup=markup)
+            price, off_percent = _calc_dynamic_price(gb, months, dyn_settings)
+            if display_mode == "mixed":
+                markup = mixed_buy_keyboard(sid, gb, months, price, off_percent=off_percent)
+            else:
+                markup = buy_wizard_keyboard(sid, gb, months, price, off_percent=off_percent)
+            await _safe_edit_message_reply_markup(query, reply_markup=markup)
 
     # تایید نهایی و هدایت به پرداخت
     elif data.startswith("buy:confirm_dyn:"):
