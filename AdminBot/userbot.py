@@ -1002,6 +1002,60 @@ def _resolve_live_server_title(service: Dict[str, Any], default: str = "سرور
     return stored_title or default
 
 
+def _resolve_all_server_titles(service: Dict[str, Any], default: str = "سرور") -> str:
+    titles = []
+    seen_ids = set()
+    try:
+        sid = int(service.get("server_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid > 0:
+        seen_ids.add(sid)
+        try:
+            srv = database.get_server_by_id(sid)
+        except Exception:
+            srv = None
+        if srv:
+            t = str(srv.get("title") or "").strip()
+            if t:
+                titles.append(t)
+        else:
+            stored = str(service.get("server_title") or "").strip()
+            titles.append(stored or f"سرور #{sid}")
+    try:
+        service_id = int(service.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    if service_id > 0:
+        try:
+            nodes = userbot_db.get_service_nodes(service_id)
+        except Exception:
+            nodes = []
+        for node in nodes:
+            try:
+                nid = int(node.get("server_id") or 0)
+            except (TypeError, ValueError):
+                nid = 0
+            if nid <= 0 or nid in seen_ids:
+                continue
+            seen_ids.add(nid)
+            try:
+                nsrv = database.get_server_by_id(nid)
+            except Exception:
+                nsrv = None
+            if nsrv:
+                t = str(nsrv.get("title") or "").strip()
+                if t:
+                    titles.append(t)
+            else:
+                titles.append(f"سرور #{nid}")
+    if len(titles) == 1:
+        return titles[0]
+    if len(titles) > 1:
+        return " + ".join(titles)
+    return default
+
+
 def _parse_service_comment_meta(raw_comment: str) -> Dict[str, str]:
     parsed: Dict[str, str] = {}
     raw = str(raw_comment or "").strip()
@@ -1405,7 +1459,7 @@ async def _resolve_service_note_text(service: Dict[str, Any]) -> str:
 
 def build_subscription_tracking_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> str:
     user_name = str(service.get("name") or "").strip() or str(user.get("full_name") or "").strip() or _display_name(user)
-    server_title = _format_server_location_title(_resolve_live_server_title(service, default="سرور"))
+    server_title = _format_server_location_title(_resolve_all_server_titles(service, default="سرور"))
 
     usage_current = _to_float(service.get("usage_current"))
     usage_limit = _to_float(service.get("usage_limit"))
@@ -1417,7 +1471,7 @@ def build_subscription_tracking_detail_text(user: Dict[str, Any], service: Dict[
     elif usage_limit is None or usage_limit <= 0:
         usage_line = f"📊میزان استفاده: {(usage_current or 0.0):.1f} از نامحدود گیگ"
     else:
-        usage_line = f"📊میزان استفاده: {(usage_current or 0.0):.1f} از {usage_limit:.1f} گیگ"
+        usage_line = f"📊میزان استفاده: {(usage_current or 0.0):.1f} از {usage_limit:.1f} گیگ (مجموع سرورها)"
 
     if days_left is None:
         expire_line = "⏳زمان باقی مانده: نامشخص"
@@ -1446,7 +1500,7 @@ def build_subscription_tracking_detail_text(user: Dict[str, Any], service: Dict[
 def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> str:
     """متن جزئیات سرویس (برای منوی لیست سرویس‌ها)."""
     service_name = (service.get("name") or "سرویس").strip()
-    server_title = _format_server_location_title(_resolve_live_server_title(service, default="سرور"))
+    server_title = _format_server_location_title(_resolve_all_server_titles(service, default="سرور"))
 
     usage_current = _to_float(service.get("usage_current"))
     usage_limit = _to_float(service.get("usage_limit"))
@@ -1462,7 +1516,7 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
     elif usage_limit is None:
         usage_line = f"📊مصرف: {usage_current:.2f} گیگابایت (نامحدود)"
     else:
-        usage_line = f"📊مصرف: {usage_current:.2f} از {usage_limit:.1f} گیگابایت"
+        usage_line = f"📊مصرف: {usage_current:.2f} از {usage_limit:.1f} گیگابایت (مجموع سرورها)"
 
     is_display_expired = _is_display_expired_service(service)
     if is_display_expired:
