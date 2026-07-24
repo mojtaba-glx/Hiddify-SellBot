@@ -18,10 +18,6 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from types import SimpleNamespace
-from collections import defaultdict
-
-# قفل (lock) برای جلوگیری از race condition در ویزارد خرید
-_USER_WIZARD_LOCKS: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # --- 1. مسیردهی پروژه (بسیار مهم برای پیدا کردن پوشه Shared) ---
 current_file = Path(__file__).resolve()
@@ -32,6 +28,10 @@ if str(project_root) not in sys.path:
 # --- 3. ایمپورت ماژول‌های خارجی با مدیریت خطا و اعتبارسنجی نسخه ---
 import importlib
 from typing import Optional, Any, List, Dict
+from collections import defaultdict
+
+# قفل (lock) برای جلوگیری از race condition در ویزارد خرید
+_USER_WIZARD_LOCKS: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Version compatibility matrix
 REQUIRED_VERSIONS = {
