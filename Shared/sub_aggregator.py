@@ -80,12 +80,38 @@ def _clean_status_host(raw: str, default: str) -> str:
 def _status_config_name(service: dict, lock_reason: str = "") -> str:
     if lock_reason:
         reason_map = {
-            "usage_limit_reached": "📊 اشتراک شما به پایان رسیده است",
-            "time_expired": "📅 اشتراک شما به پایان رسیده است",
+            "usage_limit_reached": "📊 حجم اشتراک شما به پایان رسیده است",
+            "time_expired": "📅 زمان اشتراک شما به پایان رسیده است",
             "nodes_inactive": "⚠️ اشتراک شما غیرفعال شده است",
             "service_not_found": "❌ اشتراک یافت نشد",
         }
-        return f"🚫 {reason_map.get(lock_reason, '🔒 اشتراک غیرفعال')}"
+        base_reason = reason_map.get(lock_reason, "🔒 اشتراک غیرفعال")
+
+        # جمع‌آوری جزییات استفاده از همه سرورها برای نمایش
+        usage_parts = []
+        total_usage_current = 0.0
+        total_usage_limit = 0.0
+        for target in _service_targets(service):
+            server_info = target.get("server", {})
+            server_name = server_info.get("name", "سرور") if server_info else "سرور"
+            
+            server_usage_current = _to_float((server_info or {}).get("usage_current", 0.0), 0.0)
+            server_usage_limit = _to_float((server_info or {}).get("usage_limit", 0.0), 0.0)
+            
+            total_usage_current += server_usage_current
+            total_usage_limit += server_usage_limit
+            
+            if server_usage_limit > 0:
+                usage_text = f"{_format_status_number(server_usage_current)}/{_format_status_number(server_usage_limit)}GB"
+                usage_parts.append(f"{server_name}: {usage_text}")
+        
+        global_usage_text = f"{_format_status_number(total_usage_current)}/{_format_status_number(total_usage_limit)}GB" if total_usage_limit > 0 else f"{_format_status_number(total_usage_current)}GB/نامحدود"
+        
+        usage_info = f" | ⏳ {global_usage_text}"
+        if usage_parts:
+            usage_info += f" | ({', '.join(usage_parts)})"
+        
+        return f"🚫 {base_reason}{usage_info}"
 
     service_name = str((service or {}).get("name") or "اشتراک").strip() or "اشتراک"
     usage_current = max(_to_float((service or {}).get("usage_current"), 0.0), 0.0)
