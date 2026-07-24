@@ -77,7 +77,16 @@ def _clean_status_host(raw: str, default: str) -> str:
     return value or default
 
 
-def _status_config_name(service: dict) -> str:
+def _status_config_name(service: dict, lock_reason: str = "") -> str:
+    if lock_reason:
+        reason_map = {
+            "usage_limit_reached": "📊 اشتراک شما به پایان رسیده است",
+            "time_expired": "📅 اشتراک شما به پایان رسیده است",
+            "nodes_inactive": "⚠️ اشتراک شما غیرفعال شده است",
+            "service_not_found": "❌ اشتراک یافت نشد",
+        }
+        return f"🚫 {reason_map.get(lock_reason, '🔒 اشتراک غیرفعال')}"
+
     service_name = str((service or {}).get("name") or "اشتراک").strip() or "اشتراک"
     usage_current = max(_to_float((service or {}).get("usage_current"), 0.0), 0.0)
     usage_limit = max(_to_float((service or {}).get("usage_limit"), 0.0), 0.0)
@@ -96,7 +105,7 @@ def _status_config_name(service: dict) -> str:
     return f"📊 {service_name} | ⏳ {usage_text} | 📅 {days_text}"
 
 
-def _build_status_config_line(service: dict) -> str:
+def _build_status_config_line(service: dict, lock_reason: str = "") -> str:
     if not _env_bool(STATUS_CONFIG_ENABLED_ENV, True):
         return ""
 
@@ -113,7 +122,7 @@ def _build_status_config_line(service: dict) -> str:
     return (
         f"trojan://1@{host}:{port}"
         f"?security=tls&sni={quote(sni, safe='')}&insecure=0&allowInsecure=0&type=tcp&headerType=none"
-        f"#{quote(_status_config_name(service), safe='')}"
+        f"#{quote(_status_config_name(service, lock_reason), safe='')}"
     )
 
 
@@ -562,8 +571,10 @@ def build_subscription_text_for_service(service_id: int) -> str:
     service = userbot_db.get_service_by_id(int(service_id))
     if not service:
         return ""
-    if _service_lock_reason(service):
-        return ""
+    lock_reason = _service_lock_reason(service)
+    if lock_reason:
+        status_line = _build_status_config_line(service, lock_reason)
+        return status_line or ""
     lines: List[str] = []
     seen = set()
     for target in _service_targets(service):
