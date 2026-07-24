@@ -642,7 +642,17 @@ class _SubHandler(BaseHTTPRequestHandler):
             )
             lock_reason = sub_aggregator.get_service_lock_reason(sid)
             if lock_reason:
-                self._write(403, f"subscription is locked: {lock_reason}")
+                reason_map = {
+                    "usage_limit_reached": "📊 حجم اشتراک شما به پایان رسیده است",
+                    "time_expired": "📅 زمان اشتراک شما به پایان رسیده است",
+                    "nodes_inactive": "⚠️ اشتراک شما غیرفعال شده است",
+                    "service_not_found": "❌ اشتراک یافت نشد",
+                }
+                msg = reason_map.get(lock_reason, f"🔒 اشتراک شما غیرفعال است ({lock_reason})")
+                body = f"// {msg}\n// برای تمدید به ربات مراجعه کنید"
+                if is_b64:
+                    body = base64.b64encode(body.encode("utf-8")).decode("ascii")
+                self._write(200, body, headers=self._subscription_headers(service, is_b64))
                 return
 
             if is_b64:
