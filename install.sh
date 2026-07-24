@@ -1099,6 +1099,7 @@ start_single_bot() {
     return 0
   fi
 
+  # ۱) اگه PID file هست و پروسه زنده‌ست، نرو جلو
   if [ -f "$pid_file" ]; then
     local current_pid
     current_pid="$(cat "$pid_file" 2>/dev/null || true)"
@@ -1109,27 +1110,22 @@ start_single_bot() {
     rm -f "$pid_file"
   fi
 
-  if command -v pgrep >/dev/null 2>&1; then
-    local existing_pid
-    existing_pid="$(pgrep -f "$main_py" | head -n 1 || true)"
-    if [ -n "$existing_pid" ]; then
-      # پروسه قبلی هنوز در حال خروج هست — صبر کن تا کامل بسته بشه
-      _yellow "WAIT: $title old instance (PID=$existing_pid) still shutting down, waiting..."
-      local wait_i=0
-      while kill -0 "$existing_pid" 2>/dev/null; do
-        wait_i=$((wait_i + 1))
-        if [ "$wait_i" -ge 15 ]; then
-          kill -9 "$existing_pid" 2>/dev/null || true
-          sleep 1
-          break
-        fi
-        sleep 1
-      done
-      rm -f "$pid_file"
-    fi
-  fi
+  # ۲) هر پروسه‌ای که با main_py مچ میشه رو بکش — حتی اگه در حال مرگ باشه
+  _kill_all_botProcesses "$main_py"
 
-  # تلاش برای استارت (حداکثر 3 بار در صورت شکست سریع)
+  # ۳) صبر کن تا کاملاً از process table پاک بشه
+  local wait_i=0
+  while pgrep -f "$main_py" >/dev/null 2>&1; do
+    wait_i=$((wait_i + 1))
+    if [ "$wait_i" -ge 20 ]; then
+      pgrep -9 -f "$main_py" 2>/dev/null || true
+      sleep 1
+      break
+    fi
+    sleep 1
+  done
+
+  # ۴) حالا استارت کن (حداکثر 3 تلاش)
   local attempt=0
   local max_attempts=3
   while [ "$attempt" -lt "$max_attempts" ]; do
@@ -1142,16 +1138,43 @@ start_single_bot() {
       _green "OK: $title started (PID=$pid)"
       return 0
     fi
-    # پروسه سریع خارج شد — احتمالاً تداخل PID، دوباره تلاش کن
     rm -f "$pid_file"
     if [ "$attempt" -lt "$max_attempts" ]; then
-      _yellow "WAIT: $title exited quickly, retrying (${attempt}/${max_attempts})..."
-      sleep 2
+      _yellow "WAIT: $title exited, retrying (${attempt}/${max_attempts})..."
+      # قبل از تلاش مجدد، دوباره پروسه‌های باقیمانده رو بکش
+      _kill_all_botProcesses "$main_py"
+      sleep 3
     fi
   done
 
   _red "ERROR: failed to start $title after $max_attempts attempts. Check log: $log_file"
   return 1
+}
+
+_kill_all_botProcesses() {
+  local main_py="$1"
+  if command -v pgrep >/dev/null 2>&1; then
+    local pids
+    pids="$(pgrep -f "$main_py" || true)"
+    if [ -n "$pids" ]; then
+      while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        kill "$p" 2>/dev/null || true
+      done <<< "$pids"
+      sleep 2
+      pids="$(pgrep -f "$main_py" || true)"
+      if [ -n "$pids" ]; then
+        while IFS= read -r p; do
+          [ -n "$p" ] || continue
+          kill -9 "$p" 2>/dev/null || true
+        done <<< "$pids"
+      fi
+    fi
+  else
+    pkill -f "$main_py" 2>/dev/null || true
+    sleep 2
+    pkill -9 -f "$main_py" 2>/dev/null || true
+  fi
 }
 
 start_bots() {
