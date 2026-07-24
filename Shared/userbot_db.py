@@ -2077,7 +2077,70 @@ def create_admin_service(
         conn.close()
 
 
-def get_service_owner_by_panel_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
+def fix_admin_services_missing_source_mapping() -> int:
+    """
+    Migration: برای سرویس‌های ادمینی که فقط mapping نود دارن و mapping سرور اصلی ندارن،
+    سرور اصلی (server_id خود سرویس) رو به عنوان node mapping اضافه کن.
+    تعداد fix های انجام شده رو برمیگرداند.
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    fixed = 0
+    try:
+        # پیدا کردن سرویس‌های ادمین (user_id=0) که service_node دارن
+        cur.execute("""
+            SELECT s.id, s.server_id, s.server_title, s.comment
+            FROM userbot_services s
+            WHERE s.user_id = 0
+              AND EXISTS (
+                  SELECT 1 FROM userbot_service_nodes n WHERE n.service_id = s.id
+              )
+        """)
+        services = cur.fetchall()
+
+        for svc in services:
+            svc_id = int(svc["id"])
+            main_server_id = int(svc["server_id"] or 0)
+            if main_server_id <= 0:
+                continue
+
+            # چک کن آیا mapping سرور اصلی از قبل وجود داره
+            cur.execute(
+                "SELECT 1 FROM userbot_service_nodes WHERE service_id = ? AND server_id = ? LIMIT 1",
+                (svc_id, main_server_id),
+            )
+            if cur.fetchone():
+                continue  # از قبل وجود داره
+
+            # UUID رو از comment استخراج کن
+            comment = str(svc["comment"] or "")
+            uuid = ""
+            for part in comment.split("|"):
+                if part.startswith("uuid:"):
+                    uuid = part[5:].strip()
+                    break
+            if not uuid:
+                continue
+
+            # سرور اصلی رو به عنوان node mapping اضافه کن
+            now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+            cur.execute("""
+                INSERT INTO userbot_service_nodes
+                (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(service_id, server_id, panel_user_uuid)
+                DO UPDATE SET is_active = excluded.is_active, updated_at = excluded.updated_at
+            """, (svc_id, main_server_id, str(svc["server_title"] or ""), uuid, None, "", 1, now, now))
+            fixed += 1
+
+        if fixed > 0:
+            conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return fixed
     """
     پیدا کردن مالک فعلی یک UUID در دیتابیس ربات کاربران.
     برای جلوگیری از اتصال یک اشتراک به چند کاربر.

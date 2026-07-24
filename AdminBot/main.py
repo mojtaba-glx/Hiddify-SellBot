@@ -773,6 +773,14 @@ def main() -> None:
     if not ADMIN_BOT_TOKEN:
         raise RuntimeError("❌ متغیر ADMIN_BOT_TOKEN در فایل .env تنظیم نشده است.")
 
+    # Migration: اضافه کردن mapping سرور اصلی برای سرویس‌های ادمین قدیمی
+    try:
+        fixed = userbot_db.fix_admin_services_missing_source_mapping()
+        if fixed > 0:
+            logger.info("✅ Migration: fixed %d admin services missing source server mapping", fixed)
+    except Exception as e:
+        logger.warning("⚠️ Migration fix_admin_services failed: %s", e)
+
     application = (
         ApplicationBuilder()
         .token(ADMIN_BOT_TOKEN)
