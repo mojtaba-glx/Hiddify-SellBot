@@ -109,7 +109,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         first_photo_fid = ""
         if msgs:
             for m in msgs:
-                sender = "\U0001f464 \u0645\u0634\u062a\u0631\u06cc" if m.get("sender_type") == "user" else f"\U0001f916 {_escape(m.get('sender_name', '\u0646\u0645\u0627\u06cc\u0646\u062f\u0647'))}"
+                _agent_label = '\u0646\u0645\u0627\u06cc\u0646\u062f\u0647'
+                sender = "\U0001f464 \u0645\u0634\u062a\u0631\u06cc" if m.get("sender_type") == "user" else f"\U0001f916 {_escape(m.get('sender_name', _agent_label))}"
                 msg_text = _escape(m.get("message_text", ""))
                 photo_fid = m.get("photo_file_id", "")
                 ts = _escape(str(m.get("created_at", ""))[:16])

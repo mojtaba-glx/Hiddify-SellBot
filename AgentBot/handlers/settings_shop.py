@@ -57,7 +57,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 == "buy":
             current = bool(get_setting(agent_id, "buy_enabled", True))
             set_setting(agent_id, "buy_enabled", not current)
-            await query.answer(f"\u062e\u0631\u06cc\u062f {'\u0641\u0639\u0627\u0644' if not current else '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644'} \u0634\u062f.")
+            label = '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644' if current else '\u0641\u0639\u0627\u0644'
+            await query.answer(f"\u062e\u0631\u06cc\u062f {label} \u0634\u062f.")
             buy = bool(get_setting(agent_id, "buy_enabled", True))
             renew = bool(get_setting(agent_id, "renew_enabled", True))
             try:
@@ -68,7 +69,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 == "renew":
             current = bool(get_setting(agent_id, "renew_enabled", True))
             set_setting(agent_id, "renew_enabled", not current)
-            await query.answer(f"\u062a\u0645\u062f\u06cc\u062f {'\u0641\u0639\u0627\u0644' if not current else '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644'} \u0634\u062f.")
+            label = '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644' if current else '\u0641\u0639\u0627\u0644'
+            await query.answer(f"\u062a\u0645\u062f\u06cc\u062f {label} \u0634\u062f.")
             buy = bool(get_setting(agent_id, "buy_enabled", True))
             renew = bool(get_setting(agent_id, "renew_enabled", True))
             try:

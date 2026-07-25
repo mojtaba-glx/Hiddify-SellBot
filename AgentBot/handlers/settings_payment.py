@@ -227,13 +227,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 == "card":
             current = bool(get_setting(agent_id, "card_payment_enabled", True))
             set_setting(agent_id, "card_payment_enabled", not current)
-            await query.answer(f"\u067e\u0631\u062f\u0627\u062e\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a {'\u0641\u0639\u0627\u0644' if not current else '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644'} \u0634\u062f.")
+            label = '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644' if current else '\u0641\u0639\u0627\u0644'
+            await query.answer(f"\u067e\u0631\u062f\u0627\u062e\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a {label} \u0634\u062f.")
             await _refresh_card_settings(update, agent_id)
             return
         if p2 == "last4":
             current = bool(get_setting(agent_id, "require_last4", False))
             set_setting(agent_id, "require_last4", not current)
-            await query.answer(f"\u0627\u0644\u0632\u0627\u0645 4 \u0631\u0642\u0645 \u0622\u062e\u0631 {'\u0641\u0639\u0627\u0644' if not current else '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644'} \u0634\u062f.")
+            label = '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644' if current else '\u0641\u0639\u0627\u0644'
+            await query.answer(f"\u0627\u0644\u0632\u0627\u0645 4 \u0631\u0642\u0645 \u0622\u062e\u0631 {label} \u0634\u062f.")
             await _refresh_card_settings(update, agent_id)
             return
         if p2 == "randtx":
@@ -371,12 +373,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 == "cardtext":
             current = get_setting(agent_id, "card_to_card_text", "")
             context.user_data[UD_STATE] = STATE_SET_CARD_TEXT
+            _empty_label = '(\u062e\u0627\u0644\u06cc)'
             try:
                 await query.message.reply_text(
                     "\u270f\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645 \u0645\u062a\u0646 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a</b>\n\n"
-                    f"\u0645\u062a\u0646 \u0641\u0639\u0644\u06cc:\n<code>{_escape(current) or '(\u062e\u0627\u0644\u06cc)'}</code>\n\n"
+                    f"\u0645\u062a\u0646 \u0641\u0639\u0644\u06cc:\n<code>{_escape(current) or _empty_label}</code>\n\n"
                     "\u0645\u062a\u0646 \u062c\u062f\u06cc\u062f \u0631\u0627 \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f (\u06cc\u0627 \u0628\u0631\u0627\u06cc \u062e\u0627\u0644\u06cc \u06a9\u0631\u062f\u0646 \u2014 \u0628\u0641\u0631\u0633\u062a\u06cc\u062f):",
-                    reply_markup=cancel_keyboard(), parse_mode="HTML",
+                    reply_markup=cancel_keyounter(), parse_mode="HTML",
                 )
             except Exception:
                 pass

@@ -56,9 +56,10 @@ async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if not page_expired:
         lines.append("\u0647\u06cc\u0686 \u06a9\u0627\u0631\u0628\u0631 \u0645\u0646\u0642\u0636\u06cc \u0634\u062f\u0647\u200c\u0627\u06cc \u0646\u06cc\u0633\u062a.")
     else:
+        _no_name = '\u0628\u06cc\u200c\u0646\u0627\u0645'
         for s in page_expired:
             lines.append(
-                f"\u274c <b>{_escape(s.get('name', '\u0628\u06cc\u200c\u0646\u0627\u0645'))}</b>\n"
+                f"\u274c <b>{_escape(s.get('name', _no_name))}</b>\n"
                 f"   \U0001f4c5 \u0627\u0646\u0642\u0636\u0627: {_escape(s.get('end_date', '—'))}\n"
                 f"   \U0001f4e1 \u0634\u0646\u0627\u0633\u0647: <code>{s['id']}</code>"
             )
@@ -360,8 +361,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         context.user_data[UD_SELECTED_CUSTOMER] = customer
         context.user_data.pop("new_customer_tg", None)
         context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
+        _name_display = _escape(name) or '\u0628\u062f\u0648\u0646 \u0646\u0627\u0645'
         await update.message.reply_text(
-            f"\u06a9\u0627\u0631\u0628\u0631 \u062b\u0628\u062a \u0634\u062f: {_escape(name) or '\u0628\u062f\u0648\u0646 \u0646\u0627\u0645'}\n"
+            f"\u06a9\u0627\u0631\u0628\u0631 \u062b\u0628\u062a \u0634\u062f: {_name_display}\n"
             "\u062d\u0627\u0644\u0627 \u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
             reply_markup=cancel_keyboard(), parse_mode="HTML",
         )
