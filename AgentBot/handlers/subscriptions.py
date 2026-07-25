@@ -159,7 +159,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not plan:
             await query.answer("\u067e\u0644\u0646 \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.", show_alert=True)
             return
-        plan["wholesale_price"] = 0
+        server_id = context.user_data.get(UD_SELECTED_SERVER, 0) or 0
+        plan["wholesale_price"] = agent_db.calculate_wholesale_price(agent_id, plan.get("gb", 0), plan.get("days", 30), server_id)
         plan["sale_price"] = plan.get("price", 0)
         context.user_data[UD_SELECTED_PLAN] = plan
         context.user_data[UD_STATE] = STATE_ADD_CUSTOMER_TG
@@ -396,7 +397,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             f"\u2705 <b>\u0633\u0631\u0648\u06cc\u0633 \u0628\u0627 \u0645\u0648\u0641\u0642\u06cc\u062a \u0633\u0627\u062e\u062a\u0647 \u0634\u062f!</b>\n\n"
             f"\U0001f4e1 \u0646\u0627\u0645: {_escape(text)}\n"
             f"\U0001f4cb \u067e\u0644\u0646: {plan_title}\n"
-            f"\U0001f4b0 \u0642\u06cc\u0645\u062a: {_fmt_toman(plan['wholesale_price'])} \u062a\u0648\u0645\u0627\u0646\n"
+            f"\U0001f4b0 \u0642\u06cc\u0645\u062a \u0639\u0645\u062f\u0647: {_fmt_toman(plan['wholesale_price'])} \u062a\u0648\u0645\u0627\u0646\n"
+            f"\U0001f4b8 \u0642\u06cc\u0645\u062a \u0641\u0631\u0648\u0634: {_fmt_toman(plan['sale_price'])} \u062a\u0648\u0645\u0627\u0646\n"
             f"\U0001f464 \u06a9\u0627\u0631\u0628\u0631: {_escape(customer_name)}",
             reply_markup=subs_menu_keyboard(), parse_mode="HTML",
         )
