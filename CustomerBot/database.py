@@ -12,6 +12,7 @@ DB_PATH = Path(__file__).resolve().parent.parent / DB_FILE_NAME
 _AGENCY_DB_PATH = Path(__file__).resolve().parent.parent / "Shared" / "agency.db"
 
 _db_initialized = False
+_init_db_path = ""
 
 DEFAULT_BUY_RENEW_SETTINGS = {
     "enable_buy": True,
@@ -140,10 +141,13 @@ def _ensure_column(cur: sqlite3.Cursor, table: str, column: str, definition: str
 
 
 def init_db() -> None:
-    global _db_initialized
-    if _db_initialized:
+    global _db_initialized, _init_db_path
+    current_path = str(DB_PATH)
+    # اگر مسیر دیتابیس تغییر کرده (مثلاً در تست‌ها)، دوباره جداول را می‌سازیم.
+    if _db_initialized and current_path == _init_db_path:
         return
     _db_initialized = True
+    _init_db_path = current_path
     conn = _get_conn()
     cur = conn.cursor()
 
@@ -954,6 +958,20 @@ def toggle_buy_renew_setting(agent_id: int, name: str) -> Dict[str, Any]:
 
 
 def get_subs_settings(agent_id: int) -> Dict[str, bool]:
+    """تنظیمات لینک اشتراک را از userbot_db می‌خواند (منبع اصلی که ادمین تغییر می‌دهد).
+    در صورت خطا به تنظیمات محلی customer_bot.db برمی‌گردد."""
+    try:
+        from Shared import userbot_db as _userbot_db
+        shared = _userbot_db.get_subscription_settings()
+        if isinstance(shared, dict) and shared:
+            # تنظیمات محلی CustomerBot را هم مرج کن تا کلیدهای اضافه (مثل show_auto_sub_link) پوشش داده شود
+            result = dict(DEFAULT_SUBS_SETTINGS)
+            for k in DEFAULT_SUBS_SETTINGS:
+                if k in shared:
+                    result[k] = bool(shared[k])
+            return result
+    except Exception:
+        pass
     return _load_settings_dict(agent_id, "subscription_settings", DEFAULT_SUBS_SETTINGS)
 
 

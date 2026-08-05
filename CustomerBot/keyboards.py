@@ -14,10 +14,14 @@ from CustomerBot.constants import (
 )
 
 
+def _ikb(rows):
+    return InlineKeyboardMarkup(rows)
+
+
 def main_menu_keyboard(show_renew: bool = True):
     keyboard = [[KeyboardButton(BTN_STATUS)]]
     if show_renew:
-        keyboard.append([KeyboardButton(BTN_BUY), KeyboardButton(BTN_RENEW)])
+        keyboard.append([KeyboardButton(BTN_RENEW), KeyboardButton(BTN_BUY)])
     else:
         keyboard.append([KeyboardButton(BTN_BUY)])
     keyboard.extend([
@@ -103,13 +107,15 @@ def category_keyboard(categories, server_id):
 def plans_keyboard(plans, server_id, cat_id, columns: int = 1, *,
                    unlimited_volume: bool = False, unlimited_volume_from: int = 1000,
                    unlimited_time: bool = False, unlimited_time_from: int = 365,
-                   sort_by_priority: bool = True, back_to_categories: bool = True):
+                   sort_by_priority: bool = True, back_to_categories: bool = True,
+                   callback_prefix: str = "buy"):
     rows = []
     cols = int(columns) if str(columns).isdigit() else 1
     if cols not in {1, 2}:
         cols = 1
     btns = []
     ordered_plans = sorted(plans, key=lambda x: x.get('priority', 0)) if sort_by_priority else list(plans)
+    prefix = str(callback_prefix or "buy").strip() or "buy"
     for p in ordered_plans:
         price_str = f"{p['price']:,} تومان"
         try:
@@ -123,14 +129,17 @@ def plans_keyboard(plans, server_id, cat_id, columns: int = 1, *,
         vol_txt = "نامحدود" if (unlimited_volume and gb_val >= int(unlimited_volume_from)) else f"{gb_val:g} گیگ"
         day_txt = "نامحدود" if (unlimited_time and days_val >= int(unlimited_time_from)) else f"{days_val} روز"
         btn_text = f"{p['title']} | {vol_txt} | {day_txt} - {price_str}"
-        btns.append(InlineKeyboardButton(btn_text, callback_data=f"buy:plan:{server_id}:{p['id']}"))
+        btns.append(InlineKeyboardButton(btn_text, callback_data=f"{prefix}:plan:{server_id}:{p['id']}"))
     for i in range(0, len(btns), cols):
         chunk = btns[i:i + cols]
         rows.append(list(reversed(chunk)))
-    if back_to_categories:
-        rows.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data=f"buy:loc:{server_id}")])
+    if prefix == "buy":
+        if back_to_categories:
+            rows.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data=f"buy:loc:{server_id}")])
+        else:
+            rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="buy:back_main")])
     else:
-        rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="buy:back_main")])
+        rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"{prefix}:back:{server_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -210,6 +219,31 @@ def mixed_mode_keyboard(server_id):
 
 
 
+def renew_wizard_keyboard(server_id, gb, months, price, off_percent=0):
+    price_str = f"{price:,}"
+    keyboard = [
+        [InlineKeyboardButton("📊 حجم", callback_data="noop")],
+        [
+            InlineKeyboardButton("➖", callback_data=f"rwiz:{server_id}:gb_dec"),
+            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"rwiz:{server_id}:gb_inc")
+        ],
+        [InlineKeyboardButton("⏳ زمان", callback_data="noop")],
+        [
+            InlineKeyboardButton("➖", callback_data=f"rwiz:{server_id}:month_dec"),
+            InlineKeyboardButton(f"{months} ماهه", callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"rwiz:{server_id}:month_inc")
+        ],
+        [
+            InlineKeyboardButton(f"🏷 تخفیف: {off_percent}%", callback_data="noop"),
+            InlineKeyboardButton(f"💰 قیمت: {price_str} تومان", callback_data="noop")
+        ],
+        [InlineKeyboardButton("💳 تایید و تمدید", callback_data=f"renew:confirm_dyn:{server_id}")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="renew:back:0")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 def confirm_payment_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("✅ پرداخت کردم، ارسال رسید")],
@@ -233,6 +267,7 @@ def cancel_inline_keyboard():
 def subscription_status_keyboard(service_id=None, *, show_direct_config: bool = True,
                                   show_sub_link: bool = True, show_configs: bool = False,
                                   show_detach: bool = False):
+    """کیبورد وضعیت اشتراک بدون دکمهٔ دستی بروزرسانی؛ به‌روزرسانی هنگام ورود به وضعیت انجام می‌شود."""
     keyboard = [
         [InlineKeyboardButton("کانفیگ ها📝", callback_data=f"status:configs:{service_id}")],
         [InlineKeyboardButton("تمدید اشتراک♾", callback_data=f"status:renew:{service_id}")],
@@ -240,7 +275,7 @@ def subscription_status_keyboard(service_id=None, *, show_direct_config: bool = 
         [InlineKeyboardButton("تغییر لینک اشتراک🚨", callback_data=f"status:replace_link:{service_id}", style='danger')],
     ]
     if show_detach:
-        keyboard.append([InlineKeyboardButton("❌ جداسازی اشتراک⭕", callback_data=f"status:detach:{service_id}", style='danger')])
+        keyboard.append([InlineKeyboardButton("جداسازی اشتراک⭕", callback_data=f"status:detach:{service_id}", style='danger')])
     return InlineKeyboardMarkup(keyboard)
 
 

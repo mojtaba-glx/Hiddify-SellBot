@@ -11,6 +11,7 @@ from AgentBot.handlers import (
     subscriptions, wallet, plans, customer_bot, tickets,
     settings_users, settings_orders, settings_transactions, settings_gifts,
     settings_shop, settings_payment, settings_customer_payments, settings_broadcast,
+    settings_forcejoin,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,8 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
                 await settings_shop.handle_callback(update, context)
             elif cfg_sub == "payment":
                 await settings_payment.handle_callback(update, context)
+            elif cfg_sub == "forcejoin" or data.startswith("agbot:set:cfg:forcejoin"):
+                await settings_forcejoin.handle_callback(update, context)
             else:
                 from AgentBot.keyboards import config_menu_keyboard
                 try:
@@ -178,9 +181,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if state:
         sub_state_handlers = {
-            "st:search_cust": subscriptions.handle_text,
-            "st:addcust_tg": subscriptions.handle_text,
-            "st:addcust_name": subscriptions.handle_text,
+            "fj:set_username": settings_forcejoin.handle_text,
             "st:createsvc_name": subscriptions.handle_text,
             "st:renew_days": subscriptions.handle_text,
             "st:renew_gb": subscriptions.handle_text,

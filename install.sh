@@ -1102,25 +1102,16 @@ stop_bots() {
       return 1
     fi
     _blue "Stopping bots via systemd"
-    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
-    rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE"
-    _green "OK: AdminBot stopped (systemd)."
-    _green "OK: UserBot stopped (systemd)."
-    if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
-      systemctl stop "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
-      rm -f "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
-      _green "OK: AgentBot stopped (systemd)."
-      _green "OK: CustomerBot stopped (systemd)."
-    fi
+    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
+    rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
+    _green "OK: all bots stopped (systemd)."
     return 0
   fi
   _blue "Stopping bots"
   stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot"
   stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot"
-  if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
-    stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot"
-    stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot"
-  fi
+  stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot"
+  stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot"
 }
 
 start_single_bot() {
@@ -1134,13 +1125,17 @@ start_single_bot() {
     return 0
   fi
 
-  # ۱) اگه PID file هست و پروسه زنده‌ست، نرو جلو
+  # ۱) اگه PID file هست و پروسه زنده‌ست، stop_bots درست کار نکرده — force kill کن
   if [ -f "$pid_file" ]; then
     local current_pid
     current_pid="$(cat "$pid_file" 2>/dev/null || true)"
     if [ -n "$current_pid" ] && kill -0 "$current_pid" 2>/dev/null; then
-      _yellow "WARN: $title is already running (PID=$current_pid)."
-      return 0
+      _yellow "WARN: $title still running (PID=$current_pid); force-stopping before restart..."
+      kill "$current_pid" 2>/dev/null || true
+      if ! wait_for_process_exit "$current_pid" 8; then
+        kill -9 "$current_pid" 2>/dev/null || true
+        wait_for_process_exit "$current_pid" 3 || true
+      fi
     fi
     rm -f "$pid_file"
   fi

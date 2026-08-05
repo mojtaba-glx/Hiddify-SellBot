@@ -1,5 +1,5 @@
-import json
-import re
+import asyncio
+from html import escape
 from typing import Optional
 
 from telegram import Update, InlineKeyboardMarkup
@@ -20,7 +20,8 @@ from CustomerBot.constants import (
     CB_STATUS_LIST, CB_STATUS_CONFIGS, CB_STATUS_RENEW, CB_STATUS_RENAME,
     CB_STATUS_REPLACE_LINK, CB_STATUS_DETACH, CB_STATUS_DIRECT, CB_STATUS_SUB_LINK,
     CB_STATUS_AUTO_SUB, CB_STATUS_SUB_B64, CB_STATUS_MULTI, CB_STATUS_MULTI_B64,
-    CB_STATUS_DIRECTCFG, CB_STATUS_GUIDE, CB_STATUS_MENU, CB_STATUS_LIST_BACK,
+    CB_STATUS_DIRECTCFG, CB_STATUS_REFRESH, CB_STATUS_GUIDE, CB_STATUS_MENU,
+    CB_STATUS_LIST_BACK,
     CB_RENEW_SVC, CB_RENEW_BACK,
     CB_PAY_RECEIPT_DONE, CB_PAY_CANCEL,
     CB_SUPPORT_FAQ, CB_SUPPORT_MY, CB_SUPPORT_NEW, CB_SUPPORT_VIEW,
@@ -41,12 +42,12 @@ from CustomerBot.database import (
 )
 from Shared.agent_db import (
     upsert_customer, get_customer_by_telegram_id, get_services_by_customer,
-    get_service_by_id, create_service, get_service_nodes, add_service_node,
+    get_service_by_id, create_service, add_service_node,
     renew_service, set_service_active, calculate_wholesale_price,
     update_service,
 )
 from Shared.database import (
-    get_servers, get_server_by_id, get_plan_categories, get_plans, get_plan,
+    get_servers, get_main_servers, get_server_by_id, get_plan_categories, get_plans, get_plan,
     get_plan_dynamic_settings,
 )
 from AgentBot.database import (
@@ -56,9 +57,10 @@ from CustomerBot.keyboards import (
     main_menu_keyboard, cancel_keyboard, location_keyboard, trial_location_keyboard,
     category_keyboard, plans_keyboard, confirm_buy_keyboard, selected_plan_keyboard,
     buy_wizard_keyboard, mixed_buy_keyboard, mixed_mode_keyboard,
+    renew_wizard_keyboard,
     confirm_payment_keyboard, confirm_payment_inline_keyboard,
     cancel_inline_keyboard, subscription_status_keyboard,
-    replace_subscription_link_confirm_keyboard, direct_configs_keyboard,
+    replace_subscription_link_confirm_keyboard,
     subscription_configs_keyboard, subscription_links_keyboard,
     services_list_keyboard, renew_services_keyboard, support_panel_keyboard,
     receipt_cancel_keyboard,
@@ -69,6 +71,14 @@ from CustomerBot.keyboards import (
 from CustomerBot.utils.helpers import (
     is_rate_limited, format_price, escape_markdown, safe_int, safe_float,
 )
+from CustomerBot.services import (
+    build_subscription_status_text, get_service_node_base_urls,
+    get_service_panel_targets, collect_all_direct_configs_for_service,
+    collect_all_direct_configs_from_api, get_or_create_bot_sub_links,
+    sync_service_status_from_panels, regenerate_service_uuid,
+    _resolve_live_server_title,
+)
+from Shared.qr_utils import make_qr_image
 
 
 def _calc_dynamic_price(gb, months, dyn_settings) -> tuple[int, int]:
@@ -150,7 +160,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _handle_status(query, context, agent_id, user, data)
 
     # ---- Renew ----
-    elif data.startswith("renew:"):
+    elif data.startswith("renew:") or data.startswith("rwiz:"):
         await _handle_renew(query, context, agent_id, user, data)
 
     # ---- Pay ----
@@ -410,6 +420,178 @@ async def _handle_support(query, context, agent_id, user, data):
         )
 
 
+async def _show_subscription_status(msg, agent_id, svc_id):
+    """نمایش «📄اطلاعات اشتراک شما» + کیبورد وضعیت (مطابق ربات کاربران)"""
+    subs_settings = get_subs_settings(agent_id)
+    br = get_buy_renew_settings(agent_id)
+    svc = get_service_by_id(svc_id)
+    if not svc:
+        await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+        return None
+    show_detach = bool(svc.get("comment") == "connected")
+    svc_text = build_subscription_status_text(svc, subs_settings, br)
+    kb = subscription_status_keyboard(
+        svc_id,
+        show_direct_config=subs_settings.get("show_direct_config", True),
+        show_sub_link=subs_settings.get("show_sub_link", True),
+        show_detach=show_detach,
+    )
+    try:
+        await msg.edit_text(svc_text, parse_mode="Markdown", reply_markup=kb)
+    except Exception:
+        try:
+            await msg.reply_text(svc_text, parse_mode="Markdown", reply_markup=kb)
+        except Exception:
+            pass
+    return svc
+
+
+async def _send_service_direct_configs(msg, svc):
+    """کانفیگ‌های مستقیم: استخراج از لینک all.txt همه نودها + پشتیبان API پنل"""
+    # دریافت لینک‌ها در thread جدا تا event loop ربات بلاک نشود
+    links = await asyncio.to_thread(collect_all_direct_configs_for_service, svc)
+    source_hint = ""
+    if not links:
+        links = await collect_all_direct_configs_from_api(svc)
+        if links:
+            source_hint = (
+                "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ "
+                "کانفیگ‌ها از API پنل خوانده شد.\n\n"
+            )
+    base_urls = get_service_node_base_urls(svc)
+    fallback_base = base_urls[0] if base_urls else ""
+
+    if not links:
+        msg_text = "❌ کانفیگی از لینک اشتراک استخراج نشد."
+        if fallback_base:
+            msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}/all.txt"
+        await msg.reply_text(msg_text, disable_web_page_preview=True)
+        return
+
+    server_title = _resolve_live_server_title(svc, default="")
+    header = "🔗 کانفیگ‌های مستقیم"
+    if server_title:
+        header = f"{header} | {server_title}"
+    clean_links = [str(x).strip() for x in links if str(x).strip()]
+
+    all_links_text = "\n".join(clean_links)
+    one_block_text = (
+        f"{source_hint}{header}\n"
+        "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
+        f"<pre><code class=\"language-shell\">{escape(all_links_text)}</code></pre>"
+    )
+    if len(one_block_text) <= 3900:
+        await msg.reply_text(one_block_text, parse_mode="HTML", disable_web_page_preview=True)
+        return
+
+    max_payload = 2800
+    parts_list = []
+    cur = []
+    cur_len = 0
+    for link in clean_links:
+        add = len(link) + 1
+        if cur and (cur_len + add > max_payload):
+            parts_list.append(cur)
+            cur = [link]
+            cur_len = add
+        else:
+            cur.append(link)
+            cur_len += add
+    if cur:
+        parts_list.append(cur)
+    for idx, chunk in enumerate(parts_list, start=1):
+        part_header = header if len(parts_list) == 1 else f"{header} ({idx}/{len(parts_list)})"
+        part_text = (
+            f"{source_hint if idx == 1 else ''}{part_header}\n"
+            "برای کپی، باکس زیر را کپی کنید:\n"
+            f"<pre><code class=\"language-shell\">{escape(chr(10).join(chunk))}</code></pre>"
+        )
+        await msg.reply_text(part_text, parse_mode="HTML", disable_web_page_preview=True)
+
+
+async def _send_subscription_link_with_qr(query, agent_id, svc, data):
+    """ارسال لینک‌های اشتراک همراه با QR بارکد (مثل ربات کاربران)"""
+    parts = data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    svc_id = int(svc.get("id") or 0)
+    ss = get_subs_settings(agent_id)
+    msg = query.message
+
+    base_urls = get_service_node_base_urls(svc)
+    if not base_urls:
+        await msg.edit_text("❌ برای این سرویس لینک کانفیگ در دسترس نیست.", reply_markup=main_menu_keyboard())
+        return
+    base_url = base_urls[0]
+
+    config_items = []
+    if action == "sub_link":
+        if not ss.get("show_sub_link", True):
+            await msg.edit_text("❌ نمایش لینک اشتراک خاموش است.", reply_markup=main_menu_keyboard())
+            return
+        config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+    elif action == "auto_sub":
+        if not ss.get("show_auto_sub_link", False):
+            await msg.edit_text("❌ نمایش اشتراک خودکار خاموش است.", reply_markup=main_menu_keyboard())
+            return
+        config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+    elif action == "sub_b64":
+        if not ss.get("show_sub_link_b64", False):
+            await msg.edit_text("❌ نمایش لینک b64 خاموش است.", reply_markup=main_menu_keyboard())
+            return
+        config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+    elif action == "multi":
+        if not ss.get("show_multi_server", False):
+            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند خاموش است.", reply_markup=main_menu_keyboard())
+            return
+        managed_link, _ = get_or_create_bot_sub_links(svc)
+        config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
+    elif action == "multi_b64":
+        if not ss.get("show_multi_server_b64", False):
+            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند b64 خاموش است.", reply_markup=main_menu_keyboard())
+            return
+        _, managed_link_b64 = get_or_create_bot_sub_links(svc)
+        config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
+
+    if not config_items:
+        await msg.edit_text("❌ در حال حاضر هیچ لینکی برای نمایش فعال نیست.", reply_markup=main_menu_keyboard())
+        return
+
+    primary_link = config_items[0][1]
+    qr_image = make_qr_image(primary_link)
+    qr_caption = (
+        "📄 جهت کپی شدن لینک اشتراک کافیست یک بار لینک زیر را لمس کنید 👇\n\n"
+        f"<code>{escape(primary_link)}</code>"
+    )
+    try:
+        await msg.reply_photo(
+            photo=qr_image,
+            caption=qr_caption,
+            parse_mode="HTML",
+            reply_markup=subscription_links_keyboard(svc_id),
+        )
+    except Exception:
+        try:
+            await msg.reply_text(
+                qr_caption,
+                parse_mode="HTML",
+                reply_markup=subscription_links_keyboard(svc_id),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+
+    config_text_lines = ["📝 لینک‌های اشتراک", ""]
+    for title, value in config_items:
+        config_text_lines.append(title)
+        config_text_lines.append(f"<code>{escape(value)}</code>")
+        config_text_lines.append("")
+    if len(config_items) > 1:
+        try:
+            await msg.reply_text("\n".join(config_text_lines).strip(), parse_mode="HTML")
+        except Exception:
+            pass
+
+
 async def _handle_status(query, context, agent_id, user, data):
     msg = query.message
     parts = data.split(":")
@@ -420,12 +602,12 @@ async def _handle_status(query, context, agent_id, user, data):
             cust = get_customer_by_telegram_id(agent_id, user.id)
             if not cust:
                 return
-            from CustomerBot.services import refresh_service_status
+            from CustomerBot.services import refresh_service_status, is_customer_service_visible
             services = get_services_by_customer(cust["id"])
             for svc in services:
                 await refresh_service_status(svc.get("id", 0))
             services = get_services_by_customer(cust["id"])
-            visible = [s for s in services if int(s.get("is_active") or 0) == 1 or int(s.get("days_left") or 0) > -30]
+            visible = [s for s in services if is_customer_service_visible(s)]
             if not visible:
                 await msg.edit_text("❌ سرویس فعالی ندارید.", reply_markup=main_menu_keyboard())
                 return
@@ -438,25 +620,9 @@ async def _handle_status(query, context, agent_id, user, data):
         if not svc:
             await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
-        from CustomerBot.services import refresh_service_status
-        await refresh_service_status(svc_id)
-        svc = get_service_by_id(svc_id)
-        if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
-            return
-        subs_settings = get_subs_settings(agent_id)
-        show_detach = bool(svc.get("comment") == "connected")
-        svc_text = _build_service_status_text(svc)
-        await msg.edit_text(
-            svc_text,
-            parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                svc_id,
-                show_direct_config=subs_settings.get("show_direct_config", True),
-                show_sub_link=subs_settings.get("show_sub_link", True),
-                show_detach=show_detach,
-            ),
-        )
+        await sync_service_status_from_panels(svc_id)
+        await _show_subscription_status(msg, agent_id, svc_id)
+        return
 
     elif data.startswith(CB_STATUS_CONFIGS):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
@@ -474,107 +640,82 @@ async def _handle_status(query, context, agent_id, user, data):
             ),
         )
 
-    elif data.startswith(CB_STATUS_DIRECT):
+    elif data.startswith(CB_STATUS_DIRECT) or data.startswith(CB_STATUS_DIRECTCFG):
+        # کانفیگ مستقیم: استخراج از لینک اشتراک همه نودها (در غیر این صورت API پنل)
         svc_id = int(parts[2]) if len(parts) > 2 else 0
-        await msg.edit_text(
-            "📝 لطفا پروتکل را انتخاب کنید:",
-            reply_markup=direct_configs_keyboard(svc_id),
-        )
-
-    elif data.startswith(CB_STATUS_DIRECTCFG):
-        if len(parts) < 4:
-            return
-        svc_id = int(parts[2])
-        protocol = parts[3]
         svc = get_service_by_id(svc_id)
         if not svc:
             await msg.edit_text("❌ سرویس یافت نشد.")
             return
-        nodes = get_service_nodes(svc_id)
-        server = get_server_by_id(svc.get("server_id", 0))
-        if not server:
-            await msg.edit_text("❌ سرور یافت نشد.")
-            return
-        uuid = svc.get("panel_user_uuid", "")
-        text = f"🔗 کانفیگ {protocol.upper()}:\n\n"
-        if protocol == "vless":
-            text += f"vless://{uuid}@{server.get('host', '?')}:443?security=tls&sni={server.get('host', '?')}&type=tcp"
-        elif protocol == "vmess":
-            text += json.dumps({
-                "v": "2", "ps": svc.get("name", ""), "add": server.get("host", ""),
-                "port": "443", "id": uuid, "aid": "0", "net": "tcp", "type": "none",
-                "tls": "tls", "sni": server.get("host", ""),
-            }, ensure_ascii=False)
-        elif protocol == "trojan":
-            text += f"trojan://{uuid}@{server.get('host', '?')}:443?security=tls&sni={server.get('host', '?')}&type=tcp"
-        else:
-            text += "پروتکل نامعتبر"
-        await msg.edit_text(text, reply_markup=direct_configs_keyboard(svc_id))
+        await _send_service_direct_configs(msg, svc)
 
-    elif data.startswith(CB_STATUS_SUB_LINK):
+    elif data.startswith(CB_STATUS_SUB_LINK) or data.startswith(CB_STATUS_AUTO_SUB) \
+            or data.startswith(CB_STATUS_SUB_B64) or data.startswith(CB_STATUS_MULTI) \
+            or data.startswith(CB_STATUS_MULTI_B64):
+        # لینک‌های اشتراک: ارسال QR بارکد + لینک (مثل ربات کاربران)
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
+            await msg.edit_text("❌ سرویس یافت نشد.")
             return
-        server = get_server_by_id(svc.get("server_id", 0))
-        if not server:
-            return
-        uuid = svc.get("panel_user_uuid", "")
-        domains = server.get("domains", [])
-        domain = domains[0]["domain"] if domains else server.get("host", "?")
-        link = f"https://{domain}/sub/{uuid}"
-        await msg.edit_text(
-            f"🔗 لینک اشتراک:\n`{link}`\n\n(لینک را کپی کرده و در کلاینت وارد کنید)",
-            parse_mode="Markdown",
-            reply_markup=subscription_links_keyboard(svc_id),
-        )
+        await _send_subscription_link_with_qr(query, agent_id, svc, data)
 
     elif data.startswith(CB_STATUS_MENU):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
+        await _show_subscription_status(msg, agent_id, svc_id)
+
+    elif data.startswith(CB_STATUS_REFRESH):
+        svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
-        if svc:
-            await msg.edit_text(
-                _build_service_status_text(svc),
-                parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(svc_id),
-            )
+        if not svc:
+            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            return
+        try:
+            await msg.edit_text("� در حال به‌روزرسانی اطلاعات اشتراک...")
+        except Exception:
+            pass
+        await sync_service_status_from_panels(svc_id)
+        await _show_subscription_status(msg, agent_id, svc_id)
 
     elif data.startswith(CB_STATUS_RENAME):
-        context.user_data[UD_STATE] = f"rename:{parts[2]}" if len(parts) > 2 else STATE_START
-        await msg.edit_text("✏️ نام جدید اشتراک را وارد کنید:")
-        await msg.reply_text("نام جدید را بفرستید:", reply_markup=cancel_keyboard())
+        svc_id = int(parts[2]) if len(parts) > 2 else 0
+        svc = get_service_by_id(svc_id)
+        if not svc:
+            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            return
+        context.user_data[UD_STATE] = f"rename:{svc_id}"
+        try:
+            await msg.edit_text("✏️ نام جدید اشتراک را وارد کنید:")
+        except Exception:
+            pass
+        await msg.reply_text(
+            "نام جدید را بفرستید:\n"
+            "• حداقل 3 و حداکثر 64 کاراکتر\n"
+            "برای انصراف، دکمه «بازگشت» را بزنید.",
+            reply_markup=cancel_keyboard(),
+        )
 
     elif data.startswith(CB_STATUS_REPLACE_LINK):
         if "confirm" in data:
             svc_id = int(parts[2]) if len(parts) > 2 else 0
             svc = get_service_by_id(svc_id)
-            if svc:
-                from uuid import uuid4
-                from Shared.hiddify_api import patch_user
-                server = get_server_by_id(svc.get("server_id", 0))
-                if server and server.get("panel_url"):
-                    current_uuid = svc.get("panel_user_uuid", "")
-                    if current_uuid:
-                        new_uuid = str(uuid4())
-                        try:
-                            result = await patch_user(server, current_uuid, {"uuid": new_uuid})
-                            returned_uuid = str(result.get("uuid") or result.get("id") or "").strip()
-                            if not returned_uuid:
-                                returned_uuid = new_uuid
-                            from Shared.agent_db import update_service
-                            update_service(svc_id, {"panel_user_uuid": returned_uuid})
-                        except Exception as e:
-                            await msg.edit_text("❌ خطا در تغییر لینک اشتراک. لطفاً مجدداً تلاش کنید.", reply_markup=main_menu_keyboard())
-                            return
-                else:
-                    await msg.edit_text("❌ سرور یافت نشد.", reply_markup=main_menu_keyboard())
-                    return
-            await msg.edit_text("✅ لینک اشتراک با موفقیت تغییر یافت.", reply_markup=main_menu_keyboard())
+            if not svc:
+                await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+                return
+            try:
+                await msg.edit_text("⏳ در حال تغییر لینک اشتراک...")
+            except Exception:
+                pass
+            ok, result_text, _new_uuid = await regenerate_service_uuid(svc)
+            await msg.reply_text(result_text, reply_markup=main_menu_keyboard())
+            if ok:
+                await _show_subscription_status(msg, agent_id, svc_id)
         else:
             svc_id = int(parts[2]) if len(parts) > 2 else 0
             await msg.edit_text(
-                "⚠️ آیا از تغییر لینک اشتراک اطمینان دارید؟\n"
-                "با این کار لینک قبلی دیگر کار نخواهد کرد.",
+                "⚠️ هشدار تغییر لینک اشتراک\n\n"
+                "با تغییر لینک اشتراک، لینک و کانفیگ قبلی از کار می‌افتد و باید لینک جدید را دوباره در برنامه وارد کنید.\n\n"
+                "اگر مطمئن هستید، تایید تغییر لینک را بزنید.",
                 reply_markup=replace_subscription_link_confirm_keyboard(svc_id),
             )
 
@@ -597,27 +738,37 @@ async def _handle_status(query, context, agent_id, user, data):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
         br = get_buy_renew_settings(agent_id)
         if not br.get("enable_renew", True):
             await msg.edit_text("🚫 تمدید غیرفعال است.", reply_markup=main_menu_keyboard())
             return
-        server = get_server_by_id(svc.get("server_id", 0))
-        if not server:
-            return
-        # استفاده از پلن‌های نماینده برای تمدید
-        plans = get_fixed_plans(agent_id)
-        if not plans:
+        context.user_data["renew_target_service_id"] = int(svc_id)
+        server_id = svc.get("server_id", 0)
+        mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
+        if mode == "fixed":
+            plans = get_fixed_plans(agent_id)
+            if not plans:
+                await msg.edit_text("❌ هیچ پلنی برای این نماینده تعریف نشده است.", reply_markup=main_menu_keyboard())
+                return
             await msg.edit_text(
-                "❌ هیچ پلنی برای این نماینده تعریف نشده است.",
-                reply_markup=main_menu_keyboard()
+                "📋 پلن تمدید را انتخاب کنید:",
+                reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
-            return
-        await msg.edit_text(
-            "📋 پلن تمدید را انتخاب کنید:",
-            reply_markup=plans_keyboard(plans, svc.get("server_id", 0), 0),
-        )
+        else:
+            dyn = get_plan_dynamic_settings(server_id)
+            gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
+            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+            gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), safe_int(dyn.get("max_gb", 1000), 1000))
+            months = max(months, 1)
+            context.user_data[UD_BUY_GB] = gb
+            context.user_data[UD_BUY_MONTHS] = months
+            price, off_pct = _calc_dynamic_price(gb, months, dyn)
+            await msg.edit_text(
+                "🎛 بسته تمدید را انتخاب کنید:",
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+            )
 
     elif data.startswith(CB_STATUS_LIST_BACK):
         await _back_to_main_menu(msg, "🔙 بازگشت")
@@ -631,25 +782,115 @@ async def _handle_renew(query, context, agent_id, user, data):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
-        server = get_server_by_id(svc.get("server_id", 0))
-        if not server:
-            return
-        # استفاده از پلن‌های نماینده برای تمدید
-        plans = get_fixed_plans(agent_id)
-        if not plans:
-            await msg.edit_text(
-                "❌ هیچ پلنی برای این نماینده تعریف نشده است.",
-                reply_markup=main_menu_keyboard()
+        context.user_data["renew_target_service_id"] = int(svc_id)
+        server_id = svc.get("server_id", 0)
+        mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
+        if mode == "fixed":
+            plans = get_fixed_plans(agent_id)
+            if not plans:
+                await msg.reply_text("❌ هیچ پلنی برای این نماینده تعریف نشده است.", reply_markup=main_menu_keyboard())
+                return
+            await msg.reply_text(
+                "📋 پلن تمدید را انتخاب کنید:",
+                reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
+        else:
+            dyn = get_plan_dynamic_settings(server_id)
+            gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
+            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+            gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), safe_int(dyn.get("max_gb", 1000), 1000))
+            months = max(months, 1)
+            context.user_data[UD_BUY_GB] = gb
+            context.user_data[UD_BUY_MONTHS] = months
+            price, off_pct = _calc_dynamic_price(gb, months, dyn)
+            await msg.reply_text(
+                "🎛 بسته تمدید را انتخاب کنید:",
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+            )
+
+    elif data.startswith("rwiz:"):
+        # wizard تمدید پویا — تنظیم حجم/ماه
+        server_id = int(parts[1]) if len(parts) > 1 else 0
+        wiz_action = parts[2] if len(parts) > 2 else ""
+        dyn = get_plan_dynamic_settings(server_id)
+        gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+        step_gb = safe_int(dyn.get("step_gb", 1), 1)
+        max_gb = safe_int(dyn.get("max_gb", 1000), 1000)
+        min_gb = safe_float(dyn.get("min_gb", 1), 1.0)
+        if wiz_action == "gb_inc":
+            gb = min(gb + step_gb, max_gb)
+        elif wiz_action == "gb_dec":
+            gb = max(min_gb, gb - step_gb)
+        elif wiz_action == "month_inc":
+            months += 1
+        elif wiz_action == "month_dec":
+            months = max(1, months - 1)
+        context.user_data[UD_BUY_GB] = gb
+        context.user_data[UD_BUY_MONTHS] = months
+        price, off_pct = _calc_dynamic_price(gb, months, dyn)
+        try:
+            await msg.edit_text(
+                "🎛 بسته تمدید را انتخاب کنید:",
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+            )
+        except Exception:
+            pass
+
+    elif data.startswith("renew:confirm_dyn:"):
+        # تایید تمدید پویا
+        server_id = int(parts[2]) if len(parts) > 2 else 0
+        service_id = int(context.user_data.get("renew_target_service_id") or 0)
+        if not service_id:
+            await msg.reply_text("❌ سرویس مورد نظر برای تمدید پیدا نشد.", reply_markup=main_menu_keyboard())
             return
-        await msg.edit_text(
-            "📋 پلن تمدید را انتخاب کنید:",
-            reply_markup=plans_keyboard(plans, svc.get("server_id", 0), 0),
-        )
+        svc = get_service_by_id(service_id)
+        if not svc:
+            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            return
+        dyn = get_plan_dynamic_settings(server_id)
+        gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+        days = months * 30
+        extra_gb = float(gb)
+        ok = await asyncio.to_thread(renew_service, service_id, days, extra_gb)
+        context.user_data.pop("renew_target_service_id", None)
+        context.user_data.pop(UD_BUY_GB, None)
+        context.user_data.pop(UD_BUY_MONTHS, None)
+        if not ok:
+            await msg.reply_text("❌ تمدید اشتراک انجام نشد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+            return
+        await _show_subscription_status(msg, agent_id, service_id)
+
+    elif data.startswith("renew:plan:"):
+        plan_id = int(parts[3]) if len(parts) > 3 else 0
+        service_id = int(context.user_data.get("renew_target_service_id") or 0)
+        if not service_id:
+            await msg.reply_text("❌ سرویس مورد نظر برای تمدید پیدا نشد.", reply_markup=main_menu_keyboard())
+            return
+        svc = get_service_by_id(service_id)
+        if not svc:
+            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            return
+        plan = get_fixed_plan(agent_id, plan_id)
+        if not plan:
+            await msg.reply_text("❌ پلن انتخابی نامعتبر است.", reply_markup=main_menu_keyboard())
+            return
+        extra_days = int(plan.get("days") or 0)
+        if extra_days <= 0:
+            extra_days = 30
+        extra_gb = float(plan.get("gb") or 0)
+        ok = await asyncio.to_thread(renew_service, service_id, extra_days, extra_gb)
+        context.user_data.pop("renew_target_service_id", None)
+        if not ok:
+            await msg.reply_text("❌ تمدید اشتراک انجام نشد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+            return
+        await _show_subscription_status(msg, agent_id, service_id)
 
     elif data.startswith(CB_RENEW_BACK):
+        context.user_data.pop("renew_target_service_id", None)
         await _back_to_main_menu(msg, "🔙 بازگشت")
 
 
@@ -959,7 +1200,7 @@ async def _handle_buy(query, context, agent_id, user, data):
         await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
 
     elif data == CB_BUY_BACK_MAIN:
-        servers = get_servers()
+        servers = get_main_servers()
         if servers:
             sc = int(br.get("server_columns", 1))
             await msg.edit_text(
@@ -1005,19 +1246,5 @@ async def _handle_buy(query, context, agent_id, user, data):
 
 
 def _build_service_status_text(svc: dict) -> str:
-    name = svc.get("name") or f"اشتراک #{svc.get('id')}"
-    server = svc.get("server_title") or "?"
-    usage = float(svc.get("usage_current") or 0)
-    limit = float(svc.get("usage_limit") or 0)
-    days = int(svc.get("days_left") or 0)
-    price = int(svc.get("sale_price") or 0)
-    end = svc.get("end_date") or "?"
-    usage_pct = (usage / limit * 100) if limit > 0 else 0
-    return (
-        f"📊 *{name}*\n"
-        f"🌍 سرور: {server}\n"
-        f"📶 مصرف: {usage:.2f} / {limit:.2f} GB ({usage_pct:.0f}%)\n"
-        f"⏳ روز باقیمانده: {days}\n"
-        f"📅 تاریخ پایان: {end}\n"
-        f"💰 قیمت فروش: {price:,} تومان"
-    )
+    """متن «📄اطلاعات اشتراک شما» با فرمت ربات کاربران"""
+    return build_subscription_status_text(svc, {}, {})

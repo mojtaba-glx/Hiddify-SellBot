@@ -17,7 +17,7 @@ from CustomerBot.database import (
     get_subs_settings, get_force_join_settings,
 )
 from Shared.agent_db import get_customer_by_telegram_id
-from Shared.database import get_servers
+from Shared.database import get_servers, get_main_servers
 from CustomerBot.keyboards import (
     main_menu_keyboard, location_keyboard, trial_location_keyboard,
     services_list_keyboard, renew_services_keyboard,
@@ -92,7 +92,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu_keyboard(),
             )
             return
-        servers = get_servers()
+        servers = get_main_servers()
         if not servers:
             await update.message.reply_text(
                 "❌ هیچ سروری در دسترس نیست.",
@@ -121,7 +121,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu_keyboard(),
             )
             return
-        servers = get_servers()
+        servers = get_main_servers()
         if not servers:
             await update.message.reply_text(
                 "❌ سروری برای تست رایگان در دسترس نیست.",
@@ -149,8 +149,9 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         from Shared.agent_db import get_services_by_customer
+        from CustomerBot.services import is_customer_service_visible
         services = get_services_by_customer(cust["id"])
-        visible = [s for s in services if int(s.get("is_active") or 0) == 1 or int(s.get("days_left") or 0) > -30]
+        visible = [s for s in services if is_customer_service_visible(s)]
         if not visible:
             await update.message.reply_text(
                 "❌ اشتراک فعالی برای تمدید وجود ندارد.",
@@ -171,12 +172,12 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         from Shared.agent_db import get_services_by_customer
-        from CustomerBot.services import refresh_service_status
+        from CustomerBot.services import refresh_service_status, is_customer_service_visible
         services = get_services_by_customer(cust["id"])
         for svc in services:
             await refresh_service_status(svc.get("id", 0))
         services = get_services_by_customer(cust["id"])
-        visible = [s for s in services if int(s.get("is_active") or 0) == 1 or int(s.get("days_left") or 0) > -30]
+        visible = [s for s in services if is_customer_service_visible(s)]
         if not visible:
             await update.message.reply_text(
                 "❌ هیچ سرویس فعالی ندارید.",
@@ -190,7 +191,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         for svc in visible:
-            msg = _build_service_text(svc)
+            from CustomerBot.services import build_subscription_status_text
+            msg = build_subscription_status_text(svc, get_subs_settings(agent_id), br)
             await update.message.reply_text(
                 msg,
                 parse_mode="Markdown",
@@ -222,21 +224,3 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not faq:
             faq = "❗️ سوالات متداول\n\nبه‌زودی تکمیل می‌شود."
         await update.message.reply_text(faq, reply_markup=main_menu_keyboard())
-
-
-def _build_service_text(svc: dict) -> str:
-    name = svc.get("name") or f"اشتراک #{svc.get('id')}"
-    server = svc.get("server_title") or "?"
-    usage = float(svc.get("usage_current") or 0)
-    limit = float(svc.get("usage_limit") or 0)
-    days = int(svc.get("days_left") or 0)
-    price = int(svc.get("sale_price") or 0)
-    end = svc.get("end_date") or "?"
-    return (
-        f"📊 *{name}*\n"
-        f"🌍 سرور: {server}\n"
-        f"📶 مصرف: {usage:.2f} / {limit:.2f} GB\n"
-        f"⏳ روز باقیمانده: {days}\n"
-        f"📅 تاریخ پایان: {end}\n"
-        f"💰 قیمت فروش: {price:,} تومان"
-    )

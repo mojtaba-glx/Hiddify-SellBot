@@ -67,6 +67,24 @@ def get_servers() -> List[Dict[str, Any]]:
     return db.get("servers", [])
 
 
+def get_main_servers() -> List[Dict[str, Any]]:
+    """برگرداندن فقط سرورهای اصلی (بدون نودها).
+    نودها سرورهایی هستند که target_server_id یک سرور دیگر به آن‌ها اشاره دارد."""
+    servers = get_servers()
+    child_ids: set = set()
+    for s in servers:
+        for n in (s.get("nodes") or []):
+            if not isinstance(n, dict):
+                continue
+            try:
+                cid = int(n.get("target_server_id") or 0)
+            except (TypeError, ValueError):
+                cid = 0
+            if cid > 0:
+                child_ids.add(cid)
+    return [s for s in servers if int(s.get("id") or 0) not in child_ids]
+
+
 def _save_servers(servers: List[Dict[str, Any]]) -> None:
     db = _load_db()
     if not isinstance(db, dict):

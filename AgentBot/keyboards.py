@@ -53,8 +53,7 @@ def broadcast_skip_cancel_keyboard():
 # Subscription keyboards
 def subs_menu_keyboard():
     return _ikb([
-        [IButton("\u2795 \u0633\u0627\u062e\u062a\u0646 \u0627\u0634\u062a\u0631\u0627\u06a9 \u06a9\u0627\u0631\u0628\u0631", callback_data="agbot:subs:create")],
-        [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648\u06cc \u06a9\u0627\u0631\u0628\u0631", callback_data="agbot:subs:search")],
+        [IButton("\u2795 \u0633\u0627\u062e\u062a\u0646 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data="agbot:subs:create")],
         [IButton("\U0001f51c \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0645\u0646\u0642\u0636\u06cc \u0634\u062f\u0647", callback_data="agbot:subs:expired")],
         [IButton(BTN_BACK, callback_data="agbot:menu")],
     ])
@@ -181,8 +180,9 @@ def tx_menu_keyboard():
 
 def config_menu_keyboard():
     return _ikb([
-        [IButton("\U0001f6d2 \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u062e\u0631\u06cc\u062f \u0648 \u062a\u0645\u062f\u06cc\u062f", callback_data="agbot:set:cfg:shop")],
-        [IButton("\U0001f4b3 \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u067e\u0631\u062f\u0627\u062e\u062a", callback_data="agbot:set:cfg:payment")],
+        [IButton("🛒 تنظیمات خرید و تمدید", callback_data="agbot:set:cfg:shop")],
+        [IButton("💳 تنظیمات پرداخت", callback_data="agbot:set:cfg:payment")],
+        [IButton("🔒 تنظیمات عضویت اجباری", callback_data="agbot:set:cfg:forcejoin")],
         [IButton(BTN_BACK, callback_data="agbot:set:back")],
     ])
 
@@ -301,3 +301,32 @@ def dyn_settings_keyboard():
         [IButton('\u23f0 \u0645\u062d\u062f\u0648\u062f\u0647 \u0632\u0645\u0627\u0646', callback_data='agbot:plans:dyn_edit:time_range')],
         [IButton(BTN_BACK, callback_data='agbot:plans:back')],
     ])
+
+
+def agent_dynamic_wizard_keyboard(server_id: int, gb: int, months: int, price: int, off_percent: int = 0, wholesale: int = 0):
+    price_str = f"{price:,}"
+    wholesale_str = f"{wholesale:,}"
+    rows = [
+        [IButton("\U0001f4ca \u062d\u062c\u0645", callback_data="noop")],
+        [
+            IButton("\u2796", callback_data=f"agbot:subs:wiz:gb_dec:{server_id}"),
+            IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop"),
+            IButton("\u2795", callback_data=f"agbot:subs:wiz:gb_inc:{server_id}"),
+        ],
+        [IButton("\u23f3 \u0632\u0645\u0627\u0646", callback_data="noop")],
+        [
+            IButton("\u2796", callback_data=f"agbot:subs:wiz:month_dec:{server_id}"),
+            IButton(f"{months} \u0645\u0627\u0647\u0647", callback_data="noop"),
+            IButton("\u2795", callback_data=f"agbot:subs:wiz:month_inc:{server_id}"),
+        ],
+        [
+            IButton(f"\U0001f4b0 \u0642\u06cc\u0645\u062a \u0639\u0645\u062f\u0647: {wholesale_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
+        ],
+        [
+            IButton(f"\U0001f4b8 \u0642\u06cc\u0645\u062a \u0641\u0631\u0648\u0634: {price_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
+            IButton(f"\U0001f3f7 \u062a\u062e\u0641\u06cc\u0641: {off_percent}%", callback_data="noop"),
+        ],
+        [IButton("\U0001f4b3 \u062a\u0627\u06cc\u06cc\u062f \u0648 \u0633\u0627\u062e\u062a\u0646", callback_data=f"agbot:subs:wiz:confirm:{server_id}")],
+        [IButton(BTN_BACK, callback_data="agbot:subs:picksrv_back")],
+    ]
+    return _ikb(rows)

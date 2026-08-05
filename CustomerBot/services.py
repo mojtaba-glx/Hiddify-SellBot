@@ -2,13 +2,20 @@
 # Business logic: buy service, renew, get configs
 # All actions go through agent_db + Hiddify API
 
+import base64
 import logging
-from typing import Any, Dict, Optional
+import os
+import re
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 from uuid import uuid4
 
 from Shared import agent_db, database, hiddify_api, multi_panel
 from AgentBot.database import get_fixed_plan
+from CustomerBot.utils.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +263,7 @@ async def refresh_service_status(service_id: int) -> Dict[str, Any]:
         if derived_days is not None:
             updates["days_left"] = int(derived_days)
         agent_db.update_service(service_id, updates)
+        agent_db.mark_service_seen(service_id)
         return {"ok": True, "usage_current": usage, "service": agent_db.get_service_by_id(service_id)}
     except Exception as e:
         try:
@@ -263,9 +271,615 @@ async def refresh_service_status(service_id: int) -> Dict[str, Any]:
             exists = any(str(u.get("uuid") or u.get("id") or "").strip() == panel_uuid for u in users)
             if not exists:
                 agent_db.update_service(service_id, {"is_active": 0, "days_left": 0})
+                agent_db.mark_service_missing(service_id)
+                agent_db.cleanup_stale_agent_services(14)
                 logger.info("disabled stale customer service svc=%s uuid=%s", service_id, panel_uuid)
                 return {"ok": False, "error": "panel_user_not_found", "disabled": True}
         except Exception as list_error:
             logger.warning("verify stale service failed svc=%s: %s", service_id, list_error)
         logger.warning("sync_usage failed svc=%s: %s", service_id, e)
         return {"ok": False, "error": str(e)[:100]}
+
+
+# =====================================================================
+# وضعیت اشتراک — مطابق ربات کاربران (UserBot)
+# =====================================================================
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _to_int(value, default: int = 0) -> int:
+    try:
+        if value is None:
+            return int(default)
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _parse_service_comment(comment: str) -> dict:
+    """پارس کامنت سرویس به صورت key:value جدا شده با |"""
+    parsed = {}
+    raw = (comment or "").strip()
+    if not raw:
+        return parsed
+    for part in raw.split("|"):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        k = k.strip().lower()
+        v = v.strip()
+        if k and v:
+            parsed[k] = v
+    return parsed
+
+
+def _resolve_live_server_title(svc: dict, default: str = "نامشخص") -> str:
+    stored_title = str(svc.get("server_title") or "").strip()
+    try:
+        server_id = int(svc.get("server_id") or 0)
+    except (TypeError, ValueError):
+        server_id = 0
+    if server_id > 0:
+        try:
+            server = database.get_server_by_id(server_id)
+        except Exception:
+            server = None
+        if server:
+            live_title = str(server.get("title") or "").strip()
+            if live_title:
+                return live_title
+        if stored_title:
+            return stored_title
+        return f"سرور #{server_id}"
+    return stored_title or default
+
+
+def _is_unlimited_volume(limit_gb: float, br: dict) -> bool:
+    if not bool(br.get("renew_unlimited_volume", False)):
+        return False
+    try:
+        threshold = float(br.get("renew_unlimited_volume_from_gb") or 1000)
+    except (TypeError, ValueError):
+        threshold = 1000.0
+    return limit_gb >= threshold
+
+
+def _is_unlimited_time(days_val: int, br: dict) -> bool:
+    if not bool(br.get("renew_unlimited_time", False)):
+        return False
+    try:
+        threshold = int(br.get("renew_unlimited_time_from_days") or 365)
+    except (TypeError, ValueError):
+        threshold = 365
+    return int(days_val) >= threshold
+
+
+def is_customer_service_visible(svc: Optional[Dict[str, Any]]) -> bool:
+    """بررسی اینکه سرویس هنوز معتبر و باید در لیست مشتری نمایش داده شود."""
+    if not isinstance(svc, dict):
+        return False
+
+    panel_uuid = str(svc.get("panel_user_uuid") or "").strip()
+    server_id = int(svc.get("server_id") or 0)
+    if not panel_uuid or server_id <= 0:
+        return False
+
+    try:
+        is_active = int(svc.get("is_active") or 0) == 1
+    except (TypeError, ValueError):
+        is_active = False
+
+    try:
+        days_left = int(svc.get("days_left") or 0)
+    except (TypeError, ValueError):
+        days_left = 0
+
+    if not is_active and days_left <= 0:
+        return False
+
+    return is_active or days_left > -30
+
+
+def build_subscription_status_text(svc: dict, subs_settings: Optional[dict] = None, br: Optional[dict] = None) -> str:
+    """متن «📄اطلاعات اشتراک شما» با فرمت دقیق ربات کاربران"""
+    service_name = escape_markdown(svc.get("name") or "سرویس")
+    server_title = escape_markdown(_resolve_live_server_title(svc, default="نامشخص"))
+    usage_current = _to_float(svc.get("usage_current"), 0.0)
+    usage_limit = _to_float(svc.get("usage_limit"), 0.0)
+    days_left = _to_int(svc.get("days_left"), 0)
+    comment_meta = _parse_service_comment(svc.get("comment") or "")
+    service_code = str(comment_meta.get("code") or "").strip() or str(svc.get("id") or "—")
+
+    price_raw = svc.get("sale_price")
+    if not price_raw:
+        price_raw = svc.get("wholesale_price", 0)
+    price_toman = max(0, _to_int(price_raw, 0))
+
+    subs = subs_settings or {}
+    br = br or {}
+    unlimited_volume = _is_unlimited_volume(usage_limit, br)
+    unlimited_time = _is_unlimited_time(days_left, br)
+
+    if usage_limit > 0:
+        usage_line = f"{usage_current:.1f} از {'نامحدود' if unlimited_volume else f'{usage_limit:.1f} گیگ'}"
+    else:
+        usage_line = f"{usage_current:.1f} گیگ"
+
+    lines = ["📄اطلاعات اشتراک شما", ""]
+    if subs.get("show_username", True):
+        lines.append(f"👤نام: {service_name}")
+    lines.extend([
+        f"📡سرور: {server_title}",
+        f"📊میزان استفاده: {usage_line}",
+        f"⏳زمان باقی مانده: {'نامحدود' if unlimited_time else f'{days_left} روز'}",
+        f"💰قیمت اشتراک: {price_toman:,} تومان",
+        f"🔑شناسه: `{service_code}`",
+    ])
+    return "\n".join(lines)
+
+
+# ---------- ساخت لینک‌های اشتراک (مثل UserBot) ----------
+
+def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    panel_url = str(server.get("panel_url") or "").rstrip("/")
+    user_proxy = str(server.get("user_proxy_path") or "").strip("/")
+    if not panel_url or not user_proxy or not user_uuid:
+        return None
+
+    base_url = f"{panel_url}/{user_proxy}/{user_uuid}"
+    domains = server.get("domains") or []
+    if not domains:
+        return base_url
+
+    best_score = -10 ** 9
+    display_domain = ""
+    for d in domains:
+        if isinstance(d, dict):
+            raw_domain = (d.get("domain") or d.get("host") or d.get("url") or "").strip()
+            title = (d.get("title") or d.get("name") or "").strip().lower()
+        else:
+            raw_domain = str(d).strip()
+            title = ""
+        if not raw_domain:
+            continue
+        low = raw_domain.lower()
+        score = 0
+        if "user." in low or low.startswith("user"):
+            score += 50
+        if "sub" in low:
+            score += 15
+        if "ساب" in title or "user" in title:
+            score += 10
+        if "dl." in low or low.startswith("dl"):
+            score -= 10
+        if score > best_score:
+            best_score = score
+            display_domain = raw_domain
+
+    if not display_domain:
+        return base_url
+    if not (display_domain.startswith("http://") or display_domain.startswith("https://")):
+        display_domain = "https://" + display_domain
+    return base_url.replace(panel_url, display_domain.rstrip("/"), 1)
+
+
+def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    panel_url = str(server.get("panel_url") or "").rstrip("/")
+    user_proxy = str(server.get("user_proxy_path") or "").strip("/")
+    if not panel_url or not user_proxy or not user_uuid:
+        return None
+    return f"{panel_url}/{user_proxy}/{user_uuid}"
+
+
+def get_service_node_base_urls(svc: dict) -> List[str]:
+    """آدرس base_url سرویس روی همه نودهای نگاشت‌شده + سرور اصلی"""
+    out: List[str] = []
+    seen: set = set()
+    try:
+        service_id = int(svc.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    mappings = agent_db.get_service_nodes(service_id) if service_id > 0 else []
+    if mappings:
+        active_mappings = [m for m in mappings if int((m or {}).get("is_active") or 0) == 1]
+        if active_mappings:
+            mappings = active_mappings
+        else:
+            return []
+    try:
+        primary_server_id = int(svc.get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_server_id = 0
+    mappings = sorted(mappings, key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id)
+    for m in mappings:
+        try:
+            sid = int(m.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        uuid = str(m.get("panel_user_uuid") or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+        server = database.get_server_by_id(sid)
+        if not server:
+            continue
+        for base in (_build_user_base_url(server, uuid), _build_panel_base_url(server, uuid)):
+            if not base or base in seen:
+                continue
+            out.append(base)
+            seen.add(base)
+    if not out:
+        try:
+            sid = int(svc.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        server = database.get_server_by_id(sid) if sid else None
+        uuid = str(svc.get("panel_user_uuid") or "").strip()
+        if server and uuid:
+            for base in (_build_user_base_url(server, uuid), _build_panel_base_url(server, uuid)):
+                if not base or base in seen:
+                    continue
+                out.append(base)
+                seen.add(base)
+    return out
+
+
+def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
+    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس"""
+    targets: List[Tuple[dict, str, str]] = []
+    seen: set = set()
+    try:
+        service_id = int(svc.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    mappings = agent_db.get_service_nodes(service_id) if service_id > 0 else []
+    for m in mappings:
+        try:
+            sid = int(m.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        uuid = str(m.get("panel_user_uuid") or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+        srv = database.get_server_by_id(sid)
+        if not srv:
+            continue
+        key = (sid, uuid)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append((srv, uuid, str(m.get("marzban_username") or "").strip()))
+    if targets:
+        return targets
+    try:
+        sid = int(svc.get("server_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    uuid = str(svc.get("panel_user_uuid") or "").strip()
+    srv = database.get_server_by_id(sid) if sid > 0 else None
+    if srv and uuid:
+        targets.append((srv, uuid, ""))
+    return targets
+
+
+# ---------- استخراج کانفیگ‌های مستقیم ----------
+
+def _sanitize_config_text(value: Any) -> str:
+    text = str(value or "").strip()
+    for ch in ("\ufeff", "\u200e", "\u200f", "\u202a", "\u202b", "\u202c"):
+        text = text.replace(ch, "")
+    return text.strip()
+
+
+def _extract_config_link_from_line(value: Any) -> str:
+    raw = _sanitize_config_text(value)
+    if not raw:
+        return ""
+    raw = raw.rstrip("'\",;)]}")
+    if "://" not in raw:
+        return ""
+    if re.search(r"\s", raw):
+        return ""
+    m = re.match(r"(?i)^([a-z][a-z0-9.+\-]{1,24})://", raw)
+    if not m:
+        return ""
+    scheme = str(m.group(1) or "").lower()
+    blocked = {"http", "https", "hiddify", "ftp", "file", "mailto", "tg"}
+    if scheme in blocked:
+        return ""
+    if len(raw) < 16:
+        return ""
+    return raw
+
+
+def _fetch_remote_lines(url: str) -> List[str]:
+    raw_url = str(url or "").strip()
+    if not raw_url:
+        return []
+
+    def _decode_to_lines(body_text: str) -> List[str]:
+        lines = [_sanitize_config_text(ln) for ln in body_text.splitlines() if _sanitize_config_text(ln)]
+        if lines and any("://" in ln for ln in lines):
+            return lines
+        compact = re.sub(r"\s+", "", body_text or "")
+        candidates = [body_text.strip(), compact]
+        for cand in candidates:
+            cand = str(cand or "").strip()
+            if not cand:
+                continue
+            for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+                try:
+                    padded = cand + ("=" * ((4 - len(cand) % 4) % 4))
+                    decoded = decoder(padded).decode("utf-8", errors="ignore")
+                    decoded_lines = [_sanitize_config_text(ln) for ln in decoded.splitlines() if _sanitize_config_text(ln)]
+                    if decoded_lines:
+                        return decoded_lines
+                except Exception:
+                    continue
+        return lines
+
+    urls_to_try = [raw_url]
+    low = raw_url.lower()
+    if "/all.txt" in low and "asn=" not in low:
+        sep = "&" if "?" in raw_url else "?"
+        urls_to_try.append(f"{raw_url}{sep}asn=unknown")
+
+    user_agents = [
+        "HiddifyNext/1.0",
+        "ClashMetaForAndroid/2.11.5",
+        "v2rayN/6.45",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ]
+    base_headers = {
+        "Accept": "text/plain,*/*;q=0.9",
+        "Accept-Language": "en-US,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    for target in urls_to_try:
+        for ua in user_agents:
+            try:
+                req = Request(target, headers={**base_headers, "User-Agent": ua})
+                with urlopen(req, timeout=15) as resp:
+                    raw = resp.read()
+                body = raw.decode("utf-8", errors="ignore")
+                parsed = _decode_to_lines(body)
+                if parsed:
+                    return parsed
+            except HTTPError:
+                continue
+            except Exception:
+                continue
+    return []
+
+
+def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
+    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها"""
+    out: List[str] = []
+    seen_links: set = set()
+    for base_url in get_service_node_base_urls(svc):
+        seen_lines: set = set()
+        for suffix in ("all.txt", "all.txt?base64=1"):
+            lines = _fetch_remote_lines(f"{base_url}/{suffix}")
+            for ln in lines:
+                raw = _sanitize_config_text(ln)
+                if not raw or raw in seen_lines:
+                    continue
+                seen_lines.add(raw)
+                link = _extract_config_link_from_line(raw)
+                if not link or link in seen_links:
+                    continue
+                seen_links.add(link)
+                out.append(link)
+    return out
+
+
+async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
+    """پشتیبان: دریافت کانفیگ‌ها از API پنل برای همه نودها"""
+    out: List[str] = []
+    seen: set = set()
+    for srv, uuid, marzban_un in get_service_panel_targets(svc):
+        try:
+            configs = await multi_panel.get_user_configs(srv, uuid, marzban_username=marzban_un)
+            for item in configs or []:
+                link = str(item.get("link") or "").strip()
+                if link and link not in seen:
+                    seen.add(link)
+                    out.append(link)
+        except Exception as e:
+            logger.warning("API config fallback failed svc=%s node=%s: %s", svc.get("id"), uuid[:8], e)
+    return out
+
+
+# ---------- لینک اشتراک هوشمند (managed sub link) ----------
+
+def _resolve_sub_service_base_url(svc: Optional[dict] = None) -> str:
+    try:
+        from Shared import userbot_db
+        custom_base = str(userbot_db.get_managed_sub_base_url() or "").strip().rstrip("/")
+    except Exception:
+        custom_base = ""
+    if custom_base:
+        return custom_base
+
+    env_base = str(os.getenv("SUB_SERVICE_BASE_URL", "") or "").strip().rstrip("/")
+    if env_base:
+        return env_base
+
+    explicit = str(os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip().rstrip("/")
+    if explicit:
+        try:
+            parsed = urlparse(explicit if "://" in explicit else f"//{explicit}")
+            host = (parsed.hostname or "").strip()
+            scheme = (parsed.scheme or os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower()
+            port = parsed.port if parsed.port is not None else int(os.getenv("SUB_SERVER_PUBLIC_PORT", "8787") or "8787")
+            if host:
+                default_port = (scheme == "https" and int(port) == 443) or (scheme == "http" and int(port) == 80)
+                if default_port:
+                    return f"{scheme}://{host}"
+                return f"{scheme}://{host}:{int(port)}"
+        except Exception:
+            pass
+
+    if svc:
+        base_urls = get_service_node_base_urls(svc)
+        if base_urls:
+            try:
+                p = urlparse(base_urls[0])
+                host = (p.hostname or "").strip()
+                if host:
+                    scheme = (os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower()
+                    port = int(os.getenv("SUB_SERVER_PUBLIC_PORT", "8787") or "8787")
+                    default_port = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
+                    if default_port:
+                        return f"{scheme}://{host}"
+                    return f"{scheme}://{host}:{int(port)}"
+            except Exception:
+                pass
+    return ""
+
+
+def get_or_create_bot_sub_links(svc: dict) -> Tuple[str, str]:
+    """(لینک اشتراک هوشمند، لینک b64) مشابه ربات کاربران"""
+    base = _resolve_sub_service_base_url(svc)
+    if not base:
+        base_urls = get_service_node_base_urls(svc)
+        if base_urls:
+            base = base_urls[0].rstrip("/")
+    service_uuid = str(svc.get("panel_user_uuid") or "").strip()
+    if service_uuid:
+        return (
+            f"{base}/sub/{service_uuid}/all.txt",
+            f"{base}/sub/{service_uuid}/all.txt?base64=1",
+        )
+    token = str(svc.get("id") or "").strip()
+    return f"{base}/sub/{token}/all.txt", f"{base}/sub/{token}/all.txt?base64=1"
+
+
+# ---------- بروزرسانی اطلاعات از همه پنل‌ها ----------
+
+async def sync_service_status_from_panels(service_id: int) -> Dict[str, Any]:
+    """سینک مصرف و روز باقیمانده از همه نودها + سرور اصلی (مثل UserBot)"""
+    svc = agent_db.get_service_by_id(service_id)
+    if not svc:
+        return {"ok": False, "error": "service_not_found"}
+    targets = get_service_panel_targets(svc)
+    if not targets:
+        return {"ok": False, "error": "no_targets"}
+
+    total_usage = 0.0
+    max_limit = 0.0
+    min_days_left: Optional[int] = None
+    found_any = False
+    for srv, uuid, marzban_un in targets:
+        try:
+            user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
+            usage = _to_float(user_data.get("current_usage_GB"), 0.0)
+            total_usage += usage
+            found_any = True
+            limit = _to_float(user_data.get("usage_limit_GB"), 0.0)
+            if limit > max_limit:
+                max_limit = limit
+            derived_days = _extract_days_left(user_data, None)
+            if derived_days is not None:
+                min_days_left = derived_days if min_days_left is None else min(min_days_left, derived_days)
+        except Exception as e:
+            logger.warning("sync svc=%s node=%s failed: %s", service_id, uuid[:8], e)
+
+    if not found_any:
+        return {"ok": False, "error": "no_reachable_panel"}
+
+    updates = {"usage_current": total_usage, "is_active": 1}
+    if max_limit > 0:
+        updates["usage_limit"] = max_limit
+    if min_days_left is not None:
+        updates["days_left"] = int(min_days_left)
+    agent_db.update_service(service_id, updates)
+    return {"ok": True, "service": agent_db.get_service_by_id(service_id)}
+
+
+# ---------- تغییر نام روی همه پنل‌ها ----------
+
+async def rename_service_on_panels(svc: dict, new_name: str) -> Tuple[bool, str]:
+    targets = get_service_panel_targets(svc)
+    if not targets:
+        return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
+    errors: List[str] = []
+    for srv, uuid, marzban_un in targets:
+        try:
+            await multi_panel.patch_user(srv, uuid, {"name": new_name}, marzban_username=marzban_un)
+        except Exception as e:
+            errors.append(f"{srv.get('title') or srv.get('id')}: {str(e)[:60]}")
+    if errors:
+        preview = "\n".join(errors[:3])
+        extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
+        return False, "❌ تغییر نام روی همه سرورها انجام نشد.\n" + preview + extra
+    ok = agent_db.update_service(int(svc.get("id") or 0), {"name": new_name})
+    if not ok:
+        return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
+    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد."
+
+
+# ---------- تغییر لینک اشتراک (بازسازی UUID روی همه پنل‌ها) ----------
+
+async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
+    service_id = int(svc.get("id") or 0)
+    if service_id <= 0:
+        return False, "❌ سرویس نامعتبر است.", None
+    current_uuid = str(svc.get("panel_user_uuid") or "").strip()
+    if not current_uuid:
+        return False, "❌ UUID فعلی اشتراک تعیین نشده است.", None
+    targets = get_service_panel_targets(svc)
+    if not targets:
+        return False, "❌ مسیرهای پنل این اشتراک پیدا نشد.", None
+
+    desired_uuid = str(uuid4())
+    final_uuid: Optional[str] = None
+    updated_targets: List[Tuple[dict, str, str]] = []  # (srv, old_uuid, new_uuid)
+
+    for srv, old_uuid, _marzban_un in targets:
+        if not old_uuid:
+            continue
+        try:
+            patched = await hiddify_api.patch_user(srv, old_uuid, {"uuid": desired_uuid})
+        except Exception:
+            for srv2, old_uuid2, new_uuid2 in updated_targets:
+                try:
+                    await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
+                except Exception:
+                    pass
+            return False, "❌ بازسازی UUID روی همه سرورها انجام نشد. لطفاً مجدداً تلاش کنید.", None
+
+        returned_uuid = str(patched.get("uuid") or patched.get("id") or "").strip()
+        if not returned_uuid:
+            returned_uuid = desired_uuid
+        if final_uuid is None:
+            final_uuid = returned_uuid
+        elif returned_uuid != final_uuid:
+            for srv2, old_uuid2, new_uuid2 in updated_targets:
+                try:
+                    await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
+                except Exception:
+                    pass
+            return False, "❌ UUID جدید روی همه سرورها همگن نشد. لطفاً مجدداً تلاش کنید.", None
+        updated_targets.append((srv, old_uuid, returned_uuid))
+
+    if not final_uuid:
+        return False, "❌ UUID جدید تهیه نشد.", None
+
+    agent_db.update_service(service_id, {"panel_user_uuid": final_uuid})
+    for srv, old_uuid, new_uuid in updated_targets:
+        try:
+            agent_db.update_service_node_uuid(service_id, int(srv.get("id") or 0), old_uuid, new_uuid)
+        except Exception:
+            pass
+    return True, "✅ لینک اشتراک با موفقیت تغییر یافت.", final_uuid
