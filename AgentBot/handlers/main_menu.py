@@ -200,6 +200,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "st:edit_card": settings_payment.handle_text,
             "st:card_text": settings_payment.handle_text,
             "st:search_order": settings_orders.handle_text,
+            "st:search_svc": subscriptions.handle_text,
             "st:search_tx": settings_transactions.handle_text,
             "st:broadcast_message": settings_broadcast.handle_text,
             "st:dyn_settings": plans.handle_text,

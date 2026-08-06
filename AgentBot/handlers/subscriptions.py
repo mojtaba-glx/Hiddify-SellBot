@@ -11,7 +11,7 @@ from AgentBot.constants import (
     SUBS_CFG, SUBS_RENEW, SUBS_DISABLE, SUBS_ENABLE, SUBS_DELETE, SUBS_DODELETE,
     SUBS_BACK, MENU_MAIN, UD_STATE, UD_SELECTED_SERVER, UD_SELECTED_PLAN,
     UD_SELECTED_SERVICE, UD_PAGE,
-    STATE_CREATE_SERVICE_NAME, STATE_RENEW_DAYS, STATE_RENEW_GB,
+    STATE_CREATE_SERVICE_NAME, STATE_RENEW_DAYS, STATE_RENEW_GB, STATE_SEARCH_SERVICE,
 )
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
@@ -113,14 +113,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("سرویس پیدا نشد.", show_alert=True)
             return
         is_active = bool(int(svc.get("is_active", 0) or 0))
+        svc_code = agent_db._service_code_from_comment(svc.get("comment") or "")
         text = (
             f"📦 <b>{_escape(svc.get('name') or 'سرویس')}</b>\n\n"
             f"🌍 سرور: {_escape(svc.get('server_title') or '')}\n"
             f"📊 حجم: {_fmt_gb(svc.get('usage_limit', 0))}GB\n"
             f"⏰ روز: {svc.get('days_left') or svc.get('days') or 0}\n"
+            f"🔑 شناسه: <code>{_escape(svc_code or '—')}</code>\n"
             f"🆔 <code>{svc.get('panel_user_uuid') or ''}</code>"
         )
         await query.edit_message_text(text, reply_markup=service_detail_keyboard(svc_id, is_active), parse_mode="HTML")
+        return
+
+    if action == "search":
+        context.user_data[UD_STATE] = STATE_SEARCH_SERVICE
+        try:
+            await query.edit_message_text(
+                "🔍 <b>جستجوی اشتراک با شناسه</b>\n\n"
+                "شناسه ۷ رقمی اشتراک را بفرستید:",
+                reply_markup=cancel_keyboard(),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
         return
 
     if action == "create":
@@ -379,6 +394,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     text = update.message.text.strip()
     state = context.user_data.get(UD_STATE)
+
+    if state == STATE_SEARCH_SERVICE:
+        code = _normalize_digits(text)
+        if not code:
+            await update.message.reply_text("شناسه نامعتبر است. شناسه ۷ رقمی را بفرستید.")
+            return True
+        svc = agent_db.get_service_by_code(code, agent_id=agent_id)
+        if not svc:
+            await update.message.reply_text("❌ اشتراکی با این شناسه یافت نشد.")
+            return True
+        context.user_data.pop(UD_STATE, None)
+        is_active = bool(int(svc.get("is_active", 0) or 0))
+        svc_code = agent_db._service_code_from_comment(svc.get("comment") or "")
+        detail = (
+            f"✅ <b>اشتراک یافت شد</b>\n\n"
+            f"📦 <b>{_escape(svc.get('name') or 'سرویس')}</b>\n"
+            f"🔑 شناسه: <code>{_escape(svc_code or '—')}</code>\n"
+            f"🌍 سرور: {_escape(svc.get('server_title') or '')}\n"
+            f"📊 حجم: {_fmt_gb(svc.get('usage_limit', 0))}GB\n"
+            f"⏰ روز: {svc.get('days_left') or svc.get('days') or 0}\n"
+            f"📈 استفاده: {svc.get('usage_current') or 0}GB\n"
+            f"💰 فروش: {_fmt_toman(svc.get('sale_price') or 0)} تومان\n"
+            f"💎 عمده: {_fmt_toman(svc.get('wholesale_price') or 0)} تومان"
+        )
+        await update.message.reply_text(detail, reply_markup=service_detail_keyboard(int(svc["id"]), is_active), parse_mode="HTML")
+        return True
 
     if state == STATE_CREATE_SERVICE_NAME:
         plan = context.user_data.get(UD_SELECTED_PLAN)

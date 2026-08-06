@@ -4539,6 +4539,61 @@ async def send_subscription_tracking_detail(
         await context.bot.send_message(chat_id, detail_text, reply_markup=kb)
 
 
+def _find_agent_service_by_code(service_code: str) -> Optional[Dict[str, Any]]:
+    """جستجوی سرویس‌های نمایندگی (agency.db) با شناسه ۷ رقمی."""
+    try:
+        from Shared import agent_db as _agent_db
+        svc = _agent_db.get_service_by_code(service_code)
+        if svc:
+            svc = dict(svc)
+            svc["_source"] = "agent"
+        return svc
+    except Exception:
+        return None
+
+
+async def send_agent_service_tracking_detail(message, context, service: Dict[str, Any]) -> None:
+    """نمایش جزئیات سرویس نمایندگی در ربات ادمین (جستجو با شناسه ۷ رقمی)."""
+    from Shared import agent_db as _agent_db
+    svc = dict(service or {})
+    svc_code = ""
+    for part in str(svc.get("comment") or "").split("|"):
+        if ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        if k.strip().lower() == "code":
+            svc_code = str(v).strip()
+            break
+    agent = None
+    if svc.get("agent_id"):
+        try:
+            agent = _agent_db.get_agent_by_id(int(svc["agent_id"]))
+        except Exception:
+            agent = None
+    agent_label = ""
+    if agent:
+        agent_label = str(agent.get("full_name") or agent.get("username") or f"@{agent.get('telegram_id')}" or "")
+    elif svc.get("agent_id"):
+        agent_label = f"نماینده #{svc.get('agent_id')}"
+    text = (
+        "🔎 اشتراک نمایندگی\n\n"
+        f"📦 نام: {svc.get('name') or '—'}\n"
+        f"🔑 شناسه: <code>{html_escape(svc_code or '—')}</code>\n"
+        f"👤 نماینده: {html_escape(agent_label or '—')}\n"
+        f"🌍 سرور: {html_escape(str(svc.get('server_title') or '—'))}\n"
+        f"📊 حجم: {svc.get('usage_limit') or 0}GB\n"
+        f"📈 استفاده: {svc.get('usage_current') or 0}GB\n"
+        f"⏰ روز باقی‌مانده: {svc.get('days_left') or 0}\n"
+        f"💰 قیمت فروش: {int(svc.get('sale_price') or 0):,} تومان\n"
+        f"💎 قیمت عمده: {int(svc.get('wholesale_price') or 0):,} تومان\n"
+        f"🆔: {svc.get('panel_user_uuid') or '—'}"
+    )
+    try:
+        await message.reply_text(text, reply_markup=admin_main_keyboard(), parse_mode="HTML")
+    except Exception:
+        pass
+
+
 # ===============================
 #   بخش مدیریت تراکنشات (تکمیل شده)
 # ===============================
@@ -4858,18 +4913,23 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         service = userbot_db.get_service_by_code(sub_code)
         if not service:
-            await msg.reply_text("❌اشتراکی با این شناسه یافت نشد")
-            await msg.reply_text(_subscription_tracking_prompt_text(), reply_markup=userbot_cancel_keyboard())
-            return
+            service = _find_agent_service_by_code(sub_code)
+            if not service:
+                await msg.reply_text("❌اشتراکی با این شناسه یافت نشد")
+                await msg.reply_text(_subscription_tracking_prompt_text(), reply_markup=userbot_cancel_keyboard())
+                return
 
         context.user_data.pop(SUB_TRACKING_STATE, None)
         await msg.reply_text("✅اشتراک یافت شد", reply_markup=admin_main_keyboard())
-        await send_subscription_tracking_detail(
-            msg.chat_id,
-            context,
-            service=service,
-            message=msg,
-        )
+        if str(service.get("_source") or "") == "agent":
+            await send_agent_service_tracking_detail(msg, context, service)
+        else:
+            await send_subscription_tracking_detail(
+                msg.chat_id,
+                context,
+                service=service,
+                message=msg,
+            )
         return
 
     if context.user_data.get(BACKUP_RESTORE_STATE):

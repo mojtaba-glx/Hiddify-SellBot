@@ -215,6 +215,8 @@ def init_db() -> None:
         )
     """)
 
+    _backfill_service_codes(cur)
+
     conn.commit()
     conn.close()
 
@@ -861,6 +863,84 @@ def delete_customer_bot(bot_id: int) -> bool:
 #   سرویس‌ها (agent_services)
 # ===============================
 
+def _service_code_from_comment(comment: str) -> str:
+    """استخراج شناسه ۷ رقمی سرویس از comment به فرم code:XXXXXXX."""
+    for part in str(comment or "").split("|"):
+        if ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        if k.strip().lower() == "code":
+            return str(v).strip()
+    return ""
+
+
+def _generate_service_code(cur) -> str:
+    """تولید شناسه ۷ رقمی یکتا برای سرویس."""
+    import random
+
+    for _ in range(50):
+        code = f"{random.randint(0, 9999999):07d}"
+        cur.execute(
+            "SELECT 1 FROM agent_services WHERE comment LIKE ? LIMIT 1",
+            (f"%code:{code}%",),
+        )
+        if not cur.fetchone():
+            return code
+    return f"{random.randint(0, 9999999):07d}"
+
+
+def _backfill_service_codes(cur) -> int:
+    """برای سرویس‌های قدیمی که شناسه ندارند، کد ۷ رقمی بساز و ذخیره کن."""
+    try:
+        cur.execute(
+            "SELECT id, comment FROM agent_services WHERE comment IS NULL OR comment NOT LIKE '%code:%'"
+        )
+        rows = cur.fetchall()
+    except Exception:
+        return 0
+    fixed = 0
+    for row in rows:
+        code = _generate_service_code(cur)
+        new_comment = str((row["comment"] if "comment" in row.keys() else "") or "").strip()
+        if new_comment and not new_comment.endswith("|"):
+            new_comment += "|"
+        new_comment += f"code:{code}"
+        cur.execute(
+            "UPDATE agent_services SET comment = ? WHERE id = ?",
+            (new_comment, int(row["id"])),
+        )
+        fixed += 1
+    return fixed
+
+
+def get_service_by_code(service_code: str, agent_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """پیدا کردن سرویس با شناسه ۷ رقمی ذخیره‌شده در comment به فرم code:XXXXXXX."""
+    init_db()
+    code = str(service_code or "").strip()
+    if not code:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        if agent_id:
+            cur.execute(
+                "SELECT * FROM agent_services WHERE agent_id = ? AND comment LIKE ? ORDER BY id DESC LIMIT 200",
+                (int(agent_id), f"%code:{code}%"),
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM agent_services WHERE comment LIKE ? ORDER BY id DESC LIMIT 200",
+                (f"%code:{code}%",),
+            )
+        rows = cur.fetchall()
+        for row in rows:
+            if _service_code_from_comment(str(row["comment"] or "")) == code:
+                return dict(row)
+        return None
+    finally:
+        conn.close()
+
+
 def create_service(
     agent_id: int,
     customer_id: int,
@@ -873,6 +953,7 @@ def create_service(
     wholesale_price: int = 0,
     sale_price: int = 0,
     is_trial: int = 0,
+    comment: str = "",
 ) -> Dict[str, Any]:
     """
     ساخت سرویس جدید برای مشتری.
@@ -901,6 +982,17 @@ def create_service(
          usage_limit, days, now, end_date, wholesale_price, sale_price, is_trial, now, now),
     )
     svc_id = cur.lastrowid
+
+    # شناسه ۷ رقمی سرویس در comment (code:XXXXXXX) برای جستجو در ادمین/نمایندگی
+    code = _generate_service_code(cur)
+    comment_text = str(comment or "").strip()
+    if comment_text and not comment_text.endswith("|"):
+        comment_text += "|"
+    comment_text += f"code:{code}"
+    cur.execute(
+        "UPDATE agent_services SET comment = ? WHERE id = ?",
+        (comment_text, svc_id),
+    )
     conn.commit()
     cur.execute("SELECT * FROM agent_services WHERE id = ?", (svc_id,))
     row = cur.fetchone()

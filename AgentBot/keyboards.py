@@ -54,6 +54,7 @@ def broadcast_skip_cancel_keyboard():
 def subs_menu_keyboard():
     return _ikb([
         [IButton("\u2795 \u0633\u0627\u062e\u062a\u0646 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data="agbot:subs:create")],
+        [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648 \u0628\u0627 \u0634\u0646\u0627\u0633\u0647", callback_data="agbot:subs:search")],
         [IButton("\U0001f51c \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0645\u0646\u0642\u0636\u06cc \u0634\u062f\u0647", callback_data="agbot:subs:expired")],
         [IButton(BTN_BACK, callback_data="agbot:menu")],
     ])

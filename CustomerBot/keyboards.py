@@ -1,4 +1,4 @@
-from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
@@ -37,8 +37,18 @@ def cancel_keyboard():
 
 
 def receipt_cancel_keyboard():
-    """دکمه لغو برای صفحه ارسال رسید"""
-    return ReplyKeyboardMarkup([[KeyboardButton("🚫 لغو")]], resize_keyboard=True)
+    """دکمه بازگشت قرمز رنگ برای صفحه ارسال رسید (Reply keyboard fallback)"""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("بازگشت")]],
+        resize_keyboard=True,
+    )
+
+
+def receipt_back_inline_keyboard():
+    """دکمه بازگشت قرمز رنگ — Inline — برای صفحه ارسال رسید"""
+    return _ikb([
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="pay:cancel", style="danger")],
+    ])
 
 
 def location_keyboard(servers, columns: int = 1):

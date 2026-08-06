@@ -63,11 +63,12 @@ from CustomerBot.keyboards import (
     replace_subscription_link_confirm_keyboard,
     subscription_configs_keyboard, subscription_links_keyboard,
     services_list_keyboard, renew_services_keyboard, support_panel_keyboard,
-    receipt_cancel_keyboard,
+    receipt_cancel_keyboard, receipt_back_inline_keyboard,
     ticket_skip_screenshot_keyboard, ticket_confirm_keyboard,
     user_tickets_list_keyboard, user_ticket_detail_keyboard,
     force_join_keyboard, guide_os_keyboard,
 )
+from telegram import ReplyKeyboardRemove
 from CustomerBot.utils.helpers import (
     is_rate_limited, format_price, escape_markdown, safe_int, safe_float,
 )
@@ -917,13 +918,21 @@ async def _handle_pay(query, context, agent_id, user, data):
 
     if data == CB_PAY_RECEIPT_DONE:
         context.user_data[UD_STATE] = "wallet_receipt_photo"
-        await msg.edit_text(
-            "📤 <b>ارسال رسید پرداخت</b>\n\n"
-            "📸 تصویر رسید واریز را همین الان ارسال کنید.\n"
-            "مبلغ رسید باید با مبلغ سفارش یکسان باشد.",
-            parse_mode="HTML",
+        # پاک کردن منوی پایین صفحه با ارسال پیام موقت
+        rm = await query.get_bot().send_message(
+            chat_id=query.from_user.id,
+            text=".",
+            reply_markup=ReplyKeyboardRemove(),
         )
-        await msg.reply_text("\u200b", reply_markup=receipt_cancel_keyboard())
+        try:
+            await rm.delete()
+        except Exception:
+            pass
+        await msg.edit_text(
+            "📥 لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید؛",
+            parse_mode="HTML",
+            reply_markup=receipt_back_inline_keyboard(),
+        )
 
     elif data == CB_PAY_CANCEL:
         context.user_data.pop(UD_STATE, None)
