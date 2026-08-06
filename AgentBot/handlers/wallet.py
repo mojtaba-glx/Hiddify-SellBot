@@ -28,6 +28,17 @@ def _clear_wallet_charge_state(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("charge_marker", None)
     context.user_data.pop("charge_final_amount", None)
     context.user_data.pop("charge_receipt_id", None)
+    context.user_data.pop("charge_msg_ids", None)
+
+
+async def _delete_tracked_charge_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """حذف پیام‌های میانی فرآیند شارژ کیف پول برای تمیز ماندن چت."""
+    msg_ids = context.user_data.pop("charge_msg_ids", None) or []
+    for mid in msg_ids:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
 
 
 def _wallet_back_inline_keyboard() -> InlineKeyboardMarkup:
@@ -113,6 +124,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     agent_id = get_agent_id(context)
 
     if action == "back":
+        await _delete_tracked_charge_messages(context, query.message.chat_id)
         _clear_wallet_charge_state(context)
         from AgentBot.keyboards import main_menu_keyboard
         try:
@@ -144,6 +156,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "charge":
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_AMOUNT
+        context.user_data["charge_msg_ids"] = [query.message.message_id]
         try:
             await query.edit_message_text(
                 "لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید: 🔻",
@@ -184,6 +197,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         context.user_data["charge_marker"] = marker
         context.user_data["charge_final_amount"] = final_amount
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_RECEIPT
+        context.user_data.setdefault("charge_msg_ids", []).append(update.message.message_id)
         card = shared_db.get_random_card() or {}
         card_text = (
             f"مشخصه تراکنش اعمال شد: +{_fmt_toman(marker)} تومان 🔢\n\n"
@@ -197,7 +211,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             [InlineKeyboardButton("✅ پرداخت کردم، ارسال رسید", callback_data="agbot:wallet:paid")],
             [InlineKeyboardButton("بازگشت", callback_data="agbot:wallet:back")],
         ])
-        await update.message.reply_text(card_text, parse_mode="HTML", reply_markup=kb)
+        sent = await update.message.reply_text(card_text, parse_mode="HTML", reply_markup=kb)
+        context.user_data["charge_msg_ids"].append(sent.message_id)
         return True
 
     if state == STATE_WALLET_CHARGE_RECEIPT:
@@ -207,7 +222,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             return True
         context.user_data["charge_receipt_id"] = photo.file_id
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_LAST4
-        await update.message.reply_text("🔢 لطفا 4 رقم آخر کارت مبدا را ارسال کنید:")
+        context.user_data.setdefault("charge_msg_ids", []).append(update.message.message_id)
+        sent = await update.message.reply_text("🔢 لطفا 4 رقم آخر کارت مبدا را ارسال کنید:")
+        context.user_data["charge_msg_ids"].append(sent.message_id)
         return True
 
     if state == STATE_WALLET_CHARGE_LAST4:
@@ -228,11 +245,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             card_last4=last4,
         )
         await _notify_admin_wallet_payment(context, agent_id, payment)
-        context.user_data.pop(UD_STATE, None)
-        context.user_data.pop("charge_amount", None)
-        context.user_data.pop("charge_marker", None)
-        context.user_data.pop("charge_final_amount", None)
-        context.user_data.pop("charge_receipt_id", None)
+        context.user_data.setdefault("charge_msg_ids", []).append(update.message.message_id)
+        await _delete_tracked_charge_messages(context, update.message.chat_id)
+        _clear_wallet_charge_state(context)
         from AgentBot.keyboards import main_menu_keyboard
         await update.message.reply_text(
             "✅ تراکنش شما در انتظار تایید توسط ادمین است. لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",

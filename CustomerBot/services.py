@@ -392,8 +392,8 @@ def is_customer_service_visible(svc: Optional[Dict[str, Any]]) -> bool:
 
 def build_subscription_status_text(svc: dict, subs_settings: Optional[dict] = None, br: Optional[dict] = None) -> str:
     """متن «📄اطلاعات اشتراک شما» با فرمت دقیق ربات کاربران"""
-    service_name = escape_markdown(svc.get("name") or "سرویس")
-    server_title = escape_markdown(_resolve_live_server_title(svc, default="نامشخص"))
+    service_name = svc.get("name") or "سرویس"
+    server_title = _resolve_live_server_title(svc, default="نامشخص")
     usage_current = _to_float(svc.get("usage_current"), 0.0)
     usage_limit = _to_float(svc.get("usage_limit"), 0.0)
     days_left = _to_int(svc.get("days_left"), 0)

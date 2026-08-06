@@ -8279,8 +8279,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                     if new_st == "approved":
                         if is_direct_buy:
                             notify_text = (
-                                "✅ پرداخت شما تایید شد.\n\n"
-                                "اشتراک شما در حال ساخت است و پس از آماده‌سازی ارسال می‌شود."
+                                "🎉 تراکنش شما تایید شد\n"
+                                "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.\n\n"
+                                f"🎁 شناسه تراکنش: {pay.get('tx_code') or pay.get('id') or '-'}"
                             )
                         else:
                             notify_text = (
