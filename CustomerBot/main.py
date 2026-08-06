@@ -11,6 +11,7 @@ from telegram import Update, BotCommand
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    ApplicationHandlerStop,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -18,17 +19,70 @@ from telegram.ext import (
 )
 
 from Shared.agent_db import get_all_active_customer_bots
-from CustomerBot.database import init_db as init_customer_db
+from CustomerBot.database import init_db as init_customer_db, get_force_join_settings
 from CustomerBot.handlers.start import start_command
 from CustomerBot.handlers.menu import menu_handler
 from CustomerBot.handlers.callback import callback_handler
 from CustomerBot.handlers.receipt import receipt_handler
+from CustomerBot.keyboards import force_join_keyboard
 
 logger = logging.getLogger("CustomerBot.Main")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
+
+
+async def force_join_middleware(update: Update, context) -> None:
+    """قبل از هر handler چک میکنه کاربر عضو کانال هست یا نه."""
+    agent_id = context.bot_data.get("agent_id", 0)
+    if not agent_id:
+        return
+
+    # callback دکمه بررسی عضویت رو رد کن — خودش چک میکنه
+    if update.callback_query and (update.callback_query.data or "").startswith("forcejoin:"):
+        return
+
+    fjs = get_force_join_settings(agent_id)
+    if not fjs.get("enabled") or not fjs.get("channel_username"):
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    ch = str(fjs["channel_username"])
+    chat_target = ch if ch.lstrip("-").isdigit() else f"@{ch}"
+    link = fjs.get("channel_link") or (f"https://t.me/{ch}" if not ch.lstrip("-").isdigit() else "")
+    guide = fjs.get("guide_text", "🔒 لطفاً ابتدا در کانال پشتیبانی عضو شوید.\nپس از عضویت روی «✅ بررسی عضویت» بزنید.")
+
+    allowed_statuses = {"member", "administrator", "creator", "owner"}
+    try:
+        member = await context.bot.get_chat_member(chat_target, user.id)
+        status = str(getattr(member, "status", "")).lower()
+        if status not in allowed_statuses:
+            if update.callback_query:
+                await update.callback_query.answer()
+                await update.callback_query.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+            elif update.message:
+                await update.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+            raise ApplicationHandlerStop
+    except ApplicationHandlerStop:
+        raise
+    except Exception as e:
+        # ربات ادمین کانال نیست یا کانال اشتباه است — کاربر را مسدود نکن،
+        # فقط راهنمای عضویت را نشان بده تا دوباره تلاش کند و لاگ بزن.
+        logger.warning(
+            "force_join: getChatMember failed for agent=%d chat=%s — "
+            "make sure the bot is admin in the channel. Error: %s",
+            agent_id, chat_target, e,
+        )
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+        elif update.message:
+            await update.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+        raise ApplicationHandlerStop
 
 
 async def _post_init(app: Application) -> None:
@@ -49,6 +103,9 @@ async def run_single_bot(token: str, agent_id: int):
     )
 
     app.bot_data["agent_id"] = agent_id
+
+    app.add_handler(MessageHandler(filters.ALL, force_join_middleware), group=-1)
+    app.add_handler(CallbackQueryHandler(force_join_middleware), group=-1)
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(callback_handler))

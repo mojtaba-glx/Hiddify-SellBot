@@ -33,19 +33,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     fjs = get_force_join_settings(agent_id)
     if fjs.get("enabled") and fjs.get("channel_username"):
+        ch = str(fjs["channel_username"])
+        chat_target = ch if ch.lstrip("-").isdigit() else f"@{ch}"
+        link = fjs.get("channel_link") or (f"https://t.me/{ch}" if not ch.lstrip("-").isdigit() else "")
+        guide = fjs.get("guide_text", "🔒 لطفاً ابتدا عضو شوید.")
         try:
-            member = await context.bot.get_chat_member(
-                f"@{fjs['channel_username']}", user.id
-            )
+            member = await context.bot.get_chat_member(chat_target, user.id)
             if member.status in ("left", "kicked"):
-                link = fjs.get("channel_link") or f"https://t.me/{fjs['channel_username']}"
-                text = fjs.get("guide_text", "🔒 لطفاً ابتدا عضو شوید.")
-                await update.message.reply_text(
-                    text,
-                    reply_markup=force_join_keyboard(link),
-                )
+                await update.message.reply_text(guide, reply_markup=force_join_keyboard(link))
                 return
         except Exception:
+            # خطا در چک عضویت — اجازه ورود بده (ربات ادمین نیست یا کانال نامعتبر)
             pass
 
     text_settings = get_text_settings(agent_id)

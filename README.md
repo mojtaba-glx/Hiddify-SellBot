@@ -1,5 +1,7 @@
 # Hiddify-SellBot
 
+[![Tests](https://github.com/mojtaba-glx/Hiddify-SellBot/actions/workflows/tests.yml/badge.svg)](https://github.com/mojtaba-glx/Hiddify-SellBot/actions/workflows/tests.yml)
+
 Hiddify-SellBot یک ربات فروش و مدیریت اشتراک Hiddify برای تلگرام است. پروژه شامل چهار ربات جداگانه است:
 
 - **AdminBot** برای مدیریت سرورها، کاربران، پلن‌ها، پرداخت‌ها و تنظیمات
@@ -275,6 +277,24 @@ ADMIN_BOT_TOKEN=123456:ABC...
 USER_BOT_TOKEN=789012:DEF...
 AGENT_BOT_TOKEN=345678:GHI...   # اختیاری — سیستم نمایندگی
 ```
+
+## اجرای تست‌ها
+
+برای اجرای تست‌های واحد پروژه از اسکریپت `run_tests.sh` استفاده کنید:
+
+```bash
+./run_tests.sh                                               # اجرای همه تست‌ها
+./run_tests.sh -q                                            # خروجی خلاصه
+./run_tests.sh hiddify_sellbot_tests/test_qr_utils.py        # فقط یک فایل تست
+```
+
+این اسکریپت به‌صورت خودکار:
+
+- interpreter دارای `pytest` را پیدا می‌کند (اول `venv` و بعد python سیستم)
+- `site-packages` های `venv` را به `PYTHONPATH` اضافه می‌کند تا پکیج `python-telegram-bot` نسخه درست بارگذاری شود
+- تمام فایل‌های پوشه `hiddify_sellbot_tests/` را اجرا می‌کند
+
+> نکته: ماژول‌های ربات برای ایمپورت به پکیج `python-telegram-bot` نیاز دارند که در `venv` پروژه نصب است. اجرای مستقیم `pytest` بدون `PYTHONPATH` ممکن است با خطای `ModuleNotFoundError: No module named 'telegram'` مواجه شود.
 
 ## نسخه فعلی
 

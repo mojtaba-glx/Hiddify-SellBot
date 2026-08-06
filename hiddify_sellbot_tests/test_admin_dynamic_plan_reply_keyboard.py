@@ -21,7 +21,7 @@ class TestAdminDynamicPlanReplyKeyboard(unittest.IsolatedAsyncioTestCase):
     def assert_admin_keyboard_restored(self, reply_markup):
         self.assertIsInstance(reply_markup, ReplyKeyboardMarkup)
         button_texts = [button.text for row in reply_markup.keyboard for button in row]
-        self.assertIn("🖥️مدیریت سرورها", button_texts)
+        self.assertIn("🖥 مدیریت سرورها", button_texts)
         self.assertNotIn("لغو❌", button_texts)
 
     async def test_dynamic_setting_save_restores_admin_keyboard(self):

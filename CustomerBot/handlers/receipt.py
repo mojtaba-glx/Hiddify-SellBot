@@ -478,14 +478,57 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---- Rename handler ----
+    # ---- Rename handler (مثل ربات کاربران: اعتبارسنجی + اعمال روی همه پنل‌ها) ----
     if state and state.startswith("rename:"):
         svc_id = int(state.split(":")[1])
-        from Shared.agent_db import update_service
-        update_service(svc_id, {"name": text})
+        new_name = re.sub(r"\s+", " ", (text or "").strip())
+        if len(new_name) < 3:
+            await update.message.reply_text(
+                "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        if len(new_name) > 64:
+            await update.message.reply_text(
+                "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        svc = get_service_by_id(svc_id)
+        if not svc:
+            context.user_data.pop(UD_STATE, None)
+            await update.message.reply_text("❌ اشتراک موردنظر یافت نشد.", reply_markup=main_menu_keyboard())
+            return
+        old_name = str(svc.get("name") or "").strip()
+        if new_name == old_name:
+            await update.message.reply_text(
+                "ℹ️ نام جدید با نام فعلی یکسان است. نام دیگری وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        await update.message.reply_text("⏳ در حال بروزرسانی نام اشتراک...")
+        from CustomerBot.services import rename_service_on_panels
+        ok, result_text = await rename_service_on_panels(svc, new_name)
+        if not ok:
+            await update.message.reply_text(result_text, reply_markup=cancel_keyboard())
+            return
         context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text(
-            f"✅ نام اشتراک به «{text}» تغییر یافت.",
-            reply_markup=main_menu_keyboard(),
-        )
+        await update.message.reply_text(result_text, reply_markup=main_menu_keyboard())
+        # نمایش مجدد وضعیت با نام جدید (مثل ربات کاربران)
+        try:
+            from CustomerBot.services import build_subscription_status_text
+            from CustomerBot.database import get_subs_settings, get_buy_renew_settings
+            from CustomerBot.keyboards import subscription_status_keyboard
+            refreshed = get_service_by_id(svc_id)
+            if refreshed:
+                status_text = build_subscription_status_text(
+                    refreshed, get_subs_settings(agent_id), get_buy_renew_settings(agent_id)
+                )
+                await update.message.reply_text(
+                    status_text,
+                    parse_mode="Markdown",
+                    reply_markup=subscription_status_keyboard(svc_id),
+                )
+        except Exception:
+            pass
         return

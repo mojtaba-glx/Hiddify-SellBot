@@ -200,18 +200,36 @@ async def _handle_force_join_check(query, context, agent_id, user):
     if not fjs.get("enabled") or not fjs.get("channel_username"):
         await _back_to_main_menu(query.message, "✅ عضویت شما تایید شد!")
         return
+    ch = str(fjs["channel_username"])
+    chat_target = ch if ch.lstrip("-").isdigit() else f"@{ch}"
+    link = fjs.get("channel_link") or (f"https://t.me/{ch}" if not ch.lstrip("-").isdigit() else "")
+    allowed_statuses = {"member", "administrator", "creator", "owner"}
     try:
-        member = await context.bot.get_chat_member(f"@{fjs['channel_username']}", user.id)
-        if member.status in ("left", "kicked"):
-            link = fjs.get("channel_link") or f"https://t.me/{fjs['channel_username']}"
+        member = await context.bot.get_chat_member(chat_target, user.id)
+        status = str(getattr(member, "status", "")).lower()
+        if status not in allowed_statuses:
             await query.edit_message_text(
                 fjs.get("guide_text", "شما هنوز عضو نشده‌اید."),
                 reply_markup=force_join_keyboard(link),
             )
             return
     except Exception:
+        await query.edit_message_text(
+            fjs.get("guide_text", "شما هنوز عضو نشده‌اید."),
+            reply_markup=force_join_keyboard(link),
+        )
+        return
+    try:
+        await query.message.delete()
+    except Exception:
+        try:
+            await query.edit_message_text("✅ عضویت شما تایید شد!")
+        except Exception:
+            pass
+    try:
+        await query.message.reply_text("✅ عضویت شما تایید شد!", reply_markup=main_menu_keyboard())
+    except Exception:
         pass
-    await _back_to_main_menu(query.message, "✅ عضویت شما تایید شد!")
 
 
 async def _handle_guide(query, context, agent_id, data):

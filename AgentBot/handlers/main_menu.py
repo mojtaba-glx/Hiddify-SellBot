@@ -43,7 +43,8 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
         return
     parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
-    if action != "custpay":
+    # Avoid pre-answering callbacks that intend to show alerts (e.g. "*:help").
+    if action != "custpay" and not data.endswith(":help"):
         try:
             await query.answer()
         except Exception:

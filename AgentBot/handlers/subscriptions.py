@@ -10,9 +10,8 @@ from AgentBot.constants import (
     SUBS_CREATE, SUBS_SEARCH, SUBS_EXPIRED, SUBS_DETAIL,
     SUBS_CFG, SUBS_RENEW, SUBS_DISABLE, SUBS_ENABLE, SUBS_DELETE, SUBS_DODELETE,
     SUBS_BACK, MENU_MAIN, UD_STATE, UD_SELECTED_SERVER, UD_SELECTED_PLAN,
-    UD_SELECTED_CUSTOMER, UD_SELECTED_SERVICE, UD_PAGE,
-    STATE_ADD_CUSTOMER_TG, STATE_ADD_CUSTOMER_NAME, STATE_CREATE_SERVICE_NAME,
-    STATE_SEARCH_CUSTOMER, STATE_RENEW_DAYS, STATE_RENEW_GB,
+    UD_SELECTED_SERVICE, UD_PAGE,
+    STATE_CREATE_SERVICE_NAME, STATE_RENEW_DAYS, STATE_RENEW_GB,
 )
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
@@ -25,11 +24,29 @@ from AgentBot.services.subscription_service import (
     disable_subscription, enable_subscription, delete_subscription, get_configs,
     change_subscription_link,
 )
-from AgentBot.database import create_order as db_create_order
+from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
 
 logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 8
+
+
+def _calc_dynamic_price(agent_id: int, server_id: int, gb: int, months: int):
+    settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
+    price_per_gb = settings.get("price_per_gb", 0)
+    price_per_month = settings.get("price_per_month", 0)
+    discount_pct = settings.get("discount_pct", 0)
+    wholesale_price = agent_db.calculate_wholesale_price(agent_id, gb, months * 30, server_id)
+    sale_price = (gb * price_per_gb) + (months * price_per_month)
+    if discount_pct:
+        sale_price = int(sale_price * (1 - discount_pct / 100))
+    return wholesale_price, sale_price, discount_pct
+
+
+def _get_wizard_defaults(agent_id: int):
+    settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
+    min_gb = settings.get("min_gb", 1)
+    return min_gb, 1
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -71,10 +88,7 @@ async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
         pass
 
 
-def _format_customer_info(c: dict) -> str:
-    name = _escape(c.get("full_name") or "") or _escape(c.get("username") or "") or f"\u06a9\u0627\u0631\u0628\u0631 #{c['id']}"
-    tg_id = c.get("telegram_id", "")
-    return f"\U0001f464 {name} (<code>{tg_id}</code>)"
+
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -131,25 +145,94 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if action == "picksrv":
         server_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         context.user_data[UD_SELECTED_SERVER] = server_id
-        from AgentBot.database import get_fixed_plans
-        plans = get_fixed_plans(agent_id)
-        if not plans:
-            await query.answer("\u0627\u0628\u062a\u062f\u0627 \u0627\u0632 \u0628\u062e\u0634 \u067e\u0644\u0646\u200c\u0647\u0627 \u067e\u0644\u0646 \u062b\u0627\u0628\u062a \u0627\u06cc\u062c\u0627\u062f \u06a9\u0646\u06cc\u062f.", show_alert=True)
-            return
-        from AgentBot.keyboards import _ikb
-        from Shared.tg_button_styles import inline_button as IButton
-        rows = []
-        for p in plans:
-            label = f"{p['title']} - {p['days']} \u0631\u0648\u0632 / {_fmt_gb(p['gb'])}GB - {_fmt_toman(p['price'])} \u062a\u0648\u0645\u0627\u0646"
-            rows.append([IButton(label, callback_data=f"agbot:subs:pickplan:{p['id']}")])
-        rows.append([IButton("\U0001f519 \u0628\u0627\u0632\u06af\u0634\u062a", callback_data="agbot:subs:create")])
+        gb, months = _get_wizard_defaults(agent_id)
+        context.user_data["wiz_gb"] = gb
+        context.user_data["wiz_months"] = months
+        wholesale, sale, off_pct = _calc_dynamic_price(agent_id, server_id, gb, months)
+        context.user_data["wiz_wholesale"] = wholesale
+        context.user_data["wiz_sale"] = sale
+        context.user_data["wiz_off"] = off_pct
+        from AgentBot.keyboards import agent_dynamic_wizard_keyboard
+        kb = agent_dynamic_wizard_keyboard(server_id, gb, months, sale, off_pct, wholesale)
         try:
             await query.edit_message_text(
-                "\U0001f4cb <b>\u0627\u0646\u062a\u062e\u0627\u0628 \u067e\u0644\u0646</b>\n\n\u067e\u0644\u0646 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f:",
-                reply_markup=_ikb(rows), parse_mode="HTML",
+                "\U0001f3af <b>\u0633\u06cc\u0633\u062a\u0645 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u062c\u0647\u062a \u062e\u0631\u06cc\u062f \u0637\u0631\u0627\u062d\u06cc \u06a9\u0646\u06cc\u062f:</b>",
+                reply_markup=kb, parse_mode="HTML",
             )
         except Exception:
             pass
+        return
+
+    if action == "picksrv_back":
+        context.user_data.pop(UD_SELECTED_SERVER, None)
+        context.user_data.pop("wiz_gb", None)
+        context.user_data.pop("wiz_months", None)
+        context.user_data.pop("wiz_wholesale", None)
+        context.user_data.pop("wiz_sale", None)
+        context.user_data.pop("wiz_off", None)
+        query = update.callback_query
+        query.data = "agbot:subs:create"
+        await handle_callback(update, context)
+        return
+
+    if action == "wiz":
+        sub = parts[3] if len(parts) > 3 else ""
+        server_id = context.user_data.get(UD_SELECTED_SERVER, 0) or 0
+        gb = context.user_data.get("wiz_gb", 1)
+        months = context.user_data.get("wiz_months", 1)
+
+        if sub == "confirm":
+            wholesale = context.user_data.get("wiz_wholesale", 0)
+            sale = context.user_data.get("wiz_sale", 0)
+            plan = {
+                "gb": gb,
+                "days": months * 30,
+                "wholesale_price": wholesale,
+                "sale_price": sale,
+                "price": sale,
+            }
+            context.user_data[UD_SELECTED_PLAN] = plan
+            context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
+            try:
+                await query.edit_message_text(
+                    "\U0001f4e1 <b>\u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633</b>\n\n\u062d\u0627\u0644\u0627 \u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return
+
+        settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
+        step_gb = settings.get("step_gb", 1)
+        step_month = settings.get("step_month", 1)
+        min_gb = settings.get("min_gb", 1)
+        max_gb = settings.get("max_gb", 999)
+        min_month = settings.get("min_month", 1)
+        max_month = settings.get("max_month", 12)
+        if sub == "gb_inc":
+            gb = min(gb + step_gb, max_gb)
+        elif sub == "gb_dec":
+            gb = max(gb - step_gb, min_gb)
+        elif sub == "month_inc":
+            months = min(months + step_month, max_month)
+        elif sub == "month_dec":
+            months = max(months - step_month, min_month)
+        context.user_data["wiz_gb"] = gb
+        context.user_data["wiz_months"] = months
+        wholesale, sale, off_pct = _calc_dynamic_price(agent_id, server_id, gb, months)
+        context.user_data["wiz_wholesale"] = wholesale
+        context.user_data["wiz_sale"] = sale
+        context.user_data["wiz_off"] = off_pct
+        from AgentBot.keyboards import agent_dynamic_wizard_keyboard
+        kb = agent_dynamic_wizard_keyboard(server_id, gb, months, sale, off_pct, wholesale)
+        try:
+            await query.edit_message_text(
+                "\U0001f3af <b>\u0633\u06cc\u0633\u062a\u0645 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u062c\u0647\u062a \u062e\u0631\u06cc\u062f \u0637\u0631\u0627\u062d\u06cc \u06a9\u0646\u06cc\u062f:</b>",
+                reply_markup=kb, parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await query.answer()
         return
 
     if action == "pickplan":
@@ -163,23 +246,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         plan["wholesale_price"] = agent_db.calculate_wholesale_price(agent_id, plan.get("gb", 0), plan.get("days", 30), server_id)
         plan["sale_price"] = plan.get("price", 0)
         context.user_data[UD_SELECTED_PLAN] = plan
-        context.user_data[UD_STATE] = STATE_ADD_CUSTOMER_TG
+        context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
         try:
             await query.edit_message_text(
-                "\u0645\u0631\u062d\u0644\u0647 1: \u0622\u06cc\u062f\u06cc \u062a\u0644\u06af\u0631\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f.\n\n"
-                "\u06cc\u0627 \u0627\u0632 \u062f\u06a9\u0645\u0647 \u0632\u06cc\u0631 \u0628\u0631\u0627\u06cc \u062c\u0633\u062a\u062c\u0648\u06cc \u06a9\u0627\u0631\u0628\u0631 \u0627\u0633\u062a\u0641\u0627\u062f\u0647 \u06a9\u0646\u06cc\u062f.",
-                reply_markup=cancel_keyboard(), parse_mode="HTML",
-            )
-        except Exception:
-            pass
-        return
-
-    if action == "search":
-        context.user_data[UD_STATE] = STATE_SEARCH_CUSTOMER
-        try:
-            await query.edit_message_text(
-                "\U0001f50d \u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631 \u06cc\u0627 \u0622\u06cc\u062f\u06cc \u062a\u0644\u06af\u0631\u0627\u0645 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
-                reply_markup=cancel_keyboard(), parse_mode="HTML",
+                "\U0001f4e1 <b>\u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633</b>\n\n\u062d\u0627\u0644\u0627 \u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+                parse_mode="HTML",
             )
         except Exception:
             pass
@@ -309,78 +380,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     text = update.message.text.strip()
     state = context.user_data.get(UD_STATE)
 
-    if state == STATE_SEARCH_CUSTOMER:
-        customers = agent_db.search_customers(agent_id, text, limit=10)
-        if not customers:
-            await update.message.reply_text("\u0647\u06cc\u0686 \u06a9\u0627\u0631\u0628\u0631\u06cc \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.")
-        else:
-            from AgentBot.keyboards import _ikb
-            from Shared.tg_button_styles import inline_button as IButton
-            rows = []
-            for c in customers:
-                label = _escape(c.get("full_name") or "") or _escape(c.get("username") or "") or f"\u06a9\u0627\u0631\u0628\u0631 #{c['id']}"
-                rows.append([IButton(label, callback_data=f"agbot:subs:detail:{c['id']}")])
-            rows.append([IButton("\U0001f519 \u0628\u0627\u0632\u06af\u0634\u062a", callback_data="agbot:subs:back")])
-            await update.message.reply_text(
-                f"\U0001f50d \u0646\u062a\u0627\u06cc\u062c \u062c\u0633\u062a\u062c\u0648 \u0628\u0631\u0627\u06cc \"{_escape(text)}\":",
-                reply_markup=_ikb(rows), parse_mode="HTML",
-            )
-        context.user_data.pop(UD_STATE, None)
-        return True
-
-    if state == STATE_ADD_CUSTOMER_TG:
-        raw = _normalize_digits(text)
-        try:
-            tg_id = int(raw)
-        except ValueError:
-            await update.message.reply_text("\u0622\u06cc\u062f\u06cc \u0646\u0627\u0645\u0639\u062a\u0628\u0631 \u0627\u0633\u062a.")
-            return True
-        existing = agent_db.get_customer_by_telegram_id(agent_id, tg_id)
-        if existing:
-            context.user_data[UD_SELECTED_CUSTOMER] = existing
-            context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
-            await update.message.reply_text(
-                f"\u06a9\u0627\u0631\u0628\u0631 \u0642\u0628\u0644\u0627 \u062b\u0628\u062a \u0634\u062f\u0647: {_escape(existing.get('full_name', ''))}\n"
-                "\u062d\u0627\u0644\u0627 \u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
-                reply_markup=cancel_keyboard(), parse_mode="HTML",
-            )
-            return True
-        context.user_data["new_customer_tg"] = tg_id
-        context.user_data[UD_STATE] = STATE_ADD_CUSTOMER_NAME
-        await update.message.reply_text(
-            "\u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f (\u06cc\u0627 \u0628\u0631\u0627\u06cc \u0635\u0631\u0641\u200c\u0646\u0638\u0631\u06cc \u2014 \u0628\u0641\u0631\u0633\u062a\u06cc\u062f):",
-            reply_markup=cancel_keyboard(), parse_mode="HTML",
-        )
-        return True
-
-    if state == STATE_ADD_CUSTOMER_NAME:
-        tg_id = context.user_data.get("new_customer_tg")
-        if not tg_id:
-            return False
-        name = text if text != "\u2014" else ""
-        customer = agent_db.upsert_customer(agent_id, tg_id, full_name=name)
-        context.user_data[UD_SELECTED_CUSTOMER] = customer
-        context.user_data.pop("new_customer_tg", None)
-        context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
-        _name_display = _escape(name) or '\u0628\u062f\u0648\u0646 \u0646\u0627\u0645'
-        await update.message.reply_text(
-            f"\u06a9\u0627\u0631\u0628\u0631 \u062b\u0628\u062a \u0634\u062f: {_name_display}\n"
-            "\u062d\u0627\u0644\u0627 \u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
-            reply_markup=cancel_keyboard(), parse_mode="HTML",
-        )
-        return True
-
     if state == STATE_CREATE_SERVICE_NAME:
         plan = context.user_data.get(UD_SELECTED_PLAN)
         server_id = context.user_data.get(UD_SELECTED_SERVER)
-        customer_data = context.user_data.get(UD_SELECTED_CUSTOMER)
-        if not plan or not server_id or not customer_data:
+        if not plan or not server_id:
             await update.message.reply_text("\u062e\u0637\u0627: \u0627\u0637\u0644\u0627\u0639\u0627\u062a \u06af\u0645 \u0634\u062f. \u062f\u0648\u0628\u0627\u0631\u0647 \u0634\u0631\u0648\u0639 \u06a9\u0646\u06cc\u062f.")
             context.user_data.pop(UD_STATE, None)
             return True
-        customer_id = customer_data["id"] if isinstance(customer_data, dict) else customer_data
-        customer_name = customer_data.get("full_name", "") if isinstance(customer_data, dict) else ""
-        svc = await create_subscription(agent_id, customer_id, server_id, plan, text)
+        svc = await create_subscription(agent_id, 0, server_id, plan, text)
         if not svc:
             await update.message.reply_text(
                 "\u062e\u0637\u0627 \u062f\u0631 \u0633\u0627\u062e\u062a \u0633\u0631\u0648\u06cc\u0633. \u0645\u0648\u062c\u0648\u062f\u06cc \u06a9\u0627\u0641\u06cc \u0646\u06cc\u0633\u062a \u06cc\u0627 \u062e\u0637\u0627\u06cc \u0633\u06cc\u0633\u062a\u0645.",
@@ -388,18 +395,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             )
             return True
         plan_title = f"{plan['days']} \u0631\u0648\u0632 / {_fmt_gb(plan['gb'])}GB"
-        db_create_order(agent_id, customer_id, customer_name, plan.get("wholesale_price", 0), "new", plan.get("id", 0), text)
+        db_create_order(agent_id, 0, "", plan.get("wholesale_price", 0), "new", plan.get("id", 0), text)
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_SELECTED_PLAN, None)
         context.user_data.pop(UD_SELECTED_SERVER, None)
-        context.user_data.pop(UD_SELECTED_CUSTOMER, None)
         await update.message.reply_text(
             f"\u2705 <b>\u0633\u0631\u0648\u06cc\u0633 \u0628\u0627 \u0645\u0648\u0641\u0642\u06cc\u062a \u0633\u0627\u062e\u062a\u0647 \u0634\u062f!</b>\n\n"
             f"\U0001f4e1 \u0646\u0627\u0645: {_escape(text)}\n"
             f"\U0001f4cb \u067e\u0644\u0646: {plan_title}\n"
             f"\U0001f4b0 \u0642\u06cc\u0645\u062a \u0639\u0645\u062f\u0647: {_fmt_toman(plan['wholesale_price'])} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\U0001f4b8 \u0642\u06cc\u0645\u062a \u0641\u0631\u0648\u0634: {_fmt_toman(plan['sale_price'])} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\U0001f464 \u06a9\u0627\u0631\u0628\u0631: {_escape(customer_name)}",
+            f"\U0001f4b8 \u0642\u06cc\u0645\u062a \u0641\u0631\u0648\u0634: {_fmt_toman(plan['sale_price'])} \u062a\u0648\u0645\u0627\u0646",
             reply_markup=subs_menu_keyboard(), parse_mode="HTML",
         )
         return True

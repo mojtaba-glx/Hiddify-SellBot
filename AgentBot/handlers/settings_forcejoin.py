@@ -21,13 +21,13 @@ _BACK_CONFIG_CB = "agbot:set:cfg:back"
 
 
 def _forcejoin_menu_keyboard(enabled: bool, has_channel: bool):
-    toggle_label = "✅ عضویت اجباری | فعال" if enabled else "❌ عضویت اجباری | غیرفعال"
+    toggle_label = "✅ عضویت اجباری | فعال" if enabled else "✖️ عضویت اجباری | غیرفعال"
     rows = [
-        [IButton("🧭 راهنما", callback_data="agbot:set:cfg:forcejoin:help")],
+        [IButton("🧩راهنما", callback_data="agbot:set:cfg:forcejoin:help")],
         [IButton(toggle_label, callback_data="agbot:set:cfg:forcejoin:toggle",
                  style="success" if enabled else "danger")],
-        [IButton("📢 تنظیم کانال پشتیبانی", callback_data="agbot:set:cfg:forcejoin:setchannel")],
-        [IButton("🔙 بازگشت", callback_data=_BACK_CONFIG_CB)],
+        [IButton("تنظیم کانال پشتیبانی📢", callback_data="agbot:set:cfg:forcejoin:setchannel")],
+        [IButton("🔙بازگشت", callback_data=_BACK_CONFIG_CB)],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -37,11 +37,9 @@ def _build_status_text(agent_id: int) -> str:
     enabled = fjs.get("enabled", False)
     username = fjs.get("channel_username", "") or ""
     channel_display = f"@{username}" if username else "—"
-    status = "✅ فعال" if enabled else "❌ غیرفعال"
     return (
-        f"🔒 <b>تنظیمات عضویت اجباری</b>\n\n"
-        f"📢 کانال فعلی: <b>{channel_display}</b>\n"
-        f"وضعیت: {status}"
+        f"🔒تنظیمات عضویت اجباری\n"
+        f"کانال فعلی: {channel_display} 📢"
     )
 
 
@@ -73,28 +71,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await show_menu(update, context)
         return
 
-    # راهنما
+    # راهنما — پیام جدید پایین می‌آید، دکمه‌های بالا دست نخورده می‌مانند
     if data == "agbot:set:cfg:forcejoin:help":
-        await query.answer()
         help_text = (
-            "🧭 <b>راهنمای عضویت اجباری</b>\n\n"
-            "🔒 برای استفاده از ربات، ابتدا در کانال پشتیبانی عضو شوید.\n"
-            "پس از عضویت روی ✅ «بررسی عضویت» بزنید.\n\n"
-            "اگر عضویت شما تایید نشد:\n"
-            "1) مطمئن شوید دقیقاً در همان کانال اعلام‌شده عضو شده‌اید.\n"
-            "2) ربات باید ادمین باشد در کانال، تا عضویت کاربران را تشخیص دهد."
+            "📋 <b>راهنمای عضویت اجباری</b>\n\n"
+            "برای فعال‌سازی صحیح:\n"
+            "1️⃣ کانال مورد نظر را با دکمه «تنظیم کانال» وارد کنید.\n"
+            "2️⃣ <b>ربات مشتری را ادمین کانال کنید</b> — بدون این قدم، سیستم کار نمی‌کند.\n"
+            "   (ربات را به کانال اضافه کنید → روی «ادمین‌ها» بزنید → ربات را ادمین کنید)\n"
+            "3️⃣ عضویت اجباری را با دکمه toggle فعال کنید.\n\n"
+            "⚠️ <b>اگر ربات ادمین نباشد:</b>\n"
+            "کاربران پیام «سرویس موقتاً در دسترس نیست» می‌بینند و نمی‌توانند از ربات استفاده کنند."
         )
-        fjs = get_force_join_settings(agent_id)
-        enabled = bool(fjs.get("enabled", False))
-        has_channel = bool(fjs.get("channel_username", ""))
-        try:
-            await query.message.reply_text(
-                help_text,
-                parse_mode="HTML",
-                reply_markup=_forcejoin_menu_keyboard(enabled, has_channel),
-            )
-        except Exception:
-            pass
+        await query.answer()
+        await query.message.reply_text(help_text)
         return
 
     # فعال/غیرفعال کردن
@@ -120,12 +110,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         current_display = f"@{current}" if current else "تنظیم نشده"
         try:
             await query.message.reply_text(
-                f"📢 <b>تنظیم کانال عضویت اجباری</b>\n\n"
-                f"کانال فعلی: {current_display}\n\n"
-                "یوزرنیم کانال را ارسال کنید.\n"
-                "مثال: <code>mychannel</code> یا <code>@mychannel</code>\n\n"
-                "⚠️ ربات باید ادمین کانال باشد.\n"
-                "برای لغو، /cancel را بفرستید.",
+                f"📢 <b>تنظیم کانال پشتیبانی برای عضویت اجباری</b>\n\n"
+                f"یک پیام از کانال فوروارد کنید یا <code>@channel</code> / <code>-100...</code> ارسال کنید.",
                 parse_mode="HTML",
             )
         except Exception:
@@ -142,28 +128,61 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if not agent_id:
         return False
 
-    text = (update.message.text or "").strip()
-    if text in ("/cancel", "❌ لغو", "لغو"):
-        context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text("لغو شد.")
-        return True
+    # حالت ۱: فوروارد از کانال
+    fwd = getattr(update.message, "forward_origin", None) or getattr(update.message, "forward_from_chat", None)
+    username = ""
+    channel_id = ""
 
-    # پاکسازی username
-    username = text.lstrip("@").strip()
-    if not username:
-        await update.message.reply_text("❌ یوزرنیم نامعتبر است. دوباره ارسال کنید یا /cancel بفرستید.")
+    if fwd:
+        chat = None
+        if hasattr(fwd, "chat"):
+            chat = fwd.chat
+        elif hasattr(fwd, "id"):
+            chat = fwd
+        if chat:
+            raw_username = getattr(chat, "username", "") or ""
+            raw_id = str(getattr(chat, "id", "") or "")
+            if raw_username:
+                username = raw_username.lstrip("@")
+            elif raw_id:
+                channel_id = raw_id
+    else:
+        text = (update.message.text or "").strip()
+        if text in ("/cancel", "❌ لغو", "لغو"):
+            context.user_data.pop(UD_STATE, None)
+            await update.message.reply_text("لغو شد.")
+            return True
+        # channel_id عددی مثل -1001234567890
+        if text.lstrip("-").isdigit():
+            channel_id = text
+        else:
+            username = text.lstrip("@").strip()
+
+    if not username and not channel_id:
+        await update.message.reply_text(
+            "❌ ورودی نامعتبر است.\n"
+            "یک پیام از کانال فوروارد کنید یا <code>@channel</code> / <code>-100...</code> ارسال کنید.",
+            parse_mode="HTML",
+        )
         return True
 
     fjs = get_force_join_settings(agent_id)
-    fjs["channel_username"] = username
-    fjs["channel_link"] = f"https://t.me/{username}"
+    if username:
+        fjs["channel_username"] = username
+        fjs["channel_link"] = f"https://t.me/{username}"
+        display = f"@{username}"
+    else:
+        fjs["channel_username"] = channel_id
+        fjs["channel_link"] = ""
+        display = channel_id
+
     set_force_join_settings(agent_id, fjs)
     context.user_data.pop(UD_STATE, None)
 
     enabled = bool(fjs.get("enabled", False))
     kb = _forcejoin_menu_keyboard(enabled, True)
     await update.message.reply_text(
-        f"✅ کانال <b>@{username}</b> تنظیم شد.\n\n"
+        f"✅ کانال <b>{display}</b> تنظیم شد.\n\n"
         f"{_build_status_text(agent_id)}",
         parse_mode="HTML",
         reply_markup=kb,

@@ -18,6 +18,7 @@ DB_PATH = Path(__file__).with_name(DB_FILE_NAME)
 _CUSTOMER_BOT_DB_PATH = Path(__file__).resolve().parent.parent / "CustomerBot" / "customer_bot.db"
 
 _db_initialized = False
+_init_db_path = ""
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -27,10 +28,13 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    global _db_initialized
-    if _db_initialized:
+    global _db_initialized, _init_db_path
+    current_path = str(DB_PATH)
+    # اگر مسیر دیتابیس تغییر کرده (مثلاً در تست‌ها)، دوباره جداول را می‌سازیم.
+    if _db_initialized and current_path == _init_db_path:
         return
     _db_initialized = True
+    _init_db_path = current_path
     """ساخت تمام جداول دیتابیس نمایندگی."""
     conn = _get_conn()
     cur = conn.cursor()
@@ -121,7 +125,20 @@ def init_db() -> None:
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_service_nodes_svc ON agent_service_nodes(service_id)")
 
-    # 6. قیمت‌گذاری (عمده + فروش) برای نماینده
+    # 6. ردیابی سرویس‌های ناموجود/قدیمی برای حذف خودکار بعد از 14 روز
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_service_probe (
+            service_id INTEGER PRIMARY KEY,
+            missing_streak INTEGER DEFAULT 0,
+            first_missing_at TEXT DEFAULT '',
+            last_missing_at TEXT DEFAULT '',
+            last_seen_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT '',
+            FOREIGN KEY (service_id) REFERENCES agent_services(id)
+        )
+    """)
+
+    # 7. قیمت‌گذاری (عمده + فروش) برای نماینده
     cur.execute("""
         CREATE TABLE IF NOT EXISTS agent_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -930,8 +947,113 @@ def get_services_by_agent(agent_id: int, page: int = 1, page_size: int = 20) -> 
     return [dict(r) for r in rows], total
 
 
+def _older_than_days(ts: str, days: int) -> bool:
+    """بررسی اینکه تاریخ گذشته از بازه‌ی داده‌شده بیشتر است یا نه."""
+    if not ts:
+        return False
+    value = str(ts).strip()
+    if not value:
+        return False
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(value, fmt)
+            break
+        except ValueError:
+            dt = None
+    if dt is None:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() >= days * 86400
+
+
+def mark_service_seen(service_id: int) -> None:
+    """بازنشانی ردیابی حذف سرویس در صورت وجود مجدد."""
+    init_db()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO agent_service_probe (service_id, missing_streak, first_missing_at, last_seen_at, last_missing_at, updated_at)
+            VALUES (?, 0, NULL, ?, NULL, ?)
+            ON CONFLICT(service_id) DO UPDATE SET
+                missing_streak = 0,
+                first_missing_at = NULL,
+                last_seen_at = excluded.last_seen_at,
+                last_missing_at = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (service_id, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_service_missing(service_id: int) -> Dict[str, Any]:
+    """ثبت اینکه سرویس در این اجرا ناموجود شد؛ حذف نهایی فقط بعد از TTL."""
+    init_db()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT missing_streak, first_missing_at FROM agent_service_probe WHERE service_id = ? LIMIT 1",
+            (service_id,),
+        )
+        row = cur.fetchone()
+        streak = int((row["missing_streak"] if row else 0) or 0) + 1
+        first_missing_at = str((row["first_missing_at"] if row else "") or "").strip() or now
+        cur.execute(
+            """
+            INSERT INTO agent_service_probe (service_id, missing_streak, first_missing_at, last_missing_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(service_id) DO UPDATE SET
+                missing_streak = excluded.missing_streak,
+                first_missing_at = COALESCE(agent_service_probe.first_missing_at, excluded.first_missing_at),
+                last_missing_at = excluded.last_missing_at,
+                updated_at = excluded.updated_at
+            """,
+            (service_id, streak, first_missing_at, now, now),
+        )
+        conn.commit()
+        return {"missing_streak": streak, "first_missing_at": first_missing_at, "last_missing_at": now}
+    finally:
+        conn.close()
+
+
+def cleanup_stale_agent_services(days: int = 14) -> int:
+    """حذف خودکار سرویس‌های طولانی‌مدت ناموجود در پنل پس از 14 روز."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT service_id, first_missing_at FROM agent_service_probe WHERE missing_streak > 0 AND first_missing_at != ''",
+        )
+        service_ids = [
+            int(row["service_id"])
+            for row in cur.fetchall()
+            if _older_than_days(str(row["first_missing_at"] or ""), days)
+        ]
+    finally:
+        conn.close()
+
+    removed = 0
+    for service_id in sorted(set(service_ids)):
+        try:
+            if delete_service(service_id):
+                removed += 1
+        except Exception:
+            pass
+    return removed
+
+
 def get_services_by_customer(customer_id: int) -> List[Dict[str, Any]]:
     """لیست تمام سرویس‌های یک مشتری."""
+    cleanup_stale_agent_services(14)
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
