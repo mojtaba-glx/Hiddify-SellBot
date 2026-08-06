@@ -257,11 +257,12 @@ SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES=360
 
 ```bash
 # روش ۱: اسکریپت جامع (همه ربات‌ها)
-./run_bots.sh start      # شروع همه ربات‌ها
-./run_bots.sh stop       # توقف همه ربات‌ها
-./run_bots.sh restart    # ریستارت
-./run_bots.sh status     # وضعیت
-./run_bots.sh logs adminbot   # مشاهده لاگ
+./install.sh status      # وضعیت ربات‌ها
+./install.sh restart     # ریستارت همه ربات‌ها
+./install.sh start       # شروع همه ربات‌ها
+./install.sh stop        # توقف همه ربات‌ها
+./install.sh logs        # مشاهده لاگ زنده (Ctrl+C برای خروج)
+./install.sh panel       # پنل تعاملی (پیشنهادی برای استفاده روزانه)
 
 # روش ۲: اجرای دستی هر ربات
 python -m AdminBot.main          # ربات ادمین
