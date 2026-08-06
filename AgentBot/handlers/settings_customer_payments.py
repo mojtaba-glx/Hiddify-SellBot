@@ -281,7 +281,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             await query.answer("موجودی کیف پول کافی نیست. لطفاً کیف پول خود را شارژ کنید.", show_alert=True)
             return
         try:
-            svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price)
+            svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
         except Exception as e:
             agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
             update_customer_payment_status(agent_id, pay_id, "pending")
@@ -400,7 +400,7 @@ async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_T
         pass
 
 
-async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, wholesale_price: int = 0) -> dict:
+async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, wholesale_price: int = 0, tx_code: str = "") -> dict:
     import time
     import uuid
 
@@ -475,16 +475,65 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         )
 
     # Notify customer
-    await _notify_customer(context, agent_id, user_tg_id,
+    notify = (
         f"\u2705 \u067e\u0631\u062f\u0627\u062e\u062a \u0634\u0645\u0627 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f!\n\n"
         f"\U0001f4e6 {plan_title}\n"
         f"\U0001f4ca {volume_gb:g} \u06af\u06cc\u06af\n"
         f"\u23f0 {days} \u0631\u0648\u0632\n\n"
-        f"\U0001f4fa \u0648\u0636\u0639\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9 \u062e\u0648\u062f \u0631\u0627 \u0627\u0632 \u0628\u062e\u0634 \u0648\u0636\u0639\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9 \u0628\u0628\u06cc\u0646\u06cc\u062f."
+        f"\u0627\u0634\u062a\u0631\u0627\u06a9 \u0634\u0645\u0627 \u062f\u0631 \u062d\u0627\u0644 \u0633\u0627\u062e\u062a \u0627\u0633\u062a \u0648 \u067e\u0633 \u0627\u0632 \u0622\u0645\u0627\u062f\u0647\u200c\u0633\u0627\u0632\u06cc \u0627\u0631\u0633\u0627\u0644 \u0645\u06cc\u200c\u0634\u0648\u062f."
     )
+    if tx_code:
+        notify += f"\n\U0001f381 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {tx_code}"
+    await _notify_customer(context, agent_id, user_tg_id, notify)
     pay_stub = {"id": order.get("payment_id") or 0, "user_id": user_tg_id, "receipt_image": order.get("receipt_image", "")}
     await _delete_pending_customer_message(context, agent_id, pay_stub)
+
+    # Deliver subscription info + status keyboard to customer
+    if svc:
+        await _send_subscription_delivery(context, agent_id, user_tg_id, svc["id"])
     return svc or {}
+
+
+async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, service_id: int) -> None:
+    """ارسال پیام «📄 اطلاعات اشتراک شما» همراه کیبورد وضعیت به مشتری پس از ساخت سرویس."""
+    try:
+        from CustomerBot.database import get_subs_settings, get_buy_renew_settings
+        from CustomerBot.keyboards import subscription_status_keyboard
+        from CustomerBot.services import build_subscription_status_text
+        from Shared.agent_db import get_service_by_id
+
+        svc = get_service_by_id(service_id)
+        if not svc:
+            return
+        bot_row = get_active_customer_bot(agent_id)
+        customer_token = str((bot_row or {}).get("bot_token") or "").strip()
+        if not customer_token:
+            logger.warning("No active customer bot for agent=%s; cannot deliver subscription %s", agent_id, service_id)
+            return
+        customer_bot = Bot(token=customer_token)
+        subs_settings = get_subs_settings(agent_id)
+        br = get_buy_renew_settings(agent_id)
+        svc_text = build_subscription_status_text(svc, subs_settings, br)
+        show_detach = bool(svc.get("comment") == "connected")
+        kb = subscription_status_keyboard(
+            service_id,
+            show_direct_config=subs_settings.get("show_direct_config", True),
+            show_sub_link=subs_settings.get("show_sub_link", True),
+            show_detach=show_detach,
+        )
+        await customer_bot.send_message(
+            chat_id=user_tg_id,
+            text=svc_text,
+            parse_mode="Markdown",
+            reply_markup=kb,
+            read_timeout=20,
+            write_timeout=20,
+            connect_timeout=10,
+            pool_timeout=20,
+        )
+        logger.info("Subscription %s delivered to customer %s", service_id, user_tg_id)
+    except Exception as e:
+        logger.warning("Failed to deliver subscription %s to customer %s: %s", service_id, user_tg_id, e)
 
 
 async def _notify_customer(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, text: str) -> None:
