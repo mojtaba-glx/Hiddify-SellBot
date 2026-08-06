@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import asyncio
 import re
 
@@ -8,23 +7,16 @@ from telegram import Bot, Update
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
-from AgentBot.constants import (
-    UD_STATE, UD_PAGE,
-)
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
-    _ikb, IButton, BTN_BACK, back_keyboard, pagination_keyboard,
+    _ikb, IButton, BTN_BACK, back_keyboard,
 )
 from AgentBot.utils.helpers import _fmt_toman
 from AgentBot.database import (
     get_customer_pending_card_payments,
     update_customer_payment_status,
-    get_customer_order_by_id,
     get_customer_user,
-    get_customer_payment_by_tx,
-    get_setting, set_setting,
 )
-from CustomerBot.database import get_payment_by_tx_code as get_customer_payment_by_tx_code
 from CustomerBot.database import update_order_status
 from Shared import agent_db
 from Shared.agent_db import get_active_customer_bot
@@ -34,17 +26,32 @@ logger = logging.getLogger(__name__)
 PAGE_SIZE = 5
 
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def _calc_wholesale_price(agent_id: int, pay: dict, order: dict | None = None) -> int:
+    """Calculate wholesale price from payment or order data."""
+    if order is None:
+        order = pay.get("_order") or {}
+    wholesale = int(pay.get("_wholesale_price") or order.get("wholesale_price") or 0)
+    if wholesale <= 0:
+        wholesale = agent_db.calculate_wholesale_price(
+            agent_id,
+            float(order.get("volume_gb") or pay.get("_gb") or 0),
+            int(order.get("days") or pay.get("_days") or 0),
+            int(order.get("server_id") or pay.get("_server_id") or 0),
+        )
+    return wholesale
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     query = update.callback_query
     if not query:
-        return
+        return False
     data = (query.data or "").strip()
     parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
     sub = parts[2] if len(parts) > 2 else ""
     agent_id = get_agent_id(context)
 
-    if action == "custpay" and sub not in {"approve", "reject"}:
+    if action == "custpay" and sub not in {"approve", "reject", "profile"}:
         try:
             await query.answer()
         except Exception:
@@ -74,6 +81,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if sub == "reject":
             pay_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
             await _reject_payment(update, context, agent_id, pay_id)
+            return
+
+        if sub == "profile":
+            user_tg_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            await _show_customer_profile(update, context, agent_id, user_tg_id)
             return
 
         if sub == "back":
@@ -114,12 +126,12 @@ async def _list_pending_payments(update: Update, context: ContextTypes.DEFAULT_T
     if not page_pays:
         text += "\u0647\u06cc\u0686 \u067e\u0631\u062f\u0627\u062e\u062a \u0645\u0646\u062a\u0638\u0631\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f."
     else:
+        ptype = "\U0001f4e6 خرید اشتراک"
         for p in page_pays:
             name = p.get("full_name") or p.get("username") or f"\u06a9\u0627\u0631\u0628\u0631 #{p.get('user_id', '?')}"
             amount = p.get("amount", 0)
             tx_code = p.get("tx_code", "")
             created = (p.get("created_at") or "")[:16]
-            ptype = "\U0001f4e6 خرید"  # Simplified to direct purchase only
             text += f"{ptype} | <b>{name}</b> | {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646 | {created}\n"
             text += f"\u06a9\u062f: {tx_code} | "
             text += f"[\U0001f4fa \u0645\u0634\u0627\u0647\u062f\u0647 \u062c\u0632\u0626\u06cc\u0627\u062a](agbot:custpay:detail:{p['id']})\n\n"
@@ -161,7 +173,7 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
     amount = pay.get("amount", 0)
     tx_code = pay.get("tx_code", "")
     created = pay.get("created_at", "") or ""
-    ptype = "\U0001f4e6 خرید اشتراک"  # Simplified to direct purchase only
+    ptype = "\U0001f4e6 خرید اشتراک"
     order = pay.get("_order")
 
     text = (
@@ -173,14 +185,7 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
         f"\U0001f4c5 \u062a\u0627\u0631\u06cc\u062e: {created}\n"
     )
     if order:
-        wholesale = int(pay.get("_wholesale_price") or order.get("wholesale_price") or 0)
-        if wholesale <= 0:
-            wholesale = agent_db.calculate_wholesale_price(
-                agent_id,
-                float(order.get("volume_gb") or pay.get("_gb") or 0),
-                int(order.get("days") or pay.get("_days") or 0),
-                int(order.get("server_id") or pay.get("_server_id") or 0),
-            )
+        wholesale = _calc_wholesale_price(agent_id, pay, order)
         text += (
             f"\n<code>\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501</code>\n"
             f"\U0001f4e6 \u067e\u0644\u0646: {order.get('plan_title', '?')}\n"
@@ -190,8 +195,8 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
         text += (
-            f"🏷 هزینه عمده: {_fmt_toman(wholesale)} تومان\n"
-            f"💼 موجودی نماینده: {_fmt_toman(agent_db.get_wallet_balance(agent_id))} تومان\n"
+            f"\U0001f3f7 \u0647\u0632\u06cc\u0646\u0647 \u0639\u0645\u062f\u0647: {_fmt_toman(wholesale)} \u062a\u0648\u0645\u0627\u0646\n"
+            f"\U0001f4bc \u0645\u0648\u062c\u0648\u062f\u06cc \u0646\u0645\u0627\u06cc\u0646\u062f\u0647: {_fmt_toman(agent_db.get_wallet_balance(agent_id))} \u062a\u0648\u0645\u0627\u0646\n"
         )
 
     raw_receipt = pay.get("receipt_image", "")
@@ -207,33 +212,34 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
 
     kb_rows = [
         [
-            IButton("✅ تایید پرداخت", callback_data=f"agbot:custpay:approve:{pay_id}"),
             IButton("❌ رد پرداخت", callback_data=f"agbot:custpay:reject:{pay_id}"),
+            IButton("✅ تایید پرداخت", callback_data=f"agbot:custpay:approve:{pay_id}"),
         ],
+        [IButton(f"👤 {name}", callback_data=f"agbot:custpay:profile:{pay.get('user_id', 0)}")],
         [IButton(BTN_BACK, callback_data="agbot:custpay:list:1")],
     ]
 
     try:
         if receipt_fid:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            msg = await context.bot.send_photo(
+            await context.bot.send_photo(
                 chat_id=query.message.chat_id,
                 photo=receipt_fid,
                 caption=text,
                 reply_markup=_ikb(kb_rows),
                 parse_mode="HTML",
             )
-            context.user_data["last_pay_msg_id"] = msg.message_id
+            try:
+                await query.message.delete()
+            except Exception as del_err:
+                logger.debug("Failed to delete old message after sending photo: %s", del_err)
         else:
             await query.edit_message_text(text, reply_markup=_ikb(kb_rows), parse_mode="HTML")
-    except Exception:
+    except Exception as photo_err:
+        logger.warning("Failed to send photo for payment %s: %s", pay_id, photo_err)
         try:
             await query.edit_message_text(text, reply_markup=_ikb(kb_rows), parse_mode="HTML")
-        except Exception:
-            pass
+        except Exception as edit_err:
+            logger.warning("Failed to edit message as fallback for payment %s: %s", pay_id, edit_err)
 
 
 async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
@@ -251,14 +257,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
         order = dict(pay["_order"])
         if not int(order.get("server_id") or 0):
             order["server_id"] = int(pay.get("_server_id") or 0)
-        wholesale_price = int(pay.get("_wholesale_price") or order.get("wholesale_price") or 0)
-        if wholesale_price <= 0:
-            wholesale_price = agent_db.calculate_wholesale_price(
-                agent_id,
-                float(order.get("volume_gb") or pay.get("_gb") or 0),
-                int(order.get("days") or pay.get("_days") or 0),
-                int(order.get("server_id") or 0),
-            )
+        wholesale_price = _calc_wholesale_price(agent_id, pay, order)
         if wholesale_price <= 0:
             await query.answer("قیمت عمده برای این سفارش تنظیم نشده است. از ادمین بخواهید تعرفه عمده را ثبت کند.", show_alert=True)
             return
@@ -272,7 +271,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
         if not update_customer_payment_status(agent_id, pay_id, "processing"):
             await query.answer("خطا در قفل کردن پرداخت.", show_alert=True)
             return
-        deducted, wallet = agent_db.deduct_wallet(
+        deducted, _ = agent_db.deduct_wallet(
             agent_id,
             wholesale_price,
             description=f"کسر عمده سفارش مشتری #{order.get('order_id') or pay.get('tx_code')}",
@@ -282,7 +281,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             await query.answer("موجودی کیف پول کافی نیست. لطفاً کیف پول خود را شارژ کنید.", show_alert=True)
             return
         try:
-            svc = await _create_subscription_from_order(update, context, agent_id, user_tg_id, order, wholesale_price)
+            svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price)
         except Exception as e:
             agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
             update_customer_payment_status(agent_id, pay_id, "pending")
@@ -325,11 +324,13 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             await query.edit_message_caption(caption=done_text, parse_mode="HTML", reply_markup=done_kb)
         else:
             await query.edit_message_text(done_text, parse_mode="HTML", reply_markup=done_kb)
-    except Exception:
+    except Exception as edit_err:
+        logger.warning("Failed to edit approval message for payment %s: %s", pay_id, edit_err)
         try:
-            await query.message.reply_text(done_text, parse_mode="HTML", reply_markup=done_kb)
-        except Exception:
-            pass
+            if query.message:
+                await query.message.reply_text(done_text, parse_mode="HTML", reply_markup=done_kb)
+        except Exception as reply_err:
+            logger.warning("Failed to send approval reply for payment %s: %s", pay_id, reply_err)
 
 
 async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
@@ -367,17 +368,45 @@ async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
             await query.edit_message_caption(caption=done_text, parse_mode="HTML", reply_markup=None)
         else:
             await query.edit_message_text(done_text, parse_mode="HTML", reply_markup=None)
-    except Exception:
+    except Exception as edit_err:
+        logger.warning("Failed to edit rejection message for payment %s: %s", pay_id, edit_err)
         try:
-            await query.message.reply_text(done_text, parse_mode="HTML")
+            if query.message:
+                await query.message.reply_text(done_text, parse_mode="HTML")
+        except Exception as reply_err:
+            logger.warning("Failed to send rejection reply for payment %s: %s", pay_id, reply_err)
+
+
+async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int) -> None:
+    query = update.callback_query
+    cust = get_customer_user(agent_id, user_tg_id)
+    if not cust:
+        try:
+            await query.answer("❌ اطلاعات مشتری یافت نشد.", show_alert=True)
         except Exception:
             pass
+        return
+    name = cust.get("full_name") or cust.get("username") or f"کاربر #{user_tg_id}"
+    username = str(cust.get("username") or "").strip()
+    info = (
+        "👤 پروفایل مشتری\n\n"
+        f"نام: {name}\n"
+        f"آیدی عددی: {user_tg_id}\n"
+        + (f"یوزرنیم: @{username}\n" if username else "")
+    )
+    try:
+        await query.answer(info, show_alert=True)
+    except Exception:
+        pass
 
 
-async def _create_subscription_from_order(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, wholesale_price: int = 0) -> dict:
-    from Shared.agent_db import upsert_customer, create_service, add_service_node
-    from Shared.database import get_server_by_id, get_plan
-    from AgentBot.services.subscription_service import create_subscription
+async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, wholesale_price: int = 0) -> dict:
+    import time
+    import uuid
+
+    from Shared.agent_db import upsert_customer, create_service, add_service_node, get_customer_by_telegram_id
+    from Shared.database import get_server_by_id
+    from Shared.hiddify_api import create_user
 
     # Get or create customer
     cust = get_customer_user(agent_id, user_tg_id)
@@ -385,7 +414,6 @@ async def _create_subscription_from_order(update: Update, context: ContextTypes.
         raise RuntimeError("customer_not_found")
 
     # Get customer from shared DB
-    from Shared.agent_db import get_customer_by_telegram_id, upsert_customer
     shared_cust = get_customer_by_telegram_id(agent_id, user_tg_id)
     if not shared_cust:
         shared_cust_id = upsert_customer(agent_id, user_tg_id, cust.get("username", ""), cust.get("full_name", ""))
@@ -404,11 +432,14 @@ async def _create_subscription_from_order(update: Update, context: ContextTypes.
         raise RuntimeError("server_not_found")
 
     # Create user on Hiddify panel
-    import uuid
-    from Shared.hiddify_api import create_user
     new_uuid = str(uuid.uuid4())
+    order_id_num = int(order.get("order_id") or 0)
+    if order_id_num:
+        panel_name = f"vpn-{order_id_num:07d}"
+    else:
+        panel_name = f"vpn-{user_tg_id}-{int(time.time())}"
     payload = {
-        "name": f"{plan_title or 'buy'} - {user_tg_id}",
+        "name": panel_name,
         "usage_limit_GB": volume_gb,
         "package_days": days,
         "uuid": new_uuid,
@@ -427,7 +458,7 @@ async def _create_subscription_from_order(update: Update, context: ContextTypes.
         customer_id=shared_cust_id,
         server_id=server_id,
         server_title=server.get("title", ""),
-        name=plan_title or f"\u062e\u0631\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9",
+        name=panel_name,
         panel_user_uuid=panel_uuid,
         usage_limit=volume_gb,
         days=days,
@@ -451,7 +482,7 @@ async def _create_subscription_from_order(update: Update, context: ContextTypes.
         f"\u23f0 {days} \u0631\u0648\u0632\n\n"
         f"\U0001f4fa \u0648\u0636\u0639\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9 \u062e\u0648\u062f \u0631\u0627 \u0627\u0632 \u0628\u062e\u0634 \u0648\u0636\u0639\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9 \u0628\u0628\u06cc\u0646\u06cc\u062f."
     )
-    pay_stub = {"id": order.get("payment_id") or 0, "user_id": user_tg_id, "receipt_image": order.get("receipt_image") or ""}
+    pay_stub = {"id": order.get("payment_id") or 0, "user_id": user_tg_id, "receipt_image": order.get("receipt_image", "")}
     await _delete_pending_customer_message(context, agent_id, pay_stub)
     return svc or {}
 
@@ -464,12 +495,14 @@ async def _notify_customer(context: ContextTypes.DEFAULT_TYPE, agent_id: int, us
             logger.warning("Active customer bot token missing for agent=%s; cannot notify user %s", agent_id, user_tg_id)
             return
         customer_bot = Bot(token=customer_token)
+        menu_kb = _get_customer_menu_keyboard()
         for attempt in range(1, 4):
             try:
                 await customer_bot.send_message(
                     chat_id=user_tg_id,
                     text=text,
                     parse_mode="HTML",
+                    reply_markup=menu_kb,
                     read_timeout=20,
                     write_timeout=20,
                     connect_timeout=10,
@@ -515,5 +548,16 @@ async def _delete_pending_customer_message(context: ContextTypes.DEFAULT_TYPE, a
         logger.warning("Unexpected error while deleting pending customer message for payment %s: %s", pay.get("id"), e)
 
 
+def _get_customer_menu_keyboard():
+    """Safely import and return customer bot main menu keyboard."""
+    try:
+        from CustomerBot.keyboards import main_menu_keyboard
+        return main_menu_keyboard()
+    except Exception as e:
+        logger.debug("Could not load customer menu keyboard: %s", e)
+        return None
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Handle text messages - not used in this handler, returns False to pass to next handler."""
     return False
