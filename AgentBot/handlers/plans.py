@@ -15,6 +15,7 @@ from AgentBot.keyboards import (
     _ikb, IButton, BTN_BACK,
     plans_menu_keyboard, plans_mode_keyboard, dyn_settings_keyboard,
     plans_cats_keyboard, plans_cat_del_keyboard,
+    plans_cat_detail_keyboard, plans_cat_del_confirm_keyboard,
     plans_plans_keyboard, plans_plan_del_keyboard,
     back_keyboard, cancel_keyboard,
 )
@@ -30,24 +31,39 @@ logger = logging.getLogger(__name__)
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    agent_id = get_agent_id(context)
+    current_mode = get_setting(agent_id, "plan_display_mode", "dynamic")
+    kb = plans_menu_keyboard(current_mode)
     text = "\U0001f4b5 <b>\u067e\u0644\u0646\u200c\u0647\u0627</b>"
     if update.callback_query:
         try:
-            await update.callback_query.edit_message_text(text, reply_markup=plans_menu_keyboard(), parse_mode="HTML")
+            await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
-            await update.message.reply_text(text, reply_markup=plans_menu_keyboard(), parse_mode="HTML")
+            await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=plans_menu_keyboard(), parse_mode="HTML")
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def _send_fixed_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, msg=None) -> None:
     agent_id = get_agent_id(context)
     cats = get_fixed_categories(agent_id)
-    text = "\U0001f4cb <b>\u067e\u0644\u0646\u200c\u0647\u0627\u06cc \u062b\u0627\u0628\u062a</b>\n\n"
+    total_plans = 0
+    for c in cats:
+        count = len(get_fixed_plans(agent_id, category_id=c["id"]))
+        c["plan_count"] = count
+        total_plans += count
     if not cats:
-        text += "\u0647\u0646\u0648\u0632 \u062f\u0633\u062a\u0647\u200c\u0627\u06cc \u0627\u06cc\u062c\u0627\u062f \u0646\u0634\u062f\u0647."
+        text = (
+            "\U0001f4cb <b>\u067e\u0644\u0646\u200c\u0647\u0627\u06cc \u062b\u0627\u0628\u062a</b>\n\n"
+            "\u0647\u0646\u0648\u0632 \u062f\u0633\u062a\u0647\u200c\u0627\u06cc \u0633\u0627\u062e\u062a\u0647 \u0646\u0634\u062f\u0647 \u0627\u0633\u062a.\n"
+            "\u0628\u0627 \u00ab\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u062f\u0633\u062a\u0647 \u062c\u062f\u06cc\u062f\u00bb \u0634\u0631\u0648\u0639 \u06a9\u0646\u06cc\u062f:"
+        )
     else:
-        text += "\u062f\u0633\u062a\u0647\u200c\u0647\u0627\u06cc \u0645\u0648\u062c\u0648\u062f:"
+        text = (
+            "\U0001f4cb <b>\u067e\u0644\u0646\u200c\u0647\u0627\u06cc \u062b\u0627\u0628\u062a</b>\n\n"
+            f"\U0001f5c2 \u062a\u0639\u062f\u0627\u062f \u062f\u0633\u062a\u0647: {len(cats)}   \U0001f4e6 \u0645\u062c\u0645\u0648\u0639 \u067e\u0644\u0646\u200c\u0647\u0627: {total_plans}\n\n"
+            "\u062f\u0633\u062a\u0647 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f:"
+        )
     kb = plans_cats_keyboard(cats)
     if msg:
         try:
@@ -74,16 +90,10 @@ async def _send_cat_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, c
         return
     plans = get_fixed_plans(agent_id, category_id=cat_id)
     text = (
-        f"\U0001f4c1 <b>{cat['title']}</b>\n"
-        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-        f"\U0001f522 \u0627\u0648\u0644\u0648\u06cc\u062a: {cat.get('priority', 0)}\n"
-        f"\U0001f4cb \u062a\u0639\u062f\u0627\u062f \u067e\u0644\u0646: {len(plans)}"
+        f"\U0001f4c1 <b>{cat['title']}</b>\n\n"
+        f"\U0001f4e6 \u062a\u0639\u062f\u0627\u062f \u067e\u0644\u0646: {len(plans)}   \U0001f522 \u0627\u0648\u0644\u0648\u06cc\u062a \u0646\u0645\u0627\u06cc\u0634: {cat.get('priority', 0)}"
     )
-    kb = _ikb([
-        [IButton("\U0001f4cb \u0641\u0647\u0631\u0633\u062a \u067e\u0644\u0646\u200c\u0647\u0627", callback_data=f"agbot:plans:fixed:plans:{cat_id}")],
-        [IButton("\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634 \u0639\u0646\u0648\u0627\u0646", callback_data=f"agbot:plans:fixed:cat_edit:{cat_id}")],
-        [IButton(BTN_BACK, callback_data="agbot:plans:fixed")],
-    ])
+    kb = plans_cat_detail_keyboard(cat_id)
     if update.callback_query:
         try:
             await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
@@ -99,9 +109,20 @@ async def _send_cat_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, c
 async def _send_plans_list(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int) -> None:
     agent_id = get_agent_id(context)
     plans = get_fixed_plans(agent_id, category_id=cat_id)
-    text = "\U0001f4cb <b>\u0641\u0647\u0631\u0633\u062a \u067e\u0644\u0646\u200c\u0647\u0627</b>\n\n"
+    cats = get_fixed_categories(agent_id)
+    cat = next((c for c in cats if c["id"] == cat_id), None)
+    cat_title = cat.get("title", "\u062f\u0633\u062a\u0647") if cat else "\u062f\u0633\u062a\u0647"
     if not plans:
-        text += "\u0647\u0646\u0648\u0632 \u067e\u0644\u0646\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f."
+        text = (
+            f"\U0001f4cb <b>\u067e\u0644\u0646\u200c\u0647\u0627\u06cc \u00ab{cat_title}\u00bb</b>\n\n"
+            "\u0647\u0646\u0648\u0632 \u067e\u0644\u0646\u06cc \u062f\u0631 \u0627\u06cc\u0646 \u062f\u0633\u062a\u0647 \u0646\u06cc\u0633\u062a.\n"
+            "\u0628\u0627 \u00ab\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u067e\u0644\u0646\u00bb \u0627\u0648\u0644\u06cc\u0646 \u067e\u0644\u0646 \u0631\u0627 \u0628\u0633\u0627\u0632\u06cc\u062f."
+        )
+    else:
+        text = (
+            f"\U0001f4cb <b>\u067e\u0644\u0646\u200c\u0647\u0627\u06cc \u00ab{cat_title}\u00bb</b>\n\n"
+            "\u0628\u0631\u0627\u06cc \u0645\u062f\u06cc\u0631\u06cc\u062a\u060c \u06cc\u06a9 \u067e\u0644\u0646 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f:"
+        )
     kb = plans_plans_keyboard(plans, cat_id)
     query = update.callback_query
     if query:
@@ -124,14 +145,13 @@ async def _send_plan_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     cats = get_fixed_categories(agent_id)
     cat = next((c for c in cats if c["id"] == plan.get("category_id")), {})
     cat_title = cat.get("title", "\u0646\u0627\u0645\u0634\u0646\u0627\u0633")
-    gb_txt = "\u0646\u0627\u0645\u062d\u062f\u0648\u062f" if plan["gb"] == 0 else f"{plan['gb']} \u06af\u06cc\u06af"
+    gb_txt = "\u0646\u0627\u0645\u062d\u062f\u0648\u062f" if plan["gb"] == 0 else f"{plan['gb']} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a"
     text = (
-        f"\U0001f4e6 <b>{plan['title']}</b>\n"
-        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        f"\U0001f4e6 <b>{plan['title']}</b>\n\n"
         f"\U0001f4c1 \u062f\u0633\u062a\u0647: {cat_title}\n"
-        f"\U0001f4b0 \u0642\u06cc\u0645\u062a: {plan['price']:,} \u062a\u0648\u0645\u0627\u0646\n"
+        f"\U0001f4ca \u062d\u062c\u0645: {gb_txt}\n"
         f"\u23f0 \u0632\u0645\u0627\u0646: {plan['days']} \u0631\u0648\u0632\n"
-        f"\U0001f4ca \u062d\u062c\u0645: {gb_txt}"
+        f"\U0001f4b0 \u0642\u06cc\u0645\u062a: {plan['price']:,} \u062a\u0648\u0645\u0627\u0646"
     )
     kb = _ikb([
         [IButton("\U0001f5d1 \u062d\u0630\u0641 \u0627\u06cc\u0646 \u067e\u0644\u0646", callback_data=f"agbot:plans:fixed:plan_del:{plan_id}")],
@@ -184,8 +204,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             cid = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
             if cid:
                 delete_fixed_category(agent_id, cid)
-            await query.answer("دسته حذف شد.")
+            await query.answer("\u062f\u0633\u062a\u0647 \u062d\u0630\u0641 \u0634\u062f.")
             await _send_fixed_menu(update, context)
+            return
+
+        if sub_sub == "cat_del_ask":
+            cid = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+            if cid:
+                cats = get_fixed_categories(agent_id)
+                cat = next((c for c in cats if c["id"] == cid), None)
+                title = cat.get("title", "?") if cat else "?"
+                await query.edit_message_text(
+                    f"\u26a0\ufe0f <b>\u062d\u0630\u0641 \u062f\u0633\u062a\u0647</b>\n\n\u062f\u0633\u062a\u0647 \u00ab{title}\u00bb \u0647\u0645\u0631\u0627\u0647 \u0628\u0627 \u067e\u0644\u0646\u200c\u0647\u0627\u06cc\u0634 \u062d\u0630\u0641 \u0645\u06cc\u200c\u0634\u0648\u062f.\n\u0645\u0637\u0645\u0626\u0646 \u0647\u0633\u062a\u06cc\u062f\u061f",
+                    reply_markup=plans_cat_del_confirm_keyboard(cid), parse_mode="HTML",
+                )
             return
 
         if sub_sub == "cat_edit":
@@ -577,7 +609,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             "min_month": nums[5], "max_month": nums[6], "step_month": nums[7],
         })
         context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text("\u2705 \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u067e\u0648\u06cc\u0627 \u0630\u062e\u06cc\u0631\u0647 \u0634\u062f.", reply_markup=plans_menu_keyboard())
+        await update.message.reply_text("\u2705 \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u067e\u0648\u06cc\u0627 \u0630\u062e\u06cc\u0631\u0647 \u0634\u062f.", reply_markup=plans_menu_keyboard(get_setting(agent_id, "plan_display_mode", "dynamic")))
         return True
 
     return False

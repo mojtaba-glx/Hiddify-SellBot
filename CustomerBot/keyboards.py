@@ -39,7 +39,7 @@ def cancel_keyboard():
 def receipt_cancel_keyboard():
     """دکمه بازگشت قرمز رنگ برای صفحه ارسال رسید (Reply keyboard fallback)"""
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("بازگشت")]],
+        [[KeyboardButton("بازگشت", style="danger")]],
         resize_keyboard=True,
     )
 

@@ -82,10 +82,15 @@ def wallet_menu_keyboard():
 
 
 # Plans keyboards
-def plans_menu_keyboard():
+def plans_menu_keyboard(current_mode: str = "dynamic"):
+    mode = str(current_mode or "dynamic").strip().lower()
+    if mode == "fixed":
+        settings_button = IButton("\u2699\ufe0f \u062a\u0646\u0638\u06cc\u0645 \u062b\u0627\u0628\u062a", callback_data="agbot:plans:fixed")
+    else:
+        settings_button = IButton("\u2699\ufe0f \u062a\u0646\u0638\u06cc\u0645 \u067e\u0648\u06cc\u0627", callback_data="agbot:plans:dynset")
     return _ikb([
         [IButton("\U0001f4cb \u0646\u0648\u0639 \u0646\u0645\u0627\u06cc\u0634 \u067e\u0644\u0646\u200c\u0647\u0627", callback_data="agbot:plans:mode")],
-        [IButton("\u2699\ufe0f \u062a\u0646\u0638\u06cc\u0645 \u067e\u0648\u06cc\u0627", callback_data="agbot:plans:dynset")],
+        [settings_button],
         [IButton(BTN_BACK, callback_data="agbot:menu")],
     ])
 
@@ -259,11 +264,28 @@ def pagination_keyboard(base_callback: str, page: int, total_pages: int, back_ca
 def plans_cats_keyboard(cats):
     rows = []
     for c in cats:
-        rows.append([IButton(c['title'], callback_data=f"agbot:plans:fixed:cat:{c['id']}")])
-    rows.append([IButton('\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u062f\u0633\u062a\u0647', callback_data='agbot:plans:fixed:cat_add')])
-    rows.append([IButton('\U0001f5d1 \u062d\u0630\u0641 \u062f\u0633\u062a\u0647', callback_data='agbot:plans:fixed:cat_del_menu')])
+        count = int(c.get('plan_count', 0) or 0)
+        rows.append([IButton(f"\U0001f6d2 {c['title']}  \u2022  {count} \u067e\u0644\u0646", callback_data=f"agbot:plans:fixed:cat:{c['id']}")])
+    rows.append([IButton('\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u062f\u0633\u062a\u0647 \u062c\u062f\u06cc\u062f', callback_data='agbot:plans:fixed:cat_add')])
     rows.append([IButton(BTN_BACK, callback_data='agbot:plans:back')])
     return _ikb(rows)
+
+
+def plans_cat_detail_keyboard(cat_id: int):
+    return _ikb([
+        [IButton('\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u067e\u0644\u0646 \u062c\u062f\u06cc\u062f', callback_data=f'agbot:plans:fixed:plan_add:{cat_id}')],
+        [IButton('\U0001f4cb \u0645\u0634\u0627\u0647\u062f\u0647 \u0648 \u0645\u062f\u06cc\u0631\u06cc\u062a \u067e\u0644\u0646\u200c\u0647\u0627', callback_data=f'agbot:plans:fixed:plans:{cat_id}')],
+        [IButton('\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634 \u0639\u0646\u0648\u0627\u0646 \u062f\u0633\u062a\u0647', callback_data=f'agbot:plans:fixed:cat_edit:{cat_id}')],
+        [IButton('\U0001f5d1 \u062d\u0630\u0641 \u062f\u0633\u062a\u0647', callback_data=f'agbot:plans:fixed:cat_del_ask:{cat_id}')],
+        [IButton(BTN_BACK, callback_data='agbot:plans:fixed')],
+    ])
+
+
+def plans_cat_del_confirm_keyboard(cat_id: int):
+    return _ikb([
+        [IButton('\u26a0\ufe0f \u062a\u0627\u06cc\u06cc\u062f \u062d\u0630\u0641 \u062f\u0633\u062a\u0647', callback_data=f'agbot:plans:fixed:cat_del:{cat_id}')],
+        [IButton('\u274c \u0627\u0646\u0635\u0631\u0627\u0641', callback_data=f'agbot:plans:fixed:cat:{cat_id}')],
+    ])
 
 
 def plans_cat_del_keyboard(cats):
@@ -277,8 +299,15 @@ def plans_cat_del_keyboard(cats):
 def plans_plans_keyboard(plans, cat_id):
     rows = []
     for p in plans:
-        price_txt = f"{p['price']:,}"
-        rows.append([IButton(f"{p['title']} - {price_txt}", callback_data=f"agbot:plans:fixed:plan:{p['id']}")])
+        try:
+            gb_val = float(p.get('gb') or 0)
+        except (TypeError, ValueError):
+            gb_val = 0.0
+        vol_txt = '\u0646\u0627\u0645\u062d\u062f\u0648\u062f' if gb_val == 0 else f'{gb_val:g} \u06af\u06cc\u06af'
+        days_val = int(p.get('days') or 0)
+        days_txt = '\u0646\u0627\u0645\u062d\u062f\u0648\u062f' if days_val == 0 else f'{days_val} \u0631\u0648\u0632'
+        label = f"\U0001f4e6 {p['title']} | {vol_txt} | {days_txt} | {int(p['price']):,} \u062a"
+        rows.append([IButton(label, callback_data=f"agbot:plans:fixed:plan:{p['id']}")])
     rows.append([IButton('\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u067e\u0644\u0646', callback_data=f"agbot:plans:fixed:plan_add:{cat_id}")])
     rows.append([IButton('\U0001f5d1 \u062d\u0630\u0641 \u067e\u0644\u0646', callback_data=f"agbot:plans:fixed:plan_del_menu:{cat_id}")])
     rows.append([IButton(BTN_BACK, callback_data=f"agbot:plans:fixed:cat:{cat_id}")])

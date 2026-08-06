@@ -95,7 +95,8 @@ async def _notify_agent_new_payment(
         wallet_balance = get_wallet_balance(agent_id)
         order_id = int(meta.get("order_id") or 0)
         tx_code = str(pay.get("tx_code") or "-")
-        name = getattr(customer_user, "full_name", "") or getattr(customer_user, "username", "") or str(getattr(customer_user, "id", ""))
+        user_tg_id = int(getattr(customer_user, "id", 0) or 0)
+        name = getattr(customer_user, "full_name", "") or getattr(customer_user, "username", "") or str(user_tg_id)
         caption = (
             "💳 <b>رسید پرداخت مشتری</b>\n"
             f"👤 مشتری: <b>{name}</b>\n"
@@ -104,19 +105,19 @@ async def _notify_agent_new_payment(
         )
         if order:
             caption += (
-                f"📦 سفارش: <code>{order_id}</code>\n"
-                f"📋 پلن: {order.get('plan_title') or meta.get('plan_title') or '—'}\n"
-                f"📊 حجم: {float(meta.get('gb') or order.get('volume_gb') or 0):g} گیگ\n"
-                f"⏰ زمان: {int(meta.get('days') or order.get('days') or 0)} روز\n"
-                f"🏷 هزینه عمده: <b>{wholesale:,}</b> تومان\n"
+                f"📦 سفارش: <code>{order_id}</code> | 📊 حجم: {float(meta.get('gb') or order.get('volume_gb') or 0):g} گیگ\n"
+                f"⏰ زمان: {int(meta.get('days') or order.get('days') or 0)} روز | 🏷 هزینه عمده: <b>{wholesale:,}</b> تومان\n"
                 f"💼 کیف پول نماینده: <b>{wallet_balance:,}</b> تومان\n"
             )
         caption += "\nدر تایید، اشتراک مشتری پس از بررسی کیف پول نماینده فعال می‌شود."
 
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ تایید پرداخت", callback_data=f"agbot:custpay:approve:{pay['id']}"),
                 InlineKeyboardButton("❌ رد پرداخت", callback_data=f"agbot:custpay:reject:{pay['id']}"),
+                InlineKeyboardButton("✅ تایید پرداخت", callback_data=f"agbot:custpay:approve:{pay['id']}"),
+            ],
+            [
+                InlineKeyboardButton(f"👤 {name}", callback_data=f"agbot:custpay:profile:{user_tg_id}"),
             ],
         ])
         bot = Bot(token=token)

@@ -918,20 +918,15 @@ async def _handle_pay(query, context, agent_id, user, data):
 
     if data == CB_PAY_RECEIPT_DONE:
         context.user_data[UD_STATE] = "wallet_receipt_photo"
-        # پاک کردن منوی پایین صفحه با ارسال پیام موقت
-        rm = await query.get_bot().send_message(
-            chat_id=query.from_user.id,
-            text=".",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        # حذف پیام دارای دکمه اینلاین و ارسال پیام جدید با دکمه بازگشت در کیبورد پایین (مثل ربات کاربران)
         try:
-            await rm.delete()
+            await msg.delete()
         except Exception:
             pass
-        await msg.edit_text(
-            "📥 لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید؛",
-            parse_mode="HTML",
-            reply_markup=receipt_back_inline_keyboard(),
+        await query.get_bot().send_message(
+            chat_id=query.from_user.id,
+            text="⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:",
+            reply_markup=receipt_cancel_keyboard(),
         )
 
     elif data == CB_PAY_CANCEL:

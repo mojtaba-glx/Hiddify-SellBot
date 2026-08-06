@@ -163,7 +163,7 @@ try:
     from Shared import database, plans_storage, userbot_db, hiddify_api, multi_panel, sub_http_server
     from Shared.qr_utils import make_qr_image
     from UserBot.keyboards import (
-        main_menu_keyboard, cancel_keyboard, location_keyboard, 
+        main_menu_keyboard, cancel_keyboard, receipt_cancel_keyboard, location_keyboard,
         confirm_payment_keyboard, category_keyboard, plans_keyboard, 
         confirm_buy_keyboard, buy_wizard_keyboard, mixed_buy_keyboard,
         trial_location_keyboard,
@@ -6706,7 +6706,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=user_id,
                 text="⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:",
-                reply_markup=cancel_keyboard(),
+                reply_markup=receipt_cancel_keyboard(),
             )
             return
         return
@@ -8070,7 +8070,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "✅ پرداخت کردم، ارسال رسید":
             set_user_step(context, user_id, "WAIT_WALLET_TOPUP_IMAGE")
-            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=cancel_keyboard())
+            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
             return
 
     if step == "WAIT_WALLET_TOPUP_IMAGE":
@@ -8221,7 +8221,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         if text == "✅ پرداخت کردم، ارسال رسید":
             set_user_step(context, user_id, "WAIT_RECEIPT_IMAGE")
-            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=cancel_keyboard())
+            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
             return
 
     if step == "WAIT_RECEIPT_IMAGE":

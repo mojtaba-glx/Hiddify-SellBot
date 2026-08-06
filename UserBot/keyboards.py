@@ -25,6 +25,10 @@ def main_menu_keyboard(show_renew: bool = True, show_invite: bool = True):
 def cancel_keyboard():
     return ReplyKeyboardMarkup([[KeyboardButton("بازگشت")]], resize_keyboard=True)
 
+# --- دکمه بازگشت قرمز رنگ برای صفحه ارسال رسید ---
+def receipt_cancel_keyboard():
+    return ReplyKeyboardMarkup([[KeyboardButton("بازگشت", style="danger")]], resize_keyboard=True)
+
 # --- انتخاب لوکیشن (Inline) ---
 def location_keyboard(servers, columns: int = 1):
     rows = []
