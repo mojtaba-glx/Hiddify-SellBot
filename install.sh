@@ -1172,18 +1172,41 @@ start_single_bot() {
   done
 
   # ۴) حالا استارت کن (حداکثر 3 تلاش)
+  # نکته مهم: install.sh نباید مستقیماً PID file را بنویسد.
+  # main.py خودش با fcntl.flock قفل اتمیک می‌گیرد و PID را می‌نویسد.
+  # install.sh فقط nohup می‌کند و منتظر می‌ماند تا main.py فایل را پر کند.
   local attempt=0
   local max_attempts=3
   while [ "$attempt" -lt "$max_attempts" ]; do
     attempt=$((attempt + 1))
     nohup "$VENV_DIR/bin/python" "$main_py" >> "$log_file" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$pid_file"
-    sleep 3
-    if kill -0 "$pid" 2>/dev/null; then
-      _green "OK: $title started (PID=$pid)"
+    local bg_pid=$!
+
+    # منتظر بمان تا main.py با fcntl.flock قفل کند و PID را بنویسد
+    local pid_from_file=""
+    local poll_i=0
+    while [ "$poll_i" -lt 15 ]; do
+      sleep 1
+      poll_i=$((poll_i + 1))
+      if [ -f "$pid_file" ] && [ -s "$pid_file" ]; then
+        pid_from_file="$(cat "$pid_file" 2>/dev/null || true)"
+        if [ -n "$pid_from_file" ] && kill -0 "$pid_from_file" 2>/dev/null; then
+          _green "OK: $title started (PID=$pid_from_file)"
+          return 0
+        fi
+      fi
+      # اگر پروسه bg مرده، منتظر نمان
+      if ! kill -0 "$bg_pid" 2>/dev/null; then
+        break
+      fi
+    done
+
+    # اگر main.py PID file را ننوشت ولی bg_pid هنوز زنده است، از bg_pid استفاده کن
+    if [ -n "$bg_pid" ] && kill -0 "$bg_pid" 2>/dev/null; then
+      _green "OK: $title started (PID=$bg_pid)"
       return 0
     fi
+
     rm -f "$pid_file"
     if [ "$attempt" -lt "$max_attempts" ]; then
       _yellow "WAIT: $title exited, retrying (${attempt}/${max_attempts})..."
