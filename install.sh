@@ -1155,8 +1155,21 @@ start_single_bot() {
     sleep 1
   done
 
-  # ۳.۵) مکث کوتاه برای اطمینان از پاک شدن کامل قفل‌های فایل
+  # ۳.۵) Double-check: دوباره پروسه‌های残留 رو بکش (ممکنه بین stop و start پروسه جدید spawn شده باشه)
+  _kill_all_botProcesses "$main_py"
   sleep 1
+
+  # ۳.۶) دوباره صبر کن تا process table کاملاً پاک بشه
+  wait_i=0
+  while pgrep -f "$main_py" >/dev/null 2>&1; do
+    wait_i=$((wait_i + 1))
+    if [ "$wait_i" -ge 10 ]; then
+      pgrep -9 -f "$main_py" 2>/dev/null || true
+      sleep 1
+      break
+    fi
+    sleep 1
+  done
 
   # ۴) حالا استارت کن (حداکثر 3 تلاش)
   local attempt=0
