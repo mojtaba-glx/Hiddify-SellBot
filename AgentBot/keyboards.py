@@ -53,23 +53,55 @@ def broadcast_skip_cancel_keyboard():
 # Subscription keyboards
 def subs_menu_keyboard():
     return _ikb([
+        [IButton("\U0001f465 \u0644\u06cc\u0633\u062a \u06a9\u0627\u0631\u0628\u0631\u0627\u0646", callback_data="agbot:subs:list:1")],
         [IButton("\u2795 \u0633\u0627\u062e\u062a\u0646 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data="agbot:subs:create")],
-        [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648 \u0628\u0627 \u0634\u0646\u0627\u0633\u0647", callback_data="agbot:subs:search")],
+        [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648", callback_data="agbot:subs:search")],
         [IButton("\U0001f51c \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0645\u0646\u0642\u0636\u06cc \u0634\u062f\u0647", callback_data="agbot:subs:expired")],
         [IButton(BTN_BACK, callback_data="agbot:menu")],
+    ])
+
+
+def subs_search_keyboard() -> InlineKeyboardMarkup:
+    """زیرمنوی جستجو: جستجو با نام / جستجو با شناسه."""
+    return _ikb([
+        [IButton("\U0001f464 \u062c\u0633\u062a\u062c\u0648 \u0628\u0627 \u0646\u0627\u0645", callback_data="agbot:subs:searchname")],
+        [IButton("\U0001f511 \u062c\u0633\u062a\u062c\u0648 \u0628\u0627 \u0634\u0646\u0627\u0633\u0647", callback_data="agbot:subs:searchid")],
+        [IButton(BTN_BACK, callback_data="agbot:subs:back")],
     ])
 
 
 def service_detail_keyboard(service_id: int, is_active: bool):
     rows = [[IButton("\U0001f4e1 \u062f\u0631\u06cc\u0627\u0641\u062a \u06a9\u0627\u0646\u0641\u06cc\u06af", callback_data=f"agbot:subs:cfg:{service_id}")]]
     if is_active:
-        rows.append([IButton("\u23f3 \u062a\u0645\u062f\u06cc\u062f", callback_data=f"agbot:subs:renew:{service_id}")])
+        rows.append([IButton("\u23f3 \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data=f"agbot:subs:renew:{service_id}")])
         rows.append([IButton("\u274c \u063a\u06cc\u0631\u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:disable:{service_id}")])
     else:
         rows.append([IButton("\u2705 \u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:enable:{service_id}")])
     rows.append([IButton("\U0001f504 \u0644\u06cc\u0646\u06a9 \u062c\u062f\u06cc\u062f", callback_data=f"agbot:subs:newlink:{service_id}")])
     rows.append([IButton("\U0001f5d1 \u062d\u0630\u0641", callback_data=f"agbot:subs:delete:{service_id}")])
     rows.append([IButton(BTN_BACK, callback_data="agbot:subs:back")])
+    return _ikb(rows)
+
+
+def subs_configs_keyboard(service_id: int, *, show_direct_config: bool = True,
+                          show_sub_link: bool = True, show_auto_sub_link: bool = False,
+                          show_sub_link_b64: bool = False, show_multi_server: bool = False,
+                          show_multi_server_b64: bool = False) -> InlineKeyboardMarkup:
+    """زیرمنوی «دریافت کانفیگ»: فقط دکمه‌های لینکی که ادمین فعال کرده (مثل ربات مشتری)."""
+    rows = []
+    if show_direct_config:
+        rows.append([IButton("⚔️ کانفیگ مستقیم", callback_data=f"agbot:subs:cfgmenu:{service_id}:direct")])
+    if show_sub_link:
+        rows.append([IButton("🔗 لینک اشتراک", callback_data=f"agbot:subs:cfgmenu:{service_id}:sub_link")])
+    if show_auto_sub_link:
+        rows.append([IButton("🤖 اشتراک خودکار", callback_data=f"agbot:subs:cfgmenu:{service_id}:auto_sub")])
+    if show_sub_link_b64:
+        rows.append([IButton("🔐 لینک اشتراک b64", callback_data=f"agbot:subs:cfgmenu:{service_id}:sub_b64")])
+    if show_multi_server:
+        rows.append([IButton("🌐 لینک اشتراک هوشمند", callback_data=f"agbot:subs:cfgmenu:{service_id}:multi")])
+    if show_multi_server_b64:
+        rows.append([IButton("🌐 لینک اشتراک هوشمند b64", callback_data=f"agbot:subs:cfgmenu:{service_id}:multi_b64")])
+    rows.append([IButton(BTN_BACK, callback_data=f"agbot:subs:detail:{service_id}")])
     return _ikb(rows)
 
 
@@ -339,9 +371,11 @@ def agent_dynamic_wizard_keyboard(server_id: int, gb: int, months: int, price: i
     rows = [
         [IButton("\U0001f4ca \u062d\u062c\u0645", callback_data="noop")],
         [
+            IButton("\u2796 10", callback_data=f"agbot:subs:wiz:gb_dec10:{server_id}"),
             IButton("\u2796", callback_data=f"agbot:subs:wiz:gb_dec:{server_id}"),
             IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop"),
             IButton("\u2795", callback_data=f"agbot:subs:wiz:gb_inc:{server_id}"),
+            IButton("\u2795 10", callback_data=f"agbot:subs:wiz:gb_inc10:{server_id}"),
         ],
         [IButton("\u23f3 \u0632\u0645\u0627\u0646", callback_data="noop")],
         [
@@ -358,5 +392,37 @@ def agent_dynamic_wizard_keyboard(server_id: int, gb: int, months: int, price: i
         ],
         [IButton("\U0001f4b3 \u062a\u0627\u06cc\u06cc\u062f \u0648 \u0633\u0627\u062e\u062a\u0646", callback_data=f"agbot:subs:wiz:confirm:{server_id}")],
         [IButton(BTN_BACK, callback_data="agbot:subs:picksrv_back")],
+    ]
+    return _ikb(rows)
+
+
+def agent_renew_wizard_keyboard(service_id: int, gb: int, months: int, price: int, off_percent: int = 0, wholesale: int = 0):
+    """ویزارد تمدید اشتراک — دقیقاً مثل پنل ساخت اشتراک ولی برای تمدید."""
+    price_str = f"{price:,}"
+    wholesale_str = f"{wholesale:,}"
+    rows = [
+        [IButton("\U0001f4ca \u062d\u062c\u0645 \u062a\u0645\u062f\u06cc\u062f", callback_data="noop")],
+        [
+            IButton("\u2796 10", callback_data=f"agbot:subs:rewiz:gb_dec10:{service_id}"),
+            IButton("\u2796", callback_data=f"agbot:subs:rewiz:gb_dec:{service_id}"),
+            IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop"),
+            IButton("\u2795", callback_data=f"agbot:subs:rewiz:gb_inc:{service_id}"),
+            IButton("\u2795 10", callback_data=f"agbot:subs:rewiz:gb_inc10:{service_id}"),
+        ],
+        [IButton("\u23f3 \u0645\u062f\u062a \u062a\u0645\u062f\u06cc\u062f", callback_data="noop")],
+        [
+            IButton("\u2796", callback_data=f"agbot:subs:rewiz:month_dec:{service_id}"),
+            IButton(f"{months} \u0645\u0627\u0647", callback_data="noop"),
+            IButton("\u2795", callback_data=f"agbot:subs:rewiz:month_inc:{service_id}"),
+        ],
+        [
+            IButton(f"\U0001f4b0 \u06a9\u0633\u0631 \u0627\u0632 \u06a9\u06cc\u0641 \u067e\u0648\u0644: {wholesale_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
+        ],
+        [
+            IButton(f"\U0001f4b8 \u0642\u06cc\u0645\u062a \u0641\u0631\u0648\u0634: {price_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
+            IButton(f"\U0001f3f7 \u062a\u062e\u0641\u06cc\u0641: {off_percent}%", callback_data="noop"),
+        ],
+        [IButton("\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0648 \u062a\u0645\u062f\u06cc\u062f", callback_data=f"agbot:subs:rewiz:confirm:{service_id}")],
+        [IButton(BTN_BACK, callback_data=f"agbot:subs:detail:{service_id}")],
     ]
     return _ikb(rows)

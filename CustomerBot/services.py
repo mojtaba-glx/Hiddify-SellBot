@@ -93,6 +93,7 @@ async def buy_service(
     user_uuid = str(uuid4())
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     start_date = now.strftime("%Y-%m-%d")
+    note = agent_db.make_service_note(agent_id)
 
     payload = {
         "name": service_name or f"cust_{customer_id}_svc",
@@ -101,6 +102,7 @@ async def buy_service(
         "start_date": start_date,
         "current_usage_GB": 0,
         "is_active": True,
+        "comment": note,
     }
 
     try:
@@ -126,6 +128,7 @@ async def buy_service(
         days=days,
         wholesale_price=wholesale,
         sale_price=sale_price,
+        note=note,
     )
 
     agent_db.add_service_node(

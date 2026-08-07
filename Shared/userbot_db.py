@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from typing import Tuple
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -631,6 +632,21 @@ def _renew_modes_from_policy(policy: str) -> Tuple[str, str]:
 def _normalize_renew_mode(value: Any, fallback: str) -> str:
     mode = str(value or "").strip().lower()
     return mode if mode in {"add", "reset"} else fallback
+
+
+def get_renew_modes() -> Tuple[str, str]:
+    """الگوی تمدید تعریف‌شده توسط ادمین: (renew_volume_mode, renew_time_mode) ∈ {add, reset}."""
+    try:
+        settings = get_buy_renew_settings()
+    except Exception:
+        settings = {}
+    volume = str(settings.get("renew_volume_mode") or "reset").strip().lower()
+    time = str(settings.get("renew_time_mode") or "reset").strip().lower()
+    if volume not in {"add", "reset"}:
+        volume = "add"
+    if time not in {"add", "reset"}:
+        time = "add"
+    return volume, time
 
 
 def get_buy_renew_settings() -> Dict[str, Any]:

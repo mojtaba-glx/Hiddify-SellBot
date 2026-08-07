@@ -26,12 +26,14 @@ async def revoke_user_link_on_panel(panel_user_uuid: str, server_id: int, marzba
     return await multi_panel.revoke_user_link(server, panel_user_uuid, marzban_username=marzban_username)
 
 
-async def create_user_on_panel(server_id: int, server: Dict[str, Any], name: str, usage_limit_gb: float, days: int) -> Dict[str, Any]:
+async def create_user_on_panel(server_id: int, server: Dict[str, Any], name: str, usage_limit_gb: float, days: int, comment: str = "") -> Dict[str, Any]:
     payload = {
         "name": name,
         "usage_limit_GB": usage_limit_gb,
         "package_days": days,
     }
+    if str(comment or "").strip():
+        payload["comment"] = str(comment).strip()
     result = await multi_panel.create_user(server, payload)
     if result and result.get("uuid"):
         return result

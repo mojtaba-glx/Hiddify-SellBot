@@ -99,6 +99,7 @@ def init_db() -> None:
             is_trial INTEGER DEFAULT 0,
             created_at TEXT DEFAULT '',
             updated_at TEXT DEFAULT '',
+            deleted_at TEXT DEFAULT '',
             FOREIGN KEY (agent_id) REFERENCES agent_users(id),
             FOREIGN KEY (customer_id) REFERENCES agent_customers(id)
         )
@@ -243,6 +244,15 @@ def _migrate_db():
         except sqlite3.OperationalError:
             pass
 
+    # deleted_at ستون برای agent_services (soft-delete)
+    try:
+        cur.execute("SELECT deleted_at FROM agent_services LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE agent_services ADD COLUMN deleted_at TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()
 
@@ -297,6 +307,20 @@ def get_agent_by_id(agent_id: int) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def make_service_note(agent_id: int) -> str:
+    """ساخت یادداشت اشتراک: @username|۶رقم (برای ادمین / نمایندگی / مشتری)."""
+    import random as _rnd
+    random_part = f"{_rnd.randint(0, 999999):06d}"
+    try:
+        ag = get_agent_by_id(agent_id)
+        username = str((ag or {}).get("username") or "").strip().lstrip("@")
+        if not username:
+            username = str((ag or {}).get("full_name") or "").strip() or f"id{agent_id}"
+        return f"@{username}|{random_part}"
+    except Exception:
+        return random_part
 
 
 def get_agent_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -874,6 +898,30 @@ def _service_code_from_comment(comment: str) -> str:
     return ""
 
 
+def _service_note_from_comment(comment: str) -> str:
+    """استخراج یادداشت سرویس از comment به فرم note:... (ممکن است خودش شامل | باشد)."""
+    text = str(comment or "")
+    idx = text.find("note:")
+    if idx == -1:
+        return ""
+    return text[idx + len("note:"):].strip()
+
+
+def make_service_note(agent_id: int) -> str:
+    """ساخت یادداشت اشتراک: یوزرنیم نماینده | عدد ۷ رقمی رندم."""
+    import random as _rnd
+    num = f"{_rnd.randint(0, 9999999):07d}"
+    try:
+        ag = get_agent_by_id(agent_id)
+        ag = ag or {}
+    except Exception:
+        ag = {}
+    uname = str(ag.get("username") or "").strip().lstrip("@")
+    if not uname:
+        uname = str(ag.get("full_name") or "").strip() or f"id{agent_id}"
+    return f"{uname}|{num}"
+
+
 def _generate_service_code(cur) -> str:
     """تولید شناسه ۷ رقمی یکتا برای سرویس."""
     import random
@@ -924,12 +972,14 @@ def get_service_by_code(service_code: str, agent_id: Optional[int] = None) -> Op
     try:
         if agent_id:
             cur.execute(
-                "SELECT * FROM agent_services WHERE agent_id = ? AND comment LIKE ? ORDER BY id DESC LIMIT 200",
+                "SELECT * FROM agent_services WHERE agent_id = ? AND comment LIKE ? "
+                "AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC LIMIT 200",
                 (int(agent_id), f"%code:{code}%"),
             )
         else:
             cur.execute(
-                "SELECT * FROM agent_services WHERE comment LIKE ? ORDER BY id DESC LIMIT 200",
+                "SELECT * FROM agent_services WHERE comment LIKE ? "
+                "AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC LIMIT 200",
                 (f"%code:{code}%",),
             )
         rows = cur.fetchall()
@@ -954,6 +1004,7 @@ def create_service(
     sale_price: int = 0,
     is_trial: int = 0,
     comment: str = "",
+    note: str = "",
 ) -> Dict[str, Any]:
     """
     ساخت سرویس جدید برای مشتری.
@@ -989,6 +1040,13 @@ def create_service(
     if comment_text and not comment_text.endswith("|"):
         comment_text += "|"
     comment_text += f"code:{code}"
+    # یادداشت در comment (note:...). اگر ارسال شده باشد از آن استفاده کن، وگرنه عدد ۷ رقمی رندم.
+    if str(note or "").strip():
+        comment_text += f"|note:{str(note).strip()}"
+    else:
+        import random as _rnd
+        note_val = f"{_rnd.randint(0, 9999999):07d}"
+        comment_text += f"|note:{note_val}"
     cur.execute(
         "UPDATE agent_services SET comment = ? WHERE id = ?",
         (comment_text, svc_id),
@@ -1004,7 +1062,7 @@ def get_service_by_id(service_id: int) -> Optional[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM agent_services WHERE id = ?", (service_id,))
+    cur.execute("SELECT * FROM agent_services WHERE id = ? AND (deleted_at IS NULL OR deleted_at = '')", (service_id,))
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -1014,7 +1072,7 @@ def get_service_by_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM agent_services WHERE panel_user_uuid = ?", (panel_user_uuid,))
+    cur.execute("SELECT * FROM agent_services WHERE panel_user_uuid = ? AND (deleted_at IS NULL OR deleted_at = '')", (panel_user_uuid,))
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -1028,15 +1086,46 @@ def get_services_by_agent(agent_id: int, page: int = 1, page_size: int = 20) -> 
     offset = (page - 1) * page_size
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ?", (agent_id,))
+    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '')", (agent_id,))
     total = int(cur.fetchone()["c"] or 0)
     cur.execute(
-        "SELECT * FROM agent_services WHERE agent_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        "SELECT * FROM agent_services WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC LIMIT ? OFFSET ?",
         (agent_id, page_size, offset),
     )
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows], total
+
+
+def search_services_by_name(agent_id: int, name: str, page: int = 1, page_size: int = 20) -> Tuple[List[Dict[str, Any]], int]:
+    """جستجوی اشتراک‌های یک نماینده بر اساس نام (جستجوی جزئی و بدون حساسیت به حروف بزرگ/کوچک)."""
+    init_db()
+    term = (name or "").strip()
+    if not term:
+        return [], 0
+    like = f"%{term}%"
+    if page < 1:
+        page = 1
+    offset = (page - 1) * page_size
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM agent_services "
+            "WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '') AND LOWER(name) LIKE LOWER(?)",
+            (agent_id, like),
+        )
+        total = int(cur.fetchone()["c"] or 0)
+        cur.execute(
+            "SELECT * FROM agent_services "
+            "WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '') AND LOWER(name) LIKE LOWER(?) "
+            "ORDER BY id DESC LIMIT ? OFFSET ?",
+            (agent_id, like, page_size, offset),
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
 
 
 def _older_than_days(ts: str, days: int) -> bool:
@@ -1149,7 +1238,7 @@ def get_services_by_customer(customer_id: int) -> List[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM agent_services WHERE customer_id = ? ORDER BY id DESC", (customer_id,))
+    cur.execute("SELECT * FROM agent_services WHERE customer_id = ? AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC", (customer_id,))
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -1190,12 +1279,14 @@ def get_expired_services_by_agent(agent_id: int, page: int = 1, page_size: int =
     cur = conn.cursor()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
-        "SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND end_date != '' AND end_date < ?",
+        "SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND end_date != '' AND end_date < ? "
+        "AND (deleted_at IS NULL OR deleted_at = '')",
         (agent_id, now_str),
     )
     total = int(cur.fetchone()["c"] or 0)
     cur.execute(
-        "SELECT * FROM agent_services WHERE agent_id = ? AND end_date != '' AND end_date < ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        "SELECT * FROM agent_services WHERE agent_id = ? AND end_date != '' AND end_date < ? "
+        "AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC LIMIT ? OFFSET ?",
         (agent_id, now_str, page_size, offset),
     )
     rows = cur.fetchall()
@@ -1267,6 +1358,64 @@ def renew_service(service_id: int, extra_days: int, extra_gb: float = 0) -> bool
     return True
 
 
+def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float = 0,
+                              volume_mode: str = "add", time_mode: str = "add") -> bool:
+    """
+    تمدید سرویس با رعایت الگوی تعریف‌شده در ربات ادمین:
+      volume_mode: "add" → حجم باقی‌مانده + پلن جدید | "reset" → فقط پلن جدید (ریست مصرف)
+      time_mode:   "add" → روز باقی‌مانده + پلن جدید   | "reset" → فقط پلن جدید (شروع از امروز)
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT days_left, end_date, usage_limit, usage_current FROM agent_services WHERE id = ?", (service_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # ── زمان ──
+    if str(time_mode).strip().lower() == "add":
+        new_days_left = int(row["days_left"] or 0) + int(extra_days)
+        end_date = str(row["end_date"] or "").strip()
+        if end_date:
+            try:
+                current_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                current_end = now
+        else:
+            current_end = now
+        new_end = current_end + timedelta(days=int(extra_days))
+    else:
+        new_days_left = int(extra_days)
+        new_end = now + timedelta(days=int(extra_days))
+
+    # ── حجم ──
+    if str(volume_mode).strip().lower() == "add":
+        new_usage_limit = float(row["usage_limit"] or 0) + float(extra_gb)
+    else:
+        new_usage_limit = float(extra_gb)
+
+    # ── در حالت ریست حجم، مصرف فعلی هم صفر می‌شود ──
+    new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
+    if str(volume_mode).strip().lower() == "add":
+        cur.execute(
+            "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, updated_at = ? WHERE id = ?",
+            (new_days_left, new_usage_limit, new_end_str, _now(), service_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE agent_services SET days_left = ?, usage_limit = ?, usage_current = 0, "
+            "start_date = ?, end_date = ?, updated_at = ? WHERE id = ?",
+            (new_days_left, new_usage_limit, now.strftime("%Y-%m-%d %H:%M:%S"), new_end_str, _now(), service_id),
+        )
+    conn.commit()
+    conn.close()
+    return True
+
+
 def set_service_active(service_id: int, is_active: bool) -> bool:
     """فعال/غیرفعال کردن سرویس."""
     init_db()
@@ -1299,6 +1448,74 @@ def delete_service(service_id: int) -> bool:
     conn.commit()
     conn.close()
     return True
+
+
+def _is_soft_deleted(row: Dict[str, Any]) -> bool:
+    """" آیا سرویس به‌صورت نرم (توسط ادمین) حذف شده یا نه؟ """
+    val = str(row.get("deleted_at") or "").strip()
+    return bool(val)
+
+
+def soft_delete_service_by_uuid(panel_user_uuid: str, server_id: Optional[int] = None) -> int:
+    """سرویس‌های مرتبط با یک کاربر پنل را به‌صورت نرم حذف می‌کند (وقتی ادمین حذف می‌کند).
+    برمی‌گرداند: تعداد سرویس‌های علامت‌گذاری‌شده."""
+    init_db()
+    uuid = str(panel_user_uuid or "").strip()
+    if not uuid:
+        return 0
+    conn = _get_conn()
+    cur = conn.cursor()
+    now = _now()
+    count = 0
+    try:
+        if server_id:
+            cur.execute(
+                "SELECT id FROM agent_services WHERE panel_user_uuid = ? AND server_id = ? "
+                "AND (deleted_at = '' OR deleted_at IS NULL)",
+                (uuid, int(server_id)),
+            )
+        else:
+            cur.execute(
+                "SELECT id FROM agent_services WHERE panel_user_uuid = ? "
+                "AND (deleted_at = '' OR deleted_at IS NULL)",
+                (uuid,),
+            )
+        rows = cur.fetchall()
+        for r in rows:
+            cur.execute("UPDATE agent_services SET deleted_at = ?, updated_at = ? WHERE id = ?", (now, now, int(r["id"])))
+            count += 1
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+    return count
+
+
+def purge_expired_soft_deleted(days: int = 7) -> int:
+    """حذف قطعی سرویس‌هایی که بیشتر از `days` روز پیش به‌صورت نرم حذف شده‌اند."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    count = 0
+    try:
+        cur.execute(
+            "SELECT id, deleted_at FROM agent_services WHERE deleted_at IS NOT NULL AND deleted_at != ''"
+        )
+        rows = cur.fetchall()
+        for r in rows:
+            try:
+                deleted_dt = datetime.strptime(str(r["deleted_at"]), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if (datetime.now(timezone.utc) - deleted_dt).total_seconds() >= days * 86400:
+                cur.execute("DELETE FROM agent_service_nodes WHERE service_id = ?", (int(r["id"]),))
+                cur.execute("DELETE FROM agent_services WHERE id = ?", (int(r["id"]),))
+                count += 1
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+    return count
 
 
 # ===============================
@@ -1837,25 +2054,25 @@ def get_agent_stats(agent_id: int) -> Dict[str, Any]:
     customers_count = int(cur.fetchone()["c"] or 0)
 
     # تعداد سرویس‌ها و فعال‌ها
-    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ?", (agent_id,))
+    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '')", (agent_id,))
     services_total = int(cur.fetchone()["c"] or 0)
-    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND is_active = 1", (agent_id,))
+    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND is_active = 1 AND (deleted_at IS NULL OR deleted_at = '')", (agent_id,))
     services_active = int(cur.fetchone()["c"] or 0)
 
     # تعداد ترایال‌ها
-    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND is_trial = 1", (agent_id,))
+    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND is_trial = 1 AND (deleted_at IS NULL OR deleted_at = '')", (agent_id,))
     trials_count = int(cur.fetchone()["c"] or 0)
 
     # مجموع فروش (sale_price)
     cur.execute(
-        "SELECT COALESCE(SUM(sale_price), 0) AS total FROM agent_services WHERE agent_id = ?",
+        "SELECT COALESCE(SUM(sale_price), 0) AS total FROM agent_services WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
         (agent_id,),
     )
     total_sales = int(cur.fetchone()["total"] or 0)
 
     # مجموع هزینه عمده (wholesale_price)
     cur.execute(
-        "SELECT COALESCE(SUM(wholesale_price), 0) AS total FROM agent_services WHERE agent_id = ?",
+        "SELECT COALESCE(SUM(wholesale_price), 0) AS total FROM agent_services WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
         (agent_id,),
     )
     total_wholesale = int(cur.fetchone()["total"] or 0)
@@ -1895,9 +2112,9 @@ def get_global_agency_stats() -> Dict[str, Any]:
     customers_total = int(cur.fetchone()["c"] or 0)
 
     # تعداد کل سرویس‌ها
-    cur.execute("SELECT COUNT(*) AS c FROM agent_services")
+    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE deleted_at IS NULL OR deleted_at = ''")
     services_total = int(cur.fetchone()["c"] or 0)
-    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE is_active = 1")
+    cur.execute("SELECT COUNT(*) AS c FROM agent_services WHERE is_active = 1 AND (deleted_at IS NULL OR deleted_at = '')")
     services_active = int(cur.fetchone()["c"] or 0)
 
     # مجموع فروش کل سیستم

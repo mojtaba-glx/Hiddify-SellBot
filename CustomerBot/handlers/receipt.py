@@ -27,7 +27,7 @@ from CustomerBot.database import (
 )
 from Shared.agent_db import (
     get_customer_by_telegram_id, upsert_customer, get_services_by_customer,
-    create_service, get_service_by_id, add_service_node, renew_service,
+    create_service, get_service_by_id, add_service_node, renew_service, make_service_note,
 )
 from Shared.database import get_servers
 from Shared.database import get_server_by_id
@@ -453,6 +453,12 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=main_menu_keyboard(),
                 )
                 return
+        note = make_service_note(agent_id)
+        try:
+            from Shared import hiddify_api
+            await hiddify_api.patch_user(found_server, parsed_uuid, {"comment": note})
+        except Exception:
+            pass
         svc = create_service(
             agent_id=agent_id,
             customer_id=cust_id,
@@ -463,6 +469,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             usage_limit=0,
             days=0,
             sale_price=0,
+            note=note,
         )
         if svc:
             add_service_node(

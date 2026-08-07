@@ -8066,6 +8066,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             except Exception:
                 pass
 
+            # حذف نرم اشتراک از سیستم نمایندگی/مشتری (ردیف دیتابیس تا ۷ روز می‌ماند)
+            try:
+                from Shared import agent_db as _agn
+                _agn.soft_delete_service_by_uuid(target_user_uuid, target_server_id)
+            except Exception:
+                pass
+
             if failed_servers:
                 await query.answer(
                     f"✅ حذف شد، اما {len(failed_servers)} سرور خطا داشت.",

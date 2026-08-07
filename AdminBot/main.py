@@ -673,6 +673,17 @@ async def _userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await run_userbot_auto_backup_job(context)
 
 
+async def _purge_soft_deleted_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """پاکسازی قطعی اشتراک‌هایی که بیش از ۷ روز پیش توسط ادمین به‌صورت نرم حذف شده‌اند."""
+    try:
+        from Shared import agent_db
+        purged = agent_db.purge_expired_soft_deleted(days=7)
+        if purged:
+            logging.getLogger(__name__).info("Soft-deleted purge: %s service(s) removed.", purged)
+    except Exception:
+        logging.getLogger(__name__).exception("Soft-deleted purge job failed.")
+
+
 def _build_fallback_context(application) -> SimpleNamespace:
     return SimpleNamespace(bot=application.bot, bot_data=application.bot_data)
 
@@ -847,6 +858,18 @@ def main() -> None:
         logger.info("✅ Userbot auto backup scheduler enabled (interval=60s)")
     else:
         logger.warning("⚠️ Userbot auto backup scheduler unavailable (no job_queue).")
+
+    # پاکسازی نرم-حذف‌شده‌ها (۷ روز) — هر روز
+    if application.job_queue is not None:
+        from datetime import time as _dt_time
+        application.job_queue.run_daily(
+            _purge_soft_deleted_job,
+            time=_dt_time(hour=4, minute=0),
+            name="purge-soft-deleted-services",
+        )
+        logger.info("✅ Soft-delete purge scheduler enabled (daily 04:00).")
+    else:
+        logger.warning("⚠️ Soft-delete purge scheduler unavailable (no job_queue).")
 
     logger.info("✅ AdminBot started and polling...")
     application.run_polling()

@@ -43,8 +43,8 @@ from CustomerBot.database import (
 from Shared.agent_db import (
     upsert_customer, get_customer_by_telegram_id, get_services_by_customer,
     get_service_by_id, create_service, add_service_node,
-    renew_service, set_service_active, calculate_wholesale_price,
-    update_service,
+    renew_service, renew_service_with_policy, set_service_active, calculate_wholesale_price,
+    update_service, make_service_note,
 )
 from Shared.database import (
     get_servers, get_main_servers, get_server_by_id, get_plan_categories, get_plans, get_plan,
@@ -874,7 +874,8 @@ async def _handle_renew(query, context, agent_id, user, data):
         months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
         days = months * 30
         extra_gb = float(gb)
-        ok = await asyncio.to_thread(renew_service, service_id, days, extra_gb)
+        vol_mode, time_mode = _renew_admin_modes()
+        ok = await asyncio.to_thread(renew_service_with_policy, service_id, days, extra_gb, vol_mode, time_mode)
         context.user_data.pop("renew_target_service_id", None)
         context.user_data.pop(UD_BUY_GB, None)
         context.user_data.pop(UD_BUY_MONTHS, None)
@@ -901,7 +902,8 @@ async def _handle_renew(query, context, agent_id, user, data):
         if extra_days <= 0:
             extra_days = 30
         extra_gb = float(plan.get("gb") or 0)
-        ok = await asyncio.to_thread(renew_service, service_id, extra_days, extra_gb)
+        vol_mode, time_mode = _renew_admin_modes()
+        ok = await asyncio.to_thread(renew_service_with_policy, service_id, extra_days, extra_gb, vol_mode, time_mode)
         context.user_data.pop("renew_target_service_id", None)
         if not ok:
             await msg.reply_text("❌ تمدید اشتراک انجام نشد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
@@ -954,12 +956,14 @@ async def _handle_trial(query, context, agent_id, user, data):
         from Shared.hiddify_api import create_user
         import uuid
         new_uuid = str(uuid.uuid4())
+        note = make_service_note(agent_id)
         payload = {
             "name": f"تست رایگان {gb}GB",
             "usage_limit_GB": gb,
             "package_days": days,
             "uuid": new_uuid,
             "is_active": True,
+            "comment": note,
         }
         result = await create_user(server, payload)
         if not result:
@@ -981,6 +985,7 @@ async def _handle_trial(query, context, agent_id, user, data):
             days=days,
             sale_price=0,
             is_trial=1,
+            note=note,
         )
         add_service_node(
             service_id=svc["id"],
@@ -1003,6 +1008,15 @@ async def _handle_trial(query, context, agent_id, user, data):
 
     elif data == CB_TRIAL_BACK:
         await _back_to_main_menu(msg, "🔙 بازگشت")
+
+
+def _renew_admin_modes():
+    """بازگرداندن الگوی تمدید تعریف‌شده توسط ادمین: (حجم add/reset، زمان add/reset)."""
+    try:
+        from Shared import userbot_db
+        return userbot_db.get_renew_modes()
+    except Exception:
+        return "add", "add"
 
 
 async def _handle_buy(query, context, agent_id, user, data):

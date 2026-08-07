@@ -3000,7 +3000,7 @@ async def send_direct_config_menu(
 
 
 # ===============================
-#   تمدید اشتراک با پلن
+#   تمدید اشتراک (پلن پویا - دلخواه)
 # ===============================
 
 async def send_user_extend_menu(
@@ -3019,134 +3019,154 @@ async def send_user_extend_menu(
             await context.bot.send_message(chat_id, text)
         return
 
-    get_plans = getattr(database, "get_plans", None)
-    if callable(get_plans):
-        plans = get_plans(server_id) or []
-    else:
-        plans = []
+    # تمدید اشتراک همیشه با پلن پویا (دلخواه) باز می‌شود.
+    await _send_dynamic_extend(server_id, user_uuid, chat_id, context, message=message)
 
-    if not plans:
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(
-                "بازگشت به جزئیات کاربر",
-                callback_data=f"server:{server_id}:useruuid:{user_uuid}",
-            )]]
-        )
-        text = (
-            "❌ برای این سرور هنوز هیچ پلنی ثبت نشده است.\n"
-            "از منوی «مدیریت ربات کاربران» می‌توانید بعداً پلن‌ها را اضافه کنید."
-        )
-        if message is not None:
-            await message.edit_text(text, reply_markup=kb)
-        else:
-            await context.bot.send_message(chat_id, text, reply_markup=kb)
-        return
 
-    lines = [
-        "♾️ تمدید اشتراک کاربر",
-        "یکی از پلن‌های زیر را برای تمدید انتخاب کنید:",
-        "",
-    ]
-    keyboard_rows: List[List[InlineKeyboardButton]] = []
+# ===============================
+#   تمدید اشتراک با پلن پویا (مثل ربات نمایندگی)
+# ===============================
 
-    for p in plans:
-        pid = p.get("id")
-        title = p.get("title") or p.get("name") or f"پلن #{pid}"
-        days = p.get("days") or p.get("duration_days") or "-"
-        gb = p.get("gb") or p.get("usage_limit_GB") or p.get("volume_GB")
-        price = p.get("price") or p.get("price_toman") or "-"
-
-        if gb in (None, "", 0):
-            gb_text = "نامحدود"
-        else:
-            gb_text = f"{format_gb(gb)} گیگابایت"
-
-        lines.append(f"• {title} | {price} تومان | {days} روز | {gb_text}")
-        keyboard_rows.append(
-            [
-                InlineKeyboardButton(
-                    title,
-                    callback_data=f"extend:{server_id}:{user_uuid}:{pid}",
-                )
-            ]
-        )
-
-    keyboard_rows.append(
+def _extend_dyn_keyboard(server_id: int, user_uuid: str, gb: int, months: int, vol_mode: str = "reset", time_mode: str = "reset"):
+    vol_label = "افزایشی" if vol_mode == "add" else "ریست"
+    time_label = "افزایشی" if time_mode == "add" else "ریست"
+    rows = [
+        [InlineKeyboardButton("\U0001f4ca حجم تمدید", callback_data="noop")],
         [
-            InlineKeyboardButton(
-                "بازگشت🔙",
-                callback_data=f"server:{server_id}:useruuid:{user_uuid}",
-            )
-        ]
+            InlineKeyboardButton("➖10", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_dec10"),
+            InlineKeyboardButton("➖", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_dec"),
+            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc"),
+            InlineKeyboardButton("➕10", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc10"),
+        ],
+        [InlineKeyboardButton(f"📦 حجم: {vol_label} | ⏳ زمان: {time_label}", callback_data="noop")],
+        [InlineKeyboardButton("\u23f3 مدت تمدید", callback_data="noop")],
+        [
+            InlineKeyboardButton("➖", callback_data=f"extdyn:{server_id}:{user_uuid}:month_dec"),
+            InlineKeyboardButton(f"{months} ماه", callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"extdyn:{server_id}:{user_uuid}:month_inc"),
+        ],
+        [InlineKeyboardButton("✅ اعمال و تمدید", callback_data=f"extdyn:{server_id}:{user_uuid}:confirm")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}:useruuid:{user_uuid}")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _extend_dyn_defaults(server_id: int) -> tuple:
+    try:
+        dyn = database.get_plan_dynamic_settings(server_id) or {}
+    except Exception:
+        dyn = {}
+    min_gb = _to_int(dyn.get("min_gb"), 10)
+    min_months = _to_int(dyn.get("min_months"), 1)
+    if min_gb <= 0:
+        min_gb = 10
+    if min_months <= 0:
+        min_months = 1
+    return min_gb, min_months
+
+
+async def _send_dynamic_extend(server_id: int, user_uuid: str, chat_id: int, context, message=None):
+    """نمایش ویزارد پویای تمدید اشتراک."""
+    server = database.get_server_by_id(server_id)
+    if not server:
+        text = "❌ سرور پیدا نشد."
+        if message is not None:
+            await message.edit_text(text)
+        else:
+            await context.bot.send_message(chat_id, text)
+        return
+    gb, months = _extend_dyn_defaults(server_id)
+    state_key = f"extdyn:{server_id}:{user_uuid}"
+    context.user_data[state_key] = {"gb": gb, "months": months}
+    vol_mode, time_mode = userbot_db.get_renew_modes()
+    kb = _extend_dyn_keyboard(server_id, user_uuid, gb, months, vol_mode, time_mode)
+    text = (
+        "🎛 <b>تمدید اشتراک با پلن پویا</b>\n\n"
+        "حجم و مدت دلخواه تمدید را انتخاب کنید، سپس «✅ اعمال و تمدید» را بزنید."
     )
-
-    kb = InlineKeyboardMarkup(keyboard_rows)
-    text = "\n".join(lines)
     if message is not None:
-        await message.edit_text(text, reply_markup=kb)
+        try:
+            await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
     else:
-        await context.bot.send_message(chat_id, text, reply_markup=kb)
+        await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
 
-async def apply_plan_to_user(
-    server_id: int,
-    user_uuid: str,
-    plan_id: int,
-    chat_id: int,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
+def _to_int(value, default=0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months: int, chat_id: int, context):
+    """اعمال تمدید پویا روی کاربر پنل، با رعایت الگوی تمدید ادمین (add/reset)."""
     server = database.get_server_by_id(server_id)
     if not server:
         await context.bot.send_message(chat_id, "❌ سرور پیدا نشد.")
         return
 
-    get_plan = getattr(database, "get_plan", None)
-    if not callable(get_plan):
-        await context.bot.send_message(
-            chat_id,
-            "❌ تابع get_plan در دیتابیس پیاده‌سازی نشده است، "
-            "بخش تمدید اشتراک هنوز کامل نشده.",
-        )
-        return
+    vol_mode, time_mode = userbot_db.get_renew_modes()
+    new_days = months * 30
 
-    plan = get_plan(server_id, plan_id)
-    if not plan:
-        await context.bot.send_message(chat_id, "❌ پلن انتخاب‌شده پیدا نشد.")
-        return
+    # دریافت اطلاعات فعلی کاربر از پنل
+    target_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
+    current = None
+    try:
+        current = await hiddify_api.get_user_by_uuid(server, target_uuid)
+    except Exception:
+        current = {}
 
-    days = plan.get("days") or plan.get("duration_days")
-    gb = plan.get("gb") or plan.get("usage_limit_GB") or plan.get("volume_GB")
+    current_limit = _to_float(current.get("usage_limit_GB"))
+    try:
+        _, _, current_days_left = _compute_package_info(current or {})
+    except Exception:
+        current_days_left = _to_int((current or {}).get("package_days"))
 
-    if not days:
-        await context.bot.send_message(
-            chat_id,
-            "❌ در پلن انتخاب‌شده مقدار روز (days) مشخص نشده است.",
-        )
-        return
+    # ── حجم ──
+    if vol_mode == "add":
+        new_usage_limit = max(0.0, current_limit) + float(gb)
+    else:
+        new_usage_limit = float(gb)
+
+    # ── زمان ──
+    if time_mode == "add":
+        new_package_days = max(0, current_days_left or 0) + new_days
+    else:
+        new_package_days = new_days
 
     patch_data: Dict[str, Any] = {
-        "package_days": int(days),
-        "start_date": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d"),
-        "current_usage_GB": 0,
-        "last_reset_time": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+        "usage_limit_GB": float(new_usage_limit),
+        "package_days": int(new_package_days),
     }
-    if gb:
-        patch_data["usage_limit_GB"] = float(gb)
+    if vol_mode != "add":
+        patch_data["current_usage_GB"] = 0
+        patch_data["last_reset_time"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    if time_mode != "add":
+        patch_data["start_date"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
 
-    target_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
     try:
-        await hiddify_api.patch_user(server, target_user_uuid, patch_data)
+        await hiddify_api.patch_user(server, target_uuid, patch_data)
     except Exception as e:
-        await context.bot.send_message(
-            chat_id, f"❌ خطا در اعمال پلن روی کاربر:\n{e}"
-        )
+        await context.bot.send_message(chat_id, f"❌ خطا در اعمال تمدید پویا:\n{e}")
         return
 
+    vol_text = f"حجم: {format_gb(current_limit)}+{gb}={format_gb(new_usage_limit)}GB (افزایشی)" if vol_mode == "add" else f"حجم: {gb}GB (ریست)"
+    time_text = f"زمان: {current_days_left}+{new_days}={new_package_days} روز (افزایشی)" if time_mode == "add" else f"زمان: {new_days} روز (ریست)"
     await context.bot.send_message(
         chat_id,
-        "✅ اشتراک کاربر با موفقیت بر اساس پلن انتخاب‌شده تمدید شد.",
+        f"✅ اشتراک با پلن پویا تمدید شد!\n{vol_text}\n{time_text}",
     )
-    await send_user_detail(server_id, target_user_uuid, chat_id, context)
+    await send_user_detail(server_id, target_uuid, chat_id, context)
+
+
+def _to_float(value, default=0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 # ===============================
@@ -5063,6 +5083,11 @@ async def handle_server_inline_callback(
                 )
 
                 if deleted_server_ids and not failed_servers:
+                    try:
+                        from Shared import agent_db as _agn
+                        _agn.soft_delete_service_by_uuid(user_uuid, sid)
+                    except Exception:
+                        pass
                     success_count += 1
                 elif deleted_server_ids and failed_servers:
                     partial_count += 1
@@ -5149,6 +5174,12 @@ async def handle_server_inline_callback(
             else:
                 await msg.edit_text("❌ حذف کاربر روی هیچ سروری موفق نشد.")
             return
+
+        try:
+            from Shared import agent_db as _agn
+            _agn.soft_delete_service_by_uuid(user_uuid, server_id)
+        except Exception:
+            pass
 
         if failed_servers:
             await msg.edit_text(
@@ -5428,20 +5459,63 @@ async def handle_server_inline_callback(
         await msg.edit_text("❌ گزینه‌ی ویرایش نامعتبر است.")
         return
 
-    # ------ اعمال پلن تمدید (extend:...) ------
-    if data.startswith("extend:"):
+    # ------ تمدید با پلن پویا (extdyn:...) ------
+    if data.startswith("extdyn:"):
         await query.answer()
         try:
-            _, sid_str, user_uuid, pid_str = data.split(":", 3)
+            _, sid_str, user_uuid, action = data.split(":", 3)
             server_id = int(sid_str)
-            plan_id = int(pid_str)
         except ValueError:
-            await msg.edit_text("❌ داده‌ی دکمه تمدید نامعتبر است.")
+            await msg.edit_text("❌ داده‌ی دکمه تمدید پویا نامعتبر است.")
+            return
+        state_key = f"extdyn:{server_id}:{user_uuid}"
+        state = context.user_data.get(state_key) or {}
+        gb = _to_int(state.get("gb"), 10)
+        months = _to_int(state.get("months"), 1)
+        if gb <= 0:
+            gb = 10
+        if months <= 0:
+            months = 1
+
+        if action == "menu":
+            await _send_dynamic_extend(server_id, user_uuid, chat_id, context, message=msg)
+            return
+        if action == "confirm":
+            context.user_data.pop(state_key, None)
+            await _apply_dynamic_extend(server_id, user_uuid, gb, months, chat_id, context)
             return
 
-        await apply_plan_to_user(
-            server_id, user_uuid, plan_id, chat_id, context
+        dyn = database.get_plan_dynamic_settings(server_id) or {}
+        step_gb = max(1, _to_int(dyn.get("step_gb"), 1))
+        max_gb = max(1, _to_int(dyn.get("max_gb"), 1000))
+        min_gb = max(1, _to_int(dyn.get("min_gb"), 1))
+        min_months = max(1, _to_int(dyn.get("min_months"), 1))
+        max_months = max(1, _to_int(dyn.get("max_months"), 12))
+
+        if action == "gb_inc":
+            gb = min(gb + step_gb, max_gb)
+        elif action == "gb_dec":
+            gb = max(min_gb, gb - step_gb)
+        elif action == "gb_inc10":
+            gb = min(gb + 10, max_gb)
+        elif action == "gb_dec10":
+            gb = max(min_gb, gb - 10)
+        elif action == "month_inc":
+            months = min(months + 1, max_months)
+        elif action == "month_dec":
+            months = max(min_months, months - 1)
+
+        context.user_data[state_key] = {"gb": gb, "months": months}
+        vol_mode, time_mode = userbot_db.get_renew_modes()
+        kb = _extend_dyn_keyboard(server_id, user_uuid, gb, months, vol_mode, time_mode)
+        text = (
+            "🎛 <b>تمدید اشتراک با پلن پویا</b>\n\n"
+            "حجم و مدت دلخواه تمدید را انتخاب کنید، سپس «✅ اعمال و تمدید» را بزنید."
         )
+        try:
+            await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
         return
 
     # ------ انتخاب پلن برای افزودن کاربر جدید (addplan:SERVER_ID:PLAN_ID) ------
