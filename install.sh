@@ -677,7 +677,10 @@ systemd_available() {
 }
 
 systemd_units_installed() {
-  [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && [ -f "$SYSTEMD_USER_UNIT_FILE" ] && [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ]
+  # اگر حتی یکی از unit files وجود داشته باشد، systemd فعال است
+  # (قبلاً همه ۴ تا چک می‌شد که باعث می‌شد اگر agent/customer unit نبود،
+  # install.sh از nohup استفاده کند ولی systemd همچنان admin/user را اجرا کند)
+  [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] || [ -f "$SYSTEMD_USER_UNIT_FILE" ] || [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] || [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ]
 }
 
 require_root() {
@@ -1102,7 +1105,11 @@ stop_bots() {
       return 1
     fi
     _blue "Stopping bots via systemd"
-    systemctl stop "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT" "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
+    # فقط unit هایی که واقعاً وجود دارند را stop کن
+    [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && systemctl stop "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true
+    [ -f "$SYSTEMD_USER_UNIT_FILE" ] && systemctl stop "$SYSTEMD_USER_UNIT" 2>/dev/null || true
+    [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && systemctl stop "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true
+    [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ] && systemctl stop "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
     rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
     _green "OK: all bots stopped (systemd)."
     return 0
@@ -1249,32 +1256,45 @@ start_bots() {
     _red "ERROR: virtual environment is missing. Run ./install.sh install first."
     return 1
   }
-  if systemd_units_installed; then
-    if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-      _red "ERROR: systemd autostart is installed; use sudo to start services."
-      return 1
-    fi
-    _blue "Starting bots via systemd"
-    systemctl start "$SYSTEMD_ADMIN_UNIT" "$SYSTEMD_USER_UNIT"
-    _green "OK: AdminBot started (systemd)"
-    _green "OK: UserBot started (systemd)"
-    if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
-      systemctl start "$SYSTEMD_AGENT_UNIT" "$SYSTEMD_CUSTOMER_UNIT"
-      _green "OK: AgentBot started (systemd)"
-      _green "OK: CustomerBot started (systemd)"
-    else
-      _yellow "SKIP: AgentBot (AGENT_BOT_TOKEN not set)"
-      _yellow "SKIP: CustomerBot (AGENT_BOT_TOKEN not set)"
-    fi
-    return 0
+
+  # اگر systemd فعال است و root نیستیم، خطا بده
+  if systemd_units_installed && [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    _red "ERROR: systemd autostart is installed; use sudo to start services."
+    return 1
   fi
 
   _blue "Starting bots"
-  start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot"
-  start_single_bot "$USER_MAIN" "$USER_PID_FILE" "$USER_LOG_FILE" "UserBot"
+
+  # AdminBot: systemd یا nohup
+  if [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && systemd_available; then
+    systemctl start "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true
+    _green "OK: AdminBot started (systemd)"
+  else
+    start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot"
+  fi
+
+  # UserBot: systemd یا nohup
+  if [ -f "$SYSTEMD_USER_UNIT_FILE" ] && systemd_available; then
+    systemctl start "$SYSTEMD_USER_UNIT" 2>/dev/null || true
+    _green "OK: UserBot started (systemd)"
+  else
+    start_single_bot "$USER_MAIN" "$USER_PID_FILE" "$USER_LOG_FILE" "UserBot"
+  fi
+
+  # AgentBot و CustomerBot
   if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
-    start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot"
-    start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot"
+    if [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && systemd_available; then
+      systemctl start "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true
+      _green "OK: AgentBot started (systemd)"
+    else
+      start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot"
+    fi
+    if [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ] && systemd_available; then
+      systemctl start "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
+      _green "OK: CustomerBot started (systemd)"
+    else
+      start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot"
+    fi
   else
     _yellow "SKIP: AgentBot (AGENT_BOT_TOKEN not set)"
     _yellow "SKIP: CustomerBot (AGENT_BOT_TOKEN not set)"
