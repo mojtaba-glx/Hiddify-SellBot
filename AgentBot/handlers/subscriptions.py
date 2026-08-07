@@ -97,9 +97,10 @@ async def _send_sub_link_with_qr(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         logger.warning("send sub link QR failed svc=%s: %s", svc_id, e)
     try:
+        link_line = f"\U0001f517 <b>{title}</b>\n<code>{_escape(sub_link)}</code>"
         await context.bot.send_message(
             chat_id=chat_id,
-            text=caption if len(caption) <= 1000 else f"{name_line}\n{f'\U0001f517 <b>{title}</b>\n'}<code>{_escape(sub_link)}</code>",
+            text=caption if len(caption) <= 1000 else f"{name_line}\n{link_line}",
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
