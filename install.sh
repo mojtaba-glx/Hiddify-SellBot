@@ -1678,6 +1678,7 @@ run_command() {
       ;;
     restart)
       stop_bots
+      sleep 2
       start_bots
       show_status
       ;;
