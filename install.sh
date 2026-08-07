@@ -1326,15 +1326,63 @@ show_status() {
   echo "Logs:    $LOG_DIR"
   echo "Backups: $BACKUP_DIR"
   echo "========================================="
-  if systemd_units_installed; then
-    autostart_status
-    return 0
+
+  # Hybrid: هر بات را بر اساس روش مدیریتش نشان بده
+  # AdminBot
+  if [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && systemd_available; then
+    local admin_active admin_pid
+    admin_active="$(systemctl is-active "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
+    admin_pid="$(systemctl show -p MainPID --value "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true)"
+    if [ "$admin_active" = "active" ]; then
+      _green "RUNNING: AdminBot (systemd, PID=${admin_pid:-unknown})"
+    else
+      _yellow "STOPPED: AdminBot (systemd: ${admin_active:-unknown})"
+    fi
+  else
+    status_single_bot "$ADMIN_PID_FILE" "AdminBot"
   fi
-  status_single_bot "$ADMIN_PID_FILE" "AdminBot"
-  status_single_bot "$USER_PID_FILE" "UserBot"
+
+  # UserBot
+  if [ -f "$SYSTEMD_USER_UNIT_FILE" ] && systemd_available; then
+    local user_active user_pid
+    user_active="$(systemctl is-active "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
+    user_pid="$(systemctl show -p MainPID --value "$SYSTEMD_USER_UNIT" 2>/dev/null || true)"
+    if [ "$user_active" = "active" ]; then
+      _green "RUNNING: UserBot (systemd, PID=${user_pid:-unknown})"
+    else
+      _yellow "STOPPED: UserBot (systemd: ${user_active:-unknown})"
+    fi
+  else
+    status_single_bot "$USER_PID_FILE" "UserBot"
+  fi
+
   if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
-    status_single_bot "$AGENT_PID_FILE" "AgentBot"
-    status_single_bot "$CUSTOMER_PID_FILE" "CustomerBot"
+    # AgentBot
+    if [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && systemd_available; then
+      local agent_active agent_pid
+      agent_active="$(systemctl is-active "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true)"
+      agent_pid="$(systemctl show -p MainPID --value "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true)"
+      if [ "$agent_active" = "active" ]; then
+        _green "RUNNING: AgentBot (systemd, PID=${agent_pid:-unknown})"
+      else
+        _yellow "STOPPED: AgentBot (systemd: ${agent_active:-unknown})"
+      fi
+    else
+      status_single_bot "$AGENT_PID_FILE" "AgentBot"
+    fi
+    # CustomerBot
+    if [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ] && systemd_available; then
+      local customer_active customer_pid
+      customer_active="$(systemctl is-active "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true)"
+      customer_pid="$(systemctl show -p MainPID --value "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true)"
+      if [ "$customer_active" = "active" ]; then
+        _green "RUNNING: CustomerBot (systemd, PID=${customer_pid:-unknown})"
+      else
+        _yellow "STOPPED: CustomerBot (systemd: ${customer_active:-unknown})"
+      fi
+    else
+      status_single_bot "$CUSTOMER_PID_FILE" "CustomerBot"
+    fi
   fi
 }
 
