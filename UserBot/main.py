@@ -10,6 +10,7 @@ import hashlib
 import re
 import asyncio
 import socket
+import fcntl
 from html import escape
 from urllib.parse import urlparse, parse_qs, unquote
 from urllib.request import urlopen, Request
@@ -8489,17 +8490,40 @@ def _attach_userbot_handlers(app) -> None:
 
 # --- 9. راه‌اندازی ربات ---
 _USERBOT_PID_FILE = os.path.join(LOG_DIR, "userbot.pid")
+_pid_lock_fd = None  # global file descriptor for flock
 
 def _acquire_pid_lock() -> bool:
     """Prevent multiple UserBot instances by PID file locking.
+    Uses fcntl.flock for atomic lock acquisition to prevent race conditions.
     If an old instance is found, kill it and take over."""
+    global _pid_lock_fd
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
-        if os.path.exists(_USERBOT_PID_FILE):
-            with open(_USERBOT_PID_FILE) as f:
-                old_pid_str = f.read().strip()
-            if old_pid_str:
+
+        # Open PID file with exclusive non-blocking lock (atomic operation)
+        _pid_lock_fd = open(_USERBOT_PID_FILE, "a+")
+        try:
+            fcntl.flock(_pid_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.error("Another UserBot instance is already starting. Exiting.")
+            try:
+                _pid_lock_fd.close()
+            except Exception:
+                pass
+            _pid_lock_fd = None
+            return False
+
+        # Read old PID (if any)
+        _pid_lock_fd.seek(0)
+        old_pid_str = _pid_lock_fd.read().strip()
+
+        if old_pid_str:
+            try:
                 old_pid = int(old_pid_str)
+            except ValueError:
+                old_pid = None
+
+            if old_pid is not None:
                 if old_pid == os.getpid():
                     logger.debug("PID file contains our own PID (written by start script). Overwriting.")
                 elif os.path.exists(f"/proc/{old_pid}"):
@@ -8520,20 +8544,37 @@ def _acquire_pid_lock() -> bool:
                         logger.warning("Failed to kill old PID %s: %s", old_pid, e)
                 else:
                     logger.warning("Stale PID file found for PID %s. Removing.", old_pid)
-        with open(_USERBOT_PID_FILE, "w") as f:
-            f.write(str(os.getpid()))
+
+        # Write our PID (atomic because we hold the lock)
+        _pid_lock_fd.seek(0)
+        _pid_lock_fd.truncate()
+        _pid_lock_fd.write(str(os.getpid()))
+        _pid_lock_fd.flush()
+
+        # Keep _pid_lock_fd open to hold the lock for the lifetime of the process
         return True
     except Exception as e:
         logger.warning("Failed to acquire PID lock: %s", e)
-        return True
+        return True  # Fallback: allow startup even if locking fails
 
 def _release_pid_lock() -> None:
+    global _pid_lock_fd
     try:
+        if _pid_lock_fd is not None:
+            try:
+                fcntl.flock(_pid_lock_fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                _pid_lock_fd.close()
+            except Exception:
+                pass
+            _pid_lock_fd = None
         if os.path.exists(_USERBOT_PID_FILE):
-            with open(_USERBOT_PID_FILE) as f:
-                content = f.read().strip()
-            if content == str(os.getpid()):
+            try:
                 os.remove(_USERBOT_PID_FILE)
+            except Exception:
+                pass
     except Exception:
         pass
 

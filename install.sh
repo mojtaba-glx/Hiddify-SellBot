@@ -1155,6 +1155,9 @@ start_single_bot() {
     sleep 1
   done
 
+  # ۳.۵) مکث کوتاه برای اطمینان از پاک شدن کامل قفل‌های فایل
+  sleep 1
+
   # ۴) حالا استارت کن (حداکثر 3 تلاش)
   local attempt=0
   local max_attempts=3
