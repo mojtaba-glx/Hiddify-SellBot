@@ -1111,6 +1111,15 @@ stop_bots() {
     [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && systemctl stop "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true
     [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ] && systemctl stop "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
     rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
+
+    # سیستم‌ک‌ت فقط unit ها را می‌بندد؛ اگر پروسه‌ی orphan از جلسه‌ی قبلیِ nohup هنوز
+    # در حال اجرا باشد (مثل AdminBot=3866355 قدیمی) نمی‌تواند آن را ببندد. پس همه‌ی
+    # پروسه‌های مطابق با entrypoint را هم صریحاً بکش تا هیچ leftover polling نکند.
+    _kill_all_botProcesses "$ADMIN_MAIN"
+    _kill_all_botProcesses "$USER_MAIN"
+    _kill_all_botProcesses "$AGENT_MAIN"
+    _kill_all_botProcesses "$CUSTOMER_MAIN"
+
     _green "OK: all bots stopped (systemd)."
     return 0
   fi
