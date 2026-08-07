@@ -3,8 +3,9 @@ import os
 import random
 from io import BytesIO
 
-from telegram import Bot, Update, InlineKeyboardMarkup
+from telegram import Bot, Update, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
+from Shared.tg_button_styles import keyboard_button as KButton
 from telegram.ext import ContextTypes
 
 from Shared import agent_db
@@ -21,6 +22,8 @@ STATE_WALLET_CHARGE_AMOUNT = "st:wallet_charge_amount"
 STATE_WALLET_CHARGE_RECEIPT = "st:wallet_charge_receipt"
 STATE_WALLET_CHARGE_LAST4 = "st:wallet_charge_last4"
 
+BTN_BACK_TEXT = "بازگشت"
+
 
 def _clear_wallet_charge_state(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(UD_STATE, None)
@@ -28,21 +31,48 @@ def _clear_wallet_charge_state(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("charge_marker", None)
     context.user_data.pop("charge_final_amount", None)
     context.user_data.pop("charge_receipt_id", None)
-    context.user_data.pop("charge_msg_ids", None)
+    context.user_data.pop("charge_prompt_msg_id", None)
+    context.user_data.pop("charge_back_kb_msg_id", None)
 
 
-async def _delete_tracked_charge_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
-    """حذف پیام‌های میانی فرآیند شارژ کیف پول برای تمیز ماندن چت."""
-    msg_ids = context.user_data.pop("charge_msg_ids", None) or []
-    for mid in msg_ids:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
-        except Exception:
-            pass
+async def _delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int) -> None:
+    """حذف یک پیام با نادیده گرفتن خطاهای احتمالی."""
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
 
 
-def _wallet_back_inline_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("بازگشت", callback_data="agbot:wallet:back")]])
+async def _delete_current_prompt(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """حذف پیام/پرامپت مرحله قبل تا چت به صورت مرحله به مرحله تمیز بماند."""
+    msg_id = context.user_data.pop("charge_prompt_msg_id", None)
+    if msg_id:
+        await _delete_message(context, chat_id, msg_id)
+
+
+async def _delete_back_kb_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """حذف پیام کیبورد بازگشت مرحله قبل."""
+    msg_id = context.user_data.pop("charge_back_kb_msg_id", None)
+    if msg_id:
+        await _delete_message(context, chat_id, msg_id)
+
+
+async def _send_back_reply_keyboard(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
+    """ارسال یک پیام با کیبورد پایین (دکمه بزرگ قرمز بازگشت) و برگرداندن message_id آن."""
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text="\u200b",
+        reply_markup=_wallet_back_reply_keyboard(),
+    )
+    return sent.message_id
+
+
+def _wallet_back_reply_keyboard() -> ReplyKeyboardMarkup:
+    """کیبورد پایین (زیر منو) با دکمه بزرگ و قرمز «بازگشت»."""
+    return ReplyKeyboardMarkup(
+        [[KButton(BTN_BACK_TEXT, style="danger")]],
+        resize_keyboard=True,
+    )
 
 
 def _agent_display(agent: dict) -> str:
@@ -109,9 +139,20 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await update.callback_query.edit_message_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
         except Exception:
-            await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
+            if update.message:
+                await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
+        if update.message:
+            await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
+
+
+async def _handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """بازگشت از هر مرحله شارژ به منوی کیف پول و بازگرداندن کیبورد اصلی."""
+    _clear_wallet_charge_state(context)
+    await show_menu(update, context)
+    from AgentBot.keyboards import main_menu_keyboard
+    if update.message:
+        await update.message.reply_text("منوی اصلی:", reply_markup=main_menu_keyboard())
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -124,18 +165,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     agent_id = get_agent_id(context)
 
     if action == "back":
-        await _delete_tracked_charge_messages(context, query.message.chat_id)
         _clear_wallet_charge_state(context)
-        from AgentBot.keyboards import main_menu_keyboard
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="به منوی نمایندگی بازگشتید.",
-            reply_markup=main_menu_keyboard(),
-        )
+        await show_menu(update, context)
         return
 
     if action == "view":
@@ -144,32 +175,70 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "create":
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_AMOUNT
+        chat_id = query.message.chat_id
         try:
-            await query.edit_message_text(
-                "\U0001f3e6 <b>\u0634\u0627\u0631\u0698 \u06a9\u06cc\u0641 \u067e\u0648\u0644</b>\n\n"
-                "\U0001f4b0 \u0645\u0628\u0644\u063a \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0628\u0647 \u062a\u0648\u0645\u0627\u0646 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
-                reply_markup=_wallet_back_inline_keyboard(), parse_mode="HTML",
-            )
+            await query.message.delete()
         except Exception:
             pass
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text="\U0001f3e6 <b>\u0634\u0627\u0631\u0698 \u06a9\u06cc\u0641 \u067e\u0648\u0644</b>\n\n"
+                 "\U0001f4b0 \u0645\u0628\u0644\u063a \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0628\u0647 \u062a\u0648\u0645\u0627\u0646 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+            reply_markup=_wallet_back_reply_keyboard(), parse_mode="HTML",
+        )
+        context.user_data["charge_prompt_msg_id"] = sent.message_id
         return
 
     if action == "charge":
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_AMOUNT
-        context.user_data["charge_msg_ids"] = [query.message.message_id]
+        chat_id = query.message.chat_id
         try:
-            await query.edit_message_text(
-                "لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید: 🔻",
-                reply_markup=_wallet_back_inline_keyboard(), parse_mode="HTML",
-            )
+            await query.message.delete()
         except Exception:
             pass
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text="لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید: 🔻",
+            reply_markup=_wallet_back_reply_keyboard(), parse_mode="HTML",
+        )
+        context.user_data["charge_prompt_msg_id"] = sent.message_id
         return
 
     if action == "paid":
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_RECEIPT
+        chat_id = query.message.chat_id
         try:
-            await query.edit_message_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=_wallet_back_inline_keyboard())
+            await query.edit_message_text(
+                "⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:",
+                reply_markup=InlineKeyboardMarkup([]),
+            )
+            context.user_data["charge_prompt_msg_id"] = query.message.message_id
+        except Exception:
+            pass
+        # ابتدا کیبورد پایین را مخفی کن تا پیام قبلی کیبورد دفن نشود
+        try:
+            from telegram import ReplyKeyboardRemove
+            removed = await context.bot.send_message(
+                chat_id=chat_id,
+                text="\u200b",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            await _delete_message(context, chat_id, removed.message_id)
+        except Exception:
+            pass
+        # سپس کیبورد بازگشت را با one_time_keyboard=True ارسال کن
+        # تا بعد از اینکه کاربر رسید را فرستاد، خودبه‌خود محو شود
+        try:
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text="\u200b",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KButton(BTN_BACK_TEXT, style="danger")]],
+                    resize_keyboard=True,
+                    one_time_keyboard=True,
+                ),
+            )
+            context.user_data["charge_back_kb_msg_id"] = sent.message_id
         except Exception:
             pass
         return
@@ -181,6 +250,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     state = context.user_data.get(UD_STATE)
     text = (update.message.text or update.message.caption or "").strip()
+
+    # دکمه «بازگشت» در کیبورد پایین: در هر مرحله از شارژ به منوی کیف پول برمی‌گردد
+    if text == BTN_BACK_TEXT and state in (
+        STATE_WALLET_CHARGE_AMOUNT,
+        STATE_WALLET_CHARGE_RECEIPT,
+        STATE_WALLET_CHARGE_LAST4,
+    ):
+        await _handle_back(update, context)
+        return True
 
     if state == STATE_WALLET_CHARGE_AMOUNT:
         raw = _normalize_digits(text)
@@ -197,7 +275,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         context.user_data["charge_marker"] = marker
         context.user_data["charge_final_amount"] = final_amount
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_RECEIPT
-        context.user_data.setdefault("charge_msg_ids", []).append(update.message.message_id)
         card = shared_db.get_random_card() or {}
         card_text = (
             f"مشخصه تراکنش اعمال شد: +{_fmt_toman(marker)} تومان 🔢\n\n"
@@ -209,22 +286,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ پرداخت کردم، ارسال رسید", callback_data="agbot:wallet:paid")],
-            [InlineKeyboardButton("بازگشت", callback_data="agbot:wallet:back")],
         ])
-        sent = await update.message.reply_text(card_text, parse_mode="HTML", reply_markup=kb)
-        context.user_data["charge_msg_ids"].append(sent.message_id)
+        chat_id = update.message.chat_id
+        user_msg_id = update.message.message_id
+        # ارسال پیام کارت با دکمه اینلاین «پرداخت کردم»
+        sent = await context.bot.send_message(chat_id=chat_id, text=card_text, parse_mode="HTML", reply_markup=kb)
+        # ارسال کیبورد پایین با دکمه بازگشت
+        back_kb_id = await _send_back_reply_keyboard(context, chat_id)
+        # پیشروی مرحله به مرحله: حذف پرامپت مبلغ و پیام کاربر
+        await _delete_current_prompt(context, chat_id)
+        await _delete_message(context, chat_id, user_msg_id)
+        context.user_data["charge_prompt_msg_id"] = sent.message_id
+        context.user_data["charge_back_kb_msg_id"] = back_kb_id
         return True
 
     if state == STATE_WALLET_CHARGE_RECEIPT:
         photo = update.message.photo[-1] if update.message.photo else None
         if not photo:
-            await update.message.reply_text("❌ لطفاً عکس رسید پرداخت را ارسال کنید.", reply_markup=cancel_keyboard())
+            await update.message.reply_text("❌ لطفاً عکس رسید پرداخت را ارسال کنید.")
             return True
         context.user_data["charge_receipt_id"] = photo.file_id
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_LAST4
-        context.user_data.setdefault("charge_msg_ids", []).append(update.message.message_id)
-        sent = await update.message.reply_text("🔢 لطفا 4 رقم آخر کارت مبدا را ارسال کنید:")
-        context.user_data["charge_msg_ids"].append(sent.message_id)
+        chat_id = update.message.chat_id
+        user_msg_id = update.message.message_id
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text="🔢 لطفا 4 رقم آخر کارت مبدا را ارسال کنید:",
+            reply_markup=_wallet_back_reply_keyboard(),
+        )
+        # حذف پیام کیبورد بازگشت مرحله قبل
+        await _delete_back_kb_message(context, chat_id)
+        # پیشروی مرحله به مرحله: حذف پرامپت رسید و پیام عکس کاربر
+        await _delete_current_prompt(context, chat_id)
+        await _delete_message(context, chat_id, user_msg_id)
+        context.user_data["charge_prompt_msg_id"] = sent.message_id
         return True
 
     if state == STATE_WALLET_CHARGE_LAST4:
@@ -245,12 +340,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             card_last4=last4,
         )
         await _notify_admin_wallet_payment(context, agent_id, payment)
-        context.user_data.setdefault("charge_msg_ids", []).append(update.message.message_id)
-        await _delete_tracked_charge_messages(context, update.message.chat_id)
+        chat_id = update.message.chat_id
+        user_msg_id = update.message.message_id
+        # حذف پیام کیبورد بازگشت مرحله قبل
+        await _delete_back_kb_message(context, chat_id)
+        # پیشروی مرحله به مرحله: حذف پرامپت 4 رقم و پیام کاربر، سپس ارسال پیام پایانی
+        await _delete_current_prompt(context, chat_id)
+        await _delete_message(context, chat_id, user_msg_id)
         _clear_wallet_charge_state(context)
         from AgentBot.keyboards import main_menu_keyboard
-        await update.message.reply_text(
-            "✅ تراکنش شما در انتظار تایید توسط ادمین است. لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="✅ تراکنش شما در انتظار تایید توسط ادمین است. لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
             reply_markup=main_menu_keyboard(), parse_mode="HTML",
         )
         return True

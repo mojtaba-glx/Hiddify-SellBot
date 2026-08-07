@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -53,6 +54,16 @@ def main() -> None:
     max_backoff_seconds = 60
 
     while True:
+        # python-telegram-bot's run_polling closes the event loop when it stops.
+        # Without a fresh loop, the next iteration raises "Event loop is closed".
+        try:
+            existing_loop = asyncio.get_event_loop_policy().get_event_loop()
+            if not existing_loop.is_closed():
+                existing_loop.close()
+        except RuntimeError:
+            pass
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
         application = (
             ApplicationBuilder()
             .token(AGENT_BOT_TOKEN)
