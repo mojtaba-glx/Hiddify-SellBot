@@ -1081,12 +1081,6 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
             domain = f"https://{domain}"
         link = f"{domain.rstrip('/')}/{new_uuid}"
 
-    await update.message.reply_text(
-        f"🎉 سرویس تست {gb}GB - {days} روزه با موفقیت ایجاد شد!\n\n"
-        f"🔗 لینک اشتراک:\n`{link}`",
-        parse_mode="Markdown",
-        disable_web_page_preview=True,
-    )
     if svc:
         from CustomerBot.database import get_subs_settings
         try:
