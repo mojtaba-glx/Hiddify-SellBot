@@ -404,9 +404,9 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
     import time
     import uuid
 
+    from AgentBot.services.subscription_service import _get_cluster_servers
     from Shared.agent_db import upsert_customer, create_service, add_service_node, get_customer_by_telegram_id
     from Shared.database import get_server_by_id
-    from Shared.hiddify_api import create_user
 
     # Get or create customer
     cust = get_customer_user(agent_id, user_tg_id)
@@ -431,7 +431,7 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         logger.error(f"Server {server_id} not found for agent {agent_id}")
         raise RuntimeError("server_not_found")
 
-    # Create user on Hiddify panel
+    # Create user on Hiddify panel (main + all child nodes, shared UUID)
     new_uuid = str(uuid.uuid4())
     order_id_num = int(order.get("order_id") or 0)
     if order_id_num:
@@ -445,12 +445,47 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         "uuid": new_uuid,
         "is_active": True,
     }
-    try:
-        panel_user = await create_user(server, payload)
-        panel_uuid = str(panel_user.get("uuid") or new_uuid).strip()
-    except Exception as e:
-        logger.error(f"create_user failed for payment order: {e}")
-        raise
+
+    targets = _get_cluster_servers(server_id)
+    if not targets:
+        targets = [server]
+
+    from Shared.multi_panel import create_user as mp_create_user
+    shared_uuid = new_uuid
+    payload["uuid"] = shared_uuid
+    created_nodes: list[dict] = []
+    panel_user = None
+    primary_marzban = ""
+    for idx, tgt in enumerate(targets):
+        try:
+            created = await mp_create_user(tgt, payload)
+        except Exception as e:
+            if idx == 0:
+                raise
+            logger.warning("Cluster node create_user failed server=%s: %s", tgt.get("id"), e)
+            continue
+        created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
+        if not created_uuid:
+            if idx == 0:
+                raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
+            continue
+        created_nodes.append(
+            {
+                "server_id": int(tgt.get("id") or 0),
+                "server_title": tgt.get("title") or f"سرور #{tgt.get('id')}",
+                "panel_user_uuid": created_uuid,
+                "panel_user_id": str(created.get("id") or "").strip(),
+                "marzban_username": str(created.get("_marzban_username") or "").strip(),
+                "is_primary": idx == 0,
+            }
+        )
+        if idx == 0:
+            panel_user = created
+            primary_marzban = str(created.get("_marzban_username") or "").strip()
+    if panel_user is None:
+        raise RuntimeError("no primary node created")
+    panel_uuid = str(panel_user.get("uuid") or shared_uuid).strip()
+    panel_user_id = str(panel_user.get("id") or "").strip()
 
     # Create service record
     svc = create_service(
@@ -466,13 +501,15 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         sale_price=price,
     )
     if svc:
-        add_service_node(
-            service_id=svc["id"],
-            server_id=server_id,
-            server_title=server.get("title", ""),
-            panel_user_uuid=panel_uuid,
-            panel_user_id=str(panel_user.get("id", "")),
-        )
+        for item in created_nodes:
+            add_service_node(
+                service_id=svc["id"],
+                server_id=int(item.get("server_id") or 0),
+                server_title=item.get("server_title") or "",
+                panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
+                panel_user_id=str(item.get("panel_user_id") or "").strip(),
+                marzban_username=str(item.get("marzban_username") or "").strip(),
+            )
 
     # Notify customer
     notify = (
