@@ -11,9 +11,10 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from Shared import database, hiddify_api, sub_aggregator, userbot_db
+from Shared import agent_db, database, hiddify_api, sub_aggregator, userbot_db
 
 logger = logging.getLogger(__name__)
 BYTES_PER_GB = 1024 ** 3
@@ -626,6 +627,18 @@ class _SubHandler(BaseHTTPRequestHandler):
                 if owner and owner.get("service_id"):
                     sid = int(owner["service_id"])
             if not sid:
+                # سرویس‌های نمایندگی/مشتری در agent_services ذخیره می‌شوند نه
+                # userbot_services؛ لینک هوشمند این ربات‌ها با panel_user_uuid به
+                # عنوان token ساخته می‌شود پس باید ابتدا در agent_services جستجو شود.
+                agent_svc = _resolve_agent_service_by_uuid(token, uuid_hint)
+                if agent_svc:
+                    body, a_service = _build_agent_subscription_body(agent_svc, is_b64)
+                    if body:
+                        self._write(200, body, headers=self._subscription_headers(a_service, is_b64))
+                        return
+                    self._write(404, "subscription is empty")
+                    return
+            if not sid:
                 panel_body, panel_service = _build_panel_uuid_subscription_body(token, uuid_hint, is_b64)
                 if panel_body:
                     self._write(200, panel_body, headers=self._subscription_headers(panel_service, is_b64))
@@ -992,3 +1005,61 @@ def start_sub_server(host: str, port: int) -> None:
 
     _server_thread = threading.Thread(target=_run, daemon=True)
     _server_thread.start()
+
+
+def _resolve_agent_service_by_uuid(token: str, uuid_hint: str) -> Optional[dict]:
+    """پیدا کردن سرویس نمایندگی/مشتری در agent_services با uuid پنل."""
+    candidate = str(uuid_hint or "").strip() or str(token or "").strip()
+    if not candidate:
+        return None
+    for db in (userbot_db,):
+        try:
+            reserved = getattr(db, "_RESERVED_SUB_TOKENS", ())
+            if candidate in reserved:
+                return None
+        except Exception:
+            break
+    try:
+        return agent_db.get_service_by_uuid(candidate)
+    except Exception as e:
+        logger.warning("agent service uuid resolution failed %s: %s", candidate[:12], e)
+        return None
+
+
+def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
+    """ساخت بدنه اشتراک برای سرویس نمایندگی/مشتری از همه نودهای آن."""
+    try:
+        from Shared.sub_links import collect_all_direct_configs_from_api, get_service_node_base_urls
+
+        lines: list[str] = []
+        seen: set = set()
+        for base_url in get_service_node_base_urls(svc):
+            base = str(base_url or "").strip().rstrip("/")
+            if not base:
+                continue
+            from Shared.sub_links import _fetch_remote_lines
+            fetched = _fetch_remote_lines(f"{base}/all.txt")
+            for ln in fetched:
+                raw = str(ln or "").strip()
+                if not raw or raw in seen or not any(raw.lower().startswith(s) for s in
+                        ("trojan://", "vless://", "vmess://", "ss://", "hysteria2://",
+                         "hy2://", "tuic://", "hysteria://", "wireguard://", "wg://")):
+                    continue
+                seen.add(raw)
+                lines.append(raw)
+        if not lines:
+            try:
+                lines = asyncio.run(collect_all_direct_configs_from_api(svc))
+            except Exception:
+                lines = []
+    except Exception as e:
+        logger.warning("agent sub build failed for uuid=%s: %s", str(svc.get("panel_user_uuid") or "")[:12], e)
+        return "", {}
+
+    body = "\n".join(lines)
+    if is_b64 and body:
+        try:
+            body = base64.b64encode(body.encode("utf-8")).decode("ascii")
+        except Exception:
+            pass
+    return body, svc

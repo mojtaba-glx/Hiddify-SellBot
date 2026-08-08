@@ -164,13 +164,30 @@ def _resolve_sub_service_base_url(svc: Optional[dict] = None) -> str:
 
 
 def get_or_create_bot_sub_links(svc: dict) -> Tuple[str, str]:
-    """(لینک اشتراک هوشمند، لینک b64) مشابه ربات کاربران"""
+    """(لینک اشتراک هوشمند، لینک b64) مشابه ربات کاربران.
+
+    برای سرویس‌های نمایندگی/مشتری token را به فرم ``panel-srv-{server_id}``
+    می‌سازد تا اولویت دوم ساب‌سرور (resolve مستقیم از پنل با uuid) کار کند؛
+    همین الگو در AdminBot و UserBot استفاده شده.
+    """
     base = _resolve_sub_service_base_url(svc)
     if not base:
         base_urls = get_service_node_base_urls(svc)
         if base_urls:
             base = base_urls[0].rstrip("/")
+    if not base:
+        return "", ""
     service_uuid = str(svc.get("panel_user_uuid") or "").strip()
+    try:
+        server_id = int(svc.get("server_id") or 0)
+    except (TypeError, ValueError):
+        server_id = 0
+    if service_uuid and server_id > 0:
+        token = f"panel-srv-{server_id}"
+        return (
+            f"{base}/sub/{token}/{service_uuid}/all.txt",
+            f"{base}/sub/{token}/{service_uuid}/all.txt?base64=1",
+        )
     if service_uuid:
         return (
             f"{base}/sub/{service_uuid}/all.txt",
