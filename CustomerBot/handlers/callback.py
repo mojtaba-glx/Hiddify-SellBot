@@ -1201,7 +1201,24 @@ async def _handle_buy(query, context, agent_id, user, data):
         days = int(parts[4]) if len(parts) > 4 else 0
         price = int(parts[5]) if len(parts) > 5 else 0
         from Shared.database import get_random_card
-        card = get_random_card()
+        from AgentBot.database import get_cards as get_agent_cards
+        try:
+            agent_cards = get_agent_cards(agent_id) or []
+        except Exception:
+            agent_cards = []
+        active_cards = [c for c in agent_cards if int(c.get("is_active", 1)) != 0]
+        if not active_cards:
+            active_cards = agent_cards
+        card = None
+        if active_cards:
+            chosen = random.choice(active_cards)
+            card = {
+                "number": str(chosen.get("card_number") or "").strip(),
+                "owner": str(chosen.get("owner_name") or "").strip(),
+                "bank": str(chosen.get("bank_name") or "").strip(),
+            }
+        if not card:
+            card = get_random_card()
         if not card:
             await msg.edit_text("❌ کارتی برای پرداخت وجود ندارد.", reply_markup=main_menu_keyboard())
             return
@@ -1251,8 +1268,8 @@ async def _handle_buy(query, context, agent_id, user, data):
             )
             if tx_marker > 0:
                 card_text = (
-                    f"🔢 مشخصه تراکنش: <code>{tx_marker}</code>\n"
-                    f"مبلغ نهایی شامل <b>{tx_marker:,} تومان</b> مشخصه تصادفی است.\n\n"
+                    f"🔢 مشخصه تراکنش: `{tx_marker}`\n"
+                    f"مبلغ نهایی شامل `{tx_marker:,} تومان` مشخصه تصادفی است.\n\n"
                     f"{card_text}"
                 )
         await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
