@@ -165,6 +165,7 @@ def init_db() -> None:
             UNIQUE(agent_id, telegram_id)
         )
     """)
+    _ensure_column(cur, "customer_users", "updated_at", "TEXT")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS customer_orders (

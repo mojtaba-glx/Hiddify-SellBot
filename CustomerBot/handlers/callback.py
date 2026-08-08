@@ -1060,7 +1060,11 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         panel_user_uuid=new_uuid,
         panel_user_id=str(result.get("id", "")),
     )
-    set_got_free_trial(agent_id, user.id)
+
+    try:
+        set_got_free_trial(agent_id, user.id)
+    except Exception as e:
+        logger.exception("customer trial mark used failed uid=%s: %s", user.id, e)
 
     svc = get_service_by_id(svc["id"])
     link = ""
