@@ -963,10 +963,7 @@ async def _handle_trial(query, context, agent_id, user, data):
         context.user_data["pending_trial_server_id"] = server_id
         context.user_data["pending_trial_server"] = server
         try:
-            await msg.edit_text(
-                "⬇️ لطفا نام خود را ارسال کنید:",
-                reply_markup=None,
-            )
+            await msg.delete()
         except Exception:
             pass
         try:
