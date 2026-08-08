@@ -367,9 +367,7 @@ def _is_panel_status_config_line(line: str) -> bool:
     raw = str(line or "").strip().lower()
     if not raw.startswith("trojan://"):
         return False
-    if "status.hiddify-sellbot.invalid" in raw:
-        return False
-    return "fake_ip_for_sub_link" in raw
+    return "fake_ip_for_sub_link" in raw or "status.hiddify-sellbot.invalid" in raw
 
 
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:

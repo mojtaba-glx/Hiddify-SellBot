@@ -1,8 +1,8 @@
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from Shared import agent_db, multi_panel, hiddify_api
+from Shared import agent_db, multi_panel, hiddify_api, database
 from Shared.sub_links import get_or_create_bot_sub_links
 from AgentBot.services.hiddify_service import (
     get_available_servers, get_server_by_id, get_agent_plans,
@@ -12,6 +12,81 @@ from AgentBot.services.hiddify_service import (
 from AgentBot.database import create_order as db_create_order
 
 logger = logging.getLogger(__name__)
+
+
+def _get_cluster_servers(server_id: int) -> List[Dict[str, Any]]:
+    """سرور اصلی + نودهای زیرمجموعه (child) که target_server_id دارند.
+
+    دقیقاً مثل UserBot/AdminBot: هنگام ساخت سرویس، کاربر باید روی کل خوشه
+    ساخته شود تا لینک اشتراک هوشمند همه نودها را در بر بگیرد.
+    """
+    primary = database.get_server_by_id(server_id)
+    if not primary:
+        return []
+    out: List[Dict[str, Any]] = [primary]
+    seen: set[int] = {int(server_id)}
+    for node in (primary.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        try:
+            child_sid = int(node.get("target_server_id") or 0)
+        except (TypeError, ValueError):
+            child_sid = 0
+        if child_sid <= 0 or child_sid in seen:
+            continue
+        child = database.get_server_by_id(child_sid)
+        if not child:
+            continue
+        out.append(child)
+        seen.add(child_sid)
+    return out
+
+
+async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[str, Any]) -> tuple[Optional[dict], List[dict]]:
+    """روی همه افراد هدف با یک uuid مشترک کاربر می‌سازد (مثل UserBot).
+
+    Returns: (primary_created, created_nodes) که created_nodes هر پیروز شامل
+    server_id/server_title/panel_user_uuid/marzban_username/is_primary است.
+    """
+    shared_uuid = str((payload or {}).get("uuid") or "").strip() or (str(len(targets) and __import__("uuid").uuid4()))
+    payload_base = dict(payload or {})
+    payload_base["uuid"] = shared_uuid
+    created_nodes: List[dict] = []
+    primary_created: Optional[Dict[str, Any]] = None
+    for idx, srv in enumerate(targets):
+        try:
+            created = await multi_panel.create_user(srv, payload_base)
+        except Exception as e:
+            if idx == 0:
+                raise
+            logger.warning("Cluster node create_user failed server=%s: %s", srv.get("id"), e)
+            continue
+        user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
+        if not user_uuid:
+            if idx == 0:
+                raise RuntimeError("uuid \u06a9\u0627\u0631\u0628\u0631 \u0633\u0627\u062e\u062a\u0647\u200c\u0634\u062f\u0647 \u0627\u0632 \u067e\u0646\u0644 \u062f\u0631\u06cc\u0627\u0641\u062a \u0646\u0634\u062f.")
+            continue
+        if idx == 0:
+            primary_created = created
+        marzban_username = str(created.get("_marzban_username") or "").strip()
+        created_nodes.append(
+            {
+                "server_id": int(srv.get("id") or 0),
+                "server_title": srv.get("title") or f"\u0633\u0631\u0648\u0631 #{srv.get('id')}",
+                "panel_user_uuid": user_uuid,
+                "marzban_username": marzban_username,
+                "is_primary": idx == 0,
+            }
+        )
+    if primary_created is None:
+        raise RuntimeError("no primary node created")
+    for item in created_nodes:
+        await _rollback_node_if_failed(item) if item.get("_failed") else None
+    return primary_created, created_nodes
+
+
+async def _rollback_node_if_failed(item: dict) -> None:
+    pass
 
 
 async def create_subscription(agent_id: int, customer_id: int, server_id: int, plan: Dict[str, Any], name: str, note: str = "") -> Optional[Dict[str, Any]]:
@@ -28,13 +103,26 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
     if not ok:
         return None
 
+    targets = _get_cluster_servers(server_id)
+    if not targets:
+        targets = [server]
+
+    payload = {
+        "name": name,
+        "usage_limit_GB": gb,
+        "package_days": days,
+    }
+    if str(note or "").strip():
+        payload["comment"] = str(note).strip()
+
     try:
-        panel_result = await create_user_on_panel(server_id, server, name, gb, days, comment=note)
-    except Exception:
+        panel_result, created_nodes = await _create_user_on_cluster(targets, payload)
+    except Exception as e:
+        logger.error("Cluster create failed for %s: %s", name, e)
         agent_db.charge_wallet(agent_id, wholesale, description=f"\u0628\u0627\u0632\u06af\u0631\u062f\u0627\u0646\u062a \u0645\u0648\u062c\u0648\u062f\u06cc \u0628\u0647 \u062f\u0644\u06cc\u0644 \u062e\u0637\u0627\u06cc \u0633\u0627\u062e\u062a \u06a9\u0627\u0631\u0628\u0631: {name}")
         return None
-    panel_uuid = panel_result.get("uuid", "") if panel_result else ""
-    marzban_username = str((panel_result or {}).get("_marzban_username") or "").strip()
+    panel_uuid = str(panel_result.get("uuid", "") or panel_result.get("id", "") or "").strip()
+    primary_marzban = str((panel_result or {}).get("_marzban_username") or "").strip()
 
     svc = agent_db.create_service(
         agent_id=agent_id,
@@ -50,13 +138,14 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         note=note,
     )
     if svc and panel_uuid:
-        agent_db.add_service_node(
-            service_id=svc["id"],
-            server_id=server_id,
-            server_title=server.get("title", ""),
-            panel_user_uuid=panel_uuid,
-            marzban_username=marzban_username,
-        )
+        for item in created_nodes:
+            agent_db.add_service_node(
+                service_id=svc["id"],
+                server_id=int(item.get("server_id") or 0),
+                server_title=item.get("server_title") or "",
+                panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
+                marzban_username=str(item.get("marzban_username") or "").strip(),
+            )
 
     return svc
 

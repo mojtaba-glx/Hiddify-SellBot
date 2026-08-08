@@ -116,7 +116,7 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
         return
-    from Shared.sub_links import collect_all_direct_configs_for_service, collect_all_direct_configs_from_api
+    from Shared.sub_links import collect_all_direct_configs_for_service
     import asyncio
     try:
         await query.edit_message_text("⏳ در حال استخراج کانفیگ‌های مستقیم... لطفاً صبر کنید.", parse_mode="HTML")
@@ -127,13 +127,6 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         links = []
     source_hint = ""
-    if not links:
-        try:
-            links = await collect_all_direct_configs_from_api(svc)
-            if links:
-                source_hint = "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ کانفیگ‌ها از API پنل خوانده شد.\n\n"
-        except Exception:
-            links = []
     if not links:
         await _safe_answer(query, "کانفیگ مستقیمی برای این سرویس ایجاد نشد.", alert=True)
         return
