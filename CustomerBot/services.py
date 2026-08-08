@@ -573,7 +573,10 @@ def get_service_node_base_urls(svc: dict) -> List[str]:
         primary_server_id = int(svc.get("server_id") or 0)
     except (TypeError, ValueError):
         primary_server_id = 0
-    mappings = sorted(mappings, key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id)
+    mappings = sorted(
+        mappings,
+        key=lambda m: (0 if int((m or {}).get("server_id") or 0) == primary_server_id else 1, int((m or {}).get("server_id") or 0)),
+    )
     for m in mappings:
         try:
             sid = int(m.get("server_id") or 0)

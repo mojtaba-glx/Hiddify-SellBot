@@ -106,7 +106,10 @@ def _get_service_node_base_urls(svc: dict) -> List[str]:
             out.append(base)
             seen.add(base)
 
-    for m in sorted(mappings, key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id):
+    for m in sorted(
+        mappings,
+        key=lambda m: (0 if int((m or {}).get("server_id") or 0) == primary_server_id else 1, int((m or {}).get("server_id") or 0)),
+    ):
         try:
             sid = int(m.get("server_id") or 0)
         except (TypeError, ValueError):
@@ -175,7 +178,10 @@ def get_service_user_base_urls(svc: dict) -> List[str]:
         out.append(base)
         seen.add(base)
 
-    for m in sorted(mappings, key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id):
+    for m in sorted(
+        mappings,
+        key=lambda m: (0 if int((m or {}).get("server_id") or 0) == primary_server_id else 1, int((m or {}).get("server_id") or 0)),
+    ):
         try:
             sid = int(m.get("server_id") or 0)
         except (TypeError, ValueError):
