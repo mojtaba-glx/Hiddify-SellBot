@@ -40,6 +40,7 @@ from CustomerBot.database import (
     get_user_tickets, get_ticket, get_ticket_messages,
     create_ticket, add_ticket_message, update_ticket_status, get_pending_payments,
     update_payment_status, get_payment_by_tx_code, set_got_free_trial,
+    upsert_user,
     get_tx_plans_settings,
 )
 from Shared.agent_db import (
@@ -1001,6 +1002,11 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
     if u_db and u_db.get("got_free_trial"):
         await update.message.reply_text("🚫 شما قبلا تست رایگان دریافت کرده‌اید.", reply_markup=main_menu_keyboard())
         return
+
+    # ثبت کاربر در جدول متون و فلگ تست رایگان (upsert) تا از ساخت دوباره جلوگیری شود.
+    if not u_db:
+        u_db = {}
+        u_db["id"] = upsert_user(agent_id, user.id, user.username or "", user.full_name or "")
 
     trial = get_trial_spec_settings(agent_id)
     gb = trial.get("usage_gb", 1)

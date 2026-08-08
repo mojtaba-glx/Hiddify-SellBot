@@ -554,14 +554,69 @@ def set_got_free_trial(agent_id: int, telegram_id: int) -> bool:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
+    now = _now()
     cur.execute(
-        "UPDATE customer_users SET got_free_trial = 1 WHERE agent_id = ? AND telegram_id = ?",
+        "SELECT id FROM customer_users WHERE agent_id = ? AND telegram_id = ?",
+        (agent_id, telegram_id),
+    )
+    row = cur.fetchone()
+    if row:
+        cur.execute(
+            "UPDATE customer_users SET got_free_trial = 1, updated_at = ? WHERE id = ?",
+            (now, row["id"]),
+        )
+    else:
+        cur.execute(
+            "INSERT INTO customer_users (agent_id, telegram_id, got_free_trial, created_at) VALUES (?, ?, 1, ?)",
+            (agent_id, telegram_id, now),
+        )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def clear_got_free_trial(agent_id: int, telegram_id: int) -> bool:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE customer_users SET got_free_trial = 0 WHERE agent_id = ? AND telegram_id = ?",
         (agent_id, telegram_id),
     )
     affected = cur.rowcount
     conn.commit()
     conn.close()
     return affected > 0
+
+
+def reset_all_free_trials(agent_id: int) -> int:
+    """بازنشانی فلگ تست رایگان همه مشتریان یک نماینده (برای امکان تست مجدد)."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE customer_users SET got_free_trial = 0 WHERE agent_id = ?",
+        (agent_id,),
+    )
+    affected = cur.rowcount
+    conn.commit()
+    conn.close()
+    return int(affected or 0)
+
+
+def count_free_trial_users(agent_id: int) -> int:
+    """تعداد مشتریانی که تست رایگان گرفته‌اند (برای نمایش در ربات ادمین)."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COUNT(*) AS c FROM customer_users WHERE agent_id = ? AND got_free_trial = 1",
+        (agent_id,),
+    )
+    row = cur.fetchone()
+    count = int(row["c"] or 0) if row else 0
+    conn.close()
+    return count
 
 
 # ---- Wallet ----

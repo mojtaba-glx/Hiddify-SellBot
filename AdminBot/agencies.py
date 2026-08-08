@@ -19,6 +19,7 @@ from telegram.error import BadRequest
 
 from Shared import agent_db, database, userbot_db
 from AgentBot import database as agentbot_db
+from CustomerBot import database as customerbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import admin_main_keyboard
 
@@ -109,6 +110,7 @@ def _agent_detail_kb(agent_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📦 سرویس‌ها", callback_data=f"agency:services:{agent_id}:1")],
             [InlineKeyboardButton("💵 تعرفه عمده", callback_data=f"agency:prices:{agent_id}:1")],
             [InlineKeyboardButton("🤖 ربات مشتری", callback_data=f"agency:bots:{agent_id}")],
+            [InlineKeyboardButton("🔄 بازنشانی تست رایگان", callback_data=f"agency:resettrial:{agent_id}")],
             [InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"agency:editname:{agent_id}")],
             [InlineKeyboardButton("✏️ ویرایش تلفن", callback_data=f"agency:editphone:{agent_id}")],
             [
@@ -1191,6 +1193,71 @@ async def send_agent_bots(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
 
 
 # ===============================
+#   بازنشانی تست رایگان مشتریان یک نماینده
+# ===============================
+async def show_reset_trial_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
+    """نمایش پیام تأیید برای بازنشانی همه تست‌های رایگان یک نماینده."""
+    agent = agent_db.get_agent_by_id(agent_id)
+    if not agent:
+        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        return
+
+    try:
+        trial_users = customerbot_db.count_free_trial_users(agent_id)
+    except Exception:
+        trial_users = 0
+
+    name = _escape(agent.get('full_name')) or str(agent.get('telegram_id'))
+    text = (
+        f"🔄 <b>بازنشانی تست رایگان</b>\n"
+        f"{SEPARATOR}\n"
+        f"👤 نماینده: <b>{name}</b>\n"
+        f"🔢 شناسه: <code>{agent_id}</code>\n\n"
+        f"🧮 تعداد مشتریانی که تست رایگان گرفته‌اند: <b>{trial_users}</b>\n\n"
+        f"⚠️ با تأیید، همه این کاربران دوباره مجاز به ساخت سرویس تست رایگان می‌شوند."
+    )
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ تأیید و بازنشانی", callback_data=f"agency:resettrialdo:{agent_id}"),
+                InlineKeyboardButton("❌ انصراف", callback_data=f"agency:view:{agent_id}"),
+            ],
+        ]
+    )
+    try:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    except BadRequest:
+        await update.callback_query.answer()
+
+
+async def do_reset_free_trials(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
+    """اجرای بازنشانی تست‌های رایگان همه مشتریان یک نماینده."""
+    try:
+        count = customerbot_db.reset_all_free_trials(agent_id)
+    except Exception as e:
+        logger.exception("Failed to reset free trials for agent %s: %s", agent_id, e)
+        await update.callback_query.answer("خطا در بازنشانی. دوباره تلاش کنید.", show_alert=True)
+        return
+
+    text = (
+        f"✅ <b>بازنشانی انجام شد</b>\n"
+        f"{SEPARATOR}\n"
+        f"🔢 شناسه نماینده: <code>{agent_id}</code>\n"
+        f"🧮 تعداد رکوردهای بازنشانی‌شده: <b>{count}</b>\n\n"
+        f"کاربران این نمایندگی دوباره می‌توانند سرویس تست رایگان بسازند."
+    )
+    kb = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🔙 جزئیات نماینده", callback_data=f"agency:view:{agent_id}")],
+        ]
+    )
+    try:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    except BadRequest:
+        await update.callback_query.answer()
+
+
+# ===============================
 #   توکن ربات نماینده (Agent Bot Token)
 # ===============================
 def _update_env_file(token: str) -> bool:
@@ -1608,6 +1675,14 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
 
     if action == "bots":
         await send_agent_bots(update, context, agent_id)
+        return
+
+    if action == "resettrial":
+        await show_reset_trial_confirm(update, context, agent_id)
+        return
+
+    if action == "resettrialdo":
+        await do_reset_free_trials(update, context, agent_id)
         return
 
 
