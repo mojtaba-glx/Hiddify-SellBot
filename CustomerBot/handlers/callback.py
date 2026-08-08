@@ -964,8 +964,7 @@ async def _handle_trial(query, context, agent_id, user, data):
         context.user_data["pending_trial_server"] = server
         try:
             await msg.edit_text(
-                "📝 نام سرویس تست رایگان را ارسال کنید (مثلاً: تست):\n\n"
-                "🔙 برای لغو، دکمه بازگشت را در کیبورد پایین بزنید.",
+                "⬇️ لطفا نام خود را ارسال کنید:",
                 reply_markup=None,
             )
         except Exception:
@@ -974,7 +973,7 @@ async def _handle_trial(query, context, agent_id, user, data):
             from CustomerBot.keyboards import cancel_keyboard
             await query.get_bot().send_message(
                 chat_id=query.from_user.id,
-                text="پیام بالا را ببینید و نام سرویس را ارسال کنید.",
+                text="⬇️ لطفا نام خود را ارسال کنید:",
                 reply_markup=cancel_keyboard(),
             )
         except Exception:
