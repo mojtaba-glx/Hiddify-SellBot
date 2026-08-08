@@ -686,9 +686,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if action == "create":
-        servers = shared_db.get_servers() or []
+        servers = shared_db.get_main_servers() or []
         if not servers:
-            await query.answer("\u0647\u06cc\u0686 \u0633\u0631\u0648\u0631\u06cc \u062b\u0628\u062a \u0646\u0634\u062f\u0647.", show_alert=True)
+            await query.answer("\u0647\u06cc\u0686 \u0633\u0631\u0648\u0631 \u0627\u0635\u0644\u06cc \u062b\u0628\u062a \u0646\u0634\u062f\u0647.", show_alert=True)
             return
         from AgentBot.keyboards import _ikb
         from Shared.tg_button_styles import inline_button as IButton
