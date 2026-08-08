@@ -917,21 +917,6 @@ async def _handle_pay(query, context, agent_id, user, data):
     msg = query.message
 
     if data == CB_PAY_RECEIPT_DONE:
-        from CustomerBot.database import get_payment_settings
-        cb_ps = get_payment_settings(agent_id) or {}
-        if bool(cb_ps.get("require_last4_for_card_receipt")):
-            context.user_data[UD_STATE] = STATE_CARD_LAST4
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-            await query.get_bot().send_message(
-                chat_id=query.from_user.id,
-                text="💳 لطفاً ۴ رقم آخر کارت‌بانکی‌ای که از آن پرداخت انجام داده‌اید را وارد کنید:\n\n"
-                     "(مثلاً: ۵۴۶۱)",
-                reply_markup=receipt_cancel_keyboard(),
-            )
-            return
         context.user_data[UD_STATE] = "wallet_receipt_photo"
         # حذف پیام دارای دکمه اینلاین و ارسال پیام جدید با دکمه بازگشت در کیبورد پایین (مثل ربات کاربران)
         try:

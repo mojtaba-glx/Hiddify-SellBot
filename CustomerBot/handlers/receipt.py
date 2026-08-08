@@ -343,8 +343,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     "📸 رسید شما ثبت شد.\n\n"
                     "💳 حالا لطفاً <b>۴ رقم آخر کارت‌بانکی‌ای</b> که از آن پرداخت کرده‌اید را وارد کنید "
-                    "(فارسی یا انگلیسی، فقط ۴ رقم):\n"
-                    "مثلاً: <code>۵۴۶۱</code> یا <code>5461</code>",
+                    "(فارسی یا انگلیسی، فقط ۴ رقم):",
                     parse_mode="HTML",
                     reply_markup=cancel_keyboard(),
                 )
@@ -367,8 +366,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         digits = re.sub(r"[^0-9]", "", str((text or "")).translate(fa_map))
         if len(digits) != 4:
             await update.message.reply_text(
-                "❌ باید دقیقاً <b>۴ رقم</b> آخر کارت را وارد کنید (نه کمتر، نه بیشتر).\n"
-                "مثلاً: <code>۵۴۶۱</code> یا <code>5461</code>",
+                "❌ باید دقیقاً <b>۴ رقم</b> آخر کارت را وارد کنید (نه کمتر، نه بیشتر).",
                 parse_mode="HTML",
                 reply_markup=cancel_keyboard(),
             )
