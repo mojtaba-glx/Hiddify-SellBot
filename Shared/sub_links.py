@@ -70,7 +70,7 @@ def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
 
 
 def get_service_node_base_urls(svc: dict) -> List[str]:
-    """آدرس base_url سرویس روی همه نودهای نگاشت‌شده + سرور اصلی"""
+    """آدرس base_url سرویس روی همه نودهای نگاشت‌شده + سرور اصلی + نودهای زیرمجموعه"""
     out: List[str] = []
     seen: set = set()
     try:
@@ -88,36 +88,49 @@ def get_service_node_base_urls(svc: dict) -> List[str]:
         primary_server_id = int(svc.get("server_id") or 0)
     except (TypeError, ValueError):
         primary_server_id = 0
-    mappings = sorted(mappings, key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id)
-    for m in mappings:
-        try:
-            sid = int(m.get("server_id") or 0)
-        except (TypeError, ValueError):
-            sid = 0
-        uuid = str(m.get("panel_user_uuid") or "").strip()
+
+    def _add_server(sid: int, uuid: str) -> None:
         if sid <= 0 or not uuid:
-            continue
-        server = database.get_server_by_id(sid)
-        if not server:
-            continue
-        for base in (_build_user_base_url(server, uuid), _build_panel_base_url(server, uuid)):
+            return
+        srv = database.get_server_by_id(sid)
+        if not srv:
+            return
+        for base in (_build_user_base_url(srv, uuid), _build_panel_base_url(srv, uuid)):
             if not base or base in seen:
                 continue
             out.append(base)
             seen.add(base)
-    if not out:
+
+    for m in sorted(mappings, key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id):
         try:
-            sid = int(svc.get("server_id") or 0)
+            sid = int(m.get("server_id") or 0)
         except (TypeError, ValueError):
             sid = 0
-        server = database.get_server_by_id(sid) if sid else None
+        _add_server(sid, str(m.get("panel_user_uuid") or "").strip())
+
+    if not out:
+        sid = primary_server_id
         uuid = str(svc.get("panel_user_uuid") or "").strip()
-        if server and uuid:
-            for base in (_build_user_base_url(server, uuid), _build_panel_base_url(server, uuid)):
-                if not base or base in seen:
-                    continue
-                out.append(base)
-                seen.add(base)
+        if sid > 0:
+            _add_server(sid, uuid)
+
+    # نودهای زیرمجموعه سرور اصلی (server.nodes[] با target_server_id)
+    if primary_server_id > 0:
+        primary = database.get_server_by_id(primary_server_id)
+        child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+        for node in (primary.get("nodes") or []):
+            if not isinstance(node, dict):
+                continue
+            try:
+                child_sid = int(node.get("target_server_id") or 0)
+            except (TypeError, ValueError):
+                child_sid = 0
+            if child_sid <= 0:
+                continue
+            # اول uuid mapping سرویس روی این نود، بعد uuid سرویس اصلی
+            child_map = child_mappings.get(child_sid) or {}
+            child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+            _add_server(child_sid, child_uuid)
     return out
 
 
@@ -201,7 +214,7 @@ def get_or_create_bot_sub_links(svc: dict) -> Tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
-    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس"""
+    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس + نودهای زیرمجموعه"""
     targets: List[Tuple[dict, str, str]] = []
     seen: set = set()
     try:
@@ -225,16 +238,44 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
             continue
         seen.add(key)
         targets.append((srv, uuid, str(m.get("marzban_username") or "").strip()))
-    if targets:
-        return targets
+    if not targets:
+        try:
+            sid = int(svc.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        uuid = str(svc.get("panel_user_uuid") or "").strip()
+        srv = database.get_server_by_id(sid) if sid > 0 else None
+        if srv and uuid:
+            seen.add((sid, uuid))
+            targets.append((srv, uuid, ""))
+    # نودهای زیرمجموعه سرور اصلی (server.nodes[] با target_server_id)
     try:
-        sid = int(svc.get("server_id") or 0)
+        primary_sid = int(svc.get("server_id") or 0)
     except (TypeError, ValueError):
-        sid = 0
-    uuid = str(svc.get("panel_user_uuid") or "").strip()
-    srv = database.get_server_by_id(sid) if sid > 0 else None
-    if srv and uuid:
-        targets.append((srv, uuid, ""))
+        primary_sid = 0
+    if primary_sid > 0:
+        primary = database.get_server_by_id(primary_sid)
+        child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+        for node in (primary.get("nodes") or []):
+            if not isinstance(node, dict):
+                continue
+            try:
+                child_sid = int(node.get("target_server_id") or 0)
+            except (TypeError, ValueError):
+                child_sid = 0
+            if child_sid <= 0:
+                continue
+            child_map = child_mappings.get(child_sid) or {}
+            child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+            child_un = str(child_map.get("marzban_username") or "").strip()
+            child_srv = database.get_server_by_id(child_sid)
+            if not child_srv or not child_uuid:
+                continue
+            key = (child_sid, child_uuid)
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append((child_srv, child_uuid, child_un))
     return targets
 
 

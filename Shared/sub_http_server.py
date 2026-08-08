@@ -1027,9 +1027,16 @@ def _resolve_agent_service_by_uuid(token: str, uuid_hint: str) -> Optional[dict]
 
 
 def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
-    """ساخت بدنه اشتراک برای سرویس نمایندگی/مشتری از همه نودهای آن."""
+    """ساخت بدنه اشتراک برای سرویس نمایندگی/مشتری از همه نودهای آن.
+
+    فقط از sub-link واقعی (all.txt) هر نود استفاده می‌شود تا همان تنظیمات
+    «شامل/غیرشامل در اشتراک» که در پنل هیدیفای دیده شده رعایت شود و کانفیگ‌های
+    غیرفعال یا داخلی وارد لینک هوشمند نشوند. fallback به API پنل انجام نمی‌شود
+    چون endpoint API همه کانفیگ‌ها (حتی غیرفعال و داخلی) را برمی‌گرداند.
+    """
     try:
-        from Shared.sub_links import collect_all_direct_configs_from_api, get_service_node_base_urls
+        from Shared.sub_links import get_service_node_base_urls, _fetch_remote_lines
+        from Shared.sub_aggregator import _is_panel_status_config_line
 
         lines: list[str] = []
         seen: set = set()
@@ -1037,21 +1044,22 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
             base = str(base_url or "").strip().rstrip("/")
             if not base:
                 continue
-            from Shared.sub_links import _fetch_remote_lines
             fetched = _fetch_remote_lines(f"{base}/all.txt")
             for ln in fetched:
                 raw = str(ln or "").strip()
-                if not raw or raw in seen or not any(raw.lower().startswith(s) for s in
+                if not raw or raw in seen:
+                    continue
+                if not any(raw.lower().startswith(s) for s in
                         ("trojan://", "vless://", "vmess://", "ss://", "hysteria2://",
                          "hy2://", "tuic://", "hysteria://", "wireguard://", "wg://")):
                     continue
+                try:
+                    if _is_panel_status_config_line(raw):
+                        continue
+                except Exception:
+                    pass
                 seen.add(raw)
                 lines.append(raw)
-        if not lines:
-            try:
-                lines = asyncio.run(collect_all_direct_configs_from_api(svc))
-            except Exception:
-                lines = []
     except Exception as e:
         logger.warning("agent sub build failed for uuid=%s: %s", str(svc.get("panel_user_uuid") or "")[:12], e)
         return "", {}
