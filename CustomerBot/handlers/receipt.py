@@ -35,7 +35,7 @@ from Shared.agent_db import (
 )
 from Shared.database import get_servers
 from Shared.database import get_server_by_id
-from CustomerBot.keyboards import main_menu_keyboard, cancel_keyboard, ticket_skip_screenshot_keyboard, ticket_confirm_keyboard, user_ticket_detail_keyboard
+from CustomerBot.keyboards import main_menu_keyboard, cancel_keyboard, ticket_skip_screenshot_keyboard, ticket_confirm_keyboard, user_ticket_detail_keyboard, receipt_back_inline_keyboard
 from CustomerBot.utils.helpers import is_cancel_text, is_pay_done_text
 
 
@@ -366,7 +366,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "💳 حالا لطفاً <b>۴ رقم آخر کارت‌بانکی‌ای</b> که از آن پرداخت کرده‌اید را وارد کنید "
                     "(فارسی یا انگلیسی، فقط ۴ رقم):",
                     parse_mode="HTML",
-                    reply_markup=receipt_cancel_keyboard(),
+                    reply_markup=receipt_back_inline_keyboard(),
                 )
                 return
             return await _finalize_receipt(update, context, agent_id, meta, amount)
@@ -389,7 +389,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "❌ باید دقیقاً <b>۴ رقم</b> آخر کارت را وارد کنید (نه کمتر، نه بیشتر).",
                 parse_mode="HTML",
-                reply_markup=receipt_cancel_keyboard(),
+                reply_markup=receipt_back_inline_keyboard(),
             )
             return
         meta = context.user_data.get("pending_receipt_meta") or {}
