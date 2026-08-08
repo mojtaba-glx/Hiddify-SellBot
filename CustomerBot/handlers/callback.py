@@ -1259,8 +1259,8 @@ async def _handle_buy(query, context, agent_id, user, data):
         if card_text == "0":
             rial_price = pay_price * 10
             card_text = (
-                f"💰 لطفا دقیقا مبلغ: `{rial_price}` ریال\n"
-                f"💰 معادل: `{pay_price}` تومان\n"
+                f"💰 لطفا دقیقا مبلغ: `{rial_price:,}` ریال\n"
+                f"💰 معادل: `{pay_price:,}` تومان\n"
                 f"💳 به شماره کارت: `{card.get('number', '?')}`\n"
                 f"👤 به نام: {card.get('owner', '?')}\n"
                 f"❗️ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.\n\n"
@@ -1268,8 +1268,7 @@ async def _handle_buy(query, context, agent_id, user, data):
             )
             if tx_marker > 0:
                 card_text = (
-                    f"🔢 مشخصه تراکنش: `{tx_marker}`\n"
-                    f"مبلغ نهایی شامل `{tx_marker:,} تومان` مشخصه تصادفی است.\n\n"
+                    f"🔢 مشخصه تراکنش اعمال شد: `+{tx_marker:,}` تومان\n\n"
                     f"{card_text}"
                 )
         await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
