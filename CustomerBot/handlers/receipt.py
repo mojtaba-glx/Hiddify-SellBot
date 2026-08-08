@@ -17,6 +17,7 @@ from CustomerBot.constants import (
     UD_TICKET_QUESTION,
     STATE_RECEIPT_WAITING, STATE_CARD_LAST4, STATE_TICKET_WAITING_TEXT, STATE_TICKET_WAITING_TITLE,
     STATE_TICKET_WAITING_PHOTO, STATE_TICKET_CONFIRM,
+    STATE_TRIAL_WAITING_NAME,
     BTN_BACK, BTN_PAY_DONE, STATE_START,
 )
 from CustomerBot.database import (
@@ -397,6 +398,19 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_receipt_meta"] = meta
         amount = int(context.user_data.get("pending_amount") or 0)
         await _finalize_receipt(update, context, agent_id, meta, amount)
+        return
+
+
+    # ---- نام سرویس تست رایگان (بعد از انتخاب لوکیشن، مثل UserBot) ----
+    if state == STATE_TRIAL_WAITING_NAME:
+        if is_cancel_text(text):
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop("pending_trial_server_id", None)
+            context.user_data.pop("pending_trial_server", None)
+            await update.message.reply_text("🔙 عملیات لغو شد.", reply_markup=main_menu_keyboard())
+            return
+        from CustomerBot.handlers.callback import _build_trial_service
+        await _build_trial_service(update, context, agent_id, update.effective_user, text or "")
         return
 
 

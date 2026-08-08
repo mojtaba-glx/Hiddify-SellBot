@@ -8,6 +8,7 @@ from CustomerBot.constants import (
     STATE_COUPON_WAITING, STATE_ZARINPAL_WAITING, STATE_PERFECT_MONEY_WAITING,
     STATE_CRYPTO_WAITING, STATE_CONNECT_WAITING, STATE_RENAME_WAITING,
     STATE_REPLACE_LINK_WAITING,
+    STATE_TRIAL_WAITING_NAME,
     BTN_STATUS, BTN_RENEW, BTN_BUY, BTN_CONNECT, BTN_TRIAL,
     BTN_SUPPORT, BTN_GUIDE, BTN_FAQ,
 )
@@ -65,6 +66,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         STATE_CONNECT_WAITING,
         STATE_RENAME_WAITING,
         STATE_REPLACE_LINK_WAITING,
+        STATE_TRIAL_WAITING_NAME,
         "wallet_card_amount",
         "coupon_code",
         "zarinpal_amount",

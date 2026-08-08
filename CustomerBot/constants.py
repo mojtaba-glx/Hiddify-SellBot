@@ -34,6 +34,7 @@ STATE_PERFECT_MONEY_WAITING = "perfect_money_waiting"
 STATE_CRYPTO_WAITING = "crypto_waiting"
 STATE_COUPON_WAITING = "coupon_waiting"
 STATE_CONNECT_WAITING = "connect_waiting"
+STATE_TRIAL_WAITING_NAME = "trial_waiting_name"
 
 # Callback prefixes
 CB_BUY_LOC = "buy:loc:"

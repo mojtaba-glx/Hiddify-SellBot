@@ -13,6 +13,7 @@ from CustomerBot.constants import (
     UD_TICKET_QUESTION, UD_TICKET_MODE,
     STATE_RECEIPT_WAITING, STATE_CARD_LAST4, STATE_TICKET_WAITING_TEXT, STATE_TICKET_WAITING_TITLE,
     STATE_TICKET_WAITING_PHOTO, STATE_TICKET_CONFIRM,
+    STATE_TRIAL_WAITING_NAME,
     CB_BUY_LOC, CB_BUY_CAT, CB_BUY_PLAN, CB_BUY_CONFIRM,
     CB_BUY_CONFIRM_DYN, CB_BUY_PAY_DIRECT,
     CB_BUY_BACK_MAIN, CB_BUY_EXIT_MAIN, CB_BUY_MIXED_FIXED, CB_BUY_MIXED_DYN,
@@ -955,74 +956,146 @@ async def _handle_trial(query, context, agent_id, user, data):
             await msg.edit_text("❌ سرور یافت نشد.", reply_markup=main_menu_keyboard())
             return
         trial = get_trial_spec_settings(agent_id)
-        gb = trial.get("usage_gb", 1)
-        days = trial.get("days", 1)
-        from Shared.hiddify_api import create_user
-        import uuid
-        new_uuid = str(uuid.uuid4())
-        note = make_service_note(agent_id)
-        payload = {
-            "name": f"تست رایگان {gb}GB",
-            "usage_limit_GB": gb,
-            "package_days": days,
-            "uuid": new_uuid,
-            "is_active": True,
-            "comment": note,
-        }
-        result = await create_user(server, payload)
-        if not result:
-            await msg.edit_text("❌ خطا در ایجاد سرویس تست.", reply_markup=main_menu_keyboard())
+        if not trial.get("enabled", True):
+            await msg.edit_text("🚫 تست رایگان در حال حاضر غیرفعال است.", reply_markup=main_menu_keyboard())
             return
-        cust = get_customer_by_telegram_id(agent_id, user.id)
-        if not cust:
-            cust_id = upsert_customer(agent_id, user.id, user.username or "", user.full_name or "")
-        else:
-            cust_id = cust["id"]
-        svc = create_service(
-            agent_id=agent_id,
-            customer_id=cust_id,
-            server_id=server_id,
-            server_title=server.get("title", ""),
-            name=f"تست رایگان {gb}GB",
-            panel_user_uuid=new_uuid,
-            usage_limit=float(gb),
-            days=days,
-            sale_price=0,
-            is_trial=1,
-            note=note,
-        )
-        add_service_node(
-            service_id=svc["id"],
-            server_id=server_id,
-            server_title=server.get("title", ""),
-            panel_user_uuid=new_uuid,
-            panel_user_id=str(result.get("id", "")),
-        )
-        set_got_free_trial(agent_id, user.id)
-        svc = get_service_by_id(svc["id"])
-        link = ""
+        context.user_data[UD_STATE] = STATE_TRIAL_WAITING_NAME
+        context.user_data["pending_trial_server_id"] = server_id
+        context.user_data["pending_trial_server"] = server
         try:
-            managed_link, _ = get_or_create_bot_sub_links(svc or {})
-            if managed_link:
-                link = managed_link
+            await msg.edit_text(
+                "📝 نام سرویس تست رایگان را ارسال کنید (مثلاً: تست):\n\n"
+                "🔙 برای لغو، دکمه بازگشت را در کیبورد پایین بزنید.",
+                reply_markup=None,
+            )
         except Exception:
             pass
-        if not link:
-            domains = server.get("domains", [])
-            domain = domains[0]["domain"] if domains else server.get("host", "?")
-            if domain and not (domain.startswith("http://") or domain.startswith("https://")):
-                domain = f"https://{domain}"
-            link = f"{domain.rstrip('/')}/{new_uuid}"
-        await msg.edit_text(
-            f"🎉 سرویس تست {gb}GB - {days} روزه با موفقیت ایجاد شد!\n\n"
-            f"🔗 لینک اشتراک:\n`{link}`\n\n"
-            f"📄 برای مشاهده جزئیات اشتراک از دکمه «وضعیت اشتراک» در منو استفاده کنید.",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard(),
-        )
+        try:
+            from CustomerBot.keyboards import cancel_keyboard
+            await query.get_bot().send_message(
+                chat_id=query.from_user.id,
+                text="پیام بالا را ببینید و نام سرویس را ارسال کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+        except Exception:
+            pass
+        return
 
     elif data == CB_TRIAL_BACK:
         await _back_to_main_menu(msg, "🔙 بازگشت")
+
+
+async def _build_trial_service(update, context, agent_id, user, service_name: str):
+    """ساخت سرویس تست رایگان با نام کاربری ارسال‌شده (مثل UserBot) و نمایش اشتراک."""
+    from CustomerBot.keyboards import subscription_status_keyboard
+    server_id = int(context.user_data.get("pending_trial_server_id") or 0)
+    server = context.user_data.get("pending_trial_server")
+    if not server:
+        server = get_server_by_id(server_id)
+    context.user_data.pop(UD_STATE, None)
+    context.user_data.pop("pending_trial_server_id", None)
+    context.user_data.pop("pending_trial_server", None)
+
+    service_name = (service_name or "").strip()
+    if not server or not server_id:
+        await update.message.reply_text("❌ اطلاعات تست رایگان ناقص است. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+        return
+
+    u_db = get_user(agent_id, user.id)
+    if u_db and u_db.get("got_free_trial"):
+        await update.message.reply_text("🚫 شما قبلا تست رایگان دریافت کرده‌اید.", reply_markup=main_menu_keyboard())
+        return
+
+    trial = get_trial_spec_settings(agent_id)
+    gb = trial.get("usage_gb", 1)
+    days = trial.get("days", 1)
+
+    from Shared.hiddify_api import create_user
+    import uuid
+    new_uuid = str(uuid.uuid4())
+    note = make_service_note(agent_id)
+    payload = {
+        "name": service_name or f"تست رایگان {gb}GB",
+        "usage_limit_GB": gb,
+        "package_days": days,
+        "uuid": new_uuid,
+        "is_active": True,
+        "comment": note,
+    }
+    try:
+        result = await create_user(server, payload)
+    except Exception as exc:
+        logger.exception("customer trial create_user failed uid=%s: %s", user.id, exc)
+        result = None
+    if not result:
+        await update.message.reply_text("❌ خطا در ایجاد سرویس تست.", reply_markup=main_menu_keyboard())
+        return
+
+    cust_id = None
+    cust = get_customer_by_telegram_id(agent_id, user.id)
+    if cust:
+        cust_id = cust["id"]
+    if not cust_id:
+        cust_id = upsert_customer(agent_id, user.id, user.username or "", user.full_name or "")
+
+    svc = create_service(
+        agent_id=agent_id,
+        customer_id=cust_id,
+        server_id=server_id,
+        server_title=server.get("title", ""),
+        name=service_name or f"تست رایگان {gb}GB",
+        panel_user_uuid=new_uuid,
+        usage_limit=float(gb),
+        days=days,
+        sale_price=0,
+        is_trial=1,
+        note=note,
+    )
+    add_service_node(
+        service_id=svc["id"],
+        server_id=server_id,
+        server_title=server.get("title", ""),
+        panel_user_uuid=new_uuid,
+        panel_user_id=str(result.get("id", "")),
+    )
+    set_got_free_trial(agent_id, user.id)
+
+    svc = get_service_by_id(svc["id"])
+    link = ""
+    try:
+        managed_link, _ = get_or_create_bot_sub_links(svc or {})
+        if managed_link:
+            link = managed_link
+    except Exception:
+        pass
+    if not link:
+        domains = server.get("domains", [])
+        domain = domains[0]["domain"] if domains else server.get("host", "?")
+        if domain and not (domain.startswith("http://") or domain.startswith("https://")):
+            domain = f"https://{domain}"
+        link = f"{domain.rstrip('/')}/{new_uuid}"
+
+    await update.message.reply_text(
+        f"🎉 سرویس تست {gb}GB - {days} روزه با موفقیت ایجاد شد!\n\n"
+        f"🔗 لینک اشتراک:\n`{link}`",
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
+    if svc:
+        from CustomerBot.database import get_subs_settings
+        try:
+            subs_settings = get_subs_settings(agent_id)
+            await update.message.reply_text(
+                build_subscription_status_text(svc, subs_settings, None),
+                parse_mode="Markdown",
+                reply_markup=subscription_status_keyboard(
+                    svc["id"],
+                    show_direct_config=subs_settings.get("show_direct_config", True),
+                    show_sub_link=subs_settings.get("show_sub_link", True),
+                ),
+            )
+        except Exception:
+            pass
 
 
 def _renew_admin_modes():
