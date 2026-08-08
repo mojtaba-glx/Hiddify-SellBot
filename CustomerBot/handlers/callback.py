@@ -1098,7 +1098,8 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
             pass
 
     await update.message.reply_text(
-        "\u2060",
+        "✅ اکانت تست رایگان شما با موفقیت ثبت شد\n"
+        "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.",
         reply_markup=main_menu_keyboard(),
     )
 
