@@ -167,6 +167,92 @@ def _format_ticket_confirm_text(pending: dict) -> str:
     )
 
 
+async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, meta: dict, amount: int):
+    user = update.effective_user
+    if not user:
+        return
+    receipt_meta = json.dumps(meta, ensure_ascii=False)
+    order_id = int(meta.get("order_id") or 0)
+    idempotency_key = f"receipt_{user.id}_{order_id}_0"
+    pay = get_payment_by_idempotency_key(agent_id, idempotency_key)
+    notify_agent = False
+    existing_receipt_meta = str((pay or {}).get("receipt_image") or "")
+
+    if pay and str(pay.get("status") or "") == "pending" and str(pay.get("receipt_image") or "").strip():
+        updated = update_payment_status(
+            agent_id=agent_id,
+            payment_id=pay["id"],
+            status="pending",
+            receipt_image=receipt_meta,
+        )
+        if updated and not _receipt_meta_has_agent_notified_marker(existing_receipt_meta):
+            notify_agent = True
+    else:
+        if not pay:
+            try:
+                pay = create_payment(
+                    agent_id=agent_id,
+                    user_id=user.id,
+                    amount=amount,
+                    method="card",
+                    idempotency_key=idempotency_key,
+                )
+            except sqlite3.IntegrityError:
+                pay = get_payment_by_idempotency_key(agent_id, idempotency_key)
+        if pay:
+            existing_receipt_meta = str(pay.get("receipt_image") or existing_receipt_meta or "")
+            updated = update_payment_status(
+                agent_id=agent_id,
+                payment_id=pay["id"],
+                status="pending",
+                receipt_image=receipt_meta,
+            )
+            notify_agent = updated and not _receipt_meta_has_agent_notified_marker(existing_receipt_meta)
+
+    order = None
+    if order_id:
+        from CustomerBot.database import get_order
+        order = get_order(agent_id, order_id)
+
+    if pay and notify_agent:
+        await _notify_agent_new_payment(context, agent_id, pay, meta, order, user)
+        try:
+            pay = get_payment_by_idempotency_key(agent_id, idempotency_key) or pay
+            update_payment_status(
+                agent_id=agent_id,
+                payment_id=int(pay["id"]),
+                status="pending",
+                receipt_image=_append_receipt_meta_marker(receipt_meta, "agent_notified:1"),
+            )
+        except Exception:
+            pass
+    pending_msg = await update.message.reply_text(
+        "✅ تراکنش شما در انتظار تایید توسط ادمین است.\n"
+        "لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
+        reply_markup=main_menu_keyboard(),
+    )
+    if pay and pending_msg:
+        try:
+            pending_meta = _append_receipt_meta_marker(receipt_meta, f"customer_pending_message_id:{pending_msg.message_id}")
+            if notify_agent:
+                pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
+            elif _receipt_meta_has_agent_notified_marker(existing_receipt_meta):
+                pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
+            update_payment_status(
+                agent_id=agent_id,
+                payment_id=int(pay["id"]),
+                status="pending",
+                receipt_image=pending_meta,
+            )
+        except Exception:
+            pass
+    context.user_data.pop(UD_STATE, None)
+    context.user_data.pop("card_last4", None)
+    context.user_data.pop("pending_receipt_meta", None)
+    context.user_data.pop("pending_amount", None)
+    context.user_data.pop("pending_order_id", None)
+
+
 async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
@@ -201,26 +287,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---- Card last-4 entry (required by agent settings) ----
-    if state == STATE_CARD_LAST4:
-        digits = re.sub(r"[^0-9]", "", text or "")
-        if len(digits) != 4:
-            await update.message.reply_text(
-                "❌ باید دقیقاً ۴ رقم آخر کارت را وارد کنید.\n"
-                "مثلاً: ۵۴۶۱",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-        context.user_data["card_last4"] = digits
-        context.user_data[UD_STATE] = "wallet_receipt_photo"
-        await update.message.reply_text(
-            "✅ ثبت شد.\n"
-            "📤 حالا تصویر رسید پرداخت را ارسال کنید.",
-            reply_markup=cancel_keyboard(),
-        )
-        return
-
-    # ---- Receipt (payment) handler ----
+    # ---- Receipt photo (kept until last-4 if required, else finalize now) ----
     if state in {STATE_RECEIPT_WAITING, "wallet_receipt_photo"}:
         if not (update.message and update.message.photo):
             await update.message.reply_text(
@@ -230,12 +297,11 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         try:
             photo = update.message.photo[-1]
+            file_id = photo.file_id
             order_id = context.user_data.get("last_order_id", 0)
             server_id = context.user_data.get(UD_BUY_SERVER_ID, 0)
             gb = context.user_data.get(UD_BUY_GB, 0)
             days = 0
-            if photo:
-                file_id = photo.file_id
             amount = 0
             order = None
             if order_id:
@@ -253,7 +319,6 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 wholesale_price = int((order or {}).get("wholesale_price") or 0)
                 if wholesale_price <= 0:
                     wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
-            # Store receipt_image as JSON with metadata
             meta = {
                 "file_id": file_id,
                 "order_id": order_id,
@@ -264,82 +329,29 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "wholesale_price": wholesale_price,
                 "plan_title": (order or {}).get("plan_title", ""),
                 "server_location": (order or {}).get("server_location", ""),
-                "card_last4": str(context.user_data.get("card_last4") or "").strip(),
+                "card_last4": "",
                 "type": "buy",
             }
-            receipt_meta = json.dumps(meta, ensure_ascii=False)
-            idempotency_key = f"receipt_{user.id}_{order_id}_0"
-            pay = get_payment_by_idempotency_key(agent_id, idempotency_key)
-            notify_agent = False
-            existing_receipt_meta = str((pay or {}).get("receipt_image") or "")
+            context.user_data["pending_receipt_meta"] = meta
+            context.user_data["pending_order_id"] = order_id
+            context.user_data["pending_amount"] = amount
 
-            if pay and str(pay.get("status") or "") == "pending" and str(pay.get("receipt_image") or "").strip():
-                updated = update_payment_status(
-                    agent_id=agent_id,
-                    payment_id=pay["id"],
-                    status="pending",
-                    receipt_image=receipt_meta,
+            from CustomerBot.database import get_payment_settings
+            req_last4 = bool((get_payment_settings(agent_id) or {}).get("require_last4_for_card_receipt"))
+            if req_last4:
+                context.user_data[UD_STATE] = STATE_CARD_LAST4
+                await update.message.reply_text(
+                    "📸 رسید شما ثبت شد.\n\n"
+                    "💳 حالا لطفاً <b>۴ رقم آخر کارت‌بانکی‌ای</b> که از آن پرداخت کرده‌اید را وارد کنید "
+                    "(فارسی یا انگلیسی، فقط ۴ رقم):\n"
+                    "مثلاً: <code>۵۴۶۱</code> یا <code>5461</code>",
+                    parse_mode="HTML",
+                    reply_markup=cancel_keyboard(),
                 )
-                if updated and not _receipt_meta_has_agent_notified_marker(existing_receipt_meta):
-                    notify_agent = True
-            else:
-                if not pay:
-                    try:
-                        pay = create_payment(
-                            agent_id=agent_id,
-                            user_id=user.id,
-                            amount=amount,
-                            method="card",
-                            idempotency_key=idempotency_key,
-                        )
-                    except sqlite3.IntegrityError:
-                        pay = get_payment_by_idempotency_key(agent_id, idempotency_key)
-                if pay:
-                    existing_receipt_meta = str(pay.get("receipt_image") or existing_receipt_meta or "")
-                    updated = update_payment_status(
-                        agent_id=agent_id,
-                        payment_id=pay["id"],
-                        status="pending",
-                        receipt_image=receipt_meta,
-                    )
-                    notify_agent = updated and not _receipt_meta_has_agent_notified_marker(existing_receipt_meta)
-
-            if pay and notify_agent:
-                await _notify_agent_new_payment(context, agent_id, pay, meta, order, user)
-                try:
-                    pay = get_payment_by_idempotency_key(agent_id, idempotency_key) or pay
-                    update_payment_status(
-                        agent_id=agent_id,
-                        payment_id=int(pay["id"]),
-                        status="pending",
-                        receipt_image=_append_receipt_meta_marker(receipt_meta, "agent_notified:1"),
-                    )
-                except Exception:
-                    pass
-            pending_msg = await update.message.reply_text(
-                "✅ تراکنش شما در انتظار تایید توسط ادمین است.\n"
-                "لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
-                reply_markup=main_menu_keyboard(),
-            )
-            if pay and pending_msg:
-                try:
-                    pending_meta = _append_receipt_meta_marker(receipt_meta, f"customer_pending_message_id:{pending_msg.message_id}")
-                    if notify_agent:
-                        pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
-                    elif _receipt_meta_has_agent_notified_marker(existing_receipt_meta):
-                        pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
-                    update_payment_status(
-                        agent_id=agent_id,
-                        payment_id=int(pay["id"]),
-                        status="pending",
-                        receipt_image=pending_meta,
-                    )
-                except Exception:
-                    pass
-            context.user_data.pop(UD_STATE, None)
-            context.user_data.pop("card_last4", None)
+                return
+            return await _finalize_receipt(update, context, agent_id, meta, amount)
         except Exception as e:
-            logger.exception("customer receipt photo failed uid=%s: %s", user.id, e)
+            logger.exception("customer receipt photo step failed uid=%s: %s", user.id, e)
             try:
                 await update.message.reply_text(
                     "❌ خطایی در ثبت رسید رخ داد. لطفاً دوباره تلاش کنید.",
@@ -347,6 +359,25 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception:
                 pass
+            return
+
+    # ---- Card last-4 entry (required by agent settings) ----
+    if state == STATE_CARD_LAST4:
+        fa_map = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+        digits = re.sub(r"[^0-9]", "", str((text or "")).translate(fa_map))
+        if len(digits) != 4:
+            await update.message.reply_text(
+                "❌ باید دقیقاً <b>۴ رقم</b> آخر کارت را وارد کنید (نه کمتر، نه بیشتر).\n"
+                "مثلاً: <code>۵۴۶۱</code> یا <code>5461</code>",
+                parse_mode="HTML",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        meta = context.user_data.get("pending_receipt_meta") or {}
+        meta["card_last4"] = digits
+        context.user_data["pending_receipt_meta"] = meta
+        amount = int(context.user_data.get("pending_amount") or 0)
+        await _finalize_receipt(update, context, agent_id, meta, amount)
         return
 
 
