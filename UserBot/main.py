@@ -5284,6 +5284,18 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if _should_skip_stale_startup_update(update, context, user_id):
         return
+
+    # اگر کاربر وسط یک مرحله انتظار ورود متن است (مثلاً نام تست رایگان)،
+    # حتی اگر متن شبیه دکمهٔ منو باشد، باید به هندلر مرحله برود نه به منو.
+    current_step = get_user_step(context, user_id)
+    if current_step:
+        step_lower = str(current_step).lower()
+        wait_keywords = ("trial", "name", "rename", "ticket", "receipt", "photo", "card", "amount", "wait")
+        if any(k in step_lower for k in wait_keywords):
+            from UserBot import main as _ubmod
+            await _ubmod.receipt_handler(update, context)
+            return
+
     normalized_text = _normalize_action_text(text)
     event_ts = None
     try:
