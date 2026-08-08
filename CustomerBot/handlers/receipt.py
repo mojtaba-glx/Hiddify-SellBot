@@ -1,9 +1,12 @@
 import os
 import json
+import logging
 import re
 import sqlite3
 from io import BytesIO
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from telegram import Bot, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -196,13 +199,20 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- Receipt (payment) handler ----
     if state in {STATE_RECEIPT_WAITING, "wallet_receipt_photo"}:
-        photo = update.message.photo[-1] if update.message.photo else None
-        order_id = context.user_data.get("last_order_id", 0)
-        server_id = context.user_data.get(UD_BUY_SERVER_ID, 0)
-        gb = context.user_data.get(UD_BUY_GB, 0)
-        days = 0
-        if photo:
-            file_id = photo.file_id
+        if not (update.message and update.message.photo):
+            await update.message.reply_text(
+                "❌ لطفاً تصویر رسید را ارسال کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        try:
+            photo = update.message.photo[-1]
+            order_id = context.user_data.get("last_order_id", 0)
+            server_id = context.user_data.get(UD_BUY_SERVER_ID, 0)
+            gb = context.user_data.get(UD_BUY_GB, 0)
+            days = 0
+            if photo:
+                file_id = photo.file_id
             amount = 0
             order = None
             if order_id:
@@ -303,11 +313,15 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             context.user_data.pop(UD_STATE, None)
-        else:
-            await update.message.reply_text(
-                "❌ لطفاً تصویر رسید را ارسال کنید.",
-                reply_markup=cancel_keyboard(),
-            )
+        except Exception as e:
+            logger.exception("customer receipt photo failed uid=%s: %s", user.id, e)
+            try:
+                await update.message.reply_text(
+                    "❌ خطایی در ثبت رسید رخ داد. لطفاً دوباره تلاش کنید.",
+                    reply_markup=cancel_keyboard(),
+                )
+            except Exception:
+                pass
         return
 
 
