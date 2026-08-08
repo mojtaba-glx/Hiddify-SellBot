@@ -235,6 +235,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             current = bool(get_setting(agent_id, "require_last4", False))
             set_setting(agent_id, "require_last4", not current)
             label = '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644' if current else '\u0641\u0639\u0627\u0644'
+            # هم‌گام کردن با ربات مشتری تا از کاربر 4 رقم آخر کارت خواسته شود
+            try:
+                from CustomerBot.database import get_payment_settings, set_payment_settings
+                cb_ps = get_payment_settings(agent_id) or {}
+                cb_ps["require_last4_for_card_receipt"] = not current
+                cb_ps.setdefault("enable_card_to_card", True)
+                set_payment_settings(agent_id, cb_ps)
+            except Exception as e:
+                logger.warning("Failed to sync require_last4 to customer bot: %s", e)
             await query.answer(f"\u0627\u0644\u0632\u0627\u0645 4 \u0631\u0642\u0645 \u0622\u062e\u0631 {label} \u0634\u062f.")
             await _refresh_card_settings(update, agent_id)
             return

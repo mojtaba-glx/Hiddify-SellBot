@@ -734,6 +734,7 @@ def get_customer_pending_card_payments(agent_id: int) -> List[Dict[str, Any]]:
                     p["_days"] = meta.get("days", 0)
                     p["_sale_price"] = int(meta.get("sale_price") or p.get("amount") or 0)
                     p["_wholesale_price"] = int(meta.get("wholesale_price") or 0)
+                    p["_card_last4"] = str(meta.get("card_last4") or "").strip()
             except (json.JSONDecodeError, TypeError):
                 pass
             if not p["_order_id"]:

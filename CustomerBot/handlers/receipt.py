@@ -15,7 +15,7 @@ from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from CustomerBot.constants import (
     UD_STATE, UD_BUY_GB, UD_BUY_MONTHS, UD_BUY_SERVER_ID, UD_TICKET_MODE,
     UD_TICKET_QUESTION,
-    STATE_RECEIPT_WAITING, STATE_TICKET_WAITING_TEXT, STATE_TICKET_WAITING_TITLE,
+    STATE_RECEIPT_WAITING, STATE_CARD_LAST4, STATE_TICKET_WAITING_TEXT, STATE_TICKET_WAITING_TITLE,
     STATE_TICKET_WAITING_PHOTO, STATE_TICKET_CONFIRM,
     BTN_BACK, BTN_PAY_DONE, STATE_START,
 )
@@ -107,6 +107,9 @@ async def _notify_agent_new_payment(
             f"🔖 کد پیگیری: <code>{tx_code}</code>\n"
             f"💰 مبلغ: <b>{amount:,}</b> تومان\n"
         )
+        card_last4 = str(meta.get("card_last4") or "").strip()
+        if card_last4:
+            caption += f"💳 ۴ رقم آخر کارت: <code>{card_last4}</code>\n"
         if order:
             caption += (
                 f"📦 سفارش: <code>{order_id}</code> | 📊 حجم: {float(meta.get('gb') or order.get('volume_gb') or 0):g} گیگ\n"
@@ -198,6 +201,25 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ---- Card last-4 entry (required by agent settings) ----
+    if state == STATE_CARD_LAST4:
+        digits = re.sub(r"[^0-9]", "", text or "")
+        if len(digits) != 4:
+            await update.message.reply_text(
+                "❌ باید دقیقاً ۴ رقم آخر کارت را وارد کنید.\n"
+                "مثلاً: ۵۴۶۱",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        context.user_data["card_last4"] = digits
+        context.user_data[UD_STATE] = "wallet_receipt_photo"
+        await update.message.reply_text(
+            "✅ ثبت شد.\n"
+            "📤 حالا تصویر رسید پرداخت را ارسال کنید.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
     # ---- Receipt (payment) handler ----
     if state in {STATE_RECEIPT_WAITING, "wallet_receipt_photo"}:
         if not (update.message and update.message.photo):
@@ -242,6 +264,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "wholesale_price": wholesale_price,
                 "plan_title": (order or {}).get("plan_title", ""),
                 "server_location": (order or {}).get("server_location", ""),
+                "card_last4": str(context.user_data.get("card_last4") or "").strip(),
                 "type": "buy",
             }
             receipt_meta = json.dumps(meta, ensure_ascii=False)
@@ -314,6 +337,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             context.user_data.pop(UD_STATE, None)
+            context.user_data.pop("card_last4", None)
         except Exception as e:
             logger.exception("customer receipt photo failed uid=%s: %s", user.id, e)
             try:

@@ -205,6 +205,8 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
         meta = json.loads(raw_receipt)
         if isinstance(meta, dict) and meta.get("file_id"):
             receipt_fid = meta["file_id"]
+        if isinstance(meta, dict) and str(meta.get("card_last4") or "").strip():
+            text += f"\n\U0001f4b3 \u06f4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a: <code>{meta['card_last4']}</code>\n"
     except (json.JSONDecodeError, TypeError):
         pass
     if not receipt_fid:
@@ -312,6 +314,15 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
         f"🔑 شناسه تراکنش: {tx_code}\n"
         f"💰 مبلغ پرداخت: {amount:,} تومان"
     )
+    card_last4 = str(pay.get("_card_last4") or "").strip()
+    if not card_last4:
+        try:
+            card_last4 = str((pay.get("receipt_image") and json.loads(pay["receipt_image"]).get("card_last4")) or "").strip()
+        except Exception:
+            card_last4 = ""
+    if card_last4:
+        done_text += f"\n💳 ۴ رقم آخر کارت: <code>{card_last4}</code>"
+    done_text += "\n\n✅ پرداخت تایید شد؛ اشتراک مشتری ساخته شد."
     done_kb = _ikb([
         [IButton(f"👤 {customer_name} | {user_tg_id}", callback_data=f"agbot:custpay:detail:{pay_id}")],
     ])
