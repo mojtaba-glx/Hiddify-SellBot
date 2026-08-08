@@ -24,7 +24,12 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     active = any(int(b.get("is_active", 0)) for b in bots) if bots else False
     text = "\U0001f916 <b>\u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc</b>\n\n"
     if bots:
+        seen = set()
         for b in bots:
+            key = b.get("bot_token") or b.get("bot_username") or b.get("id")
+            if key in seen:
+                continue
+            seen.add(key)
             status = "\u2705" if int(b.get("is_active", 0)) else "\u274c"
             text += f"{status} @{_escape(b.get('bot_username', '—'))}\n"
     else:

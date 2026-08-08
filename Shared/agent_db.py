@@ -173,6 +173,15 @@ def init_db() -> None:
         )
     """)
 
+    # حذف رکوردهای تکراری (همان ربات مشتری چند بار ثبت شده)
+    cur.execute("""
+        DELETE FROM agent_customer_bots
+        WHERE id NOT IN (
+            SELECT MIN(id) FROM agent_customer_bots GROUP BY agent_id, bot_token
+        )
+    """)
+    conn.commit()
+
     # 8. کدهای تخفیف نماینده
     cur.execute("""
         CREATE TABLE IF NOT EXISTS agent_discount_codes (
@@ -768,17 +777,34 @@ def delete_customer(customer_id: int) -> bool:
 # ===============================
 
 def add_customer_bot(agent_id: int, bot_token: str, bot_username: str = "") -> Dict[str, Any]:
-    """ثبت ربات مشتری جدید برای نماینده."""
+    """ثبت ربات مشتری جدید برای نماینده (در صورت وجود همان توکن، به‌روزرسانی می‌کند)."""
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
     now = _now()
+    token = bot_token.strip()
+    username = bot_username.strip()
+    cur.execute(
+        "SELECT * FROM agent_customer_bots WHERE agent_id = ? AND bot_token = ?",
+        (agent_id, token),
+    )
+    row = cur.fetchone()
+    if row:
+        cur.execute(
+            "UPDATE agent_customer_bots SET bot_username = ?, is_active = 1, updated_at = ? WHERE id = ?",
+            (username, now, row["id"]),
+        )
+        conn.commit()
+        cur.execute("SELECT * FROM agent_customer_bots WHERE id = ?", (row["id"],))
+        row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else {}
     cur.execute(
         """
         INSERT INTO agent_customer_bots (agent_id, bot_token, bot_username, is_active, created_at, updated_at)
         VALUES (?, ?, ?, 1, ?, ?)
         """,
-        (agent_id, bot_token.strip(), bot_username.strip(), now, now),
+        (agent_id, token, username, now, now),
     )
     conn.commit()
     bot_id = cur.lastrowid
