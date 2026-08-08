@@ -143,29 +143,87 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     return True
 
 
+SYSTEMD_CBOT_UNIT = "hiddify-sellbot-customer.service"
+_SYSTEMD_ACTIVE_MARK = "/run/systemd/system"
+
+
+def _systemd_available() -> bool:
+    try:
+        has_systemctl = subprocess.run(
+            ["sh", "-lc", "command -v systemctl >/dev/null 2>&1 && echo yes"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return has_systemctl.returncode == 0 and "yes" in has_systemctl.stdout and os.path.isdir(_SYSTEMD_ACTIVE_MARK)
+    except Exception:
+        return False
+
+
+def _systemd_unit_active(unit: str) -> bool:
+    try:
+        res = subprocess.run(["systemctl", "is-active", "--quiet", unit], capture_output=True, timeout=10)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _systemd_restart_unit(unit: str) -> bool:
+    try:
+        res = subprocess.run(["systemctl", "restart", unit], capture_output=True, timeout=30)
+        return res.returncode == 0
+    except Exception as e:
+        logger.warning("systemctl restart failed: %s", e)
+        return False
+
+
+def _pgrep_cbot_pids() -> list:
+    try:
+        res = subprocess.run(
+            ["pgrep", "-f", "CustomerBot/main.py"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return [p.strip() for p in res.stdout.strip().splitlines() if p.strip().isdigit()]
+    except Exception:
+        return []
+
+
+def _wait_cbot_gone(timeout: int = 20) -> bool:
+    for _ in range(timeout):
+        if not _pgrep_cbot_pids():
+            return True
+        time.sleep(1)
+    return not _pgrep_cbot_pids()
+
+
+def _kill_cbot_processes() -> None:
+    for pid in _pgrep_cbot_pids():
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+    if not _wait_cbot_gone(20):
+        for pid in _pgrep_cbot_pids():
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+        _wait_cbot_gone(5)
+
+
 def _restart_customer_bot() -> bool:
     try:
+        if _systemd_available() and _systemd_unit_active(SYSTEMD_CBOT_UNIT):
+            logger.info("CustomerBot running under systemd unit %s; restarting via systemctl", SYSTEMD_CBOT_UNIT)
+            return _systemd_restart_unit(SYSTEMD_CBOT_UNIT)
+
         root_dir = Path(__file__).resolve().parents[2]
         venv_python = root_dir / "venv" / "bin" / "python"
         customer_main = root_dir / "CustomerBot" / "main.py"
         log_file = root_dir / "logs" / "customerbot.log"
 
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", "CustomerBot/main.py"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.stdout.strip():
-                pids = result.stdout.strip().split("\n")
-                for pid in pids:
-                    try:
-                        os.kill(int(pid.strip()), signal.SIGTERM)
-                    except (ProcessLookupError, ValueError):
-                        pass
-                logger.info("Killed old CustomerBot processes: %s", pids)
-                time.sleep(2)
-        except Exception as e:
-            logger.warning("Could not kill old CustomerBot: %s", e)
+        _kill_cbot_processes()
+        if _pgrep_cbot_pids():
+            logger.error("CustomerBot processes still alive after kill; aborting restart to avoid duplicate instances")
+            return False
 
         cmd = f"cd {root_dir} && {venv_python} {customer_main} >> {log_file} 2>&1 &"
         subprocess.Popen(
@@ -174,8 +232,12 @@ def _restart_customer_bot() -> bool:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        time.sleep(3)
+        if not _pgrep_cbot_pids():
+            logger.warning("No CustomerBot process found shortly after start; checking log")
+            return False
         logger.info("CustomerBot restarted successfully")
         return True
     except Exception as e:
-        logger.error("Failed to restart CustomerBot: %s", e)
+        logger.error("Failed to restart CustomerBot (via %s when active): %s", SYSTEMD_CBOT_UNIT, e)
         return False
