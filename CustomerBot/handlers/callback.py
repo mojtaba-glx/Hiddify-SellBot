@@ -999,13 +999,24 @@ async def _handle_trial(query, context, agent_id, user, data):
             panel_user_id=str(result.get("id", "")),
         )
         set_got_free_trial(agent_id, user.id)
-        domains = server.get("domains", [])
-        domain = domains[0]["domain"] if domains else server.get("host", "?")
-        link = f"https://{domain}/{new_uuid}"
+        svc = get_service_by_id(svc["id"])
+        link = ""
+        try:
+            managed_link, _ = get_or_create_bot_sub_links(svc or {})
+            if managed_link:
+                link = managed_link
+        except Exception:
+            pass
+        if not link:
+            domains = server.get("domains", [])
+            domain = domains[0]["domain"] if domains else server.get("host", "?")
+            if domain and not (domain.startswith("http://") or domain.startswith("https://")):
+                domain = f"https://{domain}"
+            link = f"{domain.rstrip('/')}/{new_uuid}"
         await msg.edit_text(
             f"🎉 سرویس تست {gb}GB - {days} روزه با موفقیت ایجاد شد!\n\n"
             f"🔗 لینک اشتراک:\n`{link}`\n\n"
-            f"(لینک را در کلاینت کپی کنید)",
+            f"📄 برای مشاهده جزئیات اشتراک از دکمه «وضعیت اشتراک» در منو استفاده کنید.",
             parse_mode="Markdown",
             reply_markup=main_menu_keyboard(),
         )
