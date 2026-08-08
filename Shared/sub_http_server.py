@@ -1042,11 +1042,11 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
             _is_panel_status_config_line,
             _fetch_subscription_lines,
         )
-        from Shared.sub_links import get_service_node_base_urls
+        from Shared.sub_links import get_service_user_base_urls
 
         lines: list[str] = []
         seen: set = set()
-        for base_url in get_service_node_base_urls(svc):
+        for base_url in get_service_user_base_urls(svc):
             base = str(base_url or "").strip().rstrip("/")
             if not base:
                 continue

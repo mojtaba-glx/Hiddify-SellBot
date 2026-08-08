@@ -71,6 +71,11 @@ def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
 
 def get_service_node_base_urls(svc: dict) -> List[str]:
     """آدرس base_url سرویس روی همه نودهای نگاشت‌شده + سرور اصلی + نودهای زیرمجموعه"""
+    return get_service_user_base_urls(svc) or _get_service_node_base_urls(svc)
+
+
+def _get_service_node_base_urls(svc: dict) -> List[str]:
+    """پیاده‌سازی قبلی: user + panel هر دو (برای compatibility برخی مصرف‌کننده‌ها)."""
     out: List[str] = []
     seen: set = set()
     try:
@@ -128,6 +133,74 @@ def get_service_node_base_urls(svc: dict) -> List[str]:
             if child_sid <= 0:
                 continue
             # اول uuid mapping سرویس روی این نود، بعد uuid سرویس اصلی
+            child_map = child_mappings.get(child_sid) or {}
+            child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+            _add_server(child_sid, child_uuid)
+    return out
+
+
+def get_service_user_base_urls(svc: dict) -> List[str]:
+    """فقط base_url با دامنه کاربر (user domain) برای هر نود — دقیقاً مثل aggregator.
+
+    بدون افزودن raw panel_url، تا همان تنظیمات «شامل در اشتراک» دامنه کاربر
+    رعایت شود و کانفیگ‌های مخفی که فقط از دامنه خام پنل قابل‌دسترس‌اند وارد نشوند.
+    """
+    out: List[str] = []
+    seen: set = set()
+    try:
+        service_id = int(svc.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    mappings = agent_db.get_service_nodes(service_id) if service_id > 0 else []
+    if mappings:
+        active_mappings = [m for m in mappings if int((m or {}).get("is_active") or 0) == 1]
+        if active_mappings:
+            mappings = active_mappings
+        else:
+            return []
+    try:
+        primary_server_id = int(svc.get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_server_id = 0
+
+    def _add_server(sid: int, uuid: str) -> None:
+        if sid <= 0 or not uuid:
+            return
+        srv = database.get_server_by_id(sid)
+        if not srv:
+            return
+        base = _build_user_base_url(srv, uuid)
+        if not base or base in seen:
+            return
+        out.append(base)
+        seen.add(base)
+
+    for m in sorted(mappings, key=lambda m: int((m or {}).get("server_id") or 0) == primary_server_id):
+        try:
+            sid = int(m.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        _add_server(sid, str(m.get("panel_user_uuid") or "").strip())
+
+    if not out:
+        sid = primary_server_id
+        uuid = str(svc.get("panel_user_uuid") or "").strip()
+        if sid > 0:
+            _add_server(sid, uuid)
+
+    # نودهای زیرمجموعه سرور اصلی (server.nodes[] با target_server_id)
+    if primary_server_id > 0:
+        primary = database.get_server_by_id(primary_server_id)
+        child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+        for node in (primary.get("nodes") or []):
+            if not isinstance(node, dict):
+                continue
+            try:
+                child_sid = int(node.get("target_server_id") or 0)
+            except (TypeError, ValueError):
+                child_sid = 0
+            if child_sid <= 0:
+                continue
             child_map = child_mappings.get(child_sid) or {}
             child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
             _add_server(child_sid, child_uuid)
