@@ -75,7 +75,7 @@ from CustomerBot.utils.helpers import (
 from CustomerBot.services import (
     build_subscription_status_text, get_service_node_base_urls,
     get_service_panel_targets, collect_all_direct_configs_for_service,
-    collect_all_direct_configs_from_api, get_or_create_bot_sub_links,
+    get_or_create_bot_sub_links,
     sync_service_status_from_panels, regenerate_service_uuid,
     _resolve_live_server_title,
 )
@@ -466,17 +466,15 @@ async def _show_subscription_status(msg, agent_id, svc_id):
 
 
 async def _send_service_direct_configs(msg, svc):
-    """کانفیگ‌های مستقیم: استخراج از لینک all.txt همه نودها + پشتیبان API پنل"""
+    """کانفیگ‌های مستقیم: استخراج از لینک اشتراک همه نودها (بدون API پنل).
+
+    فقط از sub-link واقعی هر نود استخراج می‌شود تا همان تنظیمات
+    «شامل در اشتراک» که در پنل تعریف شده رعایت شود؛ API پنل استفاده
+    نمی‌شود چون همه کانفیگ‌ها (حتی غیرفعال/مخفی) را برمی‌گرداند.
+    """
     # دریافت لینک‌ها در thread جدا تا event loop ربات بلاک نشود
     links = await asyncio.to_thread(collect_all_direct_configs_for_service, svc)
     source_hint = ""
-    if not links:
-        links = await collect_all_direct_configs_from_api(svc)
-        if links:
-            source_hint = (
-                "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ "
-                "کانفیگ‌ها از API پنل خوانده شد.\n\n"
-            )
     base_urls = get_service_node_base_urls(svc)
     fallback_base = base_urls[0] if base_urls else ""
 

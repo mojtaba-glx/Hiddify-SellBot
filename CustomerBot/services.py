@@ -43,6 +43,34 @@ def _extract_days_left(user_data: Dict[str, Any], fallback_days: int = 0) -> Opt
     return fallback_days if fallback_days > 0 else None
 
 
+def _get_cluster_servers(server_id: int) -> List[Dict[str, Any]]:
+    """سرور اصلی + نودهای زیرمجموعه (child) که target_server_id دارند.
+
+    دقیقاً مثل UserBot/AdminBot: هنگام ساخت سرویس، کاربر باید روی کل خوشه
+    ساخته شود تا لینک اشتراک هوشمند همه نودها را در بر بگیرد.
+    """
+    primary = database.get_server_by_id(server_id)
+    if not primary:
+        return []
+    out: List[Dict[str, Any]] = [primary]
+    seen: set[int] = {int(server_id)}
+    for node in (primary.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        try:
+            child_sid = int(node.get("target_server_id") or 0)
+        except (TypeError, ValueError):
+            child_sid = 0
+        if child_sid <= 0 or child_sid in seen:
+            continue
+        child = database.get_server_by_id(child_sid)
+        if not child:
+            continue
+        out.append(child)
+        seen.add(child_sid)
+    return out
+
+
 async def buy_service(
     agent_id: int,
     customer_id: int,
@@ -106,10 +134,45 @@ async def buy_service(
     }
 
     try:
-        panel_user = await multi_panel.create_user(server, payload)
+        targets = _get_cluster_servers(server_id)
+        if not targets:
+            targets = [server]
+        shared_uuid = user_uuid
+        payload["uuid"] = shared_uuid
+        created_nodes: List[dict] = []
+        panel_user = None
+        primary_marzban = ""
+        for idx, tgt in enumerate(targets):
+            try:
+                created = await multi_panel.create_user(tgt, payload)
+            except Exception as e:
+                if idx == 0:
+                    raise
+                logger.warning("Cluster node create_user failed server=%s: %s", tgt.get("id"), e)
+                continue
+            created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
+            if not created_uuid:
+                if idx == 0:
+                    raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
+                continue
+            created_nodes.append(
+                {
+                    "server_id": int(tgt.get("id") or 0),
+                    "server_title": tgt.get("title") or f"سرور #{tgt.get('id')}",
+                    "panel_user_uuid": created_uuid,
+                    "panel_user_id": str(created.get("id") or "").strip(),
+                    "marzban_username": str(created.get("_marzban_username") or "").strip(),
+                    "is_primary": idx == 0,
+                }
+            )
+            if idx == 0:
+                panel_user = created
+                primary_marzban = str(created.get("_marzban_username") or "").strip()
+        if panel_user is None:
+            raise RuntimeError("no primary node created")
         panel_uuid = str(panel_user.get("uuid") or user_uuid).strip()
         panel_user_id = str(panel_user.get("id") or "").strip()
-        marzban_username = str(panel_user.get("_marzban_username") or "").strip()
+        marzban_username = primary_marzban
     except Exception as e:
         logger.error("buy_service create_user failed agent=%s: %s", agent_id, e)
         agent_db.charge_wallet(agent_id, wholesale, description=f"Refund: API error")
@@ -131,14 +194,16 @@ async def buy_service(
         note=note,
     )
 
-    agent_db.add_service_node(
-        service_id=svc["id"],
-        server_id=server_id,
-        server_title=server.get("title", ""),
-        panel_user_uuid=panel_uuid,
-        panel_user_id=panel_user_id,
-        marzban_username=marzban_username,
-    )
+    if svc:
+        for item in created_nodes:
+            agent_db.add_service_node(
+                service_id=svc["id"],
+                server_id=int(item.get("server_id") or 0),
+                server_title=item.get("server_title") or "",
+                panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
+                panel_user_id=str(item.get("panel_user_id") or "").strip(),
+                marzban_username=str(item.get("marzban_username") or "").strip(),
+            )
 
     return {
         "ok": True,
@@ -485,7 +550,12 @@ def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
 
 
 def get_service_node_base_urls(svc: dict) -> List[str]:
-    """آدرس base_url سرویس روی همه نودهای نگاشت‌شده + سرور اصلی"""
+    """آدرس base_url سرویس روی همه نودهای نگاشت‌شده + نودهای زیرمجموعه"""
+    try:
+        from Shared.sub_links import get_service_node_base_urls as _g
+        return _g(svc) or []
+    except Exception:
+        pass
     out: List[str] = []
     seen: set = set()
     try:
@@ -537,7 +607,12 @@ def get_service_node_base_urls(svc: dict) -> List[str]:
 
 
 def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
-    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس"""
+    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس + نودهای زیرمجموعه"""
+    try:
+        from Shared.sub_links import get_service_panel_targets as _g
+        return list(_g(svc) or [])
+    except Exception:
+        pass
     targets: List[Tuple[dict, str, str]] = []
     seen: set = set()
     try:
@@ -666,7 +741,15 @@ def _fetch_remote_lines(url: str) -> List[str]:
 
 
 def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
-    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها"""
+    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها
+
+    فقط کانفیگ‌های واقعی و فعال گرفته می‌شود؛ کانفیگ‌های وضعیت مصنوعی
+    (fake_ip_for_sub_link / status.hiddify-sellbot.invalid) فیلتر می‌شوند.
+    """
+    def _is_internal_status(raw: str) -> bool:
+        low = raw.lower()
+        return ("fake_ip_for_sub_link" in low) or ("status.hiddify-sellbot.invalid" in low) or ("hiddify-sellbot.invalid" in low and "fake_ip" in low)
+
     out: List[str] = []
     seen_links: set = set()
     for base_url in get_service_node_base_urls(svc):
@@ -680,6 +763,8 @@ def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
                 seen_lines.add(raw)
                 link = _extract_config_link_from_line(raw)
                 if not link or link in seen_links:
+                    continue
+                if _is_internal_status(link):
                     continue
                 seen_links.add(link)
                 out.append(link)
