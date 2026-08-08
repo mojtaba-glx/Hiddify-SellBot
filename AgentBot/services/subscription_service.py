@@ -258,11 +258,40 @@ async def delete_subscription(agent_id: int, service_id: int) -> bool:
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return False
     sid = int(svc.get("server_id") or 0)
-    marzban_un = _lookup_marzban_username(service_id, sid)
-    try:
-        await delete_user_on_panel(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
-    except Exception as e:
-        logger.error("delete panel API failed svc=%s: %s", service_id, e)
+
+    # کل خوشه (سرور اصلی + همه نودهای mapping شده) را با uuid هر سرور حذف کن.
+    mappings = agent_db.get_service_nodes(service_id)
+    targets: List[dict] = []
+    seen_server: set[int] = set()
+    if sid > 0:
+        targets.append((sid, str(svc.get("panel_user_uuid") or "").strip()))
+        seen_server.add(sid)
+    for m in mappings:
+        try:
+            msid = int(m.get("server_id") or 0)
+        except (TypeError, ValueError):
+            msid = 0
+        if msid <= 0 or msid in seen_server:
+            continue
+        m_uuid = str(m.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+        targets.append((msid, m_uuid))
+        seen_server.add(msid)
+
+    failures: List[str] = []
+    for t_sid, t_uuid in targets:
+        if not t_sid or not t_uuid:
+            continue
+        try:
+            marzban_un = _lookup_marzban_username(service_id, t_sid)
+            await delete_user_on_panel(t_uuid, t_sid, marzban_username=marzban_un)
+            agent_db.delete_service_node(service_id, t_sid, t_uuid)
+        except Exception as e:
+            failures.append(f"server={t_sid}: {str(e)[:100]}")
+            logger.error("delete panel node failed svc=%s server=%s: %s", service_id, t_sid, e)
+
+    if failures:
+        logger.warning("delete_subscription partial failures svc=%s: %s", service_id, "; ".join(failures))
+
     return agent_db.delete_service(service_id)
 
 
