@@ -542,6 +542,39 @@ async def _send_name_search_results(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
 
+async def _notify_customer_deleted(context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int) -> None:
+    """پس از حذف اشتراک، به مشتری صاحب سرویس اطلاع بده (از طریق ربات مشتری)."""
+    try:
+        svc = agent_db.get_service_by_id(service_id)
+        if not svc or int(svc.get("agent_id", 0)) != agent_id:
+            return
+        customer_id = int(svc.get("customer_id") or 0)
+        if customer_id <= 0:
+            return
+        customer = agent_db.get_customer_by_id(customer_id)
+        tg_id = int((customer or {}).get("telegram_id") or 0)
+        if not tg_id:
+            return
+        from Shared.agent_db import get_active_customer_bot
+        from telegram import Bot
+        bot_row = get_active_customer_bot(agent_id)
+        token = str((bot_row or {}).get("bot_token") or "").strip()
+        if not token:
+            return
+        name = str(svc.get("name") or "")
+        text = (
+            f"⚠️ اشتراک شما حذف شد.\n\n"
+            f"📄 نام سرویس: {_escape(name)}\n"
+            f"❌ دسترسی شما به این سرویس قطع شد."
+        )
+        try:
+            await Bot(token=token).send_message(chat_id=tg_id, text=text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Failed to notify customer of deletion svc=%s: %s", service_id, e)
+    except Exception as e:
+        logger.warning("delete notification error svc=%s: %s", service_id, e)
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -824,6 +857,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 done = await delete_subscription(agent_id, int(s["id"]))
                 if done:
                     ok += 1
+                    await _notify_customer_deleted(context, agent_id, int(s["id"]))
                 else:
                     fail += 1
             except Exception:
@@ -1077,6 +1111,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ok = await delete_subscription(agent_id, svc_id)
         await _safe_answer(query, "حذف شد ✅" if ok else "خطا!", alert=not ok)
         if ok:
+            await _notify_customer_deleted(context, agent_id, svc_id)
             await show_menu(update, context)
         return
 
