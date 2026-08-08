@@ -1094,6 +1094,10 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
                     show_sub_link=subs_settings.get("show_sub_link", True),
                 ),
             )
+            await update.message.reply_text(
+                "منوی اصلی:",
+                reply_markup=main_menu_keyboard(),
+            )
         except Exception:
             pass
 
