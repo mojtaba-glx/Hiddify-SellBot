@@ -43,6 +43,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("last_order_id", None)
         context.user_data.pop("pending_ticket", None)
         context.user_data.pop("current_payment", None)
+        context.user_data.pop("pending_pay_price", None)
+        context.user_data.pop("pending_tx_marker", None)
         if text in {"بازگشت", "لغو", "❌ لغو", "🚫 لغو", "/cancel"}:
             await update.message.reply_text("🔙 به منوی اصلی بازگشتید.", reply_markup=main_menu_keyboard())
             return

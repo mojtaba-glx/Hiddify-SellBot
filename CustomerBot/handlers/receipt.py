@@ -110,6 +110,13 @@ async def _notify_agent_new_payment(
         card_last4 = str(meta.get("card_last4") or "").strip()
         if card_last4:
             caption += f"💳 ۴ رقم آخر کارت: <code>{card_last4}</code>\n"
+        tx_marker = 0
+        try:
+            tx_marker = int(meta.get("tx_marker") or 0)
+        except (TypeError, ValueError):
+            pass
+        if tx_marker > 0:
+            caption += f"🔢 مشخصه تراکنش: <code>{tx_marker}</code>\n"
         if order:
             caption += (
                 f"📦 سفارش: <code>{order_id}</code> | 📊 حجم: {float(meta.get('gb') or order.get('volume_gb') or 0):g} گیگ\n"
@@ -251,6 +258,8 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     context.user_data.pop("pending_receipt_meta", None)
     context.user_data.pop("pending_amount", None)
     context.user_data.pop("pending_order_id", None)
+    context.user_data.pop("pending_pay_price", None)
+    context.user_data.pop("pending_tx_marker", None)
 
 
 async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -312,6 +321,12 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     server_id = int(order.get("server_id") or server_id or 0)
                     gb = float(order.get("volume_gb") or gb or 0)
                     days = int(order.get("days") or 0)
+            pending_pay_price = context.user_data.get("pending_pay_price")
+            if pending_pay_price:
+                try:
+                    amount = int(pending_pay_price)
+                except (TypeError, ValueError):
+                    pass
             if not days:
                 days = int(context.user_data.get(UD_BUY_MONTHS, 0) or 0)
             wholesale_price = 0
@@ -319,6 +334,11 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 wholesale_price = int((order or {}).get("wholesale_price") or 0)
                 if wholesale_price <= 0:
                     wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
+            tx_marker = 0
+            try:
+                tx_marker = int(context.user_data.get("pending_tx_marker") or 0)
+            except (TypeError, ValueError):
+                pass
             meta = {
                 "file_id": file_id,
                 "order_id": order_id,
@@ -330,6 +350,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "plan_title": (order or {}).get("plan_title", ""),
                 "server_location": (order or {}).get("server_location", ""),
                 "card_last4": "",
+                "tx_marker": tx_marker,
                 "type": "buy",
             }
             context.user_data["pending_receipt_meta"] = meta

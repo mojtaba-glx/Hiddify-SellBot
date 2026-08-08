@@ -117,11 +117,24 @@ async def _render_card_details(query, card: dict, is_new: bool = False) -> None:
         await query.message.reply_text(text, reply_markup=_ikb(rows), parse_mode="HTML")
 
 
+def _sync_random_tx_to_customer(agent_id: int) -> bool:
+    try:
+        from CustomerBot.database import get_tx_plans_settings, set_tx_plans_settings
+        txp = get_tx_plans_settings(agent_id) or {}
+        txp["random_tx_spec"] = bool(get_setting(agent_id, "random_tx_code", True))
+        set_tx_plans_settings(agent_id, txp)
+        return True
+    except Exception as e:
+        logger.warning("Failed to sync random_tx_spec to customer bot: %s", e)
+        return False
+
+
 async def _send_payment_menu(message, agent_id: int) -> None:
     card_enabled = bool(get_setting(agent_id, "card_payment_enabled", True))
     last4 = bool(get_setting(agent_id, "require_last4", False))
     rand_tx = bool(get_setting(agent_id, "random_tx_code", True))
     sms_auto = bool(get_setting(agent_id, "sms_auto_confirm", False))
+    _sync_random_tx_to_customer(agent_id)
     await message.reply_text(
         "💳 <b>تنظیمات کارت به کارت</b>",
         reply_markup=card_settings_keyboard(card_enabled, last4, rand_tx, sms_auto),
@@ -196,6 +209,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         last4 = bool(get_setting(agent_id, "require_last4", False))
         rand_tx = bool(get_setting(agent_id, "random_tx_code", True))
         sms_auto = bool(get_setting(agent_id, "sms_auto_confirm", False))
+        _sync_random_tx_to_customer(agent_id)
         await query.edit_message_text(
             "💳 <b>تنظیمات کارت به کارت</b>",
             reply_markup=card_settings_keyboard(card_enabled, last4, rand_tx, sms_auto),
@@ -208,6 +222,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         last4 = bool(get_setting(agent_id, "require_last4", False))
         rand_tx = bool(get_setting(agent_id, "random_tx_code", True))
         sms_auto = bool(get_setting(agent_id, "sms_auto_confirm", False))
+        _sync_random_tx_to_customer(agent_id)
         await query.edit_message_text(
             "\U0001f4b3 <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a</b>",
             reply_markup=card_settings_keyboard(card_enabled, last4, rand_tx, sms_auto),
@@ -249,8 +264,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         if p2 == "randtx":
             current = bool(get_setting(agent_id, "random_tx_code", True))
-            set_setting(agent_id, "random_tx_code", not current)
-            await query.answer(f"کد تراکنش تصادفی {'فعال' if not current else 'غیرفعال'} شد.")
+            new_value = not current
+            set_setting(agent_id, "random_tx_code", new_value)
+            _sync_random_tx_to_customer(agent_id)
+            await query.answer(f"کد تراکنش تصادفی {'فعال' if new_value else 'غیرفعال'} شد.")
             await _refresh_card_settings(update, agent_id)
             return
         if p2 == "smsauto":
@@ -400,6 +417,7 @@ async def _refresh_card_settings(update: Update, agent_id: int) -> None:
     last4 = bool(get_setting(agent_id, "require_last4", False))
     rand_tx = bool(get_setting(agent_id, "random_tx_code", True))
     sms_auto = bool(get_setting(agent_id, "sms_auto_confirm", False))
+    _sync_random_tx_to_customer(agent_id)
     try:
         await update.callback_query.edit_message_reply_markup(
             reply_markup=card_settings_keyboard(card_enabled, last4, rand_tx, sms_auto)

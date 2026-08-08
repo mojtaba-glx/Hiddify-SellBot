@@ -1,4 +1,5 @@
 import asyncio
+import random
 from html import escape
 from typing import Optional
 
@@ -931,6 +932,11 @@ async def _handle_pay(query, context, agent_id, user, data):
 
     elif data == CB_PAY_CANCEL:
         context.user_data.pop(UD_STATE, None)
+        context.user_data.pop("pending_pay_price", None)
+        context.user_data.pop("pending_tx_marker", None)
+        context.user_data.pop("pending_receipt_meta", None)
+        context.user_data.pop("pending_amount", None)
+        context.user_data.pop("pending_order_id", None)
         await _back_to_main_menu(msg, "❌ پرداخت لغو شد.")
 
 
@@ -1220,17 +1226,35 @@ async def _handle_buy(query, context, agent_id, user, data):
         context.user_data["last_order_id"] = order.get("order_id", 0)
         context.user_data[UD_STATE] = STATE_RECEIPT_WAITING
         ps = get_payment_settings(agent_id)
+        tx_settings = get_tx_plans_settings(agent_id)
+        tx_marker = 0
+        pay_price = price
+        if bool((tx_settings or {}).get("random_tx_spec")):
+            tx_marker = random.randint(101, 997)
+            if tx_marker % 10 == 0:
+                tx_marker += 1
+            pay_price = price + tx_marker
+            context.user_data["pending_tx_marker"] = tx_marker
+        else:
+            context.user_data.pop("pending_tx_marker", None)
+        context.user_data["pending_pay_price"] = pay_price
         card_text = ps.get("card_to_card_text", "0")
         if card_text == "0":
-            rial_price = price * 10
+            rial_price = pay_price * 10
             card_text = (
                 f"💰 لطفا دقیقا مبلغ: `{rial_price}` ریال\n"
-                f"💰 معادل: `{price}` تومان\n"
+                f"💰 معادل: `{pay_price}` تومان\n"
                 f"💳 به شماره کارت: `{card.get('number', '?')}`\n"
                 f"👤 به نام: {card.get('owner', '?')}\n"
                 f"❗️ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.\n\n"
                 f"⚡️ پس از تایید پرداخت، اشتراک شما به‌صورت خودکار ساخته و ارسال می‌شود."
             )
+            if tx_marker > 0:
+                card_text = (
+                    f"🔢 مشخصه تراکنش: <code>{tx_marker}</code>\n"
+                    f"مبلغ نهایی شامل <b>{tx_marker:,} تومان</b> مشخصه تصادفی است.\n\n"
+                    f"{card_text}"
+                )
         await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
 
     elif data == CB_BUY_BACK_MAIN:
