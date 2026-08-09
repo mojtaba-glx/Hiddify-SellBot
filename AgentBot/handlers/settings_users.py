@@ -226,7 +226,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        from CustomerBot.database import get_full_customer_stats, get_user
+        from CustomerBot.database import get_full_customer_stats, get_user, set_user_banned
         u = get_user(agent_id, telegram_id) or {}
         banned = int(u.get("is_banned") or 0)
         ok = set_user_banned(agent_id, telegram_id, not banned)
