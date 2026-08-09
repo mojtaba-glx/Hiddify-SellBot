@@ -58,6 +58,7 @@ def _build_profile_text(agent_id: int, customer: dict) -> str:
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
     if not query:
         return
     data = (query.data or "").strip()
