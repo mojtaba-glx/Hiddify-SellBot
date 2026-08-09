@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from Shared.agent_db import get_all_active_customer_bots
-from CustomerBot.database import init_db as init_customer_db, get_force_join_settings
+from CustomerBot.database import init_db as init_customer_db, get_force_join_settings, get_user
 from CustomerBot.handlers.start import start_command
 from CustomerBot.handlers.menu import menu_handler
 from CustomerBot.handlers.callback import callback_handler
@@ -33,8 +33,16 @@ signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
 
 
+def _is_user_banned(agent_id: int, telegram_id: int) -> bool:
+    try:
+        u = get_user(agent_id, telegram_id)
+        return bool(u and int(u.get("is_banned") or 0) == 1)
+    except Exception:
+        return False
+
+
 async def force_join_middleware(update: Update, context) -> None:
-    """قبل از هر handler چک میکنه کاربر عضو کانال هست یا نه."""
+    """قبل از هر handler چک میکند کاربر مسدود نیست و عضو کانال هست."""
     agent_id = context.bot_data.get("agent_id", 0)
     if not agent_id:
         return
@@ -43,11 +51,28 @@ async def force_join_middleware(update: Update, context) -> None:
     if update.callback_query and (update.callback_query.data or "").startswith("forcejoin:"):
         return
 
+    # اگر کاربر مسدود شده باشد، از همه فعالیتها جلوگیری کن.
+    user = update.effective_user
+    if user and _is_user_banned(agent_id, user.id):
+        if update.callback_query:
+            try:
+                await update.callback_query.answer(
+                    "🚫 حساب شما توسط مدیر مسدود شده است.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+        elif update.message and update.message.text:
+            try:
+                await update.message.reply_text("🚫 حساب شما توسط مدیر مسدود شده است.")
+            except Exception:
+                pass
+        raise ApplicationHandlerStop
+
     fjs = get_force_join_settings(agent_id)
     if not fjs.get("enabled") or not fjs.get("channel_username"):
         return
 
-    user = update.effective_user
     if not user:
         return
 
