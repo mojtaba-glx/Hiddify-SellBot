@@ -1,13 +1,22 @@
 import logging
+import math
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from Shared import agent_db
+from Shared.tg_button_styles import inline_button as IButton
 from AgentBot.constants import UD_STATE
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.utils.helpers import _escape
-from AgentBot.keyboards import settings_sub_menu_keyboard, back_keyboard, cancel_keyboard
+from AgentBot.keyboards import (
+    settings_sub_menu_keyboard,
+    back_keyboard,
+    cancel_keyboard,
+    main_menu_keyboard,
+    _ikb,
+    BTN_BACK,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +35,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if p1 == "set" and p2 == "users" and not p3:
         await query.edit_message_text(
             "\U0001f465 <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0631\u0628\u0627\u062a</b>",
-            reply_markup=settings_sub_menu_keyboard("set:users"), parse_mode="HTML",
+            reply_markup=settings_sub_menu_keyboard("set:users", "\U0001f465 \u0644\u06cc\u0633\u062a \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0631\u0628\u0627\u062a"), parse_mode="HTML",
         )
         return
 
@@ -39,19 +48,48 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if p3 == "list":
-        customers, total = agent_db.get_customers_list(agent_id, page=1, page_size=15)
-        lines = [f"\U0001f4cb <b>\u0644\u06cc\u0633\u062a \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0631\u0628\u0627\u062a</b> ({total})\n"]
+        page = int(p4) if len(parts) > 4 and p4.isdigit() else 1
+        page_size = 9
+        customers, total = agent_db.get_customers_list(agent_id, page=page, page_size=page_size)
+        total_pages = max(1, math.ceil(total / page_size))
+        if page > total_pages:
+            page = total_pages
+            customers, _ = agent_db.get_customers_list(agent_id, page=page, page_size=page_size)
+        lines = [
+            f"\U0001f4cb <b>\u0644\u06cc\u0633\u062a \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0631\u0628\u0627\u062a</b>",
+            f"\u062a\u0639\u062f\u0627\u062f \u06a9\u0644: {total}",
+            f"\u0635\u0641\u062d\u0647: {page}/{total_pages}",
+            "",
+        ]
         if not customers:
             lines.append("\u0647\u06cc\u0686 \u06a9\u0627\u0631\u0628\u0631\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f.")
-        else:
+        rows = []
+        if customers:
+            row = []
             for c in customers:
                 name = _escape(c.get("full_name", "") or c.get("username", "")) or f"\u06a9\u0627\u0631\u0628\u0631 #{c['id']}"
-                lines.append(f"\U0001f464 {name} \u2022 <code>{c.get('telegram_id', '')}</code>")
+                row.append(IButton(f"\U0001f535 {name}", callback_data=f"agbot:set:users:detail:{c['id']}"))
+                if len(row) == 3:
+                    rows.append(row)
+                    row = []
+            if row:
+                rows.append(row)
+        nav = []
+        if page > 1:
+            nav.append(IButton("\u2b05\ufe0f", callback_data=f"agbot:set:users:list:{page-1}"))
+        nav.append(IButton(f"{page}/{total_pages}", callback_data="agbot:noop"))
+        if page < total_pages:
+            nav.append(IButton("\u27a1\ufe0f", callback_data=f"agbot:set:users:list:{page+1}"))
+        rows.append(nav)
+        rows.append([IButton(BTN_BACK, callback_data="agbot:set:back")])
         try:
-            await query.edit_message_text("\n".join(lines), reply_markup=back_keyboard("agbot:set:users"), parse_mode="HTML")
+            await query.edit_message_text(
+                "\n".join(lines),
+                reply_markup=_ikb(rows), parse_mode="HTML",
+            )
         except Exception:
             pass
-            return
+        return
 
     if p3 == "search":
         context.user_data[UD_STATE] = "st:search_user"

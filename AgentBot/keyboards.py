@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import Any, List, Optional
 
 from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup
 from Shared.tg_button_styles import keyboard_button as KButton
@@ -197,9 +197,11 @@ def broadcast_menu_keyboard():
     ])
 
 
-def settings_sub_menu_keyboard(prefix: str):
+def settings_sub_menu_keyboard(prefix: str, list_label: Optional[str] = None):
+    if list_label is None:
+        list_label = "\U0001f4cb \u0644\u06cc\u0633\u062a"
     return _ikb([
-        [IButton("\U0001f4cb \u0644\u06cc\u0633\u062a", callback_data=f"agbot:{prefix}:list")],
+        [IButton(list_label, callback_data=f"agbot:{prefix}:list")],
         [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648", callback_data=f"agbot:{prefix}:search")],
         [IButton(BTN_BACK, callback_data="agbot:set:back")],
     ])
