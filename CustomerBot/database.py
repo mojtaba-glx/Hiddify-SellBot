@@ -551,6 +551,113 @@ def set_user_banned(agent_id: int, telegram_id: int, banned: bool) -> bool:
     return affected > 0
 
 
+def get_full_customer_stats(agent_id: int, telegram_id: int) -> Dict[str, Any]:
+    """آمار کامل مشتری برای پروفایل نماینده (کیف پول، سرویس‌ها، تراکنش‌ها، سفارشات، تیکت‌ها)."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM customer_users WHERE agent_id = ? AND telegram_id = ?",
+        (agent_id, telegram_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    user = dict(row) if row else {}
+
+    # سرویس‌های مشتری (از دیتابیس نماینده)
+    services = []
+    services_total = 0
+    services_active = 0
+    services_trial = 0
+    try:
+        from Shared import agent_db
+        cust = agent_db.get_customer_by_telegram_id(agent_id, telegram_id)
+        if cust:
+            services = agent_db.get_services_by_customer(cust["id"])
+    except Exception:
+        services = []
+    services_total = len(services)
+    services_active = sum(1 for s in services if int(s.get("is_active", 0) or 0) == 1)
+    services_trial = sum(1 for s in services if int(s.get("is_trial", 0) or 0) == 1)
+
+    # تراکنش‌ها (وضعیت تایید/رد/در انتظار)
+    tx_total = 0
+    tx_approved = 0
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM customer_payments WHERE agent_id = ? AND user_id IN (SELECT id FROM customer_users WHERE agent_id = ? AND telegram_id = ?)",
+            (agent_id, agent_id, telegram_id),
+        )
+        row = cur.fetchone()
+        tx_total = int(row["c"] or 0) if row else 0
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM customer_payments WHERE agent_id = ? AND status = 'approved' AND user_id IN (SELECT id FROM customer_users WHERE agent_id = ? AND telegram_id = ?)",
+            (agent_id, agent_id, telegram_id),
+        )
+        row = cur.fetchone()
+        tx_approved = int(row["c"] or 0) if row else 0
+        conn.close()
+    except Exception:
+        tx_total = 0
+        tx_approved = 0
+
+    # سفارشات (تعداد، حجم، مبلغ)
+    orders_count = 0
+    orders_gb = 0.0
+    orders_price = 0
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(price), 0) AS price FROM customer_orders WHERE agent_id = ? AND telegram_id = ?",
+            (agent_id, telegram_id),
+        )
+        row = cur.fetchone()
+        if row:
+            orders_count = int(row["c"] or 0)
+            orders_gb = float(row["gb"] or 0)
+            orders_price = int(row["price"] or 0)
+        conn.close()
+    except Exception:
+        orders_count = 0
+        orders_gb = 0.0
+        orders_price = 0
+
+    # تیکت‌ها
+    tickets_count = 0
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM customer_tickets WHERE agent_id = ? AND telegram_id = ?",
+            (agent_id, telegram_id),
+        )
+        row = cur.fetchone()
+        tickets_count = int(row["c"] or 0) if row else 0
+        conn.close()
+    except Exception:
+        tickets_count = 0
+
+    return {
+        "user": user,
+        "wallet_balance": int(user.get("wallet_balance") or 0),
+        "is_banned": int(user.get("is_banned") or 0),
+        "got_free_trial": int(user.get("got_free_trial") or 0),
+        "services_total": services_total,
+        "services_active": services_active,
+        "services_trial": services_trial,
+        "tx_total": tx_total,
+        "tx_approved": tx_approved,
+        "orders_count": orders_count,
+        "orders_gb": orders_gb,
+        "orders_price": orders_price,
+        "tickets_count": tickets_count,
+    }
+
+
 def set_got_free_trial(agent_id: int, telegram_id: int) -> bool:
     init_db()
     conn = _get_conn()

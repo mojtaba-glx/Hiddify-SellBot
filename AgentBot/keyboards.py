@@ -197,6 +197,20 @@ def broadcast_menu_keyboard():
     ])
 
 
+def users_profile_keyboard(customer_id: int, telegram_id: int, back_callback: str = "agbot:set:users"):
+    """کیبورد پروفایل کاربر برای نماینده"""
+    rows = [
+        [IButton("📋 لیست سرویس‌ها", callback_data=f"agbot:set:users:services:{customer_id}")],
+        [IButton("📗 لیست سفارشات", callback_data=f"agbot:set:users:orders:{customer_id}")],
+        [IButton("💵 لیست تراکنش‌ها", callback_data=f"agbot:set:users:tx:{customer_id}")],
+        [IButton("🚫 مسدود/آزادسازی کاربر", callback_data=f"agbot:set:users:ban:{customer_id}")],
+        [IButton("📑 لیست تیکت‌ها", callback_data=f"agbot:set:users:tickets:{customer_id}")],
+        [IButton("📨 ارسال پیام", callback_data=f"agbot:set:users:message:{telegram_id}")],
+        [IButton(BTN_BACK, callback_data=back_callback)],
+    ]
+    return _ikb(rows)
+
+
 def settings_sub_menu_keyboard(prefix: str, list_label: Optional[str] = None):
     if list_label is None:
         list_label = "\U0001f4cb \u0644\u06cc\u0633\u062a"
