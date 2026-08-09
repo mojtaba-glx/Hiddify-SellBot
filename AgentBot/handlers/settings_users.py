@@ -121,7 +121,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 lines.append(f"{active} {sname}{trial}")
         await query.edit_message_text(
             "\n".join(lines),
-            reply_markup=back_keyboard("agbot:set:users"),
+            reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),
             parse_mode="HTML",
         )
         return
@@ -150,7 +150,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
         await query.edit_message_text(
             "\n".join(lines),
-            reply_markup=back_keyboard("agbot:set:users"),
+            reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),
             parse_mode="HTML",
         )
         return
@@ -176,7 +176,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             lines.append(f"🔸 در انتظار: {int(stats.get('tx_total')) - int(stats.get('tx_approved'))}")
         await query.edit_message_text(
             "\n".join(lines),
-            reply_markup=back_keyboard("agbot:set:users"),
+            reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),
             parse_mode="HTML",
         )
         return
@@ -240,7 +240,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
         await query.edit_message_text(
             "\n".join(lines),
-            reply_markup=back_keyboard("agbot:set:users"),
+            reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),
             parse_mode="HTML",
         )
         return
@@ -278,7 +278,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         username = u.get("username") or customer.get("username") or ""
         full_name = u.get("full_name") or customer.get("full_name") or ""
         user_display = _escape(full_name or username or name)
-        wallet = f"{int(stats.get('wallet_balance') or 0):,}"
         trial = "✅" if stats.get("got_free_trial") else "❌"
         banned = stats.get("is_banned")
         ban_status = "🔴 مسدود" if banned else "🟢 فعال"
@@ -290,7 +289,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"🔹 نام کاربری: @{_escape(username) if username else 'None'}\n"
             f"🔸 شناسه کاربر: {tg_id}\n"
             f"🔸 وضعیت دریافت تست رایگان: {trial}\n"
-            f"🔸 موجودی کیف پول: {wallet}تومان\n"
             f"🔸 وضعیت اکانت: {ban_status}\n"
             "❖ ⬩----------------------------------⬩ ❖\n"
             f"🔸 تعداد اشتراک‌های خریداری شده: {stats.get('services_total')}\n"
