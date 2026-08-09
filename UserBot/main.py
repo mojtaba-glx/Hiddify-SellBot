@@ -322,6 +322,7 @@ SUB_SERVER_PUBLIC_SCHEME = (os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "h
 SUB_SERVER_PUBLIC_PORT = int(os.getenv("SUB_SERVER_PUBLIC_PORT", str(SUB_SERVER_PORT)) or str(SUB_SERVER_PORT))
 SUB_SERVER_PUBLIC_HOST = (os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
 USERBOT_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_ACTION_COOLDOWN_SECONDS", "0.5") or "0.5")
+USERBOT_ANTI_SPAM_ENABLED = (os.getenv("USERBOT_ANTI_SPAM_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
 USERBOT_RATE_LIMIT_NOTICE_SECONDS = float(os.getenv("USERBOT_RATE_LIMIT_NOTICE_SECONDS", "5.0") or "5.0")
 BUY_MENU_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_MENU_ACTION_COOLDOWN_SECONDS", "0") or "0")
 BUY_CALLBACK_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_CALLBACK_COOLDOWN_SECONDS", "0.2") or "0.2")
@@ -388,6 +389,10 @@ def _check_action_rate_limit(
     # از همان استفاده می‌کنیم تا در زمان لگ/صف، پیام‌های قدیمی یکجا اجرا نشوند.
     now = float(event_ts) if event_ts is not None else time.time()
     data = context.user_data.setdefault("_rate_limit", {})
+
+    # اگر ضداسپم غیرفعال باشد، هیچ محدودیتی اعمال نمی‌شود.
+    if not USERBOT_ANTI_SPAM_ENABLED:
+        return False, 0.0
 
     # Global short throttle (all actions)
     global_key = f"{user_id}:__global__"
