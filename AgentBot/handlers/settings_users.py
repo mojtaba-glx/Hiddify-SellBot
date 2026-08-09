@@ -14,6 +14,7 @@ from AgentBot.keyboards import (
     back_keyboard,
     cancel_keyboard,
     main_menu_keyboard,
+    users_profile_keyboard,
     _ikb,
     BTN_BACK,
 )
@@ -31,6 +32,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     p1 = parts[1] if len(parts) > 1 else ""
     p2 = parts[2] if len(parts) > 2 else ""
     p3 = parts[3] if len(parts) > 3 else ""
+    p4 = parts[4] if len(parts) > 4 else ""
 
     if p1 == "set" and p2 == "users" and not p3:
         await query.edit_message_text(
@@ -129,7 +131,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not customer_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        customer = agent_db.get_customer_by_id(agent_id, customer_id)
+        customer = agent_db.get_customer_by_id(customer_id)
         telegram_id = int((customer or {}).get("telegram_id") or 0)
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
@@ -158,7 +160,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not customer_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        customer = agent_db.get_customer_by_id(agent_id, customer_id)
+        customer = agent_db.get_customer_by_id(customer_id)
         telegram_id = int((customer or {}).get("telegram_id") or 0)
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
@@ -184,7 +186,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not customer_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        customer = agent_db.get_customer_by_id(agent_id, customer_id)
+        customer = agent_db.get_customer_by_id(customer_id)
         telegram_id = int((customer or {}).get("telegram_id") or 0)
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
@@ -220,7 +222,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not customer_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        customer = agent_db.get_customer_by_id(agent_id, customer_id)
+        customer = agent_db.get_customer_by_id(customer_id)
         telegram_id = int((customer or {}).get("telegram_id") or 0)
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
@@ -263,7 +265,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not customer_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        customer = agent_db.get_customer_by_id(agent_id, customer_id)
+        customer = agent_db.get_customer_by_id(customer_id)
         if not customer:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
