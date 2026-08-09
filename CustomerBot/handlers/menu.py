@@ -185,7 +185,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         visible = [s for s in services if is_customer_service_visible(s)]
         if not visible:
             await update.message.reply_text(
-                "❌ هیچ سرویس فعالی ندارید.",
+                "❌ هیچ سرویس فعال ندارید.\n"
+                "💡 برای خرید سرویس جدید، روی دکمه «💳خرید اشتراک» کلیک کنید.",
                 reply_markup=main_menu_keyboard(),
             )
             return
