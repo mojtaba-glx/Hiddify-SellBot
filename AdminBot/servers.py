@@ -89,6 +89,7 @@ from AdminBot.userbot import (
     TICKET_REPLY_STATE,
     BROADCAST_SEND_STATE,
     SUB_BASE_URL_EDIT_STATE,
+    TX_PLANS_EDIT_STATE,
 )
 
 from AdminBot.agencies import (
@@ -6612,7 +6613,8 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
        context.user_data.get("userbot_sub_reminder_edit") or \
        context.user_data.get("userbot_sub_base_url_edit") or \
        context.user_data.get(ORDERS_SEARCH_STATE_KEY) or \
-       context.user_data.get(PAYMENT_SEARCH_STATE):
+       context.user_data.get(PAYMENT_SEARCH_STATE) or \
+       context.user_data.get(TX_PLANS_EDIT_STATE):
         
         await handle_admin_text_input(update, context)
         return
