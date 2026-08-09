@@ -22,8 +22,42 @@ from AgentBot.keyboards import (
 logger = logging.getLogger(__name__)
 
 
+def _build_profile_text(agent_id: int, customer: dict) -> str:
+    from CustomerBot.database import get_full_customer_stats
+    telegram_id = int(customer.get("telegram_id") or 0)
+    stats = get_full_customer_stats(agent_id, telegram_id)
+    u = stats.get("user") or {}
+    customer_id = customer.get("id") or 0
+    name = _escape(customer.get("full_name", "") or customer.get("username", "")) or f"کاربر #{customer_id}"
+    tg_id = customer.get("telegram_id", "—")
+    username = u.get("username") or customer.get("username") or ""
+    full_name = u.get("full_name") or customer.get("full_name") or ""
+    user_display = _escape(full_name or username or name)
+    trial = "✅" if stats.get("got_free_trial") else "❌"
+    banned = stats.get("is_banned")
+    ban_status = "🔴 مسدود" if banned else "🟢 فعال"
+    gb = stats.get("orders_gb") or 0
+    gb_str = f"{gb:g}" if isinstance(gb, (int, float)) else gb
+    price = f"{int(stats.get('orders_price') or 0):,}"
+    return (
+        f"👤 کاربر: {user_display}\n"
+        f"🔹 نام کاربری: @{_escape(username) if username else 'None'}\n"
+        f"🔸 شناسه کاربر: {tg_id}\n"
+        f"🔸 وضعیت دریافت تست رایگان: {trial}\n"
+        f"🔸 وضعیت اکانت: {ban_status}\n"
+        "❖ ⬩----------------------------------⬩ ❖\n"
+        f"🔸 تعداد اشتراک‌های خریداری شده: {stats.get('services_total')}\n"
+        f"🔸 تعداد اشتراک‌های متصل شده: {stats.get('services_active')}\n"
+        f"🔸 تعداد تراکنشات: {stats.get('tx_total')}\n"
+        f"🔸 تعداد تراکنشات تایید شده: {stats.get('tx_approved')}\n"
+        "❖ ⬩----------------------------------⬩ ❖\n"
+        f"🔸 تعداد سفارشات: {stats.get('orders_count')}\n"
+        f"🔸 مجموع حجم سفارشات(GB): {gb_str}\n"
+        f"🔸 مجموع ارزش سفارشات: {price}تومان"
+    )
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
     if not query:
         return
     data = (query.data or "").strip()
@@ -191,7 +225,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        from CustomerBot.database import set_user_banned, get_user
+        from CustomerBot.database import get_full_customer_stats, get_user
         u = get_user(agent_id, telegram_id) or {}
         banned = int(u.get("is_banned") or 0)
         ok = set_user_banned(agent_id, telegram_id, not banned)
@@ -200,16 +234,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer(f"کاربر {state}", show_alert=True)
         else:
             await query.answer("خطا در تغییر وضعیت.", show_alert=True)
-        from CustomerBot.database import get_full_customer_stats
-        stats = get_full_customer_stats(agent_id, telegram_id)
-        banned = stats.get("is_banned")
-        ban_status = "🔴 مسدود" if banned else "🟢 فعال"
-        name = _escape(customer.get("full_name", "") or customer.get("username", "")) or f"کاربر #{customer_id}"
-        text = (
-            f"👤 کاربر: {name}\n"
-            f"🔸 شناسه کاربر: {telegram_id}\n"
-            f"🔸 وضعیت اکانت: {ban_status}\n"
-        )
+        text = _build_profile_text(agent_id, customer)
         await query.edit_message_text(
             text,
             reply_markup=users_profile_keyboard(customer_id, telegram_id, back_callback="agbot:set:users"),
@@ -269,37 +294,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not customer:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        from CustomerBot.database import get_full_customer_stats
         telegram_id = int(customer.get("telegram_id") or 0)
-        stats = get_full_customer_stats(agent_id, telegram_id)
-        u = stats.get("user") or {}
-        name = _escape(customer.get("full_name", "") or customer.get("username", "")) or f"کاربر #{customer_id}"
-        tg_id = customer.get("telegram_id", "—")
-        username = u.get("username") or customer.get("username") or ""
-        full_name = u.get("full_name") or customer.get("full_name") or ""
-        user_display = _escape(full_name or username or name)
-        trial = "✅" if stats.get("got_free_trial") else "❌"
-        banned = stats.get("is_banned")
-        ban_status = "🔴 مسدود" if banned else "🟢 فعال"
-        gb = stats.get("orders_gb") or 0
-        gb_str = f"{gb:g}" if isinstance(gb, (int, float)) else gb
-        price = f"{int(stats.get('orders_price') or 0):,}"
-        text = (
-            f"👤 کاربر: {user_display}\n"
-            f"🔹 نام کاربری: @{_escape(username) if username else 'None'}\n"
-            f"🔸 شناسه کاربر: {tg_id}\n"
-            f"🔸 وضعیت دریافت تست رایگان: {trial}\n"
-            f"🔸 وضعیت اکانت: {ban_status}\n"
-            "❖ ⬩----------------------------------⬩ ❖\n"
-            f"🔸 تعداد اشتراک‌های خریداری شده: {stats.get('services_total')}\n"
-            f"🔸 تعداد اشتراک‌های متصل شده: {stats.get('services_active')}\n"
-            f"🔸 تعداد تراکنشات: {stats.get('tx_total')}\n"
-            f"🔸 تعداد تراکنشات تایید شده: {stats.get('tx_approved')}\n"
-            "❖ ⬩----------------------------------⬩ ❖\n"
-            f"🔸 تعداد سفارشات: {stats.get('orders_count')}\n"
-            f"🔸 مجموع حجم سفارشات(GB): {gb_str}\n"
-            f"🔸 مجموع ارزش سفارشات: {price}تومان"
-        )
+        text = _build_profile_text(agent_id, customer)
         kb = users_profile_keyboard(customer_id, telegram_id, back_callback="agbot:set:users")
         await query.edit_message_text(
             text,
