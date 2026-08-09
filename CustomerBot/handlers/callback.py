@@ -1081,6 +1081,12 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
             domain = f"https://{domain}"
         link = f"{domain.rstrip('/')}/{new_uuid}"
 
+    await update.message.reply_text(
+        "✅ اکانت تست رایگان شما با موفقیت ثبت شد\n"
+        "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.",
+        reply_markup=main_menu_keyboard(),
+    )
+
     if svc:
         from CustomerBot.database import get_subs_settings
         try:
@@ -1096,12 +1102,6 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
             )
         except Exception:
             pass
-
-    await update.message.reply_text(
-        "✅ اکانت تست رایگان شما با موفقیت ثبت شد\n"
-        "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.",
-        reply_markup=main_menu_keyboard(),
-    )
 
 
 def _renew_admin_modes():
