@@ -1,7 +1,7 @@
 import logging
 import math
 
-from telegram import Update
+from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from Shared import agent_db
@@ -15,6 +15,7 @@ from AgentBot.keyboards import (
     cancel_keyboard,
     send_msg_keyboard,
     main_menu_keyboard,
+    settings_menu_keyboard,
     users_profile_keyboard,
     _ikb,
     BTN_BACK,
@@ -332,14 +333,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await update.message.reply_text("❌ کاربر پیدا نشد.", reply_markup=main_menu_keyboard())
             return True
         from Shared.agent_db import get_active_customer_bot
-        from telegram import Bot
         bot_row = get_active_customer_bot(agent_id)
         token = str((bot_row or {}).get("bot_token") or "").strip()
         if not token:
             await update.message.reply_text("❌ ربات مشتری برای این نماینده فعال نیست.", reply_markup=main_menu_keyboard())
             return True
         try:
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("📩 پاسخ", callback_data="agmsg:reply")]]
             )
@@ -358,16 +357,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     if text in {"بازگشت", "❌ لغو", "لغو", "/cancel"}:
         context.user_data.pop(UD_STATE, None)
-        from AgentBot.keyboards import settings_menu_keyboard
         await update.message.reply_text("⚙️ <b>تنظیمات ربات</b>", reply_markup=settings_menu_keyboard(), parse_mode="HTML")
         return True
     customers = agent_db.search_customers(agent_id, text, limit=10)
     if not customers:
         await update.message.reply_text("\u0647\u06cc\u0686 \u06a9\u0627\u0631\u0628\u0631\u06cc \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.")
         return True
-    from AgentBot.keyboards import _ikb
-    from Shared.tg_button_styles import inline_button as IButton
-    from AgentBot.keyboards import main_menu_keyboard
     rows = []
     for c in customers:
         name = _escape(c.get("full_name", "") or c.get("username", "")) or f"\u06a9\u0627\u0631\u0628\u0631 #{c['id']}"
