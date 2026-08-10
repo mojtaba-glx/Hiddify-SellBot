@@ -71,6 +71,8 @@ def _fmt_gb(value: float) -> str:
         v = float(value or 0)
     except (TypeError, ValueError):
         v = 0.0
+    if v < 0.0001:
+        return "0"
     if v >= 1024:
         return f"{v / 1024:g}T"
     if v == int(v):
@@ -1122,7 +1124,7 @@ async def send_agent_services(
     agent_id: int,
     page: int = 1,
 ) -> None:
-    """نمایش سرویس‌های یک نماینده."""
+    """نمایش سرویس‌های یک نماینده (جدول مونواسپیس + گروه‌بندی فعال/غیرفعال)."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
         await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
@@ -1134,66 +1136,156 @@ async def send_agent_services(
     total_pages = max(1, (total + SERVICES_PAGE_SIZE - 1) // SERVICES_PAGE_SIZE)
 
     agent_name = str(agent.get("full_name") or "").strip() or str(agent.get("username") or "").strip() or str(agent.get("telegram_id") or "")
-    lines = [
-        f"📦 <b>سرویس‌های نماینده</b> (صفحه {page}/{total_pages})\n",
-        f"👤 {_escape(agent_name)}",
-        f"📊 مجموع: <b>{total}</b>\n",
-    ]
+
+    cust_cache: Dict[int, str] = {}
+    def _cust_name(cid: int) -> str:
+        cid = int(cid or 0)
+        if cid not in cust_cache:
+            try:
+                cust = agent_db.get_customer_by_id(cid)
+                cust_cache[cid] = (
+                    str(cust.get("full_name") or "").strip()
+                    or str(cust.get("username") or "").strip()
+                    or f"#{cid}"
+                )
+            except Exception:
+                cust_cache[cid] = f"#{cid}"
+        return cust_cache[cid]
+
+    rows_active: List[tuple] = []
+    rows_inactive: List[tuple] = []
+    for svc in services:
+        sid = int(svc.get("id") or 0)
+        name = str(svc.get("name") or "بی‌نام").strip()
+        server_title = str(svc.get("server_title") or "—").strip()
+        usage_cur = float(svc.get("usage_current") or 0)
+        usage_lim = float(svc.get("usage_limit") or 0)
+        days = int(svc.get("days_left") or 0)
+        end = str(svc.get("end_date") or "").strip()
+        is_active = bool(int(svc.get("is_active", 0) or 0))
+        wholesale = int(svc.get("wholesale_price") or 0)
+        sale = int(svc.get("sale_price") or 0)
+        item = (sid, name, server_title, usage_cur, usage_lim, days, end, wholesale, sale)
+        if is_active:
+            rows_active.append(item)
+        else:
+            rows_inactive.append(item)
+
+    def _trunc(text: str, max_len: int) -> str:
+        t = str(text or "").strip()
+        if len(t) <= max_len:
+            return t
+        return t[: max_len - 1] + "…"
+
+    def _rtl_cell(text: str) -> str:
+        """قرار دادن متن فارسی در یک سلول LTR تا تراز جدول خراب نشود."""
+        t = str(text or "")
+        if not t:
+            return ""
+        if any("\u0600" <= ch <= "\u06ff" for ch in t):
+            return "\u200f" + t
+        return t
+
+    def _usage(c: float, l: float) -> str:
+        c, l = float(c or 0), float(l or 0)
+        return f"{_fmt_gb(c)}/{_fmt_gb(l)}GB"
+    def _table(items: List[tuple]) -> List[str]:
+        if not items:
+            return []
+        headers = ("#", "نام", "حجم", "مصرف", "روز", "فروش")
+        col_w = {h: len(h) for h in headers}
+        rows: List[List[str]] = []
+        for (sid, name, server_title, usage_cur, usage_lim, days, end, wholesale, sale) in items:
+            cells = {
+                "#": str(sid),
+                "نام": _rtl_cell(_trunc(name, 14)),
+                "سرور": _rtl_cell(_trunc(server_title, 14)),
+                "حجم": _fmt_gb(usage_lim) + "GB",
+                "مصرف": _usage(usage_cur, usage_lim),
+                "روز": str(int(days or 0)),
+                "فروش": _short_price(sale),
+            }
+            ordered = [cells[h] for h in headers]
+            rows.append(ordered)
+            for h, v in zip(headers, ordered):
+                col_w[h] = max(col_w[h], len(v))
+        out: List[str] = []
+        sep = "─".join("─" * (w + 2) for w in col_w.values())
+        out.append("┌" + sep + "┐")
+        out.append("│" + "│".join(" " + headers[i].center(col_w[h]) + " " for i, h in enumerate(headers)) + "│")
+        out.append("├" + sep + "┤")
+        for r in rows:
+            padded = []
+            for i, h in enumerate(headers):
+                w = col_w[h]
+                if h == "#" or h == "روز":
+                    padded.append(" " + r[i].rjust(w) + " ")
+                else:
+                    padded.append(" " + r[i].ljust(w) + " ")
+            out.append("│" + "│".join(padded) + "│")
+        out.append("└" + sep + "┘")
+        return out
+
+    def _short_price(v: int) -> str:
+        try:
+            v = int(v or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v >= 1_000_000:
+            return f"{v // 1_000_000}M"
+        if v >= 1_000:
+            return f"{v // 1_000}K"
+        return str(v)
+
+    def _days_txt(items: List[tuple]) -> str:
+        if not items:
+            return "—"
+        near = []
+        for it in items:
+            days = int(it[5] or 0)
+            end = str(it[6] or "").strip()
+            if days <= 3 and end:
+                near.append((days, int(it[0] or 0), it[1]))
+        near.sort(key=lambda x: x[0])
+        return "، ".join(f"#{sid}·{_rtl_cell(_trunc(name, 12))}" for _, sid, name in near[:5]) or "—"
+
+    table_active = _table(rows_active)
+    table_inactive = _table(rows_inactive)
+
+    blocks: List[str] = []
+    blocks.append(f"📦 <b>سرویس‌های نماینده</b> (صفحه {page}/{total_pages})")
+    blocks.append(f"👤 {_escape(agent_name)}")
+    blocks.append(f"📊 مجموع: <b>{total}</b>")
+    blocks.append("")
+    blocks.append("━━━━━━━━━━━━━━━━━━━")
+
     if not services:
-        lines.append("سرویسی ثبت نشده است.")
+        blocks.append("سرویسی ثبت نشده است.")
     else:
-        cust_cache: Dict[int, str] = {}
-        rendered: List[str] = []
-        for svc in services:
-            cid = int(svc.get("customer_id") or 0)
-            if cid not in cust_cache:
-                try:
-                    cust = agent_db.get_customer_by_id(cid)
-                    cust_cache[cid] = (
-                        str(cust.get("full_name") or "").strip()
-                        or str(cust.get("username") or "").strip()
-                        or f"#{cid}"
-                    )
-                except Exception:
-                    cust_cache[cid] = f"#{cid}"
-            cust_name = cust_cache[cid]
+        if rows_active:
+            blocks.append("🟢 <b>فعال</b>")
+            blocks.append("<pre>" + "\n".join(table_active) + "</pre>")
+        if rows_inactive:
+            if rows_active:
+                blocks.append("")
+            blocks.append("🔴 <b>غیرفعال</b>")
+            blocks.append("<pre>" + "\n".join(table_inactive) + "</pre>")
 
-            sid = int(svc.get("id") or 0)
-            name = str(svc.get("name") or "بی‌نام").strip()
-            server_title = str(svc.get("server_title") or "—").strip()
-            usage_cur = float(svc.get("usage_current") or 0)
-            usage_lim = float(svc.get("usage_limit") or 0)
-            days = int(svc.get("days_left") or 0)
-            end = str(svc.get("end_date") or "").strip()
-            is_active = bool(int(svc.get("is_active", 0) or 0))
-            is_trial = bool(int(svc.get("is_trial", 0) or 0))
-            wholesale = int(svc.get("wholesale_price") or 0)
-            sale = int(svc.get("sale_price") or 0)
+        blocks.append("")
+        blocks.append(f"⏳ <b>نزدیک‌ترین انقضا:</b>")
+        blocks.append(f"  {_days_txt(rows_active + rows_inactive)}")
+        total_wholesale = sum(int(i[7] or 0) for i in rows_active + rows_inactive)
+        total_sale = sum(int(i[8] or 0) for i in rows_active + rows_inactive)
+        blocks.append(f"💰 <b>عمده:</b> {_short_price(total_wholesale)}")
+        blocks.append(f"💵 <b>فروش:</b> {_short_price(total_sale)}")
 
-            usage_txt = f"{_fmt_gb(usage_cur)}/{_fmt_gb(usage_lim)}GB"
-            if usage_cur >= usage_lim and usage_lim > 0:
-                usage_txt = "🔴 " + usage_txt
-            status_icon = "✅" if is_active else "❌"
-            trial_txt = " 🔥 تستی" if is_trial else ""
-
-            type_txt = f"{_fmt_gb(usage_lim)}GB/{days}روز"
-            if not days and usage_lim <= 0:
-                type_txt = "—"
-
-            rendered.append(
-                f"<b>🧷 #{sid} | {_escape(name)}</b>{trial_txt} {status_icon}\n"
-                f"  👥 {_escape(cust_name)}\n"
-                f"  🖥 {_escape(server_title)}\n"
-                f"  📦 {type_txt} | 💧 {usage_txt}\n"
-                f"  💰 عمده {_fmt_toman(wholesale)} | فروش {_fmt_toman(sale)}\n"
-                f"  ⏳ {_escape(end or '—')}"
-            )
-        lines.append("\n\n".join(rendered))
+    text = "\n".join(blocks)
 
     rows: List[List[Any]] = []
     nav = []
     if page > 1:
         nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"agency:services:{agent_id}:{page - 1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="agency:noop"))
     if page < total_pages:
         nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"agency:services:{agent_id}:{page + 1}"))
     if nav:
@@ -1202,7 +1294,7 @@ async def send_agent_services(
 
     kb = InlineKeyboardMarkup(rows)
     try:
-        await update.callback_query.edit_message_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
         await update.callback_query.answer()
 
