@@ -13,6 +13,7 @@ from AgentBot.keyboards import (
     settings_sub_menu_keyboard,
     back_keyboard,
     cancel_keyboard,
+    send_msg_keyboard,
     main_menu_keyboard,
     users_profile_keyboard,
     _ikb,
@@ -280,9 +281,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data[UD_STATE] = "st:send_user_msg"
         context.user_data.pop("subs_back_to", None)
         await query.edit_message_text(
-            "📨 <b>ارسال پیام به کاربر</b>\n\nمتن پیام را بنویسید: (یا «❌ لغو» برای انصراف)",
-            reply_markup=cancel_keyboard(),
-            parse_mode="HTML",
+            "✍️ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
+        )
+        await query.message.reply_text(
+            "✍️ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
+            reply_markup=send_msg_keyboard(),
         )
         return
 
@@ -314,7 +317,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     text = update.message.text.strip()
 
     if state in ("st:send_user_msg",):
-        if text in {"بازگشت", "❌ لغو", "لغو", "/cancel"}:
+        if text in {"بازگشت", "◀️ بازگشت", "❌ لغو", "لغو", "/cancel"}:
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop("userbot_msg_target", None)
             await update.message.reply_text("عملیات لغو شد.", reply_markup=main_menu_keyboard())
@@ -345,7 +348,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 text=f"📨 پیام از طرف نماینده:\n\n{text}",
                 reply_markup=kb,
             )
-            await update.message.reply_text("✅ پیام ارسال شد.", reply_markup=main_menu_keyboard())
+            await update.message.reply_text("📩پیام ارسال شد", reply_markup=main_menu_keyboard())
         except Exception as e:
             logger.warning("send user msg failed tg_id=%s: %s", target, e)
             await update.message.reply_text(f"❌ ارسال پیام ناموفق بود:\n{e}", reply_markup=main_menu_keyboard())

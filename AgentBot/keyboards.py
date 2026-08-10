@@ -39,6 +39,13 @@ def cancel_keyboard():
     )
 
 
+def send_msg_keyboard():
+    return ReplyKeyboardMarkup(
+        [[KButton("\u25c0\ufe0f \u0628\u0627\u0632\u06af\u0634\u062a", style="danger")]],
+        resize_keyboard=True,
+    )
+
+
 def broadcast_skip_cancel_keyboard():
     return ReplyKeyboardMarkup(
         [
