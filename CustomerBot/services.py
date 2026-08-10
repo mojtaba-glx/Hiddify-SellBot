@@ -237,32 +237,58 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
     if not ok:
         return {"ok": False, "error": "deduct_failed"}
 
-    agent_db.renew_service(service_id, extra_days=extra_days)
-
     if panel_uuid:
         server = database.get_server_by_id(server_id)
         if server:
             try:
-                current_svc = agent_db.get_service_by_id(service_id)
+                current_svc = agent_db.get_service_by_id(service_id) or svc
                 new_end = str(current_svc.get("end_date", "")).strip()
                 if new_end:
-                    # Find marzban_username from service_nodes
-                    marzban_un = ""
-                    try:
-                        from Shared import userbot_db
-                        for node in userbot_db.get_service_nodes(service_id):
-                            if int(node.get("server_id") or 0) == server_id:
-                                marzban_un = str(node.get("marzban_username") or "").strip()
-                                break
-                    except Exception:
-                        pass
-                    await multi_panel.patch_user(
-                        server, panel_uuid,
-                        {"expire_date": new_end.split(" ")[0]},
-                        marzban_username=marzban_un,
+                    targets = get_service_panel_targets(current_svc)
+                    if not targets:
+                        targets = [(server, panel_uuid, "")]
+
+                    # سرور اصلی (primary) اول و جدا؛ اگر در دسترس نبود پول کسر نشود.
+                    primary_sid = server_id
+                    primary_target = next(
+                        (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
+                        targets[0],
                     )
+                    try:
+                        await multi_panel.patch_user(
+                            primary_target[0], primary_target[1],
+                            {"expire_date": new_end.split(" ")[0]},
+                            marzban_username=primary_target[2],
+                        )
+                    except Exception as e:
+                        logger.warning("renew primary patch failed svc=%s: %s", service_id, e)
+                        agent_db.charge_wallet(agent_id, cost, description=f"Refund: renew svc #{service_id}")
+                        return {"ok": False, "error": f"api_error: {str(e)[:100]}"}
+
+                    # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.
+                    failed_nodes: List[str] = []
+                    for srv, uuid, marzban_un in targets:
+                        if int(srv.get("id") or 0) == primary_sid:
+                            continue
+                        try:
+                            await multi_panel.patch_user(
+                                srv, uuid,
+                                {"expire_date": new_end.split(" ")[0]},
+                                marzban_username=marzban_un,
+                            )
+                        except Exception as e:
+                            failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
+                            logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
+                    if failed_nodes:
+                        logger.warning(
+                            "Renew applied on primary but some nodes are pending sync (service_id=%s): %s",
+                            service_id,
+                            ", ".join(failed_nodes),
+                        )
             except Exception as e:
                 logger.warning("renew patch failed svc=%s: %s", service_id, e)
+
+    agent_db.renew_service(service_id, extra_days=extra_days)
 
     return {"ok": True, "wallet_balance": wallet.get("balance", 0)}
 
@@ -905,19 +931,26 @@ async def rename_service_on_panels(svc: dict, new_name: str) -> Tuple[bool, str]
     if not targets:
         return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
     errors: List[str] = []
+    ok_count = 0
     for srv, uuid, marzban_un in targets:
         try:
             await multi_panel.patch_user(srv, uuid, {"name": new_name}, marzban_username=marzban_un)
+            ok_count += 1
         except Exception as e:
             errors.append(f"{srv.get('title') or srv.get('id')}: {str(e)[:60]}")
-    if errors:
+    if ok_count == 0:
         preview = "\n".join(errors[:3])
         extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
         return False, "❌ تغییر نام روی همه سرورها انجام نشد.\n" + preview + extra
     ok = agent_db.update_service(int(svc.get("id") or 0), {"name": new_name})
     if not ok:
         return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
-    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد."
+    margin = ""
+    if errors:
+        margin = ("\n\n⚠️ نام روی همه نودها اعمال شد اما " + str(len(errors)) +
+                  " نود در دسترس نبود (تا برگشتنشان بعداً همگام می‌شود):\n- " +
+                  "\n- ".join(errors[:3]))
+    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد." + margin
 
 
 # ---------- تغییر لینک اشتراک (بازسازی UUID روی همه پنل‌ها) ----------
@@ -942,13 +975,16 @@ async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
             continue
         try:
             patched = await hiddify_api.patch_user(srv, old_uuid, {"uuid": desired_uuid})
-        except Exception:
+        except Exception as e:
+            rollback_ok = True
             for srv2, old_uuid2, new_uuid2 in updated_targets:
                 try:
                     await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
                 except Exception:
-                    pass
-            return False, "❌ بازسازی UUID روی همه سرورها انجام نشد. لطفاً مجدداً تلاش کنید.", None
+                    rollback_ok = False
+            where = str(srv.get("title") or f"سرور #{srv.get('id')}")
+            extra = "" if rollback_ok else "\n⚠️ برگرداندن برخی نودها به UUID قبلی ممکن نشد؛ لطفاً با پشتیبانی هماهنگ کنید."
+            return False, f"❌ بازسازی UUID روی «{where}» انجام نشد.\nجزئیات: {str(e)[:120]}{extra}", None
 
         returned_uuid = str(patched.get("uuid") or patched.get("id") or "").strip()
         if not returned_uuid:
