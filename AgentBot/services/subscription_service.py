@@ -120,6 +120,21 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
     except Exception as e:
         logger.error("Cluster create failed for %s: %s", name, e)
         agent_db.charge_wallet(agent_id, wholesale, description=f"\u0628\u0627\u0632\u06af\u0631\u062f\u0627\u0646\u062a \u0645\u0648\u062c\u0648\u062f\u06cc \u0628\u0647 \u062f\u0644\u06cc\u0644 \u062e\u0637\u0627\u06cc \u0633\u0627\u062e\u062a \u06a9\u0627\u0631\u0628\u0631: {name}")
+        try:
+            from Shared.admin_reports import notify_admin_delivery_report
+            await notify_admin_delivery_report(
+                action_title="ساخت سرویس نماینده",
+                agent=agent_db.get_agent_by_id(agent_id),
+                service_name=name,
+                server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+                volume_gb=gb,
+                days=days,
+                amount=wholesale,
+                status="error",
+                error=str(e)[:120],
+            )
+        except Exception as _report_e:
+            logger.warning("Failed to send delivery error report: %s", _report_e)
         return None
     panel_uuid = str(panel_result.get("uuid", "") or panel_result.get("id", "") or "").strip()
     primary_marzban = str((panel_result or {}).get("_marzban_username") or "").strip()
@@ -147,7 +162,61 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
                 marzban_username=str(item.get("marzban_username") or "").strip(),
             )
 
+    # اگر بعضی نودها در دسترس نبودند → گزارش partial به ادمین + دکمه sync.
+    created_set = {int(int(n.get("server_id") or 0)) for n in (created_nodes or [])}
+    pending_servers = [
+        str(t.get("title") or f"\u0633\u0631\u0648\u0631 #{t.get('id')}")
+        for t in targets
+        if int(t.get("id") or 0) not in created_set
+    ]
+    if pending_servers:
+        try:
+            from Shared.admin_reports import notify_admin_delivery_report
+            await notify_admin_delivery_report(
+                action_title="ساخت سرویس نماینده",
+                agent=agent_db.get_agent_by_id(agent_id),
+                customer_name=_customer_display_name(customer_id),
+                service_name=name,
+                server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+                volume_gb=gb,
+                days=days,
+                amount=wholesale,
+                status="partial",
+                pending_servers=pending_servers,
+                sync_primary_server_id=int(server_id or 0),
+            )
+        except Exception as _report_e:
+            logger.warning("Failed to send partial delivery report: %s", _report_e)
+    else:
+        try:
+            from Shared.admin_reports import notify_admin_delivery_report
+            await notify_admin_delivery_report(
+                action_title="ساخت سرویس نماینده",
+                agent=agent_db.get_agent_by_id(agent_id),
+                customer_name=_customer_display_name(customer_id),
+                service_name=name,
+                server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+                volume_gb=gb,
+                days=days,
+                amount=wholesale,
+                status="success",
+            )
+        except Exception as _report_e:
+            logger.warning("Failed to send delivery success report: %s", _report_e)
+
     return svc
+
+
+def _customer_display_name(customer_id: int) -> str:
+    try:
+        cust = agent_db.get_customer_by_id(customer_id) or {}
+        return (
+            str(cust.get("full_name") or "").strip()
+            or str(cust.get("username") or "").strip()
+            or f"#{customer_id}"
+        )
+    except Exception:
+        return f"#{customer_id}"
 
 
 async def renew_subscription(agent_id: int, service_id: int, extra_days: int, extra_gb: float = 0, override_cost: Optional[int] = None, volume_mode: str = None, time_mode: str = None) -> Optional[Dict[str, Any]]:
@@ -161,6 +230,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         time_mode = time_mode or admin_time
 
     wholesale = int(svc.get("wholesale_price", 0))
+    cost = 0
     if extra_days > 0:
         if override_cost is not None:
             cost = int(override_cost)
@@ -174,28 +244,71 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, volume_mode, time_mode)
     updated = agent_db.get_service_by_id(service_id)
 
-    # Sync with panel (update usage_limit_GB and package_days)
+    # Sync with panel (update usage_limit_GB and package_days) on all cluster nodes
+    renew_failed: list[str] = []
     if updated:
         sid = int(updated.get("server_id") or 0)
         server = get_server_by_id(sid)
-        if server and updated.get("panel_user_uuid"):
-            marzban_un = _lookup_marzban_username(service_id, sid)
-            new_usage = float(updated.get("usage_limit", 0) or 0)
-            new_days = int(updated.get("days_left", 0) or 0)
-            patch_data = {"usage_limit_GB": new_usage, "package_days": new_days}
-            if str(volume_mode).strip().lower() == "reset":
-                patch_data["current_usage_GB"] = 0
-            if str(time_mode).strip().lower() == "reset":
-                patch_data["start_date"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
+        targets = _get_cluster_servers(sid) if sid > 0 else []
+        if not targets and server:
+            targets = [server]
+        new_usage = float(updated.get("usage_limit", 0) or 0)
+        new_days = int(updated.get("days_left", 0) or 0)
+        patch_data = {"usage_limit_GB": new_usage, "package_days": new_days}
+        if str(volume_mode).strip().lower() == "reset":
+            patch_data["current_usage_GB"] = 0
+        if str(time_mode).strip().lower() == "reset":
+            patch_data["start_date"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
+
+        primary_ok = False
+        for tgt in targets:
+            tgt_id = int(tgt.get("id") or 0)
+            marzban_un = _lookup_marzban_username(service_id, tgt_id)
             try:
                 await multi_panel.patch_user(
-                    server,
+                    tgt,
                     updated["panel_user_uuid"],
                     patch_data,
                     marzban_username=marzban_un,
                 )
+                if tgt_id == sid:
+                    primary_ok = True
             except Exception as e:
-                logger.error("panel sync failed on renew svc=%s: %s", service_id, e)
+                logger.warning("renew panel sync failed svc=%s server=%s: %s", service_id, tgt_id, e)
+                renew_failed.append(str(tgt.get("title") or f"\u0633\u0631\u0648\u0631 #{tgt_id}"))
+
+        # گزارش به ادمین
+        try:
+            from Shared.admin_reports import notify_admin_delivery_report
+            if not primary_ok and renew_failed:
+                await notify_admin_delivery_report(
+                    action_title="تمدید سرویس نماینده",
+                    agent=agent_db.get_agent_by_id(agent_id),
+                    customer_name=_customer_display_name(int(svc.get("customer_id") or 0)),
+                    service_name=str(svc.get("name") or ""),
+                    server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{sid}") if server else f"\u0633\u0631\u0648\u0631 #{sid}",
+                    volume_gb=new_usage,
+                    days=new_days,
+                    amount=cost if extra_days > 0 else 0,
+                    status="error",
+                    error="\n".join(renew_failed[:3]),
+                )
+            elif renew_failed:
+                await notify_admin_delivery_report(
+                    action_title="تمدید سرویس نماینده",
+                    agent=agent_db.get_agent_by_id(agent_id),
+                    customer_name=_customer_display_name(int(svc.get("customer_id") or 0)),
+                    service_name=str(svc.get("name") or ""),
+                    server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{sid}") if server else f"\u0633\u0631\u0648\u0631 #{sid}",
+                    volume_gb=new_usage,
+                    days=new_days,
+                    amount=cost if extra_days > 0 else 0,
+                    status="partial",
+                    pending_servers=renew_failed,
+                    sync_primary_server_id=int(sid or 0),
+                )
+        except Exception as _report_e:
+            logger.warning("Failed to send renew delivery report: %s", _report_e)
 
     updated["_renew_volume_mode"] = volume_mode
     updated["_renew_time_mode"] = time_mode
