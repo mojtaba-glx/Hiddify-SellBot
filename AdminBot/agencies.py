@@ -66,6 +66,18 @@ def _fmt_toman(amount: int) -> str:
         return str(amount or 0)
 
 
+def _fmt_gb(value: float) -> str:
+    try:
+        v = float(value or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    if v >= 1024:
+        return f"{v / 1024:g}T"
+    if v == int(v):
+        return f"{int(v)}"
+    return f"{v:g}"
+
+
 def _fmt_agent_display(agent: Dict[str, Any]) -> str:
     """نمایش خلاصه یک نماینده."""
     name = str(agent.get("full_name") or "").strip()
@@ -1121,23 +1133,62 @@ async def send_agent_services(
     services, total = agent_db.get_services_by_agent(agent_id, page=page, page_size=SERVICES_PAGE_SIZE)
     total_pages = max(1, (total + SERVICES_PAGE_SIZE - 1) // SERVICES_PAGE_SIZE)
 
+    agent_name = str(agent.get("full_name") or "").strip() or str(agent.get("username") or "").strip() or str(agent.get("telegram_id") or "")
     lines = [
-        f"📦 <b>سرویس‌های نماینده</b> (صفحه {page}/{total_pages})\n\n",
-        f"👤 {_escape(agent.get('full_name')) or agent.get('telegram_id')}\n",
-        f"📊 مجموع: <b>{total}</b>\n\n",
+        f"📦 <b>سرویس‌های نماینده</b> (صفحه {page}/{total_pages})\n",
+        f"👤 {_escape(agent_name)}",
+        f"📊 مجموع: <b>{total}</b>\n",
     ]
     if not services:
         lines.append("سرویسی ثبت نشده است.")
     else:
+        cust_cache: Dict[int, str] = {}
+        rendered: List[str] = []
         for svc in services:
-            active = "✅" if int(svc.get("is_active", 0)) else "❌"
-            trial = "🔥" if int(svc.get("is_trial", 0)) else ""
-            lines.append(
-                f"{active}{trial} <b>{_escape(svc.get('name')) or 'بی‌نام'}</b>\n"
-                f"   🖥 {_escape(svc.get('server_title'))} | 💧 {svc.get('usage_current', 0)}/{svc.get('usage_limit', 0)}GB\n"
-                f"   🏷 عمده: {_fmt_toman(svc.get('wholesale_price'))} | فروش: {_fmt_toman(svc.get('sale_price'))}\n"
-                f"   🆔 <code>{svc['id']}</code> · expiry: {_escape(svc.get('end_date') or '—')}"
+            cid = int(svc.get("customer_id") or 0)
+            if cid not in cust_cache:
+                try:
+                    cust = agent_db.get_customer_by_id(cid)
+                    cust_cache[cid] = (
+                        str(cust.get("full_name") or "").strip()
+                        or str(cust.get("username") or "").strip()
+                        or f"#{cid}"
+                    )
+                except Exception:
+                    cust_cache[cid] = f"#{cid}"
+            cust_name = cust_cache[cid]
+
+            sid = int(svc.get("id") or 0)
+            name = str(svc.get("name") or "بی‌نام").strip()
+            server_title = str(svc.get("server_title") or "—").strip()
+            usage_cur = float(svc.get("usage_current") or 0)
+            usage_lim = float(svc.get("usage_limit") or 0)
+            days = int(svc.get("days_left") or 0)
+            end = str(svc.get("end_date") or "").strip()
+            is_active = bool(int(svc.get("is_active", 0) or 0))
+            is_trial = bool(int(svc.get("is_trial", 0) or 0))
+            wholesale = int(svc.get("wholesale_price") or 0)
+            sale = int(svc.get("sale_price") or 0)
+
+            usage_txt = f"{_fmt_gb(usage_cur)}/{_fmt_gb(usage_lim)}GB"
+            if usage_cur >= usage_lim and usage_lim > 0:
+                usage_txt = "🔴 " + usage_txt
+            status_icon = "✅" if is_active else "❌"
+            trial_txt = " 🔥 تستی" if is_trial else ""
+
+            type_txt = f"{_fmt_gb(usage_lim)}GB/{days}روز"
+            if not days and usage_lim <= 0:
+                type_txt = "—"
+
+            rendered.append(
+                f"<b>🧷 #{sid} | {_escape(name)}</b>{trial_txt} {status_icon}\n"
+                f"  👥 {_escape(cust_name)}\n"
+                f"  🖥 {_escape(server_title)}\n"
+                f"  📦 {type_txt} | 💧 {usage_txt}\n"
+                f"  💰 عمده {_fmt_toman(wholesale)} | فروش {_fmt_toman(sale)}\n"
+                f"  ⏳ {_escape(end or '—')}"
             )
+        lines.append("\n\n".join(rendered))
 
     rows: List[List[Any]] = []
     nav = []
