@@ -336,6 +336,10 @@ USERBOT_TICKET_AUTOCLOSE_ENABLED = (os.getenv("USERBOT_TICKET_AUTOCLOSE_ENABLED"
 USERBOT_TICKET_AUTOCLOSE_HOURS = int(os.getenv("USERBOT_TICKET_AUTOCLOSE_HOURS", "24") or "24")
 USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS = int(os.getenv("USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS", "600") or "600")
 
+# Direct-buy delivery retry on transient Hiddify API errors.
+DIRECT_DELIVERY_MAX_RETRIES = int(os.getenv("USERBOT_DIRECT_DELIVERY_MAX_RETRIES", "5") or "5")
+DIRECT_DELIVERY_RETRY_DELAY_SECONDS = float(os.getenv("USERBOT_DIRECT_DELIVERY_RETRY_DELAY_SECONDS", "60") or "60")
+
 
 def _normalize_action_text(text: str) -> str:
     t = (text or "").strip()
@@ -2623,6 +2627,8 @@ async def _apply_service_renewal_on_targets(
         service_id = 0
 
     last_online = None
+    ok_count = 0
+    errors_primary: list[str] = []
     for srv, uuid in targets:
         # Look up marzban_username for this target
         marzban_un = ""
@@ -2633,10 +2639,34 @@ async def _apply_service_renewal_on_targets(
                     break
         except Exception:
             pass
-        patched = await multi_panel.patch_user(srv, uuid, payload, marzban_username=marzban_un)
-        await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+        try:
+            patched = await multi_panel.patch_user(srv, uuid, payload, marzban_username=marzban_un)
+            await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+        except Exception as e:
+            # یک نود down نباید مانع تحویل به بقیه شود؛ فقط لاگ و ادامه بده.
+            logger.warning(
+                "Renewal skipped for server_id=%s (uuid=%s) due to error: %s",
+                srv.get("id"),
+                uuid,
+                e,
+            )
+            errors_primary.append(str(e))
+            continue
+        ok_count += 1
         if last_online is None:
             last_online = patched.get("last_online")
+
+    # اگر هیچ نودی موفق نشد، یعنی کل شبکه سرورها از دسترس خارج است -> fail واقعی.
+    if ok_count == 0:
+        raise RuntimeError("تمدید سرویس روی هیچ سرور/نودی انجام نشد: " + (" | ".join(errors_primary[:3]) or "all servers unreachable"))
+
+    if ok_count < len(targets):
+        logger.warning(
+            "Renewal partially applied (service_id=%s): %s/%s targets succeeded.",
+            service_id,
+            ok_count,
+            len(targets),
+        )
 
     if service_id > 0:
         try:
@@ -3706,6 +3736,8 @@ def _build_receipt_meta(meta: dict) -> str:
         "direct_done",
         "direct_done_at",
         "direct_error",
+        "direct_attempts",
+        "direct_error_at",
         "admin_notified_at",
         "admin_chat_id",
         "admin_message_id",
@@ -4291,6 +4323,13 @@ def _parse_number_meta(value: Any, as_int: bool = True):
         return 0 if as_int else 0.0
 
 
+def _parse_direct_retry_count(meta: dict) -> int:
+    try:
+        return int(meta.get("direct_attempts") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _try_claim_direct_buy_payment(payment_id: int) -> bool:
     conn = userbot_db._get_conn()
     try:
@@ -4301,8 +4340,17 @@ def _try_claim_direct_buy_payment(payment_id: int) -> bool:
             return False
         current = str(row["receipt_image"] or "")
         meta = _parse_receipt_meta(current)
-        if str(meta.get("direct_done") or "").strip().lower() in {"1", "processing", "err"}:
+        done_state = str(meta.get("direct_done") or "").strip().lower()
+        # پرداخت‌هایی که با موفقیت تحویل شده یا در حال پردازش‌اند دوباره claim نمی‌شوند.
+        if done_state in {"1", "processing"}:
             return False
+        # پرداخت‌هایی که با خطای موقت شکست خورده‌اند، تا سقف مشخصی می‌توانند دوباره تلاش شوند.
+        if done_state == "err":
+            err_type = str(meta.get("direct_error") or "").strip()
+            if _is_non_retryable_direct_error(err_type):
+                return False
+            if _parse_direct_retry_count(meta) >= DIRECT_DELIVERY_MAX_RETRIES:
+                return False
         meta["direct_done"] = "processing"
         meta["direct_error"] = ""
         new_raw = _build_receipt_meta(meta)
@@ -4349,8 +4397,23 @@ async def _process_approved_direct_buy_payments(application) -> None:
             if str(meta.get("pay_flow") or "").strip().lower() != "direct_buy":
                 continue
             done_state = str(meta.get("direct_done") or "").strip().lower()
-            if done_state in {"1", "processing", "err"}:
+            if done_state in {"1", "processing"}:
                 continue
+            if done_state == "err":
+                err_type = str(meta.get("direct_error") or "").strip()
+                if _is_non_retryable_direct_error(err_type):
+                    continue
+                if _parse_direct_retry_count(meta) >= DIRECT_DELIVERY_MAX_RETRIES:
+                    continue
+                err_at = str(meta.get("direct_error_at") or "").strip()
+                if err_at:
+                    try:
+                        err_dt = datetime.strptime(err_at, "%Y-%m-%d %H:%M:%S")
+                        elapsed = (datetime.now(timezone.utc).replace(tzinfo=None) - err_dt).total_seconds()
+                        if elapsed < DIRECT_DELIVERY_RETRY_DELAY_SECONDS:
+                            continue
+                    except ValueError:
+                        pass
 
             internal_user_id = int(row.get("user_id") or 0)
             tg_id = int(row.get("telegram_id") or 0)
@@ -4406,21 +4469,30 @@ async def _process_approved_direct_buy_payments(application) -> None:
                     },
                 )
             else:
+                meta_after = _parse_receipt_meta(str(row.get("receipt_image") or ""))
+                attempts = _parse_direct_retry_count(meta_after) + 1
                 _update_payment_receipt_meta(
                     payment_id,
                     {
                         "direct_done": "err",
                         "direct_error": "fulfillment_failed",
+                        "direct_error_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                        "direct_attempts": str(attempts),
                         "service_name": service_name,
                     },
                 )
+                if attempts >= DIRECT_DELIVERY_MAX_RETRIES:
+                    await _warn_admin_direct_delivery_exhausted(payment_id, row, attempts)
         except Exception as e:
+            meta_ex = _parse_receipt_meta(str(row.get("receipt_image") or ""))
+            attempts = _parse_direct_retry_count(meta_ex) + 1
             _update_payment_receipt_meta(
                 payment_id,
                 {
                     "direct_done": "err",
                     "direct_error": "fulfillment_exception",
                     "direct_error_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                    "direct_attempts": str(attempts),
                 },
             )
             logger.exception(
@@ -4428,6 +4500,8 @@ async def _process_approved_direct_buy_payments(application) -> None:
                 payment_id,
                 e,
             )
+            if attempts >= DIRECT_DELIVERY_MAX_RETRIES:
+                await _warn_admin_direct_delivery_exhausted(payment_id, row, attempts)
             continue
 
 
@@ -4447,6 +4521,38 @@ async def _direct_buy_delivery_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         await _process_approved_direct_buy_payments(context.application)
     except Exception as e:
         logger.warning("Direct-buy delivery job error: %s", e)
+
+
+def _is_non_retryable_direct_error(err_type: str) -> bool:
+    return str(err_type or "").strip().lower() in {"invalid_meta", "already_done"}
+
+
+async def _warn_admin_direct_delivery_exhausted(payment_id: int, row: dict, attempts: int) -> None:
+    """به ادمین اخطار می‌دهد که تحویل خرید مستقیم پس از چند تلاش شکست خورده است."""
+    if not (ADMIN_ID and ADMIN_BOT_TOKEN):
+        return
+    try:
+        from telegram import Bot
+        admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        user_title = (
+            str(row.get("full_name") or "").strip()
+            or str(row.get("username") or "").strip()
+            or str(row.get("telegram_id") or "").strip()
+            or "-"
+        )
+        await admin_bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                "⚠️ تحویل خرید مستقیم پس از چند تلاش موفق نشد.\n"
+                f"🆔 پرداخت: {payment_id}\n"
+                f"👤 کاربر: {user_title}\n"
+                f"🔑 کد تراکنش: {row.get('tx_code') or '-'}\n"
+                f"📦 تعداد تلاش: {attempts}\n\n"
+                "لطفاً به صورت دستی بررسی/تحویل دهید یا پنل/نود را بررسی کنید."
+            ),
+        )
+    except Exception as e:
+        logger.warning("Failed to warn admin about direct delivery exhaustion (payment_id=%s): %s", payment_id, e)
 
 
 def _resolve_plan_display_mode(server_block: Optional[Dict[str, Any]]) -> str:

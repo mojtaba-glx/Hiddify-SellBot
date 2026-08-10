@@ -15,6 +15,9 @@ SSL_MODE_AUTO = "auto"
 SSL_MODE_SECURE = "secure"
 SSL_MODE_INSECURE = "insecure"
 API_TIMEOUT_ENV = "HIDDIFY_API_TIMEOUT_SECONDS"
+API_RETRY_ATTEMPTS_ENV = "HIDDIFY_API_RETRY_ATTEMPTS"
+API_RETRY_DELAY_ENV = "HIDDIFY_API_RETRY_DELAY_SECONDS"
+API_RETRY_EAGER_ENV = "HIDDIFY_API_RETRY_ON_POST"
 BACKUP_RETRY_ATTEMPTS_ENV = "HIDDIFY_BACKUP_RETRY_ATTEMPTS"
 BACKUP_RETRY_DELAY_ENV = "HIDDIFY_BACKUP_RETRY_DELAY_SECONDS"
 CREATE_USER_STABILIZE_ENV = "HIDDIFY_CREATE_USER_STABILIZE_MODE"
@@ -210,6 +213,58 @@ def _get_api_timeout_seconds() -> float:
     return min(max(val, 2.0), 60.0)
 
 
+def _get_api_retry_attempts() -> int:
+    raw = str(os.getenv(API_RETRY_ATTEMPTS_ENV, "3") or "3").strip()
+    try:
+        return max(int(raw), 1)
+    except Exception:
+        return 3
+
+
+def _get_api_retry_delay_seconds() -> float:
+    raw = str(os.getenv(API_RETRY_DELAY_ENV, "1.5") or "1.5").strip()
+    try:
+        return min(max(float(raw), 0.2), 15.0)
+    except Exception:
+        return 1.5
+
+
+def _get_api_retry_on_post() -> bool:
+    raw = str(os.getenv(API_RETRY_EAGER_ENV, "1") or "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    text = f"{str(exc).strip()} {exc.__class__.__name__}".lower()
+    return any(
+        token in text
+        for token in (
+            "connecttimeout",
+            "connect error",
+            "readtimeout",
+            "read timeout",
+            "timeout",
+            "temporarily failed",
+            "temporary failure in name resolution",
+            "remoteprotocolerror",
+            "server disconnected",
+            "connectionreset",
+            "connection refused",
+            "connectionerror",
+            "dns",
+            "name resolution",
+            "resolve",
+            "networkerror",
+            "pooltimeout",
+            "unreachable",
+            "gaierror",
+            "econnreset",
+            "econnrefused",
+            "ehostunreach",
+        )
+    )
+
+
 def _get_create_user_stabilize_mode() -> str:
     raw = str(os.getenv(CREATE_USER_STABILIZE_ENV, CREATE_USER_STABILIZE_TOGGLE) or "").strip().lower()
     aliases = {
@@ -254,6 +309,9 @@ async def _request(
     mode = _get_ssl_mode()
 
     timeout_seconds = _get_api_timeout_seconds()
+    retry_attempts = _get_api_retry_attempts()
+    retry_delay = _get_api_retry_delay_seconds()
+    allow_retry_post = _get_api_retry_on_post()
 
     async def _send_request(verify: Any) -> httpx.Response:
         async with httpx.AsyncClient(timeout=timeout_seconds, verify=verify) as client:
@@ -265,27 +323,46 @@ async def _request(
                 json=json,
             )
 
-    try:
-        if mode == SSL_MODE_SECURE:
-            resp = await _send_request(True)
-        elif mode == SSL_MODE_INSECURE:
-            resp = await _send_request(_build_insecure_ssl_context())
-        else:
-            try:
+    # اگر روش POST باشد (مثل ساخت کاربر) تلاش مجدد به‌طور پیش‌فرض غیرفعال است تا
+    # از ساخت کاربر تکراری جلوگیری شود، مگر اینکه صریحاً فعال شده باشد.
+    max_attempts = retry_attempts if (method.upper() != "POST" or allow_retry_post) else 1
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            if mode == SSL_MODE_SECURE:
                 resp = await _send_request(True)
-            except httpx.RequestError as e:
-                if not _looks_like_tls_error(e):
-                    raise
-                logger.warning(
-                    "TLS verification failed for %s; retrying insecure because %s=%s",
-                    url,
-                    SSL_MODE_ENV,
-                    SSL_MODE_AUTO,
-                )
+            elif mode == SSL_MODE_INSECURE:
                 resp = await _send_request(_build_insecure_ssl_context())
-    except httpx.RequestError as e:
-        msg = str(e).strip() or e.__class__.__name__
-        raise HiddifyApiError(f"خطا در اتصال به Hiddify API: {msg}") from e
+            else:
+                try:
+                    resp = await _send_request(True)
+                except httpx.RequestError as e:
+                    if not _looks_like_tls_error(e):
+                        raise
+                    logger.warning(
+                        "TLS verification failed for %s; retrying insecure because %s=%s",
+                        url,
+                        SSL_MODE_ENV,
+                        SSL_MODE_AUTO,
+                    )
+                    resp = await _send_request(_build_insecure_ssl_context())
+            break
+        except httpx.RequestError as e:
+            msg = str(e).strip() or e.__class__.__name__
+            transient = _is_transient_network_error(e)
+            if transient and attempt < max_attempts:
+                logger.warning(
+                    "Hiddify API request failed (transient, attempt %s/%s) %s: %s",
+                    attempt,
+                    max_attempts,
+                    url,
+                    msg,
+                )
+                await asyncio.sleep(retry_delay)
+                continue
+            raise HiddifyApiError(f"خطا در اتصال به Hiddify API: {msg}") from e
 
     if resp.status_code >= 400:
         raise HiddifyApiError(f"HTTP {resp.status_code}: {resp.text}")
