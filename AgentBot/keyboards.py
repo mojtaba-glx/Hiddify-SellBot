@@ -1,4 +1,4 @@
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup
 from Shared.tg_button_styles import keyboard_button as KButton
@@ -230,12 +230,12 @@ def settings_sub_menu_keyboard(prefix: str, list_label: Optional[str] = None):
 
 def tx_menu_keyboard():
     return _ikb([
-        [IButton("\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647", callback_data="agbot:set:tx:approved")],
-        [IButton("\u274c \u0631\u062f \u0634\u062f\u0647", callback_data="agbot:set:tx:rejected")],
-        [IButton("\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631", callback_data="agbot:set:tx:pending")],
-        [IButton("\U0001f4b3 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a", callback_data="agbot:set:tx:card")],
-        [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648", callback_data="agbot:set:tx:search")],
-        [IButton(BTN_BACK, callback_data="agbot:set:back")],
+        [IButton("\u2705\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647", callback_data="agbot:set:tx:approved")],
+        [IButton("\u274c\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0631\u062f \u0634\u062f\u0647", callback_data="agbot:set:tx:rejected")],
+        [IButton("\u23f3\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631", callback_data="agbot:set:tx:pending")],
+        [IButton("\U0001f4b3\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a", callback_data="agbot:set:tx:card")],
+        [IButton("\U0001f50d\u062c\u0633\u062a\u062c\u0648\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634", callback_data="agbot:set:tx:search")],
+        [IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data="agbot:set:back")],
     ])
 
 
@@ -312,6 +312,30 @@ def pagination_keyboard(base_callback: str, page: int, total_pages: int, back_ca
     if nav:
         rows.append(nav)
     rows.append([IButton(BTN_BACK, callback_data=back_callback)])
+    return _ikb(rows)
+
+
+def tx_list_keyboard(payments: List[Dict[str, Any]], filter_type: str, page: int, total_pages: int, back_callback: str = "agbot:set:tx"):
+    rows = []
+    current_row = []
+    for p in payments:
+        current_row.append(IButton(str(p.get("id")), callback_data=f"agbot:set:tx:detail:{p.get('id')}"))
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+
+    nav_row = []
+    if page > 1:
+        nav_row.append(IButton("\u27a1\ufe0f", callback_data=f"agbot:set:tx:{filter_type}:{page - 1}"))
+    nav_row.append(IButton(f"{page}/{total_pages}", callback_data="agbot:set:tx:noop"))
+    if page < total_pages:
+        nav_row.append(IButton("\u2b05\ufe0f", callback_data=f"agbot:set:tx:{filter_type}:{page + 1}"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
     return _ikb(rows)
 
 

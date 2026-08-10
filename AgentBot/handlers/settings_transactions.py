@@ -5,9 +5,9 @@ from telegram.ext import ContextTypes
 
 from AgentBot.constants import UD_STATE, STATE_SEARCH_TX
 from AgentBot.handlers.base import get_agent_id
-from AgentBot.keyboards import tx_menu_keyboard, back_keyboard, cancel_keyboard, pagination_keyboard
+from AgentBot.keyboards import tx_menu_keyboard, back_keyboard, cancel_keyboard, tx_list_keyboard
 from AgentBot.utils.helpers import _escape, _fmt_toman, _status_icon
-from AgentBot.database import get_payments, search_payments
+from AgentBot.database import get_payments, search_payments, get_payment_stats, get_payment_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -45,26 +45,64 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         page = int(p4) if p4 and p4.isdigit() else 1
         status = p3 if p3 != "card" else None
         method = "card_to_card" if p3 == "card" else None
-        payments, total = get_payments(agent_id, status=status, method=method, page=page, page_size=_PAGE_SIZE)
-        total_pages = max(1, (total + _PAGE_SIZE - 1) // _PAGE_SIZE)
-        labels = {"approved": "\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647", "rejected": "\u274c \u0631\u062f \u0634\u062f\u0647", "pending": "\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631", "card": "\U0001f4b3 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a"}
-        label = labels.get(p3, p3)
-        lines = [f"<b>{label}</b> (\u0635\u0641\u062d\u0647 {page}/{total_pages})\n"]
-        if not payments:
-            lines.append("\u0647\u06cc\u0686 \u062a\u0631\u0627\u06a9\u0646\u0634\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f.")
-        else:
-            for p in payments:
-                lines.append(
-                    f"\U0001f464 {_escape(p.get('customer_name', ''))} \u2022 "
-                    f"{_fmt_toman(p.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646\n"
-                    f"   {_escape(p.get('created_at', ''))} \u2022 {_escape(p.get('ref_id', '') or '-')}"
-                )
+        stats = get_payment_stats(agent_id, status=status, method=method)
+        total_pages = max(1, (int(stats["total_count"]) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+        if page > total_pages:
+            page = total_pages
+        payments, _ = get_payments(agent_id, status=status, method=method, page=page, page_size=_PAGE_SIZE)
+        header_titles = {
+            "approved": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647 \u2705",
+            "rejected": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0631\u062f \u0634\u062f\u0647 \u274c",
+            "pending": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631 \u23f3",
+            "card": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a \U0001f4b3",
+        }
+        text = (
+            f"\U0001f539 {header_titles[p3]}\n"
+            f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a: {stats['total_count']}\n"
+            f"\U0001f538 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a: {_fmt_toman(stats['total_amount'])} \u062a\u0648\u0645\u0627\u0646\n"
+            f"\u2756 \u2b2c----------------------------------\u2b2c \u2756\n"
+            f"\U0001f538 \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {stats['last30_count']}\n"
+            f"\U0001f538 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {_fmt_toman(stats['last30_amount'])} \u062a\u0648\u0645\u0627\u0646\n"
+            f"\u2756 \u2b2c----------------------------------\u2b2c \u2756\n"
+            f"\U0001f538 \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {stats['month_count']}\n"
+            f"\U0001f538 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {_fmt_toman(stats['month_amount'])} \u062a\u0648\u0645\u0627\u0646"
+        )
         try:
             await query.edit_message_text(
-                "\n".join(lines),
-                reply_markup=pagination_keyboard(f"agbot:set:tx:{p3}", page, total_pages, "agbot:set:back"),
+                text,
+                reply_markup=tx_list_keyboard(payments, p3, page, total_pages),
                 parse_mode="HTML",
             )
+        except Exception:
+            pass
+        return
+
+    if p3 == "noop":
+        await query.answer()
+        return
+
+    if p3 == "detail":
+        pay_id = int(p4) if p4 and p4.isdigit() else 0
+        pay = get_payment_by_id(pay_id)
+        if not pay:
+            await query.answer("\u274c \u062a\u0631\u0627\u06a9\u0646\u0634 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", show_alert=True)
+            return
+        status_titles = {
+            "approved": "\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647",
+            "rejected": "\u274c \u0631\u062f \u0634\u062f\u0647",
+            "pending": "\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631",
+        }
+        text = (
+            f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {pay.get('id')}\n"
+            f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {_escape(pay.get('customer_name', '') or '-')}\n"
+            f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}\n"
+            f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646\n"
+            f"\u2756 \u2022 -------------------------- \u2022 \u2756\n"
+            f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {status_titles.get(str(pay.get('status')), pay.get('status'))}\n"
+            f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('method', '') or '-')}\n"
+        )
+        try:
+            await query.edit_message_text(text, reply_markup=back_keyboard(f"agbot:set:tx:{pay.get('status')}"), parse_mode="HTML")
         except Exception:
             pass
         return

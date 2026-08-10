@@ -584,6 +584,52 @@ def get_payments(agent_id: int, status: Optional[str] = None, method: Optional[s
     return [dict(r) for r in rows], total
 
 
+def get_payment_stats(agent_id: int, status: Optional[str] = None, method: Optional[str] = None) -> Dict[str, Any]:
+    init_db()
+    conditions = ["agent_id=?"]
+    params: List[Any] = [agent_id]
+    if status:
+        conditions.append("status=?")
+        params.append(status)
+    if method:
+        conditions.append("method=?")
+        params.append(method)
+    base_where = " AND ".join(conditions)
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_payments WHERE {base_where}",
+            params,
+        )
+        total_row = cur.fetchone()
+
+        where_30 = base_where + " AND date(created_at) >= date('now', '-30 days')"
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_payments WHERE {where_30}",
+            params,
+        )
+        last30_row = cur.fetchone()
+
+        where_month = base_where + " AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_payments WHERE {where_month}",
+            params,
+        )
+        month_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "total_count": int(total_row["c"] or 0),
+        "total_amount": int(total_row["total"] or 0),
+        "last30_count": int(last30_row["c"] or 0),
+        "last30_amount": int(last30_row["total"] or 0),
+        "month_count": int(month_row["c"] or 0),
+        "month_amount": int(month_row["total"] or 0),
+    }
+
+
 def get_payment_by_id(payment_id: int) -> Optional[Dict[str, Any]]:
     init_db()
     conn = _conn()
