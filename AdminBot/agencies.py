@@ -6,6 +6,7 @@ import subprocess
 import signal
 import os
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from html import escape
 from pathlib import Path
@@ -45,6 +46,7 @@ AGENCY_SET_WHOLESALE_GB = "agency:set_wholesale_gb"
 AGENCY_SET_WHOLESALE_DAYS = "agency:set_wholesale_days"
 AGENCY_BULK_WHOLESALE = "agency:bulk_wholesale"
 AGENCY_SET_AGENT_TOKEN = "agency:set_agent_token"
+AGENCY_SVC_SEARCH = "agency:svc_search"
 
 # کلیدهای user_data برای صفحه‌بندی
 AGENCY_PAGE_KEY = "agency_page"
@@ -78,6 +80,61 @@ def _fmt_gb(value: float) -> str:
     if v == int(v):
         return f"{int(v)}"
     return f"{v:g}"
+
+
+_FA_MONTHS = {
+    1: "ژانویه", 2: "فوریه", 3: "مارس", 4: "آوریل", 5: "مه", 6: "ژوئن",
+    7: "ژوئیه", 8: "آگوست", 9: "سپتامبر", 10: "اکتبر", 11: "نوامبر", 12: "دسامبر",
+}
+
+_LOCATION_FLAGS = {
+    "ترکیه": "🇹🇷",
+    "آلمان": "🇩🇪",
+    "هلند": "🇳🇱",
+    "فنلاند": "🇫🇮",
+    "هند": "🇮🇳",
+}
+
+
+def _fmt_fa_date(ts: str) -> str:
+    """تبدیل تاریخ ISO به «روز ماه» مثل «06 سپتامبر»."""
+    try:
+        raw = str(ts or "").strip()
+        if not raw:
+            return "—"
+        dt = datetime.fromisoformat(raw[:19])
+    except Exception:
+        return "—"
+    month = _FA_MONTHS.get(dt.month, "")
+    if not month:
+        return f"{dt.day:02d}"
+    return f"{dt.day:02d} {month}"
+
+
+def _server_flag_title(title: str) -> str:
+    """از عنوان سرور یک برچسب کوتاه با flag می‌سازد؛ مثل «🇩🇪 آلمان»."""
+    raw = str(title or "").strip()
+    if not raw:
+        return ""
+    flag = ""
+    for word, fl in _LOCATION_FLAGS.items():
+        if word in raw:
+            flag = fl
+            break
+    location = raw.replace("لوکیشن", "")
+    for fl in set(_LOCATION_FLAGS.values()):
+        location = location.replace(fl, "")
+    location = location.strip()
+    if flag and location:
+        return f"{flag} {location}"
+    if flag:
+        return flag
+    return raw.strip()
+
+
+def _usage_text(usage_cur: float, usage_lim: float) -> str:
+    c, l = float(usage_cur or 0), float(usage_lim or 0)
+    return f"{_fmt_gb(c)}/{_fmt_gb(l)}GB"
 
 
 def _fmt_agent_display(agent: Dict[str, Any]) -> str:
@@ -1124,7 +1181,7 @@ async def send_agent_services(
     agent_id: int,
     page: int = 1,
 ) -> None:
-    """نمایش سرویس‌های یک نماینده (جدول مونواسپیس + گروه‌بندی فعال/غیرفعال)."""
+    """نمایش داشبورد فشرده سرویس‌های یک نماینده (جدول افقی + نوار آمار)."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
         await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
@@ -1132,44 +1189,21 @@ async def send_agent_services(
 
     if page < 1:
         page = 1
-    services, total = agent_db.get_services_by_agent(agent_id, page=page, page_size=SERVICES_PAGE_SIZE)
+    filter_key = f"agency_svc_filter_{agent_id}"
+    filter_mode = "all"
+    if context and hasattr(context, "user_data") and context.user_data:
+        filter_mode = context.user_data.get(filter_key, "all")
+    if filter_mode == "active":
+        services, total = agent_db.get_active_services_by_agent_paged(agent_id, page=page, page_size=SERVICES_PAGE_SIZE)
+    elif filter_mode == "inactive":
+        services, total = agent_db.get_inactive_services_by_agent_paged(agent_id, page=page, page_size=SERVICES_PAGE_SIZE)
+    else:
+        services, total = agent_db.get_services_by_agent(agent_id, page=page, page_size=SERVICES_PAGE_SIZE)
     total_pages = max(1, (total + SERVICES_PAGE_SIZE - 1) // SERVICES_PAGE_SIZE)
 
     agent_name = str(agent.get("full_name") or "").strip() or str(agent.get("username") or "").strip() or str(agent.get("telegram_id") or "")
 
-    cust_cache: Dict[int, str] = {}
-    def _cust_name(cid: int) -> str:
-        cid = int(cid or 0)
-        if cid not in cust_cache:
-            try:
-                cust = agent_db.get_customer_by_id(cid)
-                cust_cache[cid] = (
-                    str(cust.get("full_name") or "").strip()
-                    or str(cust.get("username") or "").strip()
-                    or f"#{cid}"
-                )
-            except Exception:
-                cust_cache[cid] = f"#{cid}"
-        return cust_cache[cid]
-
-    rows_active: List[tuple] = []
-    rows_inactive: List[tuple] = []
-    for svc in services:
-        sid = int(svc.get("id") or 0)
-        name = str(svc.get("name") or "بی‌نام").strip()
-        server_title = str(svc.get("server_title") or "—").strip()
-        usage_cur = float(svc.get("usage_current") or 0)
-        usage_lim = float(svc.get("usage_limit") or 0)
-        days = int(svc.get("days_left") or 0)
-        end = str(svc.get("end_date") or "").strip()
-        is_active = bool(int(svc.get("is_active", 0) or 0))
-        wholesale = int(svc.get("wholesale_price") or 0)
-        sale = int(svc.get("sale_price") or 0)
-        item = (sid, name, server_title, usage_cur, usage_lim, days, end, wholesale, sale)
-        if is_active:
-            rows_active.append(item)
-        else:
-            rows_inactive.append(item)
+    stats = agent_db.get_agent_services_stats(agent_id)
 
     def _trunc(text: str, max_len: int) -> str:
         t = str(text or "").strip()
@@ -1178,7 +1212,6 @@ async def send_agent_services(
         return t[: max_len - 1] + "…"
 
     def _rtl_cell(text: str) -> str:
-        """قرار دادن متن فارسی در یک سلول LTR تا تراز جدول خراب نشود."""
         t = str(text or "")
         if not t:
             return ""
@@ -1189,112 +1222,190 @@ async def send_agent_services(
     def _usage(c: float, l: float) -> str:
         c, l = float(c or 0), float(l or 0)
         return f"{_fmt_gb(c)}/{_fmt_gb(l)}GB"
-    def _table(items: List[tuple]) -> List[str]:
+
+    rows: List[Dict[str, str]] = []
+    for svc in services:
+        sid = int(svc.get("id") or 0)
+        name = str(svc.get("name") or "بی‌نام").strip()
+        usage_cur = float(svc.get("usage_current") or 0)
+        usage_lim = float(svc.get("usage_limit") or 0)
+        is_active = bool(int(svc.get("is_active", 0) or 0))
+        end = str(svc.get("end_date") or "").strip()
+        rows.append(
+            {
+                "sid": str(sid),
+                "name": _rtl_cell(_trunc(name, 10)),
+                "status": "🟢" if is_active else "🔴",
+                "usage": _usage(usage_cur, usage_lim),
+                "end": _rtl_cell(_fmt_fa_date(end)),
+            }
+        )
+
+    def _table(items: List[Dict[str, str]]) -> List[str]:
         if not items:
             return []
-        headers = ("#", "نام", "حجم", "مصرف", "روز", "فروش")
-        col_w = {h: len(h) for h in headers}
-        rows: List[List[str]] = []
-        for (sid, name, server_title, usage_cur, usage_lim, days, end, wholesale, sale) in items:
-            cells = {
-                "#": str(sid),
-                "نام": _rtl_cell(_trunc(name, 14)),
-                "سرور": _rtl_cell(_trunc(server_title, 14)),
-                "حجم": _fmt_gb(usage_lim) + "GB",
-                "مصرف": _usage(usage_cur, usage_lim),
-                "روز": str(int(days or 0)),
-                "فروش": _short_price(sale),
-            }
-            ordered = [cells[h] for h in headers]
-            rows.append(ordered)
-            for h, v in zip(headers, ordered):
-                col_w[h] = max(col_w[h], len(v))
+        headers = ("#", "نام سرویس", "وضعیت", "حجم/مصرف", "انقضا")
+        col_w = {"#": 3, "نام سرویس": 11, "وضعیت": 6, "حجم/مصرف": 9, "انقضا": 10}
         out: List[str] = []
         sep = "─".join("─" * (w + 2) for w in col_w.values())
         out.append("┌" + sep + "┐")
         out.append("│" + "│".join(" " + headers[i].center(col_w[h]) + " " for i, h in enumerate(headers)) + "│")
         out.append("├" + sep + "┤")
-        for r in rows:
+        for it in items:
+            cells = [it["sid"], it["name"], it["status"], it["usage"], it["end"]]
             padded = []
             for i, h in enumerate(headers):
                 w = col_w[h]
-                if h == "#" or h == "روز":
-                    padded.append(" " + r[i].rjust(w) + " ")
+                if h == "#":
+                    padded.append(" " + cells[i].rjust(w) + " ")
+                elif h == "وضعیت":
+                    padded.append(" " + cells[i].center(w) + " ")
                 else:
-                    padded.append(" " + r[i].ljust(w) + " ")
+                    padded.append(" " + cells[i].ljust(w) + " ")
             out.append("│" + "│".join(padded) + "│")
         out.append("└" + sep + "┘")
         return out
 
-    def _short_price(v: int) -> str:
-        try:
-            v = int(v or 0)
-        except (TypeError, ValueError):
-            v = 0
-        if v >= 1_000_000:
-            return f"{v // 1_000_000}M"
-        if v >= 1_000:
-            return f"{v // 1_000}K"
-        return str(v)
+    table = _table(rows)
 
-    def _days_txt(items: List[tuple]) -> str:
-        if not items:
-            return "—"
-        near = []
-        for it in items:
-            days = int(it[5] or 0)
-            end = str(it[6] or "").strip()
-            if days <= 3 and end:
-                near.append((days, int(it[0] or 0), it[1]))
-        near.sort(key=lambda x: x[0])
-        return "، ".join(f"#{sid}·{_rtl_cell(_trunc(name, 12))}" for _, sid, name in near[:5]) or "—"
-
-    table_active = _table(rows_active)
-    table_inactive = _table(rows_inactive)
-
+    # ── متن صفحه ──
+    filter_label = {"active": " 🟢", "inactive": " 🔴"}.get(filter_mode, "")
     blocks: List[str] = []
-    blocks.append(f"📦 <b>سرویس‌های نماینده</b> (صفحه {page}/{total_pages})")
+    blocks.append(f"📦 <b>مدیریت سرویس‌های نماینده</b>{filter_label}")
     blocks.append(f"👤 {_escape(agent_name)}")
-    blocks.append(f"📊 مجموع: <b>{total}</b>")
+    blocks.append(f"📊 مجموع: <b>{total}</b> سرویس")
     blocks.append("")
-    blocks.append("━━━━━━━━━━━━━━━━━━━")
 
-    if not services:
+    server_stat = ""
+    if stats["top_server"]:
+        server_stat = f"{_server_flag_title(stats['top_server'])}: {stats['top_server_count']}"
+    stats_parts = [
+        f"🟢 فعال: {stats['active']}",
+        f"🔴 غیرفعال: {stats['inactive']}",
+    ]
+    if server_stat:
+        stats_parts.append(server_stat)
+    stats_parts.append(f"⏳ نزدیک انقضا: {stats['near_expiry']}")
+    blocks.append("  |  ".join(stats_parts))
+    blocks.append("")
+
+    if not rows:
         blocks.append("سرویسی ثبت نشده است.")
     else:
-        if rows_active:
-            blocks.append("🟢 <b>فعال</b>")
-            blocks.append("<pre>" + "\n".join(table_active) + "</pre>")
-        if rows_inactive:
-            if rows_active:
-                blocks.append("")
-            blocks.append("🔴 <b>غیرفعال</b>")
-            blocks.append("<pre>" + "\n".join(table_inactive) + "</pre>")
+        blocks.append("<pre>" + "\n".join(table) + "</pre>")
 
-        blocks.append("")
-        blocks.append(f"⏳ <b>نزدیک‌ترین انقضا:</b>")
-        blocks.append(f"  {_days_txt(rows_active + rows_inactive)}")
-        total_wholesale = sum(int(i[7] or 0) for i in rows_active + rows_inactive)
-        total_sale = sum(int(i[8] or 0) for i in rows_active + rows_inactive)
-        blocks.append(f"💰 <b>عمده:</b> {_short_price(total_wholesale)}")
-        blocks.append(f"💵 <b>فروش:</b> {_short_price(total_sale)}")
+        total_wholesale = 0
+        total_sale = 0
+        for svc in services:
+            total_wholesale += int(svc.get("wholesale_price") or 0)
+            total_sale += int(svc.get("sale_price") or 0)
+        blocks.append(
+            f"💰 عمده: {_fmt_toman(total_wholesale)} تومان   |   "
+            f"💵 فروش: {_fmt_toman(total_sale)} تومان"
+        )
 
     text = "\n".join(blocks)
 
-    rows: List[List[Any]] = []
-    nav = []
+    # ── دکمه‌ها ──
+    rows_kb: List[List[Any]] = [
+        [
+            InlineKeyboardButton("➕ سرویس جدید", callback_data=f"agency:svcadd:{agent_id}"),
+            InlineKeyboardButton("🔍 جستجو", callback_data=f"agency:svcsearch:{agent_id}"),
+            InlineKeyboardButton("🔽 فیلتر", callback_data=f"agency:svcfilter:{agent_id}:{page}"),
+        ]
+    ]
+    nav: List[Any] = []
     if page > 1:
         nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"agency:services:{agent_id}:{page - 1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="agency:noop"))
     if page < total_pages:
         nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"agency:services:{agent_id}:{page + 1}"))
-    if nav:
-        rows.append(nav)
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")])
+    rows_kb.append(nav)
 
-    kb = InlineKeyboardMarkup(rows)
+    if services:
+        svc_buttons: List[Any] = []
+        for svc in services[:8]:
+            sid = int(svc.get("id") or 0)
+            cb = f"agency:svcview:{agent_id}:{sid}"
+            svc_buttons.append(InlineKeyboardButton(f"🔹 {sid}", callback_data=cb))
+        if svc_buttons:
+            rows_kb.append(svc_buttons)
+
+    rows_kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")])
+
+    kb = InlineKeyboardMarkup(rows_kb)
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    except BadRequest:
+        await update.callback_query.answer()
+
+
+# ===============================
+#   جزئیات یک سرویس نماینده
+# ===============================
+async def send_agent_service_detail(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    service_id: int,
+    page: int = 1,
+) -> None:
+    """نمایش جزئیات فشرده یک سرویس نماینده."""
+    svc = agent_db.get_service_by_id(service_id)
+    if not svc or int(svc.get("agent_id", 0)) != agent_id:
+        await update.callback_query.answer("سرویس پیدا نشد.", show_alert=True)
+        return
+
+    name = str(svc.get("name") or "بی‌نام").strip()
+    server_title = str(svc.get("server_title") or "—").strip()
+    usage_cur = float(svc.get("usage_current") or 0)
+    usage_lim = float(svc.get("usage_limit") or 0)
+    days = int(svc.get("days_left") or 0)
+    end = str(svc.get("end_date") or "").strip()
+    start = str(svc.get("start_date") or "").strip()
+    is_active = bool(int(svc.get("is_active", 0) or 0))
+    is_trial = bool(int(svc.get("is_trial", 0) or 0))
+    wholesale = int(svc.get("wholesale_price") or 0)
+    sale = int(svc.get("sale_price") or 0)
+    customer_id = int(svc.get("customer_id") or 0)
+
+    status = "🟢 فعال" if is_active else "🔴 غیرفعال"
+    cust_name = "—"
+    if customer_id:
+        try:
+            cust = agent_db.get_customer_by_id(customer_id)
+            cust_name = (
+                str(cust.get("full_name") or "").strip()
+                or str(cust.get("username") or "").strip()
+                or f"#{customer_id}"
+            )
+        except Exception:
+            cust_name = f"#{customer_id}"
+
+    trial_txt = " · 🔥 ترایال" if is_trial else ""
+    blocks = [
+        f"📦 <b>جزئیات سرویس #{service_id}</b>{trial_txt}",
+        SEPARATOR,
+        f"🔖 <b>نام:</b> {_escape(name)}",
+        f"📍 <b>وضعیت:</b> {status}",
+        f"🖥 <b>سرور:</b> {_escape(_server_flag_title(server_title))}",
+        f"👤 <b>مشتری:</b> {_escape(cust_name)}",
+        f"💾 <b>حجم:</b> {_usage_text(usage_cur, usage_lim)}",
+        f"⏳ <b>انقضا:</b> {_fmt_fa_date(end)} ({days} روز)",
+    ]
+    if start:
+        blocks.append(f"📅 <b>شروع:</b> {_fmt_fa_date(start)}")
+    blocks.append(f"💰 <b>عمده:</b> {_fmt_toman(wholesale)} | 💵 <b>فروش:</b> {_fmt_toman(sale)}")
+
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:{page}"),
+            ]
+        ]
+    )
+    try:
+        await update.callback_query.edit_message_text("\n".join(blocks), reply_markup=kb, parse_mode="HTML")
     except BadRequest:
         await update.callback_query.answer()
 
@@ -1664,6 +1775,114 @@ async def handle_set_agent_token_text(update: Update, context: ContextTypes.DEFA
 
 
 # ===============================
+#   سرویس جدید / جستجو / فیلتر سرویس‌های نماینده
+# ===============================
+async def send_agent_svc_add_help(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
+    """راهنمای ساخت سرویس جدید — ساخت از طریق ربات نماینده انجام می‌شود."""
+    agent = agent_db.get_agent_by_id(agent_id)
+    name = _escape(agent.get('full_name')) if agent else f"#{agent_id}"
+    text = (
+        "➕ <b>ساخت سرویس جدید</b>\n"
+        f"{SEPARATOR}\n\n"
+        f"👤 نماینده: <b>{name}</b>\n\n"
+        "🛠 ساخت سرویس جدید مستقیماً توسط <b>خودِ نماینده</b> از طریق ربات اختصاصی‌اش "
+        "(AgentBot) انجام می‌شود؛ ادمین نیازی به ساخت دستی ندارد.\n\n"
+        "🧭 برای نماینده:\n"
+        "• وارد AgentBot شود\n"
+        "• گزینه «ساخت سرویس» را بزند\n"
+        "• سرور، حجم و مدت را انتخاب کند\n\n"
+        "✅ پس از ساخت، سرویس به‌صورت خودکار اینجا نمایش داده می‌شود.\n\n"
+        "⚙️ برای مدیریت قیمت‌ها از دکمه «قیمت‌گذاری» استفاده کنید."
+    )
+    kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("💵 قیمت‌گذاری", callback_data=f"agency:prices:{agent_id}:1"),
+                InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:1"),
+            ]
+        ]
+    )
+    try:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    except BadRequest:
+        await update.callback_query.answer()
+
+
+async def start_agent_service_search(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
+    """شروع ویزارد جستجوی نام سرویس."""
+    context.user_data["state"] = AGENCY_SVC_SEARCH
+    context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
+    context.user_data.pop(f"agency_svc_filter_{agent_id}", None)
+    text = (
+        "🔍 <b>جستجوی سرویس</b>\n"
+        f"{SEPARATOR}\n\n"
+        "نام یا بخشی از نام سرویس را بنویسید.\n\n"
+        "مثال: <code>vpn</code> یا <code>تست</code>\n\n"
+        "برای لغو /cancel را بفرستید."
+    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data=f"agency:services:{agent_id}:1")]])
+    try:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    except BadRequest:
+        await update.callback_query.answer()
+
+
+async def handle_agent_service_search_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """پردازش متن جستجو و نمایش نتایج."""
+    text = (update.message.text or "").strip()
+    agent_id = int(context.user_data.get(AGENCY_VIEWING_ID_KEY) or 0)
+    context.user_data.pop("state", None)
+    if agent_id <= 0 or not text:
+        await update.message.reply_text("جستجو لغو شد.")
+        return True
+
+    services, total = agent_db.search_services_by_name(agent_id, text, page=1, page_size=SERVICES_PAGE_SIZE)
+    total_pages = max(1, (total + SERVICES_PAGE_SIZE - 1) // SERVICES_PAGE_SIZE)
+    agent = agent_db.get_agent_by_id(agent_id) or {}
+
+    blocks = [
+        f"🔍 <b>نتایج جستجو: «{_escape(text)}»</b>",
+        f"👤 {_escape(agent.get('full_name') or '')}",
+        f"📊 <b>{total}</b> سرویس پیدا شد",
+        "",
+    ]
+    if not services:
+        blocks.append("سرویسی با این نام پیدا نشد.")
+        blocks.append("")
+        blocks.append("با دکمه 🔙 به لیست بازگردید.")
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:1")]]
+        )
+        try:
+            await update.message.reply_text("\n".join(blocks), reply_markup=kb, parse_mode="HTML")
+        except BadRequest:
+            pass
+        return True
+
+    kb_rows: List[List[Any]] = []
+    for svc in services[:8]:
+        sid = int(svc.get("id") or 0)
+        nm = str(svc.get("name") or "؟").strip()
+        kb_rows.append([InlineKeyboardButton(f"🔹 {sid} · {nm[:20]}", callback_data=f"agency:svcview:{agent_id}:{sid}:1")])
+    kb_rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:1")])
+    kb = InlineKeyboardMarkup(kb_rows)
+    try:
+        await update.message.reply_text("\n".join(blocks), reply_markup=kb, parse_mode="HTML")
+    except BadRequest:
+        pass
+    return True
+
+
+async def cycle_agent_service_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, page: int = 1) -> None:
+    """چرخش فیلتر سرویس‌ها: همه → فعال → غیرفعال."""
+    key = f"agency_svc_filter_{agent_id}"
+    current = context.user_data.get(key, "all")
+    nxt = {"all": "active", "active": "inactive", "inactive": "all"}.get(current, "all")
+    context.user_data[key] = nxt
+    await send_agent_services(update, context, agent_id, page=page)
+
+
+# ===============================
 #   هندلر اصلی inline (callback router)
 # ===============================
 async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1787,8 +2006,34 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     if action == "services":
+        context.user_data.pop("state", None)
         page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
         await send_agent_services(update, context, agent_id, page=page)
+        return
+
+    if action == "svcadd":
+        context.user_data.pop("state", None)
+        await send_agent_svc_add_help(update, context, agent_id)
+        return
+
+    if action == "svcsearch":
+        await start_agent_service_search(update, context, agent_id)
+        return
+
+    if action == "svcfilter":
+        context.user_data.pop("state", None)
+        page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
+        await cycle_agent_service_filter(update, context, agent_id, page=page)
+        return
+
+    if action == "svcview":
+        context.user_data.pop("state", None)
+        service_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1
+        if service_id <= 0:
+            await query.answer("سرویس نامعتبر.", show_alert=True)
+            return
+        await send_agent_service_detail(update, context, agent_id, service_id, page=page)
         return
 
     if action == "prices":
@@ -1866,6 +2111,9 @@ async def handle_agencies_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if state in {AGENCY_SET_WHOLESALE_GB, AGENCY_SET_WHOLESALE_DAYS}:
         return await handle_wholesale_rates_text(update, context)
+
+    if state == AGENCY_SVC_SEARCH:
+        return await handle_agent_service_search_text(update, context)
 
     if state == AGENCY_SET_AGENT_TOKEN:
         return await handle_set_agent_token_text(update, context)

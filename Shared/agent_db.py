@@ -1154,6 +1154,109 @@ def search_services_by_name(agent_id: int, name: str, page: int = 1, page_size: 
         conn.close()
 
 
+def get_active_services_by_agent_paged(agent_id: int, page: int = 1, page_size: int = 20) -> Tuple[List[Dict[str, Any]], int]:
+    """سرویس‌های فعال یک نماینده با صفحه‌بندی."""
+    init_db()
+    if page < 1:
+        page = 1
+    offset = (page - 1) * page_size
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND is_active = 1 "
+            "AND (deleted_at IS NULL OR deleted_at = '')",
+            (agent_id,),
+        )
+        total = int(cur.fetchone()["c"] or 0)
+        cur.execute(
+            "SELECT * FROM agent_services WHERE agent_id = ? AND is_active = 1 "
+            "AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC LIMIT ? OFFSET ?",
+            (agent_id, page_size, offset),
+        )
+        return [dict(r) for r in cur.fetchall()], total
+    finally:
+        conn.close()
+
+
+def get_inactive_services_by_agent_paged(agent_id: int, page: int = 1, page_size: int = 20) -> Tuple[List[Dict[str, Any]], int]:
+    """سرویس‌های غیرفعال یک نماینده با صفحه‌بندی."""
+    init_db()
+    if page < 1:
+        page = 1
+    offset = (page - 1) * page_size
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM agent_services WHERE agent_id = ? AND is_active = 0 "
+            "AND (deleted_at IS NULL OR deleted_at = '')",
+            (agent_id,),
+        )
+        total = int(cur.fetchone()["c"] or 0)
+        cur.execute(
+            "SELECT * FROM agent_services WHERE agent_id = ? AND is_active = 0 "
+            "AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC LIMIT ? OFFSET ?",
+            (agent_id, page_size, offset),
+        )
+        return [dict(r) for r in cur.fetchall()], total
+    finally:
+        conn.close()
+
+
+def get_agent_services_stats(agent_id: int) -> Dict[str, Any]:
+    """آمار سرویس‌های یک نماینده برای نوار داشبورد.
+
+    Returns:
+        {
+            "total": int,
+            "active": int,
+            "inactive": int,
+            "near_expiry": int,     # تعداد سرویس‌هایی که تا ۳ روز دیگر منقضی می‌شوند
+            "top_server": str,      # عنوان پرتکرارترین سرور (به همراه flag) یا ""
+            "top_server_count": int,
+        }
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        base = "FROM agent_services WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '')"
+        cur.execute(f"SELECT COUNT(*) AS c {base}", (agent_id,))
+        total = int(cur.fetchone()["c"] or 0)
+        cur.execute(f"SELECT COUNT(*) AS c {base} AND is_active = 1", (agent_id,))
+        active = int(cur.fetchone()["c"] or 0)
+
+        # نزدیک انقضا: کمتر یا مساوی ۳ روز باقی‌مانده (هم‌چون منقضی نشده)
+        cur.execute(
+            f"SELECT COUNT(*) AS c {base} AND days_left >= 0 AND days_left <= 3",
+            (agent_id,),
+        )
+        near_expiry = int(cur.fetchone()["c"] or 0)
+
+        # پرتکرارترین سرور
+        cur.execute(
+            "SELECT server_title, COUNT(*) AS c FROM agent_services "
+            "WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '') AND server_title != '' "
+            "GROUP BY server_title ORDER BY c DESC, server_title LIMIT 1",
+            (agent_id,),
+        )
+        top_row = cur.fetchone()
+        top_server = str(top_row["server_title"] or "") if top_row else ""
+        top_server_count = int(top_row["c"] or 0) if top_row else 0
+
+        return {
+            "total": total,
+            "active": active,
+            "inactive": total - active,
+            "near_expiry": near_expiry,
+            "top_server": top_server,
+            "top_server_count": top_server_count,
+        }
+    finally:
+        conn.close()
+
+
 def _older_than_days(ts: str, days: int) -> bool:
     """بررسی اینکه تاریخ گذشته از بازه‌ی داده‌شده بیشتر است یا نه."""
     if not ts:
