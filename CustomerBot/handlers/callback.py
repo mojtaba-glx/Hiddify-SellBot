@@ -14,6 +14,7 @@ from CustomerBot.constants import (
     STATE_RECEIPT_WAITING, STATE_CARD_LAST4, STATE_TICKET_WAITING_TEXT, STATE_TICKET_WAITING_TITLE,
     STATE_TICKET_WAITING_PHOTO, STATE_TICKET_CONFIRM,
     STATE_TRIAL_WAITING_NAME,
+    STATE_AGENT_MSG_WAITING,
     CB_BUY_LOC, CB_BUY_CAT, CB_BUY_PLAN, CB_BUY_CONFIRM,
     CB_BUY_CONFIRM_DYN, CB_BUY_PAY_DIRECT,
     CB_BUY_BACK_MAIN, CB_BUY_EXIT_MAIN, CB_BUY_MIXED_FIXED, CB_BUY_MIXED_DYN,
@@ -31,6 +32,7 @@ from CustomerBot.constants import (
     CB_TRIAL_LOC, CB_TRIAL_BACK,
     CB_GUIDE_ANDROID, CB_GUIDE_IOS, CB_GUIDE_WINDOWS, CB_GUIDE_MAC, CB_GUIDE_LINUX,
     CB_GUIDE_BACK, CB_FORCEJOIN_CHECK,
+    CB_AGENT_MSG_REPLY,
     BTN_PAY_DONE, BTN_BACK,
 )
 from CustomerBot.database import (
@@ -158,6 +160,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---- Support ----
     elif data.startswith("support:"):
         await _handle_support(query, context, agent_id, user, data)
+
+    # ---- Direct agent message reply ----
+    elif data == CB_AGENT_MSG_REPLY:
+        context.user_data[UD_STATE] = STATE_AGENT_MSG_WAITING
+        try:
+            await query.message.edit_text(
+                "📩 لطفا پاسخ خود را برای نماینده بنویسید:",
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+        await query.message.reply_text(
+            "📩 پاسخ شما برای نماینده ارسال خواهد شد. متن پاسخ را بنویسید:",
+        )
 
     # ---- Status ----
     elif data.startswith("status:"):

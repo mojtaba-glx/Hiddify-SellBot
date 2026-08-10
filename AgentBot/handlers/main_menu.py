@@ -182,6 +182,8 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if state:
         sub_state_handlers = {
+            "st:search_user": settings_users.handle_text,
+            "st:send_user_msg": settings_users.handle_text,
             "fj:set_username": settings_forcejoin.handle_text,
             "st:createsvc_name": subscriptions.handle_text,
             "st:renew_days": subscriptions.handle_text,

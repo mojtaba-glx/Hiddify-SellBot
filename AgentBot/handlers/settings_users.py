@@ -336,7 +336,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await update.message.reply_text("❌ ربات مشتری برای این نماینده فعال نیست.", reply_markup=main_menu_keyboard())
             return True
         try:
-            await Bot(token=token).send_message(chat_id=target, text=f"📨 پیام از طرف نماینده:\n\n{text}")
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("📩 پاسخ", callback_data="agmsg:reply")]]
+            )
+            await Bot(token=token).send_message(
+                chat_id=target,
+                text=f"📨 پیام از طرف نماینده:\n\n{text}",
+                reply_markup=kb,
+            )
             await update.message.reply_text("✅ پیام ارسال شد.", reply_markup=main_menu_keyboard())
         except Exception as e:
             logger.warning("send user msg failed tg_id=%s: %s", target, e)

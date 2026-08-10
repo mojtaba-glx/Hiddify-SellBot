@@ -9,6 +9,7 @@ from CustomerBot.constants import (
     STATE_CRYPTO_WAITING, STATE_CONNECT_WAITING, STATE_RENAME_WAITING,
     STATE_REPLACE_LINK_WAITING,
     STATE_TRIAL_WAITING_NAME,
+    STATE_AGENT_MSG_WAITING,
     BTN_STATUS, BTN_RENEW, BTN_BUY, BTN_CONNECT, BTN_TRIAL,
     BTN_SUPPORT, BTN_GUIDE, BTN_FAQ,
 )
@@ -51,6 +52,11 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     state = context.user_data.get(UD_STATE, "")
+
+    if state == STATE_AGENT_MSG_WAITING:
+        await _handle_agent_msg_reply(update, context, text)
+        return
+
     routed_states = {
         STATE_RECEIPT_WAITING,
         STATE_CARD_LAST4,
@@ -230,3 +236,54 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not faq:
             faq = "❗️ سوالات متداول\n\nبه‌زودی تکمیل می‌شود."
         await update.message.reply_text(faq, reply_markup=main_menu_keyboard())
+
+
+async def _handle_agent_msg_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    user = update.effective_user
+    if not text:
+        await update.message.reply_text("📩 متن خالی است. لطفا پاسخ خود را بنویسید:")
+        return
+    if text in {"بازگشت", "لغو", "❌ لغو", "🚫 لغو", "/cancel"}:
+        context.user_data.pop(UD_STATE, None)
+        await update.message.reply_text("🔙 به منوی اصلی بازگشتید.", reply_markup=main_menu_keyboard())
+        return
+
+    agent_id = context.bot_data.get("agent_id", 0)
+    from Shared.agent_db import get_active_customer_bot
+    bot_row = get_active_customer_bot(agent_id)
+    agent_tg = int((bot_row or {}).get("agent_telegram_id") or 0)
+    context.user_data.pop(UD_STATE, None)
+
+    if not agent_tg:
+        await update.message.reply_text("❌ ارسال پیام ناموفق بود. لطفا دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+        return
+
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    from Shared.agent_db import get_customer_by_telegram_id
+    customer = get_customer_by_telegram_id(agent_id, user.id)
+    display = str(
+        (customer or {}).get("full_name")
+        or user.full_name
+        or (customer or {}).get("username")
+        or user.username
+        or user.id
+    ).strip()
+    try:
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("📨 پاسخ", callback_data=f"agbot:set:users:message:{user.id}")]]
+        )
+        await context.bot.send_message(
+            chat_id=agent_tg,
+            text=(
+                f"📨 پیام از طرف مشتری:\n"
+                f"👤 {display} (tg: {user.id})\n\n"
+                f"📄 متن: {text}"
+            ),
+            reply_markup=kb,
+        )
+        await update.message.reply_text("✅ پاسخ شما برای نماینده ارسال شد.", reply_markup=main_menu_keyboard())
+    except Exception as e:
+        import logging
+        logger = logging.getLogger("CustomerBot.Menu")
+        logger.warning("send agent msg reply failed tg=%s: %s", user.id, e)
+        await update.message.reply_text("❌ ارسال پیام ناموفق بود. لطفا دوباره تلاش کنید.", reply_markup=main_menu_keyboard())

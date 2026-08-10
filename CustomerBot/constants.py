@@ -35,6 +35,7 @@ STATE_CRYPTO_WAITING = "crypto_waiting"
 STATE_COUPON_WAITING = "coupon_waiting"
 STATE_CONNECT_WAITING = "connect_waiting"
 STATE_TRIAL_WAITING_NAME = "trial_waiting_name"
+STATE_AGENT_MSG_WAITING = "agent_msg_waiting"
 
 # Callback prefixes
 CB_BUY_LOC = "buy:loc:"
@@ -102,6 +103,9 @@ CB_GUIDE_LINUX = "guide:linux:"
 CB_GUIDE_BACK = "guide:back:"
 
 CB_FORCEJOIN_CHECK = "forcejoin:check"
+
+# AgentBot -> CustomerBot direct message reply
+CB_AGENT_MSG_REPLY = "agmsg:reply"
 
 # AgentBot -> CustomerBot communication
 AGENT_BOT_WALLET = "customer_wallet"
