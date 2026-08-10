@@ -2605,9 +2605,11 @@ async def _apply_service_renewal_on_targets(
     service_name: str,
     package_gb: float,
     package_days: int,
-) -> tuple[float, int, Any]:
+) -> tuple[float, int, Any, list[str]]:
     """
     تمدید سرویس روی سرور اصلی + نودها بر اساس uuid مشترک.
+    خروجی: (usage_limit, days_left, last_online, failed_servers)
+      - failed_servers: لیست عنوان‌های سرور/نودهایی که در دسترس نبودند
     """
     targets = _get_service_targets_for_renew(service)
     if not targets:
@@ -2629,6 +2631,7 @@ async def _apply_service_renewal_on_targets(
     last_online = None
     ok_count = 0
     errors_primary: list[str] = []
+    failed_servers: list[str] = []
     for srv, uuid in targets:
         # Look up marzban_username for this target
         marzban_un = ""
@@ -2651,6 +2654,7 @@ async def _apply_service_renewal_on_targets(
                 e,
             )
             errors_primary.append(str(e))
+            failed_servers.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
             continue
         ok_count += 1
         if last_online is None:
@@ -2673,7 +2677,7 @@ async def _apply_service_renewal_on_targets(
             userbot_db.set_service_nodes_active(service_id, 1)
         except Exception as e:
             logger.warning("Failed to re-enable service_nodes after renewal (service_id=%s): %s", service_id, e)
-    return final_limit, final_days, last_online
+    return final_limit, final_days, last_online, failed_servers
 
 
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
@@ -4555,6 +4559,43 @@ async def _warn_admin_direct_delivery_exhausted(payment_id: int, row: dict, atte
         logger.warning("Failed to warn admin about direct delivery exhaustion (payment_id=%s): %s", payment_id, e)
 
 
+async def _warn_admin_pending_node_sync(
+    *,
+    server_id: int,
+    failed_servers: list[str],
+    service_label: str,
+) -> None:
+    """اگر تمدید/ساخت روی بعضی نودها با خطا مواجه شد، به ادمین هشدار + دکمه sync سریع بده."""
+    if not (ADMIN_ID and ADMIN_BOT_TOKEN) or not failed_servers:
+        return
+    try:
+        from telegram import Bot
+        admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        fail_lines = "\n".join(f"• {t}" for t in list(dict.fromkeys(failed_servers))[:10])
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔄 همگام‌سازی و ساخت کاربران جاافتاده روی نودها",
+                        callback_data=f"server:{server_id}:sync_nodes_missing",
+                    )
+                ]
+            ]
+        )
+        await admin_bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                f"⚠️ {service_label} روی بعضی نودها تحویل نشد.\n\n"
+                f"سرورهای در دسترس نبودند:\n{fail_lines}\n\n"
+                "سرویس روی بقیه نودها تحویل داده شد. بعد از بازگشت آن سرورها، "
+                "روی دکمه زیر بزنید تا ربات بررسی کند و کاربران جاافتاده را بسازد."
+            ),
+            reply_markup=kb,
+        )
+    except Exception as e:
+        logger.warning("Failed to warn admin about pending node sync (server_id=%s): %s", server_id, e)
+
+
 def _resolve_plan_display_mode(server_block: Optional[Dict[str, Any]]) -> str:
     """Resolve plan display mode with backward compatibility for legacy `mode` key."""
     block = server_block or {}
@@ -4806,6 +4847,7 @@ async def _process_wallet_purchase(
     is_renew_flow = renew_service_id > 0
     renew_service = None
     last_online = None
+    renew_failed_servers: list[str] = []
 
     if is_renew_flow:
         renew_service = userbot_db.get_service_by_id(renew_service_id)
@@ -4824,12 +4866,14 @@ async def _process_wallet_purchase(
             )
             return False
         try:
-            usage_limit, days_left, last_online = await _apply_service_renewal_on_targets(
-                renew_service,
-                user_id=int(user_id),
-                service_name=service_name,
-                package_gb=float(gb),
-                package_days=int(days),
+            usage_limit, days_left, last_online, renew_failed_servers = (
+                await _apply_service_renewal_on_targets(
+                    renew_service,
+                    user_id=int(user_id),
+                    service_name=service_name,
+                    package_gb=float(gb),
+                    package_days=int(days),
+                )
             )
             usage_current = 0.0
             server_title = (renew_service.get("server_title") or server_title).strip() or server_title
@@ -5040,6 +5084,14 @@ async def _process_wallet_purchase(
                     e,
                 )
 
+    # نودهای down هنگام ساخت: گزارش به ادمین تا بعداً sync شوند.
+    created_server_ids = {int(int(n.get("server_id") or 0)) for n in (created_nodes or [])}
+    create_failed_servers = [
+        str(s.get("title") or f"سرور #{s.get('id')}")
+        for s in (targets if not is_renew_flow else [])
+        if int(s.get("id") or 0) not in created_server_ids
+    ]
+
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
@@ -5108,6 +5160,17 @@ async def _process_wallet_purchase(
         service_code=service_code,
         amount=int(amount),
     )
+
+    pending_failed = list(dict.fromkeys((renew_failed_servers or []) + (create_failed_servers or [])))
+    if pending_failed:
+        try:
+            await _warn_admin_pending_node_sync(
+                server_id=int(sid or 0),
+                failed_servers=pending_failed,
+                service_label="تمدید اشتراک" if is_renew_flow else "ساخت اشتراک",
+            )
+        except Exception as e:
+            logger.warning("Failed to warn admin about pending node sync: %s", e)
 
     return True
 
