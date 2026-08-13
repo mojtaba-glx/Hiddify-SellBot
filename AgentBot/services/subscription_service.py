@@ -229,6 +229,11 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         volume_mode = volume_mode or admin_volume
         time_mode = time_mode or admin_time
 
+    # تمدید نمایندگی همیشه به‌صورت «ریست» است (مثل ربات ادمین):
+    # حجم و زمان قبلی صفر و مقدار جدید جایگزین می‌شود.
+    volume_mode = "reset"
+    time_mode = "reset"
+
     wholesale = int(svc.get("wholesale_price", 0))
     cost = 0
     if extra_days > 0:
@@ -276,6 +281,16 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             except Exception as e:
                 logger.warning("renew panel sync failed svc=%s server=%s: %s", service_id, tgt_id, e)
                 renew_failed.append(str(tgt.get("title") or f"\u0633\u0631\u0648\u0631 #{tgt_id}"))
+
+        # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
+        for tgt in targets:
+            tgt_id = int(tgt.get("id") or 0)
+            marzban_un = _lookup_marzban_username(service_id, tgt_id)
+            try:
+                await enable_user_on_panel(updated["panel_user_uuid"], tgt_id, marzban_username=marzban_un)
+            except Exception as e:
+                logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, tgt_id, e)
+        agent_db.set_service_active(service_id, True)
 
         # گزارش به ادمین
         try:

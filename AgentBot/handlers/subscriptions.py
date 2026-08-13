@@ -24,7 +24,7 @@ from AgentBot.utils.helpers import _escape, _fmt_toman, _fmt_gb, _normalize_digi
 from AgentBot.services.subscription_service import (
     create_subscription, renew_subscription,
     disable_subscription, enable_subscription, delete_subscription,
-    change_subscription_link, get_subs_link_settings, get_sub_link_for_type, get_admin_renew_policy,
+    change_subscription_link, get_subs_link_settings, get_sub_link_for_type,
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
 from Shared.qr_utils import make_qr_image
@@ -927,11 +927,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data["rewiz_wholesale"] = wholesale
         context.user_data["rewiz_sale"] = sale
         context.user_data["rewiz_off"] = off_pct
-        vol_mode, time_mode, _ = get_admin_renew_policy()
+        vol_mode = time_mode = "reset"
         context.user_data["rewiz_vol_mode"] = vol_mode
         context.user_data["rewiz_time_mode"] = time_mode
-        vol_label = "افزایشی" if vol_mode == "add" else "ریست"
-        time_label = "افزایشی" if time_mode == "add" else "ریست"
+        vol_label = "ریست"
+        time_label = "ریست"
         from AgentBot.keyboards import agent_renew_wizard_keyboard
         kb = agent_renew_wizard_keyboard(svc_id, gb, months, sale, off_pct, wholesale)
         try:
@@ -960,8 +960,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         if sub == "confirm":
             wholesale = int(context.user_data.get("rewiz_wholesale", 0) or 0)
-            vol_mode = context.user_data.get("rewiz_vol_mode") or "add"
-            time_mode = context.user_data.get("rewiz_time_mode") or "add"
+            vol_mode = context.user_data.get("rewiz_vol_mode") or "reset"
+            time_mode = context.user_data.get("rewiz_time_mode") or "reset"
             days = months * 30
             updated = await renew_subscription(
                 agent_id, svc_id, days, extra_gb=float(gb),
