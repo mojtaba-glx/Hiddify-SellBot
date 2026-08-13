@@ -420,10 +420,10 @@ def agent_dynamic_wizard_keyboard(server_id: int, gb: int, months: int, price: i
         [
             IButton("\u2796 10", callback_data=f"agbot:subs:wiz:gb_dec10:{server_id}"),
             IButton("\u2796", callback_data=f"agbot:subs:wiz:gb_dec:{server_id}"),
-            IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop"),
             IButton("\u2795", callback_data=f"agbot:subs:wiz:gb_inc:{server_id}"),
             IButton("\u2795 10", callback_data=f"agbot:subs:wiz:gb_inc10:{server_id}"),
         ],
+        [IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop")],
         [IButton("\u23f3 \u0632\u0645\u0627\u0646", callback_data="noop")],
         [
             IButton("\u2796", callback_data=f"agbot:subs:wiz:month_dec:{server_id}"),
@@ -452,10 +452,10 @@ def agent_renew_wizard_keyboard(service_id: int, gb: int, months: int, price: in
         [
             IButton("\u2796 10", callback_data=f"agbot:subs:rewiz:gb_dec10:{service_id}"),
             IButton("\u2796", callback_data=f"agbot:subs:rewiz:gb_dec:{service_id}"),
-            IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop"),
             IButton("\u2795", callback_data=f"agbot:subs:rewiz:gb_inc:{service_id}"),
             IButton("\u2795 10", callback_data=f"agbot:subs:rewiz:gb_inc10:{service_id}"),
         ],
+        [IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop")],
         [IButton("\u23f3 \u0645\u062f\u062a \u062a\u0645\u062f\u06cc\u062f", callback_data="noop")],
         [
             IButton("\u2796", callback_data=f"agbot:subs:rewiz:month_dec:{service_id}"),
