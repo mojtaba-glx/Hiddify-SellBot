@@ -3028,9 +3028,7 @@ async def send_user_extend_menu(
 #   تمدید اشتراک با پلن پویا (مثل ربات نمایندگی)
 # ===============================
 
-def _extend_dyn_keyboard(server_id: int, user_uuid: str, gb: int, months: int, vol_mode: str = "reset", time_mode: str = "reset"):
-    vol_label = "افزایشی" if vol_mode == "add" else "ریست"
-    time_label = "افزایشی" if time_mode == "add" else "ریست"
+def _extend_dyn_keyboard(server_id: int, user_uuid: str, gb: int, months: int):
     rows = [
         [InlineKeyboardButton("\U0001f4ca حجم تمدید", callback_data="noop")],
         [
@@ -3040,7 +3038,7 @@ def _extend_dyn_keyboard(server_id: int, user_uuid: str, gb: int, months: int, v
             InlineKeyboardButton("➕", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc"),
             InlineKeyboardButton("➕10", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc10"),
         ],
-        [InlineKeyboardButton(f"📦 حجم: {vol_label} | ⏳ زمان: {time_label}", callback_data="noop")],
+        [InlineKeyboardButton("📦 حجم: ریست | ⏳ زمان: ریست", callback_data="noop")],
         [InlineKeyboardButton("\u23f3 مدت تمدید", callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"extdyn:{server_id}:{user_uuid}:month_dec"),
@@ -3080,8 +3078,7 @@ async def _send_dynamic_extend(server_id: int, user_uuid: str, chat_id: int, con
     gb, months = _extend_dyn_defaults(server_id)
     state_key = f"extdyn:{server_id}:{user_uuid}"
     context.user_data[state_key] = {"gb": gb, "months": months}
-    vol_mode, time_mode = userbot_db.get_renew_modes()
-    kb = _extend_dyn_keyboard(server_id, user_uuid, gb, months, vol_mode, time_mode)
+    kb = _extend_dyn_keyboard(server_id, user_uuid, gb, months)
     text = (
         "🎛 <b>تمدید اشتراک با پلن پویا</b>\n\n"
         "حجم و مدت دلخواه تمدید را انتخاب کنید، سپس «✅ اعمال و تمدید» را بزنید."
@@ -3103,50 +3100,30 @@ def _to_int(value, default=0) -> int:
 
 
 async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months: int, chat_id: int, context):
-    """اعمال تمدید پویا روی کاربر پنل، با رعایت الگوی تمدید ادمین (add/reset)."""
+    """اعمال تمدید پویا روی کاربر پنل.
+
+    حجم و زمان قبلی به‌طور کامل صفر (ریست) می‌شود و مقدارهای جدید جایگزین می‌شوند،
+    سپس اشتراک فعال (تیک فعال شدن) می‌شود.
+    """
     server = database.get_server_by_id(server_id)
     if not server:
         await context.bot.send_message(chat_id, "❌ سرور پیدا نشد.")
         return
 
-    vol_mode, time_mode = userbot_db.get_renew_modes()
     new_days = months * 30
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    today = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
 
-    # دریافت اطلاعات فعلی کاربر از پنل
     target_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
-    current = None
-    try:
-        current = await hiddify_api.get_user_by_uuid(server, target_uuid)
-    except Exception:
-        current = {}
 
-    current_limit = _to_float(current.get("usage_limit_GB"))
-    try:
-        _, _, current_days_left = _compute_package_info(current or {})
-    except Exception:
-        current_days_left = _to_int((current or {}).get("package_days"))
-
-    # ── حجم ──
-    if vol_mode == "add":
-        new_usage_limit = max(0.0, current_limit) + float(gb)
-    else:
-        new_usage_limit = float(gb)
-
-    # ── زمان ──
-    if time_mode == "add":
-        new_package_days = max(0, current_days_left or 0) + new_days
-    else:
-        new_package_days = new_days
-
+    # حجم و زمان قبلی صفر شده و مقادیر جدید جایگزین می‌شود (ریست کامل)
     patch_data: Dict[str, Any] = {
-        "usage_limit_GB": float(new_usage_limit),
-        "package_days": int(new_package_days),
+        "usage_limit_GB": float(gb),
+        "package_days": int(new_days),
+        "current_usage_GB": 0,
+        "last_reset_time": now_dt,
+        "start_date": today,
     }
-    if vol_mode != "add":
-        patch_data["current_usage_GB"] = 0
-        patch_data["last_reset_time"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-    if time_mode != "add":
-        patch_data["start_date"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
 
     try:
         await hiddify_api.patch_user(server, target_uuid, patch_data)
@@ -3154,11 +3131,17 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
         await context.bot.send_message(chat_id, f"❌ خطا در اعمال تمدید پویا:\n{e}")
         return
 
-    vol_text = f"حجم: {format_gb(current_limit)}+{gb}={format_gb(new_usage_limit)}GB (افزایشی)" if vol_mode == "add" else f"حجم: {gb}GB (ریست)"
-    time_text = f"زمان: {current_days_left}+{new_days}={new_package_days} روز (افزایشی)" if time_mode == "add" else f"زمان: {new_days} روز (ریست)"
+    # فعال‌سازی اشتراک (تیک فعال شدن) روی کل خوشه
+    try:
+        await _set_user_active_state_on_related_servers(server_id, user_uuid, active=True)
+    except Exception as e:
+        logger.warning("Failed to activate user after dynamic extend: %s", e)
+
     await context.bot.send_message(
         chat_id,
-        f"✅ اشتراک با پلن پویا تمدید شد!\n{vol_text}\n{time_text}",
+        f"✅ اشتراک با پلن پویا تمدید و فعال شد!\n"
+        f"حجم: {format_gb(gb)}GB (ریست کامل - حجم قبلی صفر شد)\n"
+        f"زمان: {int(new_days)} روز (ریست کامل - زمان قبلی صفر شد)",
     )
     await send_user_detail(server_id, target_uuid, chat_id, context)
 
@@ -5507,8 +5490,7 @@ async def handle_server_inline_callback(
             months = max(min_months, months - 1)
 
         context.user_data[state_key] = {"gb": gb, "months": months}
-        vol_mode, time_mode = userbot_db.get_renew_modes()
-        kb = _extend_dyn_keyboard(server_id, user_uuid, gb, months, vol_mode, time_mode)
+        kb = _extend_dyn_keyboard(server_id, user_uuid, gb, months)
         text = (
             "🎛 <b>تمدید اشتراک با پلن پویا</b>\n\n"
             "حجم و مدت دلخواه تمدید را انتخاب کنید، سپس «✅ اعمال و تمدید» را بزنید."
