@@ -5489,9 +5489,9 @@ async def handle_server_inline_callback(
         if action == "reset":
             gb, months = _extend_dyn_defaults(server_id)
         elif action == "gb_inc":
-            gb = min(gb + step_gb, max_gb)
+            gb = min(gb + 1, max_gb)
         elif action == "gb_dec":
-            gb = max(min_gb, gb - step_gb)
+            gb = max(min_gb, gb - 1)
         elif action == "gb_inc10":
             gb = min(gb + 10, max_gb)
         elif action == "gb_dec10":
