@@ -3125,10 +3125,18 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
         "start_date": today,
     }
 
+    # اعمال تمدید (ریست حجم/زمان) روی سرور اصلی و همه نودها
     try:
-        await hiddify_api.patch_user(server, target_uuid, patch_data)
+        _, changed, total, failed = await _patch_user_on_related_servers(
+            server_id, user_uuid, patch_data
+        )
     except Exception as e:
-        await context.bot.send_message(chat_id, f"❌ خطا در اعمال تمدید پویا:\n{e}")
+        logger.warning("Failed applying dynamic extend on cluster: %s", e)
+        changed, total, failed = 0, 0, []
+
+    if changed <= 0:
+        detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
+        await context.bot.send_message(chat_id, f"❌ خطا در اعمال تمدید پویا.{detail}")
         return
 
     # فعال‌سازی اشتراک (تیک فعال شدن) روی کل خوشه
@@ -3137,11 +3145,13 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
     except Exception as e:
         logger.warning("Failed to activate user after dynamic extend: %s", e)
 
+    node_note = f"\n⚠️ {len(failed)} نود اعمال نشد: {', '.join(failed[:3])}" if failed else ""
     await context.bot.send_message(
         chat_id,
-        f"✅ اشتراک با پلن پویا تمدید و فعال شد!\n"
+        f"✅ اشتراک با پلن پویا تمدید و فعال شد ({changed}/{total} سرور)!\n"
         f"حجم: {format_gb(gb)}GB (ریست کامل - حجم قبلی صفر شد)\n"
-        f"زمان: {int(new_days)} روز (ریست کامل - زمان قبلی صفر شد)",
+        f"زمان: {int(new_days)} روز (ریست کامل - زمان قبلی صفر شد)"
+        f"{node_note}",
     )
     await send_user_detail(server_id, target_uuid, chat_id, context)
 
