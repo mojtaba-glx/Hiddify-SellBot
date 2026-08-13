@@ -998,6 +998,30 @@ async def _handle_trial(query, context, agent_id, user, data):
         await _back_to_main_menu(msg, "🔙 بازگشت")
 
 
+async def _notify_agent_new_trial(agent_id: int, user, service_name: str, gb: float, days: int, server_title: str) -> None:
+    """گزارش ساخت اکانت تست رایگان به ربات نماینده."""
+    try:
+        import os
+        from Shared.agent_db import get_agent_by_id
+        agent = get_agent_by_id(agent_id)
+        agent_tg_id = int((agent or {}).get("telegram_id") or 0)
+        token = os.getenv("AGENT_BOT_TOKEN", "").strip()
+        if not agent_tg_id or not token:
+            return
+        name = getattr(user, "full_name", "") or getattr(user, "username", "") or str(getattr(user, "id", ""))
+        text = (
+            "\U0001f381 <b>\u0627\u06a9\u0627\u0646\u062a \u062a\u0633\u062a \u0631\u0627\u06cc\u06af\u0627\u0646 \u062c\u062f\u06cc\u062f</b>\n"
+            f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: <b>{name}</b>\n"
+            f"\U0001f4e6 \u0633\u0631\u0648\u06cc\u0633: {service_name}\n"
+            f"\U0001f4ca \u062d\u062c\u0645: {float(gb):g} \u06af\u06cc\u06af | \u23f0 \u0632\u0645\u0627\u0646: {int(days)} \u0631\u0648\u0632\n"
+            f"\U0001f5a5 \u0633\u0631\u0648\u0631: {server_title or '-'}"
+        )
+        from telegram import Bot
+        await Bot(token=token).send_message(chat_id=agent_tg_id, text=text, parse_mode="HTML")
+    except Exception:
+        return
+
+
 async def _build_trial_service(update, context, agent_id, user, service_name: str):
     """ساخت سرویس تست رایگان با نام کاربری ارسال‌شده (مثل UserBot) و نمایش اشتراک."""
     from CustomerBot.keyboards import subscription_status_keyboard
@@ -1096,6 +1120,16 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         if domain and not (domain.startswith("http://") or domain.startswith("https://")):
             domain = f"https://{domain}"
         link = f"{domain.rstrip('/')}/{new_uuid}"
+
+    # گزارش ساخت اکانت تست رایگان به ربات نماینده
+    await _notify_agent_new_trial(
+        agent_id,
+        user,
+        service_name or f"\u062a\u0633\u062a \u0631\u0627\u06cc\u06af\u0627\u0646 {gb}GB",
+        gb,
+        days,
+        server.get("title", ""),
+    )
 
     await update.message.reply_text(
         "✅ اکانت تست رایگان شما با موفقیت ثبت شد\n"
