@@ -1709,6 +1709,33 @@ def get_service_nodes(service_id: int) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def set_service_node_active(service_id: int, server_id: int, is_active: bool) -> None:
+    """فعال/غیرفعال کردن نود یک سرویس."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE agent_service_nodes SET is_active = ?, updated_at = ? "
+        "WHERE service_id = ? AND server_id = ?",
+        (1 if is_active else 0, _now(), service_id, server_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_service_nodes_active(service_id: int, is_active: bool) -> None:
+    """فعال/غیرفعال کردن همه نودهای یک سرویس."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE agent_service_nodes SET is_active = ?, updated_at = ? WHERE service_id = ?",
+        (1 if is_active else 0, _now(), service_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def update_service_node_uuid(service_id: int, server_id: int, old_uuid: str, new_uuid: str) -> bool:
     """بروزرسانی UUID یک نود سرویس."""
     init_db()

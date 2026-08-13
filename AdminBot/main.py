@@ -49,6 +49,7 @@ from Shared import service_enforcer  # noqa: E402
 from Shared import node_ops  # noqa: E402
 from Shared import userbot_db  # noqa: E402
 from Shared import database  # noqa: E402
+from Shared import agent_enforcer  # noqa: E402
 
 # ===============================
 #   تنظیمات عمومی
@@ -62,6 +63,8 @@ GLOBAL_ENFORCER_INTERVAL = max(10, int(os.getenv("GLOBAL_ENFORCER_INTERVAL_SECON
 NODE_MONITOR_ENABLED = (os.getenv("NODE_MONITOR_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 NODE_MONITOR_INTERVAL = int(os.getenv("NODE_MONITOR_INTERVAL_SECONDS", "180") or "180")
 SUB_REMINDER_INTERVAL = max(60, int(os.getenv("SUB_REMINDER_INTERVAL_SECONDS", "300") or "300"))
+AGENT_ENFORCER_ENABLED = (os.getenv("AGENT_ENFORCER_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+AGENT_ENFORCER_INTERVAL = max(60, int(os.getenv("AGENT_ENFORCER_INTERVAL_SECONDS", "180") or "180"))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -352,6 +355,7 @@ async def _set_admin_commands(application) -> None:
         BotCommand("start", "منوی اصلی ادمین"),
         BotCommand("debug", "گزارش اشکال‌زدایی کامل"),
         BotCommand("enforce_now", "اجرای فوری کنترل مصرف"),
+        BotCommand("agent_enforce", "اجرای فوری کنترل مصرف نمایندگی"),
         BotCommand("nodes_health", "بررسی سلامت نودها"),
     ]
     try:
@@ -592,6 +596,27 @@ async def enforce_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def agent_enforce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    message = update.message
+    if not user or not message:
+        return
+    if user.id != ADMIN_ID:
+        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        return
+
+    await message.reply_text("⏳ در حال بررسی مصرف سرویس‌های نمایندگی...")
+    summary = await agent_enforcer.run_agent_usage_enforcer(scan_all=True)
+    await message.reply_text(
+        "✅ بررسی مصرف نمایندگی تمام شد.\n"
+        f"سرویس بررسی‌شده: {summary['services_scanned']} از {summary['services_total']}\n"
+        f"سرویس همگام‌شده: {summary['services_synced']}\n"
+        f"سرویس قطع‌شده: {summary['services_disabled']}\n"
+        f"نود قطع‌شده: {summary['nodes_disabled']}\n"
+        f"خطا: {summary['errors']}"
+    )
+
+
 async def _enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     summary = await service_enforcer.run_global_usage_enforcer(scan_all=False)
     reminder_summary = {"days_sent": 0, "usage_sent": 0, "unreachable": 0, "errors": 0}
@@ -614,6 +639,19 @@ async def _enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         reminder_summary["usage_sent"],
         reminder_summary["unreachable"],
         reminder_summary["errors"],
+    )
+
+
+async def _agent_enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    summary = await agent_enforcer.run_agent_usage_enforcer(scan_all=True)
+    logger.info(
+        "Agent enforcer cycle done: scanned=%s/%s synced=%s disabled=%s nodes_disabled=%s errors=%s",
+        summary["services_scanned"],
+        summary["services_total"],
+        summary["services_synced"],
+        summary["services_disabled"],
+        summary["nodes_disabled"],
+        summary["errors"],
     )
 
 
@@ -733,6 +771,21 @@ async def _post_init(application) -> None:
         )
         logger.info("✅ Global enforcer fallback scheduler enabled (interval=%ss)", GLOBAL_ENFORCER_INTERVAL)
 
+    if AGENT_ENFORCER_ENABLED:
+        fallback_tasks.append(
+            application.create_task(
+                _run_fallback_loop(
+                    application,
+                    name="agent-enforcer-fallback",
+                    worker=_agent_enforcer_job,
+                    interval=AGENT_ENFORCER_INTERVAL,
+                    first=30,
+                ),
+                name="agent-enforcer-fallback",
+            )
+        )
+        logger.info("✅ Agent enforcer fallback scheduler enabled (interval=%ss)", AGENT_ENFORCER_INTERVAL)
+
     if NODE_MONITOR_ENABLED:
         fallback_tasks.append(
             application.create_task(
@@ -804,6 +857,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("debug", debug))
     application.add_handler(CommandHandler("enforce_now", enforce_now))
+    application.add_handler(CommandHandler("agent_enforce", agent_enforce))
     application.add_handler(CommandHandler("nodes_health", nodes_health))
 
     # همه‌ی پیام‌های متنی — داخل AdminBot/servers.py
@@ -833,6 +887,20 @@ def main() -> None:
         logger.warning("⚠️ Global enforcer requested but job_queue is unavailable.")
     else:
         logger.info("ℹ️ Global enforcer disabled by env")
+
+    if AGENT_ENFORCER_ENABLED and application.job_queue is not None:
+        application.job_queue.run_repeating(
+            _agent_enforcer_job,
+            interval=AGENT_ENFORCER_INTERVAL,
+            first=30,
+            name="agent-enforcer",
+            job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 60},
+        )
+        logger.info("✅ Agent enforcer enabled (interval=%ss)", AGENT_ENFORCER_INTERVAL)
+    elif AGENT_ENFORCER_ENABLED:
+        logger.warning("⚠️ Agent enforcer requested but job_queue is unavailable.")
+    else:
+        logger.info("ℹ️ Agent enforcer disabled by env")
 
     if NODE_MONITOR_ENABLED and application.job_queue is not None:
         application.job_queue.run_repeating(
