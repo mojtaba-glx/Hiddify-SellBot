@@ -183,10 +183,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         from Shared.agent_db import get_services_by_customer
-        from CustomerBot.services import refresh_service_status, is_customer_service_visible
+        from CustomerBot.services import sync_service_status_from_panels, is_customer_service_visible
         services = get_services_by_customer(cust["id"])
         for svc in services:
-            await refresh_service_status(svc.get("id", 0))
+            await sync_service_status_from_panels(svc.get("id", 0))
         services = get_services_by_customer(cust["id"])
         visible = [s for s in services if is_customer_service_visible(s)]
         if not visible:

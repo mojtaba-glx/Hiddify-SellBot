@@ -638,10 +638,10 @@ async def _handle_status(query, context, agent_id, user, data):
             cust = get_customer_by_telegram_id(agent_id, user.id)
             if not cust:
                 return
-            from CustomerBot.services import refresh_service_status, is_customer_service_visible
+            from CustomerBot.services import sync_service_status_from_panels, is_customer_service_visible
             services = get_services_by_customer(cust["id"])
             for svc in services:
-                await refresh_service_status(svc.get("id", 0))
+                await sync_service_status_from_panels(svc.get("id", 0))
             services = get_services_by_customer(cust["id"])
             visible = [s for s in services if is_customer_service_visible(s)]
             if not visible:
