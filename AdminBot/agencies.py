@@ -1228,24 +1228,23 @@ async def send_agent_services(
                 f"{'🟢' if is_active else '🔴'} {sid}",
                 callback_data=f"agency:svcview:{agent_id}:{sid}:{page}",
             ))
-            if len(chunk) == 3:
+            if len(chunk) == 4:
                 rows_kb.append(chunk)
                 chunk = []
         if chunk:
             rows_kb.append(chunk)
 
     rows_kb.append([
-        InlineKeyboardButton("➕ سرویس جدید", callback_data=f"agency:svcadd:{agent_id}"),
         InlineKeyboardButton("🔍 جستجو", callback_data=f"agency:svcsearch:{agent_id}"),
         InlineKeyboardButton("🔽 فیلتر", callback_data=f"agency:svcfilter:{agent_id}:{page}"),
     ])
 
     nav: List[Any] = []
     if page > 1:
-        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"agency:services:{agent_id}:{page - 1}"))
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"agency:services:{agent_id}:{page - 1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="agency:noop"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"agency:services:{agent_id}:{page + 1}"))
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"agency:services:{agent_id}:{page + 1}"))
     rows_kb.append(nav)
 
     rows_kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")])
