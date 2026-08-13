@@ -3034,11 +3034,11 @@ def _extend_dyn_keyboard(server_id: int, user_uuid: str, gb: int, months: int):
         [
             InlineKeyboardButton("➖10", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_dec10"),
             InlineKeyboardButton("➖", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_dec"),
-            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc"),
             InlineKeyboardButton("➕10", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc10"),
         ],
-        [InlineKeyboardButton("📦 حجم: ریست | ⏳ زمان: ریست", callback_data="noop")],
+        [InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop")],
+        [InlineKeyboardButton("📦 حجم: ریست | ⏳ زمان: ریست", callback_data=f"extdyn:{server_id}:{user_uuid}:reset")],
         [InlineKeyboardButton("\u23f3 مدت تمدید", callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"extdyn:{server_id}:{user_uuid}:month_dec"),
@@ -5486,7 +5486,9 @@ async def handle_server_inline_callback(
         min_months = max(1, _to_int(dyn.get("min_months"), 1))
         max_months = max(1, _to_int(dyn.get("max_months"), 12))
 
-        if action == "gb_inc":
+        if action == "reset":
+            gb, months = _extend_dyn_defaults(server_id)
+        elif action == "gb_inc":
             gb = min(gb + step_gb, max_gb)
         elif action == "gb_dec":
             gb = max(min_gb, gb - step_gb)
