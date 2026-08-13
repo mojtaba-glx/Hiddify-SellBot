@@ -1181,7 +1181,7 @@ async def send_agent_services(
     agent_id: int,
     page: int = 1,
 ) -> None:
-    """نمایش داشبورد فشرده سرویس‌های یک نماینده (جدول افقی + نوار آمار)."""
+    """نمایش ساده سرویس‌های یک نماینده: آمار + دکمه‌های شماره."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
         await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
@@ -1202,118 +1202,44 @@ async def send_agent_services(
     total_pages = max(1, (total + SERVICES_PAGE_SIZE - 1) // SERVICES_PAGE_SIZE)
 
     agent_name = str(agent.get("full_name") or "").strip() or str(agent.get("username") or "").strip() or str(agent.get("telegram_id") or "")
-
     stats = agent_db.get_agent_services_stats(agent_id)
 
-    def _trunc(text: str, max_len: int) -> str:
-        t = str(text or "").strip()
-        if len(t) <= max_len:
-            return t
-        return t[: max_len - 1] + "…"
-
-    def _rtl_cell(text: str) -> str:
-        t = str(text or "")
-        if not t:
-            return ""
-        if any("\u0600" <= ch <= "\u06ff" for ch in t):
-            return "\u200f" + t
-        return t
-
-    def _usage(c: float, l: float) -> str:
-        c, l = float(c or 0), float(l or 0)
-        return f"{_fmt_gb(c)}/{_fmt_gb(l)}GB"
-
-    rows: List[Dict[str, str]] = []
-    for svc in services:
-        sid = int(svc.get("id") or 0)
-        name = str(svc.get("name") or "بی‌نام").strip()
-        usage_cur = float(svc.get("usage_current") or 0)
-        usage_lim = float(svc.get("usage_limit") or 0)
-        is_active = bool(int(svc.get("is_active", 0) or 0))
-        end = str(svc.get("end_date") or "").strip()
-        rows.append(
-            {
-                "sid": str(sid),
-                "name": _rtl_cell(_trunc(name, 10)),
-                "status": "🟢" if is_active else "🔴",
-                "usage": _usage(usage_cur, usage_lim),
-                "end": _rtl_cell(_fmt_fa_date(end)),
-            }
-        )
-
-    def _table(items: List[Dict[str, str]]) -> List[str]:
-        if not items:
-            return []
-        headers = ("#", "نام سرویس", "وضعیت", "حجم/مصرف", "انقضا")
-        col_w = {"#": 3, "نام سرویس": 11, "وضعیت": 6, "حجم/مصرف": 9, "انقضا": 10}
-        out: List[str] = []
-        sep = "─".join("─" * (w + 2) for w in col_w.values())
-        out.append("┌" + sep + "┐")
-        out.append("│" + "│".join(" " + headers[i].center(col_w[h]) + " " for i, h in enumerate(headers)) + "│")
-        out.append("├" + sep + "┤")
-        for it in items:
-            cells = [it["sid"], it["name"], it["status"], it["usage"], it["end"]]
-            padded = []
-            for i, h in enumerate(headers):
-                w = col_w[h]
-                if h == "#":
-                    padded.append(" " + cells[i].rjust(w) + " ")
-                elif h == "وضعیت":
-                    padded.append(" " + cells[i].center(w) + " ")
-                else:
-                    padded.append(" " + cells[i].ljust(w) + " ")
-            out.append("│" + "│".join(padded) + "│")
-        out.append("└" + sep + "┘")
-        return out
-
-    table = _table(rows)
-
-    # ── متن صفحه ──
     filter_label = {"active": " 🟢", "inactive": " 🔴"}.get(filter_mode, "")
-    blocks: List[str] = []
-    blocks.append(f"📦 <b>مدیریت سرویس‌های نماینده</b>{filter_label}")
-    blocks.append(f"👤 {_escape(agent_name)}")
-    blocks.append(f"📊 مجموع: <b>{total}</b> سرویس")
-    blocks.append("")
-
-    server_stat = ""
-    if stats["top_server"]:
-        server_stat = f"{_server_flag_title(stats['top_server'])}: {stats['top_server_count']}"
-    stats_parts = [
-        f"🟢 فعال: {stats['active']}",
-        f"🔴 غیرفعال: {stats['inactive']}",
+    blocks: List[str] = [
+        f"📦 <b>سرویس‌های نماینده</b>{filter_label}",
+        f"👤 {_escape(agent_name)}",
+        f"🟢 {stats['active']} فعال · 🔴 {stats['inactive']} غیرفعال · ⏳ {stats['near_expiry']} نزدیک انقضا",
+        f"📊 مجموع: <b>{total}</b> سرویس",
     ]
-    if server_stat:
-        stats_parts.append(server_stat)
-    stats_parts.append(f"⏳ نزدیک انقضا: {stats['near_expiry']}")
-    blocks.append("  |  ".join(stats_parts))
-    blocks.append("")
-
-    if not rows:
+    if not services:
+        blocks.append("")
         blocks.append("سرویسی ثبت نشده است.")
-    else:
-        blocks.append("<pre>" + "\n".join(table) + "</pre>")
-
-        total_wholesale = 0
-        total_sale = 0
-        for svc in services:
-            total_wholesale += int(svc.get("wholesale_price") or 0)
-            total_sale += int(svc.get("sale_price") or 0)
-        blocks.append(
-            f"💰 عمده: {_fmt_toman(total_wholesale)} تومان   |   "
-            f"💵 فروش: {_fmt_toman(total_sale)} تومان"
-        )
 
     text = "\n".join(blocks)
 
     # ── دکمه‌ها ──
-    rows_kb: List[List[Any]] = [
-        [
-            InlineKeyboardButton("➕ سرویس جدید", callback_data=f"agency:svcadd:{agent_id}"),
-            InlineKeyboardButton("🔍 جستجو", callback_data=f"agency:svcsearch:{agent_id}"),
-            InlineKeyboardButton("🔽 فیلتر", callback_data=f"agency:svcfilter:{agent_id}:{page}"),
-        ]
-    ]
+    rows_kb: List[List[Any]] = []
+    if services:
+        chunk: List[Any] = []
+        for svc in services:
+            sid = int(svc.get("id") or 0)
+            is_active = bool(int(svc.get("is_active", 0) or 0))
+            chunk.append(InlineKeyboardButton(
+                f"{'🟢' if is_active else '🔴'} {sid}",
+                callback_data=f"agency:svcview:{agent_id}:{sid}:{page}",
+            ))
+            if len(chunk) == 3:
+                rows_kb.append(chunk)
+                chunk = []
+        if chunk:
+            rows_kb.append(chunk)
+
+    rows_kb.append([
+        InlineKeyboardButton("➕ سرویس جدید", callback_data=f"agency:svcadd:{agent_id}"),
+        InlineKeyboardButton("🔍 جستجو", callback_data=f"agency:svcsearch:{agent_id}"),
+        InlineKeyboardButton("🔽 فیلتر", callback_data=f"agency:svcfilter:{agent_id}:{page}"),
+    ])
+
     nav: List[Any] = []
     if page > 1:
         nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"agency:services:{agent_id}:{page - 1}"))
@@ -1321,15 +1247,6 @@ async def send_agent_services(
     if page < total_pages:
         nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"agency:services:{agent_id}:{page + 1}"))
     rows_kb.append(nav)
-
-    if services:
-        svc_buttons: List[Any] = []
-        for svc in services[:8]:
-            sid = int(svc.get("id") or 0)
-            cb = f"agency:svcview:{agent_id}:{sid}"
-            svc_buttons.append(InlineKeyboardButton(f"🔹 {sid}", callback_data=cb))
-        if svc_buttons:
-            rows_kb.append(svc_buttons)
 
     rows_kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")])
 
