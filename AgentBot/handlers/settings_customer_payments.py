@@ -324,7 +324,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
         done_text += f"\n💳 ۴ رقم آخر کارت: <code>{card_last4}</code>"
     done_text += "\n\n✅ پرداخت تایید شد؛ اشتراک مشتری ساخته شد."
     done_kb = _ikb([
-        [IButton(f"👤 {customer_name} | {user_tg_id}", callback_data=f"agbot:custpay:detail:{pay_id}")],
+        [IButton(f"👤 {customer_name}", callback_data=f"agbot:custpay:profile:{user_tg_id}")],
     ])
     try:
         await query.answer("✅ پرداخت با موفقیت تایید شد.", show_alert=True)
@@ -370,20 +370,24 @@ async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
     await _delete_pending_customer_message(context, agent_id, pay)
 
     done_text = "❌ پرداخت رد شد."
+    customer_name = pay.get("full_name") or pay.get("username") or f"Customer {user_tg_id}"
+    done_kb = _ikb([
+        [IButton(f"👤 {customer_name}", callback_data=f"agbot:custpay:profile:{user_tg_id}")],
+    ])
     try:
         await query.answer("❌ پرداخت رد شد.", show_alert=True)
     except Exception:
         pass
     try:
         if query.message and query.message.photo:
-            await query.edit_message_caption(caption=done_text, parse_mode="HTML", reply_markup=None)
+            await query.edit_message_caption(caption=done_text, parse_mode="HTML", reply_markup=done_kb)
         else:
-            await query.edit_message_text(done_text, parse_mode="HTML", reply_markup=None)
+            await query.edit_message_text(done_text, parse_mode="HTML", reply_markup=done_kb)
     except Exception as edit_err:
         logger.warning("Failed to edit rejection message for payment %s: %s", pay_id, edit_err)
         try:
             if query.message:
-                await query.message.reply_text(done_text, parse_mode="HTML")
+                await query.message.reply_text(done_text, parse_mode="HTML", reply_markup=done_kb)
         except Exception as reply_err:
             logger.warning("Failed to send rejection reply for payment %s: %s", pay_id, reply_err)
 
