@@ -339,6 +339,21 @@ def tx_list_keyboard(payments: List[Dict[str, Any]], filter_type: str, page: int
     return _ikb(rows)
 
 
+def tx_search_results_keyboard(payments: List[Dict[str, Any]], back_callback: str = "agbot:set:tx"):
+    """کیبورد نتایج جستجوی تراکنش — دکمه‌های شناسه تراکنش + بازگشت."""
+    rows = []
+    current_row = []
+    for p in payments:
+        current_row.append(IButton(str(p.get("id")), callback_data=f"agbot:set:tx:detail:{p.get('id')}"))
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
+    return _ikb(rows)
+
+
 # Fixed plan keyboards
 def plans_cats_keyboard(cats):
     rows = []

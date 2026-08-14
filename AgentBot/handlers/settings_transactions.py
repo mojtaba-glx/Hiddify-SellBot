@@ -1,17 +1,37 @@
 import logging
+from typing import Any, Dict
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from AgentBot.constants import UD_STATE, STATE_SEARCH_TX
 from AgentBot.handlers.base import get_agent_id
-from AgentBot.keyboards import tx_menu_keyboard, back_keyboard, cancel_keyboard, tx_list_keyboard
+from AgentBot.keyboards import tx_menu_keyboard, back_keyboard, cancel_keyboard, tx_list_keyboard, tx_search_results_keyboard
 from AgentBot.utils.helpers import _escape, _fmt_toman, _status_icon
 from AgentBot.database import get_payments, search_payments, get_payment_stats, get_payment_by_id
 
 logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 8
+
+_STATUS_TITLES = {
+    "approved": "\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647",
+    "rejected": "\u274c \u0631\u062f \u0634\u062f\u0647",
+    "pending": "\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631",
+}
+
+
+def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
+    """متن جزئیات تراکنش (مثل ربات ادمین)."""
+    return (
+        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {pay.get('id')}\n"
+        f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {_escape(pay.get('customer_name', '') or '-')}\n"
+        f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}\n"
+        f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646\n"
+        f"\u2756 \u2022 -------------------------- \u2022 \u2756\n"
+        f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {_STATUS_TITLES.get(str(pay.get('status')), pay.get('status'))}\n"
+        f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('method', '') or '-')}\n"
+    )
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,20 +107,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not pay:
             await query.answer("\u274c \u062a\u0631\u0627\u06a9\u0646\u0634 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", show_alert=True)
             return
-        status_titles = {
-            "approved": "\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647",
-            "rejected": "\u274c \u0631\u062f \u0634\u062f\u0647",
-            "pending": "\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631",
-        }
-        text = (
-            f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {pay.get('id')}\n"
-            f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {_escape(pay.get('customer_name', '') or '-')}\n"
-            f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}\n"
-            f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\u2756 \u2022 -------------------------- \u2022 \u2756\n"
-            f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {status_titles.get(str(pay.get('status')), pay.get('status'))}\n"
-            f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('method', '') or '-')}\n"
-        )
+        text = _build_payment_detail_text(pay)
         try:
             await query.edit_message_text(text, reply_markup=back_keyboard(f"agbot:set:tx:{pay.get('status')}"), parse_mode="HTML")
         except Exception:
@@ -110,8 +117,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if p3 == "search":
         context.user_data[UD_STATE] = STATE_SEARCH_TX
         try:
-            await query.edit_message_text(
-                "\U0001f50d \u0646\u0627\u0645 \u0645\u0634\u062a\u0631\u06cc \u06cc\u0627 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+            await query.answer()
+        except Exception:
+            pass
+        try:
+            await query.message.reply_text(
+                "\U0001f50d <b>\u062c\u0633\u062a\u062c\u0648\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634</b>\n"
+                "\u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634 (\u0639\u062f\u062f) \u06cc\u0627 \u0646\u0627\u0645 \u0645\u0634\u062a\u0631\u06cc \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
                 reply_markup=cancel_keyboard(), parse_mode="HTML",
             )
         except Exception:
@@ -132,17 +144,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         from AgentBot.keyboards import settings_menu_keyboard
         await update.message.reply_text("⚙️ <b>تنظیمات ربات</b>", reply_markup=settings_menu_keyboard(), parse_mode="HTML")
         return True
-    payments = search_payments(agent_id, text, limit=10)
-    if not payments:
-        await update.message.reply_text("\u0647\u06cc\u0686 \u062a\u0631\u0627\u06a9\u0646\u0634\u06cc \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.")
+
+    # جستجوی مستقیم با شناسه تراکنش (مثل ربات ادمین)
+    if text.isdigit():
+        pid = int(text)
+        pay = get_payment_by_id(pid)
+        context.user_data.pop(UD_STATE, None)
+        if not pay or int(pay.get("agent_id") or 0) != agent_id:
+            await update.message.reply_text(f"❌ تراکنشی با شناسه {pid} یافت نشد.", reply_markup=tx_menu_keyboard(), parse_mode="HTML")
+            return True
+        await update.message.reply_text(
+            _build_payment_detail_text(pay),
+            reply_markup=back_keyboard(f"agbot:set:tx:{pay.get('status')}"),
+            parse_mode="HTML",
+        )
         return True
-    from AgentBot.keyboards import main_menu_keyboard
-    lines = [f"\U0001f50d <b>\u0646\u062a\u0627\u06cc\u062c \u062c\u0633\u062a\u062c\u0648 \u0628\u0631\u0627\u06cc \"{_escape(text)}\":</b>\n"]
+
+    # جستجو بر اساس نام مشتری / کد پیگیری
+    payments = search_payments(agent_id, text, limit=15)
+    context.user_data.pop(UD_STATE, None)
+    if not payments:
+        await update.message.reply_text(
+            "❌ هیچ تراکنشی با این مشخصات پیدا نشد.",
+            reply_markup=tx_menu_keyboard(), parse_mode="HTML",
+        )
+        return True
+    lines = [f"\U0001f50d <b>نتایج جستجو برای \"{_escape(text)}\"</b> ({len(payments)}):\n"]
     for p in payments:
         lines.append(
-            f"{_status_icon(p.get('status', ''))} {_escape(p.get('customer_name', ''))} \u2022 "
-            f"{_fmt_toman(p.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646"
+            f"{_status_icon(p.get('status', ''))} #{p.get('id')} \u2022 {_escape(p.get('customer_name', ''))} \u2022 "
+            f"{_fmt_toman(p.get('amount', 0))} تومان"
         )
-    await update.message.reply_text("\n".join(lines), reply_markup=main_menu_keyboard(), parse_mode="HTML")
-    context.user_data.pop(UD_STATE, None)
+    await update.message.reply_text(
+        "\n".join(lines),
+        reply_markup=tx_search_results_keyboard(payments),
+        parse_mode="HTML",
+    )
     return True
