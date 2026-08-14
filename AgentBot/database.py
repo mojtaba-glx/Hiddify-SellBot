@@ -439,21 +439,23 @@ def get_orders(agent_id: int, status: Optional[str] = None, page: int = 1, page_
     if page < 1:
         page = 1
     offset = (page - 1) * page_size
-    conn = _conn()
+    conn = _customer_conn()
+    if not conn:
+        return [], 0
     try:
         cur = conn.cursor()
         if status:
-            cur.execute("SELECT COUNT(*) AS c FROM agent_orders WHERE agent_id=? AND status=?", (agent_id, status))
+            cur.execute("SELECT COUNT(*) AS c FROM customer_orders WHERE agent_id=? AND status=?", (agent_id, status))
             total = int(cur.fetchone()["c"] or 0)
             cur.execute(
-                "SELECT * FROM agent_orders WHERE agent_id=? AND status=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM customer_orders WHERE agent_id=? AND status=? ORDER BY id DESC LIMIT ? OFFSET ?",
                 (agent_id, status, page_size, offset),
             )
         else:
-            cur.execute("SELECT COUNT(*) AS c FROM agent_orders WHERE agent_id=?", (agent_id,))
+            cur.execute("SELECT COUNT(*) AS c FROM customer_orders WHERE agent_id=?", (agent_id,))
             total = int(cur.fetchone()["c"] or 0)
             cur.execute(
-                "SELECT * FROM agent_orders WHERE agent_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM customer_orders WHERE agent_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
                 (agent_id, page_size, offset),
             )
         rows = cur.fetchall()
@@ -463,31 +465,28 @@ def get_orders(agent_id: int, status: Optional[str] = None, page: int = 1, page_
 
 
 def get_order_stats(agent_id: int) -> Dict[str, Any]:
-    """آمار سفارشات نماینده (کل، ۳۰ روز گذشته و ماه جاری)."""
+    """آمار سفارشات نماینده (کل، ۳۰ روز گذشته و ماه جاری) — از customer_orders."""
     init_db()
-    conditions = ["agent_id=?"]
-    params: List[Any] = [agent_id]
-    base_where = " AND ".join(conditions)
-    conn = _conn()
+    conn = _customer_conn()
+    if not conn:
+        return {k: 0 for k in ("total_count","total_gb","total_amount","last30_count","last30_gb","last30_amount","month_count","month_gb","month_amount")}
     try:
         cur = conn.cursor()
         cur.execute(
-            f"SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {base_where}",
-            params,
+            "SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(price), 0) AS total FROM customer_orders WHERE agent_id=?",
+            (agent_id,),
         )
         total_row = cur.fetchone()
 
-        where_30 = base_where + " AND date(created_at) >= date('now', '-30 days')"
         cur.execute(
-            f"SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_30}",
-            params,
+            "SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(price), 0) AS total FROM customer_orders WHERE agent_id=? AND date(created_at) >= date('now', '-30 days')",
+            (agent_id,),
         )
         last30_row = cur.fetchone()
 
-        where_month = base_where + " AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
         cur.execute(
-            f"SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_month}",
-            params,
+            "SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(price), 0) AS total FROM customer_orders WHERE agent_id=? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')",
+            (agent_id,),
         )
         month_row = cur.fetchone()
     finally:
@@ -508,10 +507,12 @@ def get_order_stats(agent_id: int) -> Dict[str, Any]:
 
 def get_order_by_id(agent_id: int, order_id: int) -> Optional[Dict[str, Any]]:
     init_db()
-    conn = _conn()
+    conn = _customer_conn()
+    if not conn:
+        return None
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM agent_orders WHERE id=? AND agent_id=?", (int(order_id), agent_id))
+        cur.execute("SELECT * FROM customer_orders WHERE agent_id=? AND (id=? OR order_id=?)", (agent_id, int(order_id), int(order_id)))
         row = cur.fetchone()
     finally:
         conn.close()
@@ -520,16 +521,18 @@ def get_order_by_id(agent_id: int, order_id: int) -> Optional[Dict[str, Any]]:
 
 def search_orders(agent_id: int, query: str, limit: int = 20) -> List[Dict[str, Any]]:
     init_db()
-    conn = _conn()
+    conn = _customer_conn()
+    if not conn:
+        return []
     try:
-            cur = conn.cursor()
-            like = f"%{query}%"
-            cur.execute(
-            "SELECT * FROM agent_orders WHERE agent_id=? AND (customer_name LIKE ? OR CAST(id AS TEXT) LIKE ?) "
+        cur = conn.cursor()
+        like = f"%{query}%"
+        cur.execute(
+            "SELECT * FROM customer_orders WHERE agent_id=? AND (full_name LIKE ? OR CAST(order_id AS TEXT) LIKE ? OR plan_title LIKE ?) "
             "ORDER BY id DESC LIMIT ?",
-            (agent_id, like, like, limit),
-            )
-            rows = cur.fetchall()
+            (agent_id, like, like, like, limit),
+        )
+        rows = cur.fetchall()
     finally:
         conn.close()
     return [dict(r) for r in rows]
@@ -921,6 +924,140 @@ def get_customer_user(agent_id: int, telegram_id: int) -> Optional[Dict[str, Any
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def get_customer_payments(
+    agent_id: int,
+    status: Optional[str] = None,
+    method: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+) -> Tuple[List[Dict[str, Any]], int]:
+    conn = _customer_conn()
+    if not conn:
+        return [], 0
+    if page < 1:
+        page = 1
+    offset = (page - 1) * page_size
+    conditions = ["cp.agent_id=?"]
+    params: List[Any] = [agent_id]
+    if status:
+        conditions.append("cp.status=?")
+        params.append(status)
+    if method:
+        conditions.append("cp.method=?")
+        params.append(method)
+    where = " AND ".join(conditions)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) AS c FROM customer_payments cp WHERE {where}",
+            params,
+        )
+        total = int(cur.fetchone()["c"] or 0)
+        cur.execute(
+            f"SELECT cp.*, cu.full_name, cu.username FROM customer_payments cp "
+            f"LEFT JOIN customer_users cu ON cu.agent_id=cp.agent_id AND cu.telegram_id=cp.user_id "
+            f"WHERE {where} ORDER BY cp.id DESC LIMIT ? OFFSET ?",
+            [*params, page_size, offset],
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows], total
+
+
+def get_customer_payment_stats(
+    agent_id: int,
+    status: Optional[str] = None,
+    method: Optional[str] = None,
+) -> Dict[str, Any]:
+    conn = _customer_conn()
+    if not conn:
+        return {
+            "total_count": 0, "total_amount": 0,
+            "last30_count": 0, "last30_amount": 0,
+            "month_count": 0, "month_amount": 0,
+        }
+    conditions = ["cp.agent_id=?"]
+    params: List[Any] = [agent_id]
+    if status:
+        conditions.append("cp.status=?")
+        params.append(status)
+    if method:
+        conditions.append("cp.method=?")
+        params.append(method)
+    base_where = " AND ".join(conditions)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(cp.amount), 0) AS total "
+            f"FROM customer_payments cp WHERE {base_where}",
+            params,
+        )
+        total_row = cur.fetchone()
+        where_30 = base_where + " AND date(cp.created_at) >= date('now', '-30 days')"
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(cp.amount), 0) AS total "
+            f"FROM customer_payments cp WHERE {where_30}",
+            params,
+        )
+        last30_row = cur.fetchone()
+        where_month = base_where + " AND strftime('%Y-%m', cp.created_at) = strftime('%Y-%m', 'now')"
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(cp.amount), 0) AS total "
+            f"FROM customer_payments cp WHERE {where_month}",
+            params,
+        )
+        month_row = cur.fetchone()
+    finally:
+        conn.close()
+    return {
+        "total_count": int(total_row["c"] or 0),
+        "total_amount": int(total_row["total"] or 0),
+        "last30_count": int(last30_row["c"] or 0),
+        "last30_amount": int(last30_row["total"] or 0),
+        "month_count": int(month_row["c"] or 0),
+        "month_amount": int(month_row["total"] or 0),
+    }
+
+
+def search_customer_payments(agent_id: int, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    conn = _customer_conn()
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        like = f"%{query}%"
+        cur.execute(
+            "SELECT cp.*, cu.full_name, cu.username FROM customer_payments cp "
+            "LEFT JOIN customer_users cu ON cu.agent_id=cp.agent_id AND cu.telegram_id=cp.user_id "
+            "WHERE cp.agent_id=? AND (cu.full_name LIKE ? OR cu.username LIKE ? OR CAST(cp.id AS TEXT) LIKE ? OR cp.tx_code LIKE ?) "
+            "ORDER BY cp.id DESC LIMIT ?",
+            (agent_id, like, like, like, like, limit),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_customer_payment_detail(payment_id: int) -> Optional[Dict[str, Any]]:
+    conn = _customer_conn()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT cp.*, cu.full_name, cu.username FROM customer_payments cp "
+            "LEFT JOIN customer_users cu ON cu.agent_id=cp.agent_id AND cu.telegram_id=cp.user_id "
+            "WHERE cp.id=?",
+            (int(payment_id),),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
 
 
 def get_fixed_categories(agent_id: int) -> List[Dict[str, Any]]:

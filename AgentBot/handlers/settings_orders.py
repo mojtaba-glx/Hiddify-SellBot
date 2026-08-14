@@ -15,15 +15,21 @@ _PAGE_SIZE = 9
 
 
 def _build_order_detail_text(order) -> str:
-    """متن جزئیات سفارش (مثل ربات ادمین)."""
+    """متن جزئیات سفارش (هماهنگ با customer_orders)."""
+    oid = order.get('order_id') or order.get('id') or '?'
+    name = order.get('full_name') or order.get('customer_name') or '-'
+    amt = order.get('price') or order.get('amount') or 0
     return (
-        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u0633\u0641\u0627\u0631\u0634: {order.get('id')}\n"
-        f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {_escape(order.get('customer_name', '') or '-')}\n"
-        f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u0633\u0641\u0627\u0631\u0634: {_escape(order.get('created_at', '') or '-')}\n"
-        f"\u25c8 \u0645\u0628\u0644\u063a \u0633\u0641\u0627\u0631\u0634: {_fmt_toman(order.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646\n"
-        f"\u2756 \u2022 -------------------------- \u2022 \u2756\n"
-        f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {_status_icon(order.get('status', ''))} {_escape(order.get('status', ''))}\n"
-        f"\u25c8 \u0646\u0648\u0639 \u0633\u0641\u0627\u0631\u0634: {_escape(order.get('order_type', '') or '-')}\n"
+        f"◈ شناسه سفارش: {oid}\n"
+        f"👤 مشتری: {_escape(name)}\n"
+        f"◈ تاریخ سفارش: {_escape(order.get('created_at', '') or '-')}\n"
+        f"◈ مبلغ سفارش: {_fmt_toman(amt)} تومان\n"
+        f"⬖ حجم: {_fmt_gb(order.get('volume_gb', 0))}GB\n"
+        f"⬖ مدت: {order.get('days', 0)} روز\n"
+        f"⬖ پلن: {_escape(order.get('plan_title', '') or '-')}\n"
+        f"⬖ سرور: {_escape(order.get('server_location', '') or '-')}\n"
+        f"⬖ نوع سفارش: {_escape(order.get('order_type', '') or '-')}\n"
+        f"⬖ وضعیت: {_status_icon(order.get('status', ''))} {_escape(order.get('status', ''))}\n"
     )
 
 
@@ -166,9 +172,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return True
     lines = [f"\U0001f50d <b>نتایج جستجو برای \"{_escape(text)}\"</b> ({len(orders)}):\n"]
     for o in orders:
+        oid = o.get('order_id') or o.get('id') or '?'
+        name = o.get('full_name') or o.get('customer_name') or '-'
+        amt = o.get('price') or o.get('amount') or 0
         lines.append(
-            f"{_status_icon(o.get('status', ''))} #{o.get('id')} \u2022 {_escape(o.get('customer_name', ''))} \u2022 "
-            f"{_fmt_toman(o.get('amount', 0))} تومان"
+            f"{_status_icon(o.get('status', ''))} #{oid} • {_escape(name)} • "
+            f"{_fmt_toman(amt)} تومان"
         )
     await update.message.reply_text(
         "\n".join(lines),
