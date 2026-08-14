@@ -225,6 +225,16 @@ def init_db() -> None:
         )
     """)
 
+    # 11. وضعیت یادآوری تمدید هر سرویس
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_service_reminder_state (
+            service_id INTEGER PRIMARY KEY,
+            days_sent INTEGER DEFAULT -1,
+            usage_sent INTEGER DEFAULT -1,
+            updated_at TEXT DEFAULT ''
+        )
+    """)
+
     _backfill_service_codes(cur)
 
     conn.commit()
@@ -1734,6 +1744,85 @@ def set_service_nodes_active(service_id: int, is_active: bool) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def get_agent_services_for_reminder(agent_id: int) -> List[Dict[str, Any]]:
+    """سرویس‌های فعال یک نماینده به همراه telegram_id مشتری، برای یادآوری تمدید."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT s.*, c.telegram_id, c.username, c.full_name
+            FROM agent_services s
+            JOIN agent_customers c ON c.id = s.customer_id
+            WHERE s.agent_id = ?
+              AND c.telegram_id IS NOT NULL
+              AND (s.deleted_at IS NULL OR s.deleted_at = '')
+              AND EXISTS (
+                SELECT 1 FROM agent_service_nodes n
+                WHERE n.service_id = s.id AND COALESCE(n.is_active, 1) = 1
+              )
+            ORDER BY s.id DESC
+            """,
+            (agent_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_service_reminder_state(service_id: int) -> Dict[str, Any]:
+    """وضعیت یادآوری تمدید یک سرویس."""
+    init_db()
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return {"days_sent": -1, "usage_sent": -1}
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT days_sent, usage_sent FROM agent_service_reminder_state WHERE service_id = ? LIMIT 1",
+            (sid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"days_sent": -1, "usage_sent": -1}
+        return {
+            "days_sent": int(row["days_sent"]) if row["days_sent"] is not None else -1,
+            "usage_sent": int(row["usage_sent"]) if row["usage_sent"] is not None else -1,
+        }
+    finally:
+        conn.close()
+
+
+def set_service_reminder_state(service_id: int, *, days_sent: Optional[int] = None, usage_sent: Optional[int] = None) -> None:
+    """ثبت وضعیت یادآوری تمدید یک سرویس."""
+    init_db()
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return
+    current = get_service_reminder_state(sid)
+    d_val = int(days_sent) if days_sent is not None else int(current.get("days_sent", -1))
+    u_val = int(usage_sent) if usage_sent is not None else int(current.get("usage_sent", -1))
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO agent_service_reminder_state (service_id, days_sent, usage_sent, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(service_id) DO UPDATE SET
+                days_sent = excluded.days_sent,
+                usage_sent = excluded.usage_sent,
+                updated_at = excluded.updated_at
+            """,
+            (sid, d_val, u_val, _now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def update_service_node_uuid(service_id: int, server_id: int, old_uuid: str, new_uuid: str) -> bool:

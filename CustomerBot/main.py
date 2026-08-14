@@ -20,6 +20,7 @@ from telegram.ext import (
 
 from Shared.agent_db import get_all_active_customer_bots
 from CustomerBot.database import init_db as init_customer_db, get_force_join_settings, get_user
+from Shared import agent_reminder
 from CustomerBot.handlers.start import start_command
 from CustomerBot.handlers.menu import menu_handler
 from CustomerBot.handlers.callback import callback_handler
@@ -31,6 +32,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 
 signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
+
+AGENT_REMINDER_INTERVAL = max(600, int(os.getenv("AGENT_REMINDER_INTERVAL_SECONDS", "1800") or "1800"))
 
 
 def _is_user_banned(agent_id: int, telegram_id: int) -> bool:
@@ -149,8 +152,18 @@ async def run_single_bot(token: str, agent_id: int):
         await app.start()
         if app.updater:
             await app.updater.start_polling(drop_pending_updates=True)
+        import time as _t
+        last_reminder_ts = 0.0
         while True:
-            await asyncio.sleep(3600)
+            now = _t.monotonic()
+            if now - last_reminder_ts >= AGENT_REMINDER_INTERVAL:
+                try:
+                    summary = await agent_reminder.run_agent_reminder_cycle(app.bot, agent_id)
+                    logger.info('Agent #%d reminder: scanned=%s days=%s usage=%s', agent_id, summary['scanned'], summary['days_sent'], summary['usage_sent'])
+                except Exception as e:
+                    logger.warning('Agent #%d reminder error: %s', agent_id, e)
+                last_reminder_ts = now
+            await asyncio.sleep(60)
 
 
 async def main():
