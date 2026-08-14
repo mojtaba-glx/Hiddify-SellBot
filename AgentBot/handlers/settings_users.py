@@ -207,15 +207,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        from CustomerBot.database import get_full_customer_stats
-        stats = get_full_customer_stats(agent_id, telegram_id)
-        lines = [f"💵 <b>لیست تراکنش‌ها</b>\n"]
-        if not stats.get("tx_total"):
-            lines.append("مشتری تراکنشی ندارد.")
+        from AgentBot.database import get_customer_payments
+        payments, total = get_customer_payments(agent_id, user_id=telegram_id, page=1, page_size=20)
+        lines = [f"\U0001f4b5 <b>\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u200c\u0647\u0627</b> ({total})\n"]
+        if not payments:
+            lines.append("\u0645\u0634\u062a\u0631\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634\u06cc \u0646\u062f\u0627\u0631\u062f.")
         else:
-            lines.append(f"🔸 تعداد تراکنشات: {stats.get('tx_total')}")
-            lines.append(f"🔸 تایید شده: {stats.get('tx_approved')}")
-            lines.append(f"🔸 در انتظار: {int(stats.get('tx_total')) - int(stats.get('tx_approved'))}")
+            for p in payments:
+                status_icon = _status_icon(p.get("status", ""))
+                amount = _fmt_toman(int(p.get("amount") or 0))
+                tx_code = str(p.get("tx_code") or "").strip()
+                code_str = f" \u2022 \U0001f511{tx_code}" if tx_code else ""
+                lines.append(f"{status_icon} <b>#{p.get('id')}</b>{code_str} \u2022 {amount} \u062a\u0648\u0645\u0627\u0646 \u2022 {_escape(str(p.get('created_at', ''))[:16])}")
         await query.edit_message_text(
             "\n".join(lines),
             reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),

@@ -588,14 +588,14 @@ def get_full_customer_stats(agent_id: int, telegram_id: int) -> Dict[str, Any]:
         conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT COUNT(*) AS c FROM customer_payments WHERE agent_id = ? AND user_id IN (SELECT id FROM customer_users WHERE agent_id = ? AND telegram_id = ?)",
-            (agent_id, agent_id, telegram_id),
+            "SELECT COUNT(*) AS c FROM customer_payments WHERE agent_id = ? AND user_id = ?",
+            (agent_id, telegram_id),
         )
         row = cur.fetchone()
         tx_total = int(row["c"] or 0) if row else 0
         cur.execute(
-            "SELECT COUNT(*) AS c FROM customer_payments WHERE agent_id = ? AND status = 'approved' AND user_id IN (SELECT id FROM customer_users WHERE agent_id = ? AND telegram_id = ?)",
-            (agent_id, agent_id, telegram_id),
+            "SELECT COUNT(*) AS c FROM customer_payments WHERE agent_id = ? AND status = 'approved' AND user_id = ?",
+            (agent_id, telegram_id),
         )
         row = cur.fetchone()
         tx_approved = int(row["c"] or 0) if row else 0

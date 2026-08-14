@@ -932,6 +932,7 @@ def get_customer_payments(
     method: Optional[str] = None,
     page: int = 1,
     page_size: int = 10,
+    user_id: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     conn = _customer_conn()
     if not conn:
@@ -947,6 +948,9 @@ def get_customer_payments(
     if method:
         conditions.append("cp.method=?")
         params.append(method)
+    if user_id is not None:
+        conditions.append("cp.user_id=?")
+        params.append(user_id)
     where = " AND ".join(conditions)
     try:
         cur = conn.cursor()
