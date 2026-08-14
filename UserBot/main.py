@@ -1135,12 +1135,10 @@ async def _notify_admin_new_ticket(ticket: Dict[str, Any]) -> None:
     receipt_photo_id = str(ticket.get("receipt_photo_id") or "").strip()
     display_name = full_name or (f"@{username}" if username else telegram_id)
     text = (
-        f"📩 تیکت جدید ثبت شد\n\n"
-        f"🆔 شناسه تیکت: {code}\n"
-        f"👤 کاربر: {display_name}\n"
-        f"🔢 شناسه کاربر: {telegram_id}\n"
-        f"📌 عنوان: {title}\n"
-        f"📝 سوال: {question}"
+        f"📩 تیکت جدید #{code}\n"
+        f"📋 موضوع: {title}\n"
+        f"👤 مشتری: {display_name}\n\n"
+        f"{question}"
     )
     kb = InlineKeyboardMarkup(
         [
@@ -1150,12 +1148,6 @@ async def _notify_admin_new_ticket(ticket: Dict[str, Any]) -> None:
     )
     try:
         admin_bot = Bot(token=ADMIN_BOT_TOKEN)
-        if receipt_photo_id:
-            try:
-                await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_photo_id, caption=text, reply_markup=kb)
-                return
-            except Exception:
-                pass
         await admin_bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=kb)
     except Exception as e:
         logger.warning("Failed to notify admin on new ticket: %s", e)
