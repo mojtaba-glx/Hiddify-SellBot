@@ -6,10 +6,14 @@ from telegram.ext import ContextTypes
 from AgentBot.constants import (
     TICKET_PENDING, TICKET_OPEN, TICKET_CLOSED,
     TICKET_VIEW, TICKET_REPLY, TICKET_CLOSE, TICKET_BACK,
-    MENU_MAIN, UD_STATE, UD_SELECTED_TICKET, STATE_REPLY_TICKET,
+    MENU_MAIN, UD_STATE, UD_SELECTED_TICKET,
+    STATE_REPLY_TICKET, STATE_REPLY_TICKET_SHOT, STATE_REPLY_TICKET_CONFIRM,
 )
 from AgentBot.handlers.base import get_agent_id
-from AgentBot.keyboards import tickets_menu_keyboard, ticket_detail_keyboard, back_keyboard, cancel_keyboard
+from AgentBot.keyboards import (
+    tickets_menu_keyboard, ticket_detail_keyboard, back_keyboard, cancel_keyboard,
+    ticket_reply_skip_keyboard, ticket_reply_confirm_keyboard,
+)
 from AgentBot.utils.helpers import _escape
 from AgentBot.database import (
     get_customer_tickets, get_customer_ticket,
@@ -66,6 +70,26 @@ def _parse_shot_payload(payload: str):
         return int(m.group(1)), int(m.group(2))
     except Exception:
         return 0, 0
+
+
+def _reply_preview_text(pending: dict) -> str:
+    reply_text = str((pending or {}).get("reply_text") or "").strip() or "-"
+    has_photo = bool(str((pending or {}).get("photo_file_id") or "").strip())
+    screenshot_line = "📎 اسکرین‌شات: ارسال شده ✅" if has_photo else "📎 اسکرین‌شات: ارسال نشد"
+    return (
+        "📧 تایید اطلاعات پاسخ تیکت\n\n"
+        f"📝 پاسخ:\n{_escape(reply_text)}\n\n"
+        f"{screenshot_line}\n\n"
+        "⚠️ در صورت تایید اطلاعات، برای ارسال تیکت گزینه «✅ ارسال» را انتخاب نمایید."
+    )
+
+
+def _pending_reply(context) -> dict:
+    return context.user_data.get("pending_reply") or {}
+
+
+def _set_pending_reply(context, pending: dict) -> None:
+    context.user_data["pending_reply"] = pending
 
 
 async def handle_ticket_shot_start(update, context, payload: str) -> bool:
@@ -245,6 +269,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ticket_code = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         context.user_data[UD_SELECTED_TICKET] = ticket_code
         context.user_data[UD_STATE] = STATE_REPLY_TICKET
+        context.user_data.pop("pending_reply", None)
         try:
             await query.edit_message_text(
                 "\U0001f4ac <b>\u067e\u0627\u0633\u062e \u0628\u0647 \u062a\u06cc\u06a9\u062a</b>\n\n"
@@ -254,6 +279,62 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception:
             pass
         return
+
+    if action == "replyshot":
+        sub = parts[3] if len(parts) > 3 else ""
+        pending = _pending_reply(context)
+        if sub == "skip":
+            pending["photo_file_id"] = ""
+            _set_pending_reply(context, pending)
+            context.user_data[UD_STATE] = STATE_REPLY_TICKET_CONFIRM
+            try:
+                await query.edit_message_text(
+                    _reply_preview_text(pending),
+                    reply_markup=ticket_reply_confirm_keyboard(),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return
+        if sub == "cancel":
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop(UD_SELECTED_TICKET, None)
+            context.user_data.pop("pending_reply", None)
+            try:
+                await query.edit_message_text("\u274c \u0627\u0631\u0633\u0627\u0644 \u067e\u0627\u0633\u062e \u0644\u063a\u0648 \u0634\u062f.")
+            except Exception:
+                pass
+            return
+
+    if action == "replyconfirm":
+        sub = parts[3] if len(parts) > 3 else ""
+        pending = _pending_reply(context)
+        ticket_code = int((pending or {}).get("ticket_code") or 0) or context.user_data.get(UD_SELECTED_TICKET) or 0
+        if sub == "edit":
+            context.user_data[UD_STATE] = STATE_REPLY_TICKET
+            context.user_data[UD_SELECTED_TICKET] = ticket_code
+            context.user_data.pop("pending_reply", None)
+            try:
+                await query.edit_message_text(
+                    "\U0001f4ac <b>\u067e\u0627\u0633\u062e \u0628\u0647 \u062a\u06cc\u06a9\u062a</b>\n\n"
+                    "\u0645\u062a\u0646 \u067e\u0627\u0633\u062e \u062e\u0648\u062f \u0631\u0627 \u062f\u0648\u0628\u0627\u0631\u0647 \u0628\u0646\u0648\u06cc\u0633\u06cc\u062f:",
+                    reply_markup=cancel_keyboard(), parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return
+        if sub == "cancel":
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop(UD_SELECTED_TICKET, None)
+            context.user_data.pop("pending_reply", None)
+            try:
+                await query.edit_message_text("\u274c \u0627\u0631\u0633\u0627\u0644 \u067e\u0627\u0633\u062e \u0644\u063a\u0648 \u0634\u062f.")
+            except Exception:
+                pass
+            return
+        if sub == "send":
+            await _do_send_reply(update, context, ticket_code, pending)
+            return
 
     if action == "close":
         ticket_code = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
@@ -277,30 +358,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def _do_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, ticket_code: int, pending: dict) -> None:
     agent_id = get_agent_id(context)
-    if not agent_id:
-        return False
-    state = context.user_data.get(UD_STATE)
-    if state != STATE_REPLY_TICKET:
-        return False
-    ticket_code = context.user_data.get(UD_SELECTED_TICKET)
-    if not ticket_code:
-        return False
-    text = (update.message.text or update.message.caption or "").strip()
-    photo_file_id = ""
-    if update.message.photo:
-        photo_file_id = update.message.photo[-1].file_id
-        if not text:
-            text = "[عکس]"
-    if not text and not photo_file_id:
-        await update.message.reply_text("\u0645\u062a\u0646 \u06cc\u0627 \u0639\u06a9\u0633 \u067e\u06cc\u0627\u0645 \u0646\u0645\u06cc\u200c\u062a\u0648\u0627\u0646\u062f \u062e\u0627\u0644\u06cc \u0628\u0627\u0634\u062f.")
-        return True
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    reply_text = str((pending or {}).get("reply_text") or "").strip()
+    photo_file_id = str((pending or {}).get("photo_file_id") or "").strip()
     agent_data = context.user_data.get("agent_data", {})
     name = agent_data.get("full_name", "") or agent_data.get("username", "") or f"\u0646\u0645\u0627\u06cc\u0646\u062f\u0647 #{agent_id}"
-    add_customer_ticket_message(agent_id, ticket_code, "agent", name, text, photo_file_id)
+    add_customer_ticket_message(agent_id, ticket_code, "agent", name, reply_text, photo_file_id)
     set_customer_ticket_status(agent_id, ticket_code, "open")
-    # Notify customer via the customer's own bot token. Most customers never start AgentBot.
     ticket = get_customer_ticket(agent_id, ticket_code)
     if ticket and ticket.get("telegram_id"):
         try:
@@ -308,7 +374,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             bot_rows = [b for b in get_all_active_customer_bots() if int(b.get("agent_id") or 0) == int(agent_id)]
             token = (bot_rows[0].get("bot_token") if bot_rows else "") or ""
             notify_bot = Bot(token=token) if token else context.bot
-            notify_text = f"\U0001f4ac \u067e\u0627\u0633\u062e \u062c\u062f\u06cc\u062f \u0628\u0631\u0627\u06cc \u062a\u06cc\u06a9\u062a #{ticket_code}:\n\n{text}"
+            notify_text = f"\U0001f4ac \u067e\u0627\u0633\u062e \u062c\u062f\u06cc\u062f \u0628\u0631\u0627\u06cc \u062a\u06cc\u06a9\u062a #{ticket_code}:\n\n{reply_text}"
             if photo_file_id:
                 await notify_bot.send_photo(chat_id=ticket["telegram_id"], photo=photo_file_id, caption=notify_text[:1024])
             else:
@@ -317,7 +383,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             logger.warning(f"Failed to notify customer: {e}")
     context.user_data.pop(UD_STATE, None)
     context.user_data.pop(UD_SELECTED_TICKET, None)
-    # برگشت به صفحه جزئیات تیکت با دکمه٬های پاسخ/بستن (مثل ربات ادمین)
+    context.user_data.pop("pending_reply", None)
     fresh = get_customer_ticket(agent_id, ticket_code)
     msgs = get_customer_ticket_messages(agent_id, ticket_code) if fresh else []
     status_fa = _STATUS_MAP.get((fresh or {}).get("status", ""), (fresh or {}).get("status", ""))
@@ -342,5 +408,79 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     else:
         text += "(\u067e\u06cc\u0627\u0645\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f)"
     kb = ticket_detail_keyboard(ticket_code, (fresh or {}).get("status", ""))
-    await update.message.reply_text("\u2705 \u067e\u0627\u0633\u062e \u062b\u0628\u062a \u0634\u062f \u0648 \u0628\u0647 \u0645\u0634\u062a\u0631\u06cc \u0627\u0637\u0644\u0627\u0639 \u062f\u0627\u062f\u0647 \u0634\u062f.\n\n" + text, reply_markup=kb, parse_mode="HTML")
-    return True
+    out = "\u2705 \u067e\u0627\u0633\u062e \u062b\u0628\u062a \u0634\u062f \u0648 \u0628\u0647 \u0645\u0634\u062a\u0631\u06cc \u0627\u0637\u0644\u0627\u0639 \u062f\u0627\u062f\u0647 \u0634\u062f.\n\n" + text
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(out, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            if chat_id:
+                await context.bot.send_message(chat_id=chat_id, text=out, reply_markup=kb, parse_mode="HTML")
+    else:
+        await update.message.reply_text(out, reply_markup=kb, parse_mode="HTML")
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    agent_id = get_agent_id(context)
+    if not agent_id:
+        return False
+    state = context.user_data.get(UD_STATE)
+    if state not in (STATE_REPLY_TICKET, STATE_REPLY_TICKET_SHOT):
+        return False
+    ticket_code = context.user_data.get(UD_SELECTED_TICKET)
+    if not ticket_code:
+        return False
+
+    text = (update.message.text or update.message.caption or "").strip()
+    photo_file_id = ""
+    if update.message.photo:
+        photo_file_id = update.message.photo[-1].file_id
+
+    # --- مرحله ۱: نوشتن متن پاسخ ---
+    if state == STATE_REPLY_TICKET:
+        if not text and not photo_file_id:
+            await update.message.reply_text("\u0645\u062a\u0646 \u06cc\u0627 \u0639\u06a9\u0633 \u067e\u06cc\u0627\u0645 \u0646\u0645\u06cc\u200c\u062a\u0648\u0627\u0646\u062f \u062e\u0627\u0644\u06cc \u0628\u0627\u0634\u062f.")
+            return True
+        if not text and photo_file_id:
+            text = "[عکس]"
+        pending = {
+            "ticket_code": ticket_code,
+            "reply_text": text,
+            "photo_file_id": photo_file_id,
+        }
+        _set_pending_reply(context, pending)
+        # اگر عکس از قبل به‌عنوان پاسخ ارسال شده، مستقیم به تأیید برو
+        if photo_file_id:
+            context.user_data[UD_STATE] = STATE_REPLY_TICKET_CONFIRM
+            await update.message.reply_text(
+                _reply_preview_text(pending),
+                reply_markup=ticket_reply_confirm_keyboard(),
+                parse_mode="HTML",
+            )
+            return True
+        # در غیر این صورت، اسکرین‌شات اختیاری بپرس
+        context.user_data[UD_STATE] = STATE_REPLY_TICKET_SHOT
+        await update.message.reply_text(
+            "\U0001f4ce \u0622\u06cc\u0627 \u0627\u0633\u06a9\u0631\u06cc\u0646\u200c\u0634\u0627\u062a \u0647\u0645 \u062f\u0627\u0631\u06cc\u062f\u061f (\u0627\u062e\u062a\u06cc\u0627\u0631\u06cc)\n\n"
+            "\u0627\u06af\u0631 \u062f\u0627\u0631\u06cc\u062f \u0639\u06a9\u0633 \u0631\u0627 \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f \u06cc\u0627 \u06af\u0632\u06cc\u0646\u0647 \u00ab\u25b6\ufe0f \u0631\u062f \u06a9\u0631\u062f\u0646\u00bb \u0631\u0627 \u0628\u0632\u0646\u06cc\u062f.",
+            reply_markup=ticket_reply_skip_keyboard(),
+            parse_mode="HTML",
+        )
+        return True
+
+    # --- مرحله ۲: اسکرین‌شات اختیاری ---
+    if state == STATE_REPLY_TICKET_SHOT:
+        pending = _pending_reply(context)
+        if not pending or not pending.get("ticket_code"):
+            return False
+        if photo_file_id:
+            pending["photo_file_id"] = photo_file_id
+        _set_pending_reply(context, pending)
+        context.user_data[UD_STATE] = STATE_REPLY_TICKET_CONFIRM
+        await update.message.reply_text(
+            _reply_preview_text(pending),
+            reply_markup=ticket_reply_confirm_keyboard(),
+            parse_mode="HTML",
+        )
+        return True
+
+    return False

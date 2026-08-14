@@ -207,6 +207,8 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "st:sale_price": plans.handle_text,
             "st:cbot_token": customer_bot.handle_text,
             "st:reply_ticket": tickets.handle_text,
+            "st:reply_ticket_shot": tickets.handle_text,
+            "st:reply_ticket_confirm": tickets.handle_text,
             "st:add_card": settings_payment.handle_text,
             "st:add_card_number": settings_payment.handle_text,
             "st:add_card_owner": settings_payment.handle_text,

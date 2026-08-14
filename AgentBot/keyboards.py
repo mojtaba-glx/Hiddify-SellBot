@@ -178,6 +178,23 @@ def ticket_detail_keyboard(ticket_id: int, status: str):
     return _ikb(rows)
 
 
+def ticket_reply_skip_keyboard():
+    return _ikb([
+        [IButton("\u25b6\ufe0f \u0631\u062f \u06a9\u0631\u062f\u0646", callback_data="agbot:ticket:replyshot:skip")],
+        [IButton("\u274c \u0644\u063a\u0648", callback_data="agbot:ticket:replyshot:cancel")],
+    ])
+
+
+def ticket_reply_confirm_keyboard():
+    return _ikb([
+        [
+            IButton("\u2705 \u0627\u0631\u0633\u0627\u0644", callback_data="agbot:ticket:replyconfirm:send"),
+            IButton("\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634", callback_data="agbot:ticket:replyconfirm:edit"),
+        ],
+        [IButton("\u274c \u0644\u063a\u0648", callback_data="agbot:ticket:replyconfirm:cancel")],
+    ])
+
+
 # Settings root keyboard
 def settings_menu_keyboard():
     return _ikb([
