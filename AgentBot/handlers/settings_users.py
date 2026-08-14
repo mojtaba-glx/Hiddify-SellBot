@@ -133,8 +133,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if p3 == "search":
         context.user_data[UD_STATE] = "st:search_user"
         try:
-            await query.edit_message_text(
-                "\U0001f50d \u0646\u0627\u0645 \u06cc\u0627 \u0622\u06cc\u062f\u06cc \u06a9\u0627\u0631\u0628\u0631 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+            await query.answer()
+        except Exception:
+            pass
+        try:
+            await query.message.reply_text(
+                "\U0001f50d <b>\u062c\u0633\u062a\u062c\u0648\u06cc \u06a9\u0627\u0631\u0628\u0631</b>\n"
+                "\u0646\u0627\u0645 \u06cc\u0627 \u0622\u06cc\u062f\u06cc \u06a9\u0627\u0631\u0628\u0631 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
                 reply_markup=cancel_keyboard(), parse_mode="HTML",
             )
         except Exception:
