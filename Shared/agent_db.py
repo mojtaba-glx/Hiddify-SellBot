@@ -1759,6 +1759,7 @@ def get_agent_services_for_reminder(agent_id: int) -> List[Dict[str, Any]]:
             JOIN agent_customers c ON c.id = s.customer_id
             WHERE s.agent_id = ?
               AND c.telegram_id IS NOT NULL
+              AND s.is_active = 1
               AND (s.deleted_at IS NULL OR s.deleted_at = '')
               AND EXISTS (
                 SELECT 1 FROM agent_service_nodes n
