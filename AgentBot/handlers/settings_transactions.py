@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any, Dict
 
@@ -8,7 +9,12 @@ from AgentBot.constants import UD_STATE, STATE_SEARCH_TX
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import tx_menu_keyboard, back_keyboard, cancel_keyboard, tx_list_keyboard, tx_search_results_keyboard
 from AgentBot.utils.helpers import _escape, _fmt_toman, _status_icon
-from AgentBot.database import get_payments, search_payments, get_payment_stats, get_payment_by_id
+from AgentBot.database import (
+    get_customer_payments,
+    get_customer_payment_stats,
+    search_customer_payments,
+    get_customer_payment_detail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +26,63 @@ _STATUS_TITLES = {
     "pending": "\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631",
 }
 
+_METHOD_TITLES = {
+    "card": "\u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a",
+}
+
+
+def _payment_customer_name(pay: Dict[str, Any]) -> str:
+    name = (pay.get("full_name") or pay.get("username") or "").strip()
+    if not name:
+        name = f"\u06a9\u0627\u0631\u0628\u0631 #{pay.get('user_id', '-')}"
+    return name
+
+
+def _payment_method_title(pay: Dict[str, Any]) -> str:
+    method = str(pay.get("method") or "").strip()
+    return _METHOD_TITLES.get(method, method or "-")
+
+
+def _parse_receipt_card_last4(pay: Dict[str, Any]) -> str:
+    raw = str(pay.get("receipt_image") or "").strip()
+    if not raw:
+        return ""
+    try:
+        meta = json.loads(raw)
+        if isinstance(meta, dict):
+            return str(meta.get("card_last4") or "").strip()
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return ""
+
 
 def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
-    """متن جزئیات تراکنش (مثل ربات ادمین)."""
-    return (
-        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {pay.get('id')}\n"
-        f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {_escape(pay.get('customer_name', '') or '-')}\n"
-        f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}\n"
-        f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646\n"
-        f"\u2756 \u2022 -------------------------- \u2022 \u2756\n"
-        f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {_STATUS_TITLES.get(str(pay.get('status')), pay.get('status'))}\n"
-        f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('method', '') or '-')}\n"
-    )
+    lines = [
+        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {pay.get('id')}",
+        f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {_escape(_payment_customer_name(pay))}",
+    ]
+    tx_code = str(pay.get("tx_code") or "").strip()
+    if tx_code:
+        lines.append(f"\U0001f511 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634 \u0628\u0627\u0646\u06a9: {tx_code}")
+    lines.append(f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}")
+    lines.append(f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646")
+    lines.append("\u2756 \u2022 -------------------------- \u2022 \u2756")
+    lines.append(f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {_STATUS_TITLES.get(str(pay.get('status')), pay.get('status'))}")
+    lines.append(f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_payment_method_title(pay)}")
+    card_last4 = _parse_receipt_card_last4(pay)
+    if card_last4:
+        lines.append(f"\U0001f4b3 \u06a9\u0627\u0631\u062a (\u0622\u062e\u0631\u06cc\u0646 \u0686\u0647\u0627\u0631 \u0631\u0642\u0645): {card_last4}")
+    return "\n".join(lines)
+
+
+def _filter_params(p3: str) -> Dict[str, Any]:
+    status = None
+    method = None
+    if p3 == "card":
+        method = "card"
+    elif p3 in ("approved", "rejected", "pending"):
+        status = p3
+    return {"status": status, "method": method}
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -63,13 +114,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if p3 in ("approved", "rejected", "pending", "card"):
         page = int(p4) if p4 and p4.isdigit() else 1
-        status = p3 if p3 != "card" else None
-        method = "card_to_card" if p3 == "card" else None
-        stats = get_payment_stats(agent_id, status=status, method=method)
-        total_pages = max(1, (int(stats["total_count"]) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+        fp = _filter_params(p3)
+        stats = get_customer_payment_stats(agent_id, status=fp["status"], method=fp["method"])
+        total_pages = max(1, (stats["total_count"] + _PAGE_SIZE - 1) // _PAGE_SIZE)
         if page > total_pages:
             page = total_pages
-        payments, _ = get_payments(agent_id, status=status, method=method, page=page, page_size=_PAGE_SIZE)
+        payments, _ = get_customer_payments(
+            agent_id, status=fp["status"], method=fp["method"], page=page, page_size=_PAGE_SIZE,
+        )
         header_titles = {
             "approved": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647 \u2705",
             "rejected": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0631\u062f \u0634\u062f\u0647 \u274c",
@@ -103,7 +155,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if p3 == "detail":
         pay_id = int(p4) if p4 and p4.isdigit() else 0
-        pay = get_payment_by_id(pay_id)
+        pay = get_customer_payment_detail(pay_id)
         if not pay:
             await query.answer("\u274c \u062a\u0631\u0627\u06a9\u0646\u0634 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", show_alert=True)
             return
@@ -145,10 +197,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         await update.message.reply_text("⚙️ <b>تنظیمات ربات</b>", reply_markup=settings_menu_keyboard(), parse_mode="HTML")
         return True
 
-    # جستجوی مستقیم با شناسه تراکنش (مثل ربات ادمین)
     if text.isdigit():
         pid = int(text)
-        pay = get_payment_by_id(pid)
+        pay = get_customer_payment_detail(pid)
         context.user_data.pop(UD_STATE, None)
         if not pay or int(pay.get("agent_id") or 0) != agent_id:
             await update.message.reply_text(f"❌ تراکنشی با شناسه {pid} یافت نشد.", reply_markup=tx_menu_keyboard(), parse_mode="HTML")
@@ -160,8 +211,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         )
         return True
 
-    # جستجو بر اساس نام مشتری / کد پیگیری
-    payments = search_payments(agent_id, text, limit=15)
+    payments = search_customer_payments(agent_id, text, limit=15)
     context.user_data.pop(UD_STATE, None)
     if not payments:
         await update.message.reply_text(
@@ -172,7 +222,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     lines = [f"\U0001f50d <b>نتایج جستجو برای \"{_escape(text)}\"</b> ({len(payments)}):\n"]
     for p in payments:
         lines.append(
-            f"{_status_icon(p.get('status', ''))} #{p.get('id')} \u2022 {_escape(p.get('customer_name', ''))} \u2022 "
+            f"{_status_icon(p.get('status', ''))} #{p.get('id')} \u2022 {_escape(_payment_customer_name(p))} \u2022 "
             f"{_fmt_toman(p.get('amount', 0))} تومان"
         )
     await update.message.reply_text(
