@@ -228,6 +228,55 @@ def settings_sub_menu_keyboard(prefix: str, list_label: Optional[str] = None):
     ])
 
 
+def orders_menu_keyboard():
+    return _ikb([
+        [IButton("\U0001f4d7\u0644\u06cc\u0633\u062a \u0633\u0641\u0627\u0631\u0634\u0627\u062a", callback_data="agbot:set:orders:list")],
+        [IButton("\U0001f50d\u062c\u0633\u062a\u062c\u0648\u06cc \u0633\u0641\u0627\u0631\u0634\u0627\u062a", callback_data="agbot:set:orders:search")],
+        [IButton(BTN_BACK, callback_data="agbot:set:back")],
+    ])
+
+
+def orders_list_keyboard(orders: List[Dict[str, Any]], page: int, total_pages: int, back_callback: str = "agbot:set:orders"):
+    """کیبورد لیست سفارشات — گرید ۳ ستونه شناسه سفارش + صفحه‌بندی."""
+    rows = []
+    current_row = []
+    for o in orders:
+        oid = str(o.get("id"))
+        current_row.append(IButton(oid, callback_data=f"agbot:set:orders:detail:{oid}"))
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+
+    nav_row = []
+    if page > 1:
+        nav_row.append(IButton("\u27a1\ufe0f", callback_data=f"agbot:set:orders:list:{page - 1}"))
+    nav_row.append(IButton(f"{page}/{total_pages}", callback_data="agbot:set:orders:noop"))
+    if page < total_pages:
+        nav_row.append(IButton("\u2b05\ufe0f", callback_data=f"agbot:set:orders:list:{page + 1}"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
+    return _ikb(rows)
+
+
+def order_search_results_keyboard(orders: List[Dict[str, Any]], back_callback: str = "agbot:set:orders"):
+    """کیبورد نتایج جستجوی سفارش — دکمه‌های شناسه سفارش + بازگشت."""
+    rows = []
+    current_row = []
+    for o in orders:
+        current_row.append(IButton(str(o.get("id")), callback_data=f"agbot:set:orders:detail:{o.get('id')}"))
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
+    return _ikb(rows)
+
+
 def tx_menu_keyboard():
     return _ikb([
         [IButton("\u2705\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647", callback_data="agbot:set:tx:approved")],

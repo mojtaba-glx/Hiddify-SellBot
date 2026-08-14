@@ -460,6 +460,59 @@ def get_orders(agent_id: int, status: Optional[str] = None, page: int = 1, page_
         conn.close()
 
 
+def get_order_stats(agent_id: int) -> Dict[str, Any]:
+    """آمار سفارشات نماینده (کل، ۳۰ روز گذشته و ماه جاری)."""
+    init_db()
+    conditions = ["agent_id=?"]
+    params: List[Any] = [agent_id]
+    base_where = " AND ".join(conditions)
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {base_where}",
+            params,
+        )
+        total_row = cur.fetchone()
+
+        where_30 = base_where + " AND date(created_at) >= date('now', '-30 days')"
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_30}",
+            params,
+        )
+        last30_row = cur.fetchone()
+
+        where_month = base_where + " AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_month}",
+            params,
+        )
+        month_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "total_count": int(total_row["c"] or 0),
+        "total_amount": int(total_row["total"] or 0),
+        "last30_count": int(last30_row["c"] or 0),
+        "last30_amount": int(last30_row["total"] or 0),
+        "month_count": int(month_row["c"] or 0),
+        "month_amount": int(month_row["total"] or 0),
+    }
+
+
+def get_order_by_id(agent_id: int, order_id: int) -> Optional[Dict[str, Any]]:
+    init_db()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM agent_orders WHERE id=? AND agent_id=?", (int(order_id), agent_id))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
 def search_orders(agent_id: int, query: str, limit: int = 20) -> List[Dict[str, Any]]:
     init_db()
     conn = _conn()
