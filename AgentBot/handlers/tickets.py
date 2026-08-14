@@ -163,6 +163,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 pass
         return
 
+    if action == "reopen":
+        ticket_code = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        ok = set_customer_ticket_status(agent_id, ticket_code, "open")
+        await query.answer("\u062a\u06cc\u06a9\u062a \u062f\u0648\u0628\u0627\u0631\u0647 \u0628\u0627\u0632 \u0634\u062f \U0001f4ec" if ok else "\u062e\u0637\u0627!")
+        try:
+            await query.edit_message_reply_markup(reply_markup=ticket_detail_keyboard(ticket_code, "open"))
+        except Exception:
+            pass
+        return
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     agent_id = get_agent_id(context)
@@ -204,6 +214,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             logger.warning(f"Failed to notify customer: {e}")
     context.user_data.pop(UD_STATE, None)
     context.user_data.pop(UD_SELECTED_TICKET, None)
-    from AgentBot.keyboards import main_menu_keyboard
-    await update.message.reply_text("\u2705 \u067e\u0627\u0633\u062e \u062b\u0628\u062a \u0634\u062f \u0648 \u0628\u0647 \u0645\u0634\u062a\u0631\u06cc \u0627\u0637\u0644\u0627\u0639 \u062f\u0627\u062f\u0647 \u0634\u062f.", reply_markup=main_menu_keyboard())
+    # برگشت به صفحه جزئیات تیکت با دکمه٬های پاسخ/بستن (مثل ربات ادمین)
+    fresh = get_customer_ticket(agent_id, ticket_code)
+    msgs = get_customer_ticket_messages(agent_id, ticket_code) if fresh else []
+    status_fa = _STATUS_MAP.get((fresh or {}).get("status", ""), (fresh or {}).get("status", ""))
+    title = _escape(str((fresh or {}).get("title") or (fresh or {}).get("question", "")[:50] or "\u0628\u062f\u0648\u0646 \u0645\u0648\u0636\u0648\u0639"))
+    name = _escape((fresh or {}).get("full_name", "")) or f"\u06a9\u0627\u0631\u0628\u0631 #{(fresh or {}).get('telegram_id', '?')}"
+    text = (
+        f"\U0001f4ec <b>\u062a\u06cc\u06a9\u062a #{ticket_code}</b>\n"
+        f"\U0001f4cb \u0645\u0648\u0636\u0648\u0639: {title}\n"
+        f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {name}\n"
+        f"\U0001f4c5 {_escape(str((fresh or {}).get('created_at', ''))[:16])}\n"
+        f"\U0001f4cc \u0648\u0636\u0639\u06cc\u062a: {status_fa}\n\n"
+        f"\u2501\u2501\u2501 \u067e\u06cc\u0627\u0645\u200c\u0647\u0627 \u2501\u2501\u2501\n"
+    )
+    if msgs:
+        for m in msgs:
+            _agent_label = '\u0646\u0645\u0627\u06cc\u0646\u062f\u0647'
+            sender = "\U0001f464 \u0645\u0634\u062a\u0631\u06cc" if m.get("sender_type") == "user" else f"\U0001f916 {_escape(m.get('sender_name', _agent_label))}"
+            msg_text = _escape(m.get("message_text", ""))
+            photo_tag = " \U0001f4f7 [\u0639\u06a9\u0633]" if m.get("photo_file_id") else ""
+            ts = _escape(str(m.get("created_at", ""))[:16])
+            text += f"\n{sender} ({ts}):\n{msg_text}{photo_tag}\n"
+    else:
+        text += "(\u067e\u06cc\u0627\u0645\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f)"
+    kb = ticket_detail_keyboard(ticket_code, (fresh or {}).get("status", ""))
+    await update.message.reply_text("\u2705 \u067e\u0627\u0633\u062e \u062b\u0628\u062a \u0634\u062f \u0648 \u0628\u0647 \u0645\u0634\u062a\u0631\u06cc \u0627\u0637\u0644\u0627\u0639 \u062f\u0627\u062f\u0647 \u0634\u062f.\n\n" + text, reply_markup=kb, parse_mode="HTML")
     return True

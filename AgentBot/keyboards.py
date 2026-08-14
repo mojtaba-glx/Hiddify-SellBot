@@ -171,6 +171,9 @@ def ticket_detail_keyboard(ticket_id: int, status: str):
     if status in ("open", "pending"):
         rows.append([IButton("\U0001f4ac \u067e\u0627\u0633\u062e", callback_data=f"agbot:ticket:reply:{ticket_id}")])
         rows.append([IButton("\u2705 \u0628\u0633\u062a\u0646 \u062a\u06cc\u06a9\u062a", callback_data=f"agbot:ticket:close:{ticket_id}")])
+    elif status == "closed":
+        # مثل ربات ادمین: امکان باز کردن دوباره تیکت بسته
+        rows.append([IButton("\U0001f4ec \u0628\u0627\u0632 \u06a9\u0631\u062f\u0646 \u062a\u06cc\u06a9\u062a", callback_data=f"agbot:ticket:reopen:{ticket_id}")])
     rows.append([IButton(BTN_BACK, callback_data="agbot:ticket:back")])
     return _ikb(rows)
 

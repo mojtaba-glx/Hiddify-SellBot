@@ -27,7 +27,7 @@ from CustomerBot.database import (
     get_payment_by_idempotency_key,
     get_pending_payments,
     create_ticket, get_ticket, add_ticket_message, update_ticket_status,
-    get_user_tickets,
+    get_user_tickets, get_ticket_messages,
 )
 from Shared.agent_db import (
     get_customer_by_telegram_id, upsert_customer, get_services_by_customer,
@@ -38,6 +38,72 @@ from Shared.database import get_servers
 from Shared.database import get_server_by_id
 from CustomerBot.keyboards import main_menu_keyboard, cancel_keyboard, ticket_skip_screenshot_keyboard, ticket_confirm_keyboard, user_ticket_detail_keyboard
 from CustomerBot.utils.helpers import is_cancel_text, is_pay_done_text
+
+
+def _build_ticket_detail_text(ticket, messages) -> str:
+    """ساخت متن جزئیات تیکت (متناقض با ربات کاربران/ادمین)."""
+    try:
+        code = ticket.get("ticket_code") or ticket.get("id") or "?"
+    except Exception:
+        code = "?"
+    status_map = {"pending": "⏳ در انتظار", "open": "📬 باز", "closed": "✅ بسته"}
+    status_fa = status_map.get(str(ticket.get("status", "")), str(ticket.get("status", "")))
+    title = str(ticket.get("title") or "") or str(ticket.get("question") or "")[:50] or "بدون موضوع"
+    text = (
+        f"📩 <b>تیکت #{code}</b>\n"
+        f"📋 موضوع: {title}\n"
+        f"📅 {str(ticket.get('created_at', ''))[:16]}\n"
+        f"📌 وضعیت: {status_fa}\n\n"
+        f"━━━ پیام‌ها ━━━\n"
+    )
+    if not messages:
+        text += "(پیامی وجود ندارد)"
+    else:
+        for m in messages:
+            sender = "👤 شما" if m.get("sender_type") == "user" else f"🤖 {m.get('sender_name', 'پشتیبان')}"
+            msg_text = m.get("message_text", "") or ""
+            has_photo = "📷 [عکس]" if m.get("photo_file_id") else ""
+            ts = str(m.get("created_at", ""))[:16]
+            text += f"\n{sender} ({ts}):\n{msg_text}\n{has_photo}\n"
+    return text
+
+
+async def _notify_agent_ticket_reply(context: ContextTypes.DEFAULT_TYPE, agent_id: int, ticket: dict, message_text: str, photo_file_id: str = "") -> None:
+    """خبر دادن به نماینده که مشتری به تیکت پاسخ داده است."""
+    try:
+        from Shared.agent_db import get_agent_by_id
+        agent = get_agent_by_id(agent_id)
+        agent_tg_id = int((agent or {}).get("telegram_id") or 0)
+        token = os.getenv("AGENT_BOT_TOKEN", "").strip()
+        if not agent_tg_id or not token:
+            return
+        bot = Bot(token=token)
+        code = ticket.get("ticket_code", "?")
+        title = ticket.get("title") or "بدون موضوع"
+        notify_text = (
+            f"💬 پاسخ جدید مشتری به تیکت #{code}\n"
+            f"📋 موضوع: {title}\n\n"
+            f"{message_text or '[بدون متن]'}"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👁 مشاهده تیکت", callback_data=f"agbot:ticket:view:{code}")],
+            [InlineKeyboardButton("💬 پاسخ", callback_data=f"agbot:ticket:reply:{code}"),
+             InlineKeyboardButton("✅ بستن", callback_data=f"agbot:ticket:close:{code}")],
+        ])
+        if photo_file_id:
+            try:
+                tg_file = await context.bot.get_file(photo_file_id)
+                bio = BytesIO()
+                await tg_file.download_to_memory(out=bio)
+                bio.seek(0)
+                bio.name = f"ticket_{code}.jpg"
+                await bot.send_photo(chat_id=agent_tg_id, photo=bio, caption=notify_text[:1024], reply_markup=kb)
+            except Exception:
+                await bot.send_message(chat_id=agent_tg_id, text=notify_text + "\n\n📷 عکس ضمیمه شد ولی ارسال مستقیم آن ممکن نشد.", reply_markup=kb)
+        else:
+            await bot.send_message(chat_id=agent_tg_id, text=notify_text, reply_markup=kb)
+    except Exception:
+        return
 
 
 async def _notify_agent_new_ticket(context: ContextTypes.DEFAULT_TYPE, agent_id: int, ticket: dict, message_text: str, photo_file_id: str = "") -> None:
@@ -473,10 +539,40 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_text=msg_text,
                 photo_file_id=photo_file_id,
             )
-            await update.message.reply_text(
-                "✅ پاسخ شما ثبت شد.",
-                reply_markup=main_menu_keyboard(),
-            )
+            # تیکت دوباره «باز» محسوب می‌شود (دقیقاً مثل ربات کاربران)
+            try:
+                update_ticket_status(agent_id, code, "open")
+            except Exception:
+                pass
+            # خبر دادن به نماینده که مشتری پاسخ داده است
+            try:
+                fresh = get_ticket(agent_id, code)
+                if fresh:
+                    await _notify_agent_ticket_reply(context, agent_id, fresh, msg_text, photo_file_id)
+            except Exception:
+                pass
+            # برگشت به صفحه «جزئیات تیکت» با دکمه‌های پاسخ/بستن
+            try:
+                fresh = get_ticket(agent_id, code)
+                msgs = get_ticket_messages(agent_id, code) if fresh else []
+                detail_text = _build_ticket_detail_text(fresh, msgs)
+                await update.message.reply_text(
+                    detail_text,
+                    reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
+                    parse_mode="HTML",
+                )
+                for m in msgs:
+                    pfid = m.get("photo_file_id", "")
+                    if pfid:
+                        try:
+                            await update.message.reply_photo(photo=pfid, caption=f"📷 عکس تیکت #{code}")
+                        except Exception:
+                            pass
+            except Exception:
+                await update.message.reply_text(
+                    "✅ پاسخ شما ثبت شد.",
+                    reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
+                )
 
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_TICKET_MODE, None)
