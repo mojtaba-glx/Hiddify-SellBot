@@ -286,9 +286,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data["userbot_msg_target"] = telegram_id
         context.user_data[UD_STATE] = "st:send_user_msg"
         context.user_data.pop("subs_back_to", None)
-        await query.edit_message_text(
-            "✍️ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
-        )
+        try:
+            await query.answer()
+        except Exception:
+            pass
         await query.message.reply_text(
             "✍️ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
             reply_markup=send_msg_keyboard(),

@@ -259,6 +259,8 @@ async def _handle_agent_msg_reply(update: Update, context: ContextTypes.DEFAULT_
         return
 
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    from telegram import Bot as TelegramBot
+    import os
     from Shared.agent_db import get_customer_by_telegram_id
     customer = get_customer_by_telegram_id(agent_id, user.id)
     display = str(
@@ -268,11 +270,17 @@ async def _handle_agent_msg_reply(update: Update, context: ContextTypes.DEFAULT_
         or user.username
         or user.id
     ).strip()
+    agent_bot_token = os.getenv("AGENT_BOT_TOKEN", "").strip()
+    if not agent_bot_token:
+        await update.message.reply_text("❌ ارسال پیام ناموفق بود. لطفا دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+        return
     try:
         kb = InlineKeyboardMarkup(
             [[InlineKeyboardButton("📨 پاسخ", callback_data=f"agbot:set:users:message:{user.id}")]]
         )
-        await context.bot.send_message(
+        # پیام باید از طریق «ربات نمایندگی» ارسال شود تا دکمه‌ی پاسخ در
+        # چت ربات نمایندگی قرار بگیرد و کلیک روی آن به ربات نمایندگی برگردد.
+        await TelegramBot(token=agent_bot_token).send_message(
             chat_id=agent_tg,
             text=(
                 f"📨 پیام از طرف مشتری:\n"
