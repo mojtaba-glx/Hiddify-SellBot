@@ -8,7 +8,7 @@ from Shared import agent_db
 from Shared.tg_button_styles import inline_button as IButton
 from AgentBot.constants import UD_STATE
 from AgentBot.handlers.base import get_agent_id
-from AgentBot.utils.helpers import _escape, _fmt_toman, _status_icon
+from AgentBot.utils.helpers import _escape, _fmt_toman, _fmt_gb, _status_icon
 from AgentBot.keyboards import (
     settings_sub_menu_keyboard,
     back_keyboard,
@@ -152,18 +152,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
         services = agent_db.get_services_by_customer(customer_id)
-        lines = [f"📋 <b>لیست سرویس‌ها</b> ({len(services)})"]
+        total = len(services)
+        active = sum(1 for s in services if int(s.get("is_active", 0) or 0) == 1)
+        expired = total - active
+        text = (
+            "#️⃣ لیست سرویس‌ها\n"
+            "شما می‌توانید لیست سرویس‌ها و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
+            f"📦 تعداد کل سرویس‌ها: {total}\n"
+            f"🟢 سرویس‌های فعال: {active}\n"
+            f"🔴 سرویس‌های منقضی: {expired}"
+        )
+        rows = []
         if not services:
-            lines.append("مشتری سرویسی ندارد.")
+            text += "\n\n❌ سرویسی برای نمایش این کاربر یافت نشد."
         else:
             for s in services:
-                sname = _escape(s.get("name", "")) or f"سرویس #{s['id']}"
-                active = "🟢" if int(s.get("is_active", 0) or 0) == 1 else "🔴"
-                trial = " (تست)" if int(s.get("is_trial", 0) or 0) == 1 else ""
-                lines.append(f"{active} {sname}{trial}")
+                name = s.get("name") or f"Service #{s['id']}"
+                if int(s.get("is_active", 0) or 0) == 1:
+                    emoji = "🟡" if int(s.get("is_trial", 0) or 0) == 1 else "🔵"
+                else:
+                    emoji = "🔴"
+                rows.append([IButton(f"{emoji} |{name}", callback_data=f"agbot:subs:detail:{s['id']}")])
+        rows.append([IButton("بازگشت🔙", callback_data=f"agbot:set:users:detail:{customer_id}")])
         await query.edit_message_text(
-            "\n".join(lines),
-            reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),
+            text,
+            reply_markup=_ikb(rows),
             parse_mode="HTML",
         )
         return
@@ -178,21 +191,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        from CustomerBot.database import get_user_orders
+        from CustomerBot.database import get_user_orders, get_user_orders_stats
+        stats = get_user_orders_stats(agent_id, telegram_id)
         orders = get_user_orders(agent_id, telegram_id, limit=20)
-        lines = [f"📗 <b>لیست سفارشات</b> ({len(orders)})"]
-        if not orders:
-            lines.append("مشتری سفارشی ندارد.")
-        else:
-            for o in orders:
-                price = _fmt_toman(int(o.get("price") or 0))
-                status = _status_icon(o.get("status", ""))
-                lines.append(
-                    f"{status} <b>{_escape(o.get('plan_title', '') or 'سفارش')}</b> • {price} تومان • {_escape(str(o.get('created_at', ''))[:16])}"
-                )
+        text = (
+            "🔹 لیست سفارشات\n"
+            f"🔸 تعداد سفارشات: {stats['total_count']}\n"
+            f"🔸 مجموع حجم سفارشات(GB): {_fmt_gb(stats['total_gb'])}\n"
+            f"🔸 مجموع ارزش سفارشات: {_fmt_toman(stats['total_price'])}تومان\n"
+            "❖ ⬩----------------------------------⬩ ❖\n"
+            f"🔸 تعداد سفارشات 30 روز گذشته: {stats['last30_count']}\n"
+            f"🔸 حجم سفارشات 30 روز گذشته(GB): {_fmt_gb(stats['last30_gb'])}\n"
+            f"🔸 ارزش سفارشات 30 روز گذشته: {_fmt_toman(stats['last30_price'])}تومان\n"
+            "❖ ⬩----------------------------------⬩ ❖\n"
+            f"🔸 تعداد سفارشات این ماه: {stats['month_count']}\n"
+            f"🔸 حجم سفارشات این ماه(GB): {_fmt_gb(stats['month_gb'])}\n"
+            f"🔸 ارزش سفارشات این ماه: {_fmt_toman(stats['month_price'])}تومان"
+        )
+        rows = []
+        current_row = []
+        for o in orders:
+            oid = str(o.get("order_id") or o.get("id"))
+            current_row.append(IButton(oid, callback_data=f"agbot:set:orders:detail:{oid}"))
+            if len(current_row) == 3:
+                rows.append(current_row)
+                current_row = []
+        if current_row:
+            rows.append(current_row)
+        rows.append([IButton("بازگشت🔙", callback_data=f"agbot:set:users:detail:{customer_id}")])
         await query.edit_message_text(
-            "\n".join(lines),
-            reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),
+            text,
+            reply_markup=_ikb(rows),
             parse_mode="HTML",
         )
         return
@@ -207,21 +236,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not telegram_id:
             await query.answer("کاربر پیدا نشد.", show_alert=True)
             return
-        from AgentBot.database import get_customer_payments
-        payments, total = get_customer_payments(agent_id, user_id=telegram_id, page=1, page_size=20)
-        lines = [f"\U0001f4b5 <b>\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u200c\u0647\u0627</b> ({total})\n"]
-        if not payments:
-            lines.append("\u0645\u0634\u062a\u0631\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634\u06cc \u0646\u062f\u0627\u0631\u062f.")
-        else:
-            for p in payments:
-                status_icon = _status_icon(p.get("status", ""))
-                amount = _fmt_toman(int(p.get("amount") or 0))
-                tx_code = str(p.get("tx_code") or "").strip()
-                code_str = f" \u2022 \U0001f511{tx_code}" if tx_code else ""
-                lines.append(f"{status_icon} <b>#{p.get('id')}</b>{code_str} \u2022 {amount} \u062a\u0648\u0645\u0627\u0646 \u2022 {_escape(str(p.get('created_at', ''))[:16])}")
+        from AgentBot.database import get_customer_payments, get_customer_payment_stats
+        stats = get_customer_payment_stats(agent_id, user_id=telegram_id)
+        payments, _ = get_customer_payments(agent_id, user_id=telegram_id, page=1, page_size=20)
+        text = (
+            "🔹 لیست تراکنشات\n"
+            f"🔸 تعداد تراکنشات: {stats['total_count']}\n"
+            f"🔸 مبلغ تراکنشات: {_fmt_toman(stats['total_amount'])}تومان\n"
+            "❖ ⬩----------------------------------⬩ ❖\n"
+            f"🔸 تراکنشات 30 روز گذشته: {stats['last30_count']}\n"
+            f"🔸 مبلغ تراکنشات 30 روز گذشته: {_fmt_toman(stats['last30_amount'])}تومان\n"
+            "❖ ⬩----------------------------------⬩ ❖\n"
+            f"🔸 تراکنشات این ماه: {stats['month_count']}\n"
+            f"🔸 مبلغ تراکنشات این ماه: {_fmt_toman(stats['month_amount'])}تومان"
+        )
+        rows = []
+        current_row = []
+        for p in payments:
+            current_row.append(IButton(str(p.get("id")), callback_data=f"agbot:set:tx:detail:{p.get('id')}"))
+            if len(current_row) == 3:
+                rows.append(current_row)
+                current_row = []
+        if current_row:
+            rows.append(current_row)
+        rows.append([IButton("بازگشت🔙", callback_data=f"agbot:set:users:detail:{customer_id}")])
         await query.edit_message_text(
-            "\n".join(lines),
-            reply_markup=back_keyboard(f"agbot:set:users:detail:{customer_id}"),
+            text,
+            reply_markup=_ikb(rows),
             parse_mode="HTML",
         )
         return

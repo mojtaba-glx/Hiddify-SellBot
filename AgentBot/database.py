@@ -975,6 +975,7 @@ def get_customer_payment_stats(
     agent_id: int,
     status: Optional[str] = None,
     method: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     conn = _customer_conn()
     if not conn:
@@ -991,6 +992,9 @@ def get_customer_payment_stats(
     if method:
         conditions.append("cp.method=?")
         params.append(method)
+    if user_id is not None:
+        conditions.append("cp.user_id=?")
+        params.append(user_id)
     base_where = " AND ".join(conditions)
     try:
         cur = conn.cursor()

@@ -860,6 +860,39 @@ def get_user_orders(agent_id: int, telegram_id: int, limit: int = 10) -> List[Di
     return [dict(r) for r in rows]
 
 
+def get_user_orders_stats(agent_id: int, telegram_id: int) -> Dict[str, Any]:
+    """آمار سفارشات یک مشتری (کل، ۳۰ روز گذشته، ماه جاری)."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+
+    def _q(extra: str = ""):
+        where = "agent_id = ? AND telegram_id = ?" + extra
+        cur.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(price), 0) AS price "
+            f"FROM customer_orders WHERE {where}",
+            (agent_id, telegram_id),
+        )
+        return cur.fetchone()
+
+    total_row = _q()
+    last30_row = _q(" AND date(created_at) >= date('now', '-30 days')")
+    month_row = _q(" AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')")
+    conn.close()
+
+    return {
+        "total_count": int(total_row["c"] or 0),
+        "total_gb": float(total_row["gb"] or 0),
+        "total_price": int(total_row["price"] or 0),
+        "last30_count": int(last30_row["c"] or 0),
+        "last30_gb": float(last30_row["gb"] or 0),
+        "last30_price": int(last30_row["price"] or 0),
+        "month_count": int(month_row["c"] or 0),
+        "month_gb": float(month_row["gb"] or 0),
+        "month_price": int(month_row["price"] or 0),
+    }
+
+
 # ---- Payments ----
 
 def generate_tx_code(agent_id: int) -> str:
