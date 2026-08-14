@@ -526,7 +526,7 @@ async def _handle_support(query, context, agent_id, user, data):
                 detail_text = _build_ticket_detail_text(fresh, msgs, screenshot_links=links)
             except Exception:
                 detail_text = ""
-            header = "✅ <b>تیکت شما با موفقیت ثبت شد.</b>\n\n"
+            header = "✅ <b>تیکت شما با موفقیت ثبت شد.</b>\n\nبه زودی پاسخ داده می‌شود\n\n"
             out_text = header + detail_text
             await msg.edit_text(
                 out_text,

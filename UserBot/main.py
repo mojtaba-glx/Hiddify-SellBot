@@ -6314,6 +6314,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     detail_links = await _build_user_ticket_screenshot_links(context, code, detail_messages)
                     detail = (
                         "✅ تیکت شما با موفقیت ثبت شد.\n\n"
+                        "به زودی پاسخ داده می‌شود\n\n"
                         + _ticket_detail_text(ticket, detail_messages, screenshot_links=detail_links)
                     )
                     try:
