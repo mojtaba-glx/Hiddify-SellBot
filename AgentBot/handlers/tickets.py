@@ -120,18 +120,21 @@ async def handle_ticket_shot_start(update, context, payload: str) -> bool:
     try:
         await update.message.reply_photo(photo=fid, caption=caption, reply_markup=kb)
         sent = True
-    except Exception:
+    except Exception as e:
+        logger.warning("ticket shot direct send failed code=%s msg=%s: %s", code, msg_id, e)
         sent = False
     # ۲) درغیراین‌صورت فایل را از ربات مشتری (که عکس را آپلود کرده) دانلود و دوباره ارسال کن
     if not sent:
         try:
             import io as _io
+            from telegram.request import HTTPXRequest
             from Shared.agent_db import get_all_active_customer_bots
             bot_rows = [b for b in get_all_active_customer_bots() if int(b.get("agent_id") or 0) == int(agent_id)]
             token = (bot_rows[0].get("bot_token") if bot_rows else "") or ""
             if not token:
                 raise RuntimeError("no customer bot token")
-            cust_bot = Bot(token=token)
+            request = HTTPXRequest(connect_timeout=15, read_timeout=60, write_timeout=60, pool_timeout=15)
+            cust_bot = Bot(token=token, request=request)
             f = await cust_bot.get_file(fid)
             raw = await f.download_as_bytearray()
             bio = _io.BytesIO(raw)
@@ -139,7 +142,8 @@ async def handle_ticket_shot_start(update, context, payload: str) -> bool:
             bio.seek(0)
             await update.message.reply_photo(photo=bio, caption=caption, reply_markup=kb)
             sent = True
-        except Exception:
+        except Exception as e:
+            logger.warning("ticket shot download-from-customer-bot failed code=%s msg=%s: %s", code, msg_id, e)
             sent = False
     if not sent:
         try:
