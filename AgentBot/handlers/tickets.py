@@ -92,6 +92,21 @@ def _set_pending_reply(context, pending: dict) -> None:
     context.user_data["pending_reply"] = pending
 
 
+async def _edit_or_reply(query, text: str, kb, parse_mode: str = "HTML", **kwargs) -> bool:
+    """اگر پیام عکس باشد، پیام جدید بفرست؛ وگرنه همان پیام را ویرایش کن."""
+    if query.message and query.message.photo:
+        try:
+            await query.message.reply_text(text, reply_markup=kb, parse_mode=parse_mode, **kwargs)
+            return True
+        except Exception:
+            return False
+    try:
+        await query.edit_message_text(text, reply_markup=kb, parse_mode=parse_mode, **kwargs)
+        return True
+    except Exception:
+        return False
+
+
 async def handle_ticket_shot_start(update, context, payload: str) -> bool:
     code, msg_id = _parse_shot_payload(payload)
     if code <= 0 or msg_id <= 0:
@@ -265,13 +280,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         kb = ticket_detail_keyboard(ticket_code, ticket.get("status", ""))
 
-        try:
-            await query.edit_message_text(text[:4000], reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
-        except Exception:
-            try:
-                await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
-            except Exception:
-                pass
+        await _edit_or_reply(query, text[:4000], kb, parse_mode="HTML", disable_web_page_preview=True)
         return
 
     if action == "reply":
@@ -279,14 +288,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data[UD_SELECTED_TICKET] = ticket_code
         context.user_data[UD_STATE] = STATE_REPLY_TICKET
         context.user_data.pop("pending_reply", None)
-        try:
-            await query.edit_message_text(
-                "\U0001f4ac <b>\u067e\u0627\u0633\u062e \u0628\u0647 \u062a\u06cc\u06a9\u062a</b>\n\n"
-                "\u0645\u062a\u0646 \u067e\u0627\u0633\u062e \u062e\u0648\u062f \u0631\u0627 \u0628\u0646\u0648\u06cc\u0633\u06cc\u062f:",
-                reply_markup=cancel_keyboard(), parse_mode="HTML",
-            )
-        except Exception:
-            pass
+        await _edit_or_reply(
+            query,
+            "\U0001f4ac <b>\u067e\u0627\u0633\u062e \u0628\u0647 \u062a\u06cc\u06a9\u062a</b>\n\n"
+            "\u0645\u062a\u0646 \u067e\u0627\u0633\u062e \u062e\u0648\u062f \u0631\u0627 \u0628\u0646\u0648\u06cc\u0633\u06cc\u062f:",
+            cancel_keyboard(),
+        )
         return
 
     if action == "replyshot":
@@ -296,23 +303,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pending["photo_file_id"] = ""
             _set_pending_reply(context, pending)
             context.user_data[UD_STATE] = STATE_REPLY_TICKET_CONFIRM
-            try:
-                await query.edit_message_text(
-                    _reply_preview_text(pending),
-                    reply_markup=ticket_reply_confirm_keyboard(),
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
+            await _edit_or_reply(
+                query,
+                _reply_preview_text(pending),
+                ticket_reply_confirm_keyboard(),
+            )
             return
         if sub == "cancel":
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_SELECTED_TICKET, None)
             context.user_data.pop("pending_reply", None)
-            try:
-                await query.edit_message_text("\u274c \u0627\u0631\u0633\u0627\u0644 \u067e\u0627\u0633\u062e \u0644\u063a\u0648 \u0634\u062f.")
-            except Exception:
-                pass
+            await _edit_or_reply(query, "\u274c \u0627\u0631\u0633\u0627\u0644 \u067e\u0627\u0633\u062e \u0644\u063a\u0648 \u0634\u062f.", None)
             return
 
     if action == "replyconfirm":
@@ -323,23 +324,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data[UD_STATE] = STATE_REPLY_TICKET
             context.user_data[UD_SELECTED_TICKET] = ticket_code
             context.user_data.pop("pending_reply", None)
-            try:
-                await query.edit_message_text(
-                    "\U0001f4ac <b>\u067e\u0627\u0633\u062e \u0628\u0647 \u062a\u06cc\u06a9\u062a</b>\n\n"
-                    "\u0645\u062a\u0646 \u067e\u0627\u0633\u062e \u062e\u0648\u062f \u0631\u0627 \u062f\u0648\u0628\u0627\u0631\u0647 \u0628\u0646\u0648\u06cc\u0633\u06cc\u062f:",
-                    reply_markup=cancel_keyboard(), parse_mode="HTML",
-                )
-            except Exception:
-                pass
+            await _edit_or_reply(
+                query,
+                "\U0001f4ac <b>\u067e\u0627\u0633\u062e \u0628\u0647 \u062a\u06cc\u06a9\u062a</b>\n\n"
+                "\u0645\u062a\u0646 \u067e\u0627\u0633\u062e \u062e\u0648\u062f \u0631\u0627 \u062f\u0648\u0628\u0627\u0631\u0647 \u0628\u0646\u0648\u06cc\u0633\u06cc\u062f:",
+                cancel_keyboard(),
+            )
             return
         if sub == "cancel":
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_SELECTED_TICKET, None)
             context.user_data.pop("pending_reply", None)
-            try:
-                await query.edit_message_text("\u274c \u0627\u0631\u0633\u0627\u0644 \u067e\u0627\u0633\u062e \u0644\u063a\u0648 \u0634\u062f.")
-            except Exception:
-                pass
+            await _edit_or_reply(query, "\u274c \u0627\u0631\u0633\u0627\u0644 \u067e\u0627\u0633\u062e \u0644\u063a\u0648 \u0634\u062f.", None)
             return
         if sub == "send":
             await _do_send_reply(update, context, ticket_code, pending)
