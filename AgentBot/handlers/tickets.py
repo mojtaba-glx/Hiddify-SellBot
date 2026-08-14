@@ -25,6 +25,81 @@ _STATUS_MAP = {
 }
 
 
+async def _agent_bot_username(context) -> str:
+    cached = str(context.bot_data.get("_agent_bot_username") or "").strip().lstrip("@")
+    if cached:
+        return cached
+    try:
+        me = await context.bot.get_me()
+        username = str(getattr(me, "username", "") or "").strip().lstrip("@")
+        if username:
+            context.bot_data["_agent_bot_username"] = username
+        return username
+    except Exception:
+        return ""
+
+
+def _shot_payload(ticket_code: int, message_id: int) -> str:
+    return f"tshotu_{int(ticket_code)}_{int(message_id)}"
+
+
+async def _build_ticket_shot_links(context, ticket_code: int, messages) -> dict:
+    username = await _agent_bot_username(context)
+    if not username:
+        return {}
+    links = {}
+    for idx, item in enumerate(messages or [], start=1):
+        fid = str(item.get("photo_file_id") or "").strip()
+        mid = int(item.get("id") or 0)
+        if not fid or mid <= 0:
+            continue
+        links[idx] = f"https://t.me/{username}?start={_shot_payload(ticket_code, mid)}"
+    return links
+
+
+def _parse_shot_payload(payload: str):
+    import re as _re
+    m = _re.match(r"^tshotu_(\d+)_(\d+)$", str(payload or "").strip())
+    if not m:
+        return 0, 0
+    try:
+        return int(m.group(1)), int(m.group(2))
+    except Exception:
+        return 0, 0
+
+
+async def handle_ticket_shot_start(update, context, payload: str) -> bool:
+    code, msg_id = _parse_shot_payload(payload)
+    if code <= 0 or msg_id <= 0:
+        return False
+    agent_id = get_agent_id(context)
+    if not agent_id:
+        return True
+    rows = get_customer_ticket_messages(agent_id, code)
+    target = None
+    idx = 0
+    for i, item in enumerate(rows or [], start=1):
+        if int(item.get("id") or 0) == int(msg_id):
+            target = item
+            idx = i
+            break
+    if not target or not str(target.get("photo_file_id") or "").strip():
+        await update.message.reply_text("❌ اسکرین‌شات یافت نشد یا دسترسی ندارید.")
+        return True
+    caption = f"🖼 اسکرین‌شات #{idx} | تیکت #{code}"
+    from AgentBot.keyboards import _ikb
+    from Shared.tg_button_styles import inline_button as IButton
+    kb = _ikb([[IButton("\U0001f519 \u0628\u0627\u0632\u06af\u0634\u062a \u0628\u0647 \u062a\u06cc\u06a9\u062a", callback_data=f"agbot:ticket:view:{code}")]])
+    try:
+        await update.message.reply_photo(photo=target["photo_file_id"], caption=caption, reply_markup=kb)
+    except Exception:
+        try:
+            await update.message.reply_text("❌ نمایش اسکرین‌شات ممکن نشد.", reply_markup=kb)
+        except Exception:
+            pass
+    return True
+
+
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = get_agent_id(context)
     pending = get_customer_tickets(agent_id, "pending")
@@ -95,7 +170,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         title = _escape(str(ticket.get("title") or ticket.get("question", "")[:50] or "\u0628\u062f\u0648\u0646 \u0645\u0648\u0636\u0648\u0639"))
         name = _escape(ticket.get("full_name", "")) or f"\u06a9\u0627\u0631\u0628\u0631 #{ticket.get('telegram_id', '?')}"
 
-        # Build text summary (هماهنگ با ربات ادمین)
+        # Build text summary (هماهنگ با ربات ادمین/کاربران — اسکرین‌شات به‌صورت لینک)
         text = (
             f"🧾 شناسه تیکت: {_escape(ticket_code)}\n"
             f"📅 تاریخ ایجاد: {_escape(str(ticket.get('created_at', ''))[:19])}\n"
@@ -106,32 +181,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "❖⬩--------------------------------⬩❖\n"
         )
 
-        # Find first photo in messages
-        first_photo_fid = ""
+        shot_links = await _build_ticket_shot_links(context, ticket_code, msgs)
         if msgs:
-            for m in msgs:
+            for idx, m in enumerate(msgs, start=1):
                 _agent_label = '\u0646\u0645\u0627\u06cc\u0646\u062f\u0647'
                 sender = "\U0001f464 \u0645\u0634\u062a\u0631\u06cc" if m.get("sender_type") == "user" else f"\U0001f916 {_escape(m.get('sender_name', _agent_label))}"
                 msg_text = _escape(m.get("message_text", ""))
                 photo_fid = m.get("photo_file_id", "")
                 ts = _escape(str(m.get("created_at", ""))[:16])
-                photo_tag = " \U0001f4f7 [\u0639\u06a9\u0633]" if photo_fid else ""
-                text += f"\n{sender} ({ts}):\n{msg_text}{photo_tag}\n"
-                if photo_fid and not first_photo_fid:
-                    first_photo_fid = photo_fid
+                line = f"\n{sender} ({ts}):\n{msg_text}"
+                if photo_fid:
+                    link = (shot_links or {}).get(idx) or ""
+                    if link:
+                        from html import escape as _he
+                        line += f'\n🖼 <a href="{_he(link, quote=True)}">اسکرین‌شات #{idx}</a>'
+                    else:
+                        line += f"\n🖼 اسکرین‌شات #{idx}"
+                text += line + "\n"
         else:
             text += "(\u067e\u06cc\u0627\u0645\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f)"
 
         kb = ticket_detail_keyboard(ticket_code, ticket.get("status", ""))
 
         try:
-            await query.edit_message_text(text[:4000], reply_markup=kb, parse_mode="HTML")
-            for m in msgs:
-                photo_fid = m.get("photo_file_id", "")
-                if photo_fid:
-                    sender = "مشتری" if m.get("sender_type") == "user" else m.get("sender_name", "نماینده")
-                    caption = f"📷 عکس تیکت #{ticket_code} - {sender}\n{m.get('message_text', '') or ''}"
-                    await context.bot.send_photo(chat_id=query.message.chat_id, photo=photo_fid, caption=caption[:1024])
+            await query.edit_message_text(text[:4000], reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
             try:
                 await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")

@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # دپ‌لینک اسکرین‌شات تیکت: /start tshotu_...
+    try:
+        parts = (update.message.text or "").split()
+        if len(parts) > 1 and str(parts[1] or "").startswith("tshotu_"):
+            from AgentBot.handlers.tickets import handle_ticket_shot_start
+            handled = await handle_ticket_shot_start(update, context, parts[1])
+            if handled:
+                return
+    except Exception:
+        pass
+
     agent = await authenticate(update, context)
     if not agent:
         await update.message.reply_text(
