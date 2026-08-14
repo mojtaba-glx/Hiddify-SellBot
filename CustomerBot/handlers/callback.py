@@ -765,10 +765,18 @@ async def _handle_status(query, context, agent_id, user, data):
     elif data.startswith(CB_STATUS_GUIDE):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         text_settings = get_text_settings(agent_id)
-        await msg.edit_text(
-            text_settings.get("guide_text", "راهنمای اتصال:\nلینک اشتراک را در کلاینت مورد نظر import کنید."),
-            reply_markup=guide_os_keyboard(f"s:{svc_id}"),
-        )
+        # دکمه «راهنمای اتصال» روی پیام عکس (QR) قرار دارد؛ به همین دلیل نمی‌توان
+        # با edit_text ویرایشش کرد و باید پیام جدیدی ارسال شود.
+        try:
+            await msg.reply_text(
+                text_settings.get("guide_text", "راهنمای اتصال:\nلینک اشتراک را در کلاینت مورد نظر import کنید."),
+                reply_markup=guide_os_keyboard(f"s:{svc_id}"),
+            )
+        except Exception:
+            await msg.edit_text(
+                text_settings.get("guide_text", "راهنمای اتصال:\nلینک اشتراک را در کلاینت مورد نظر import کنید."),
+                reply_markup=guide_os_keyboard(f"s:{svc_id}"),
+            )
 
     elif data.startswith(CB_STATUS_RENEW):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
