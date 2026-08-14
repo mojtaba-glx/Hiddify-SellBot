@@ -18,7 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # دپ‌لینک اسکرین‌شات تیکت: /start tshotu_...
+    agent = await authenticate(update, context)
+    if not agent:
+        await update.message.reply_text(
+            "\u26a0\ufe0f \u0634\u0645\u0627 \u0628\u0647 \u0639\u0646\u0648\u0627\u0646 \u0646\u0645\u0627\u06cc\u0646\u062f\u0647 \u062b\u0628\u062a \u0646\u0634\u062f\u0647\u200c\u0627\u06cc\u062f.\n"
+            "\u0628\u0627 \u0627\u062f\u0645\u06cc\u0646 \u062f\u0631 \u0627\u0631\u062a\u0628\u0627\u0637 \u0628\u0627\u0634\u06cc\u062f."
+        )
+        return
+
+    # دپ‌لینک اسکرین‌شات تیکت: /start tshotu_... (باید بعد از authenticate باشد تا agent_id ست شود)
     try:
         parts = (update.message.text or "").split()
         if len(parts) > 1 and str(parts[1] or "").startswith("tshotu_"):
@@ -29,13 +37,6 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception:
         pass
 
-    agent = await authenticate(update, context)
-    if not agent:
-        await update.message.reply_text(
-            "\u26a0\ufe0f \u0634\u0645\u0627 \u0628\u0647 \u0639\u0646\u0648\u0627\u0646 \u0646\u0645\u0627\u06cc\u0646\u062f\u0647 \u062b\u0628\u062a \u0646\u0634\u062f\u0647\u200c\u0627\u06cc\u062f.\n"
-            "\u0628\u0627 \u0627\u062f\u0645\u06cc\u0646 \u062f\u0631 \u0627\u0631\u062a\u0628\u0627\u0637 \u0628\u0627\u0634\u06cc\u062f."
-        )
-        return
     clear_state(context)
     name = agent.get("full_name") or agent.get("username") or f"\u0646\u0645\u0627\u06cc\u0646\u062f\u0647 #"
     await update.message.reply_text(
