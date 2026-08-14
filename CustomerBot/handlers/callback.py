@@ -518,10 +518,18 @@ async def _handle_support(query, context, agent_id, user, data):
             context.user_data.pop(UD_TICKET_MODE, None)
             context.user_data.pop(UD_TICKET_QUESTION, None)
             context.user_data.pop("pending_ticket", None)
+            from CustomerBot.handlers.receipt import _build_ticket_detail_text, build_ticket_screenshot_links
+            try:
+                fresh = get_ticket(agent_id, ticket["ticket_code"])
+                msgs = get_ticket_messages(agent_id, ticket["ticket_code"])
+                links = await build_ticket_screenshot_links(context, ticket["ticket_code"], msgs)
+                detail_text = _build_ticket_detail_text(fresh, msgs, screenshot_links=links)
+            except Exception:
+                detail_text = ""
+            header = "✅ <b>تیکت شما با موفقیت ثبت شد.</b>\n\n"
+            out_text = header + detail_text
             await msg.edit_text(
-                f"✅ تیکت شما با کد <b>{ticket['ticket_code']}</b> ثبت شد.\n"
-                f"📋 موضوع: {title}\n\n"
-                f"به زودی پاسخ داده می‌شود.",
+                out_text,
                 reply_markup=user_ticket_detail_keyboard(ticket["ticket_code"], can_reply=True, is_closed=False),
                 parse_mode="HTML",
             )

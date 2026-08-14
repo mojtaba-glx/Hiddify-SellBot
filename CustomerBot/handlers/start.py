@@ -63,7 +63,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parsed = parse_deep_link(start_payload)
         if parsed:
             kind, data = parsed
-            if kind == "voucher":
+            if kind == "ticket_shot":
+                from CustomerBot.handlers.receipt import handle_ticket_shot_start
+                await handle_ticket_shot_start(update, context, start_payload)
+            elif kind == "voucher":
                 from CustomerBot.database import get_zarin_voucher, redeem_zarin_voucher
                 ok, amount = redeem_zarin_voucher(agent_id, data, user.id)
                 if ok:

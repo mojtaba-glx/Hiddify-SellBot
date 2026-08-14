@@ -40,32 +40,137 @@ from CustomerBot.keyboards import main_menu_keyboard, cancel_keyboard, ticket_sk
 from CustomerBot.utils.helpers import is_cancel_text, is_pay_done_text
 
 
-def _build_ticket_detail_text(ticket, messages) -> str:
-    """ساخت متن جزئیات تیکت (متناقض با ربات کاربران/ادمین)."""
+def _fmt_ticket_time(ts) -> str:
+    """تبدیل 2026-08-14 08:00:32 به 08-14-2026 08:00:32 (مثل ربات کاربران)."""
+    raw = str(ts or "").strip()
+    if not raw:
+        return "-"
+    s = raw
     try:
-        code = ticket.get("ticket_code") or ticket.get("id") or "?"
+        from datetime import datetime as _dt
+        dt = _dt.strptime(s[:19], "%Y-%m-%d %H:%M:%S")
+        return dt.strftime("%m-%d-%Y %H:%M:%S")
     except Exception:
-        code = "?"
-    status_map = {"pending": "⏳ در انتظار", "open": "📬 باز", "closed": "✅ بسته"}
-    status_fa = status_map.get(str(ticket.get("status", "")), str(ticket.get("status", "")))
-    title = str(ticket.get("title") or "") or str(ticket.get("question") or "")[:50] or "بدون موضوع"
-    text = (
-        f"📩 <b>تیکت #{code}</b>\n"
-        f"📋 موضوع: {title}\n"
-        f"📅 {str(ticket.get('created_at', ''))[:16]}\n"
-        f"📌 وضعیت: {status_fa}\n\n"
-        f"━━━ پیام‌ها ━━━\n"
-    )
-    if not messages:
-        text += "(پیامی وجود ندارد)"
-    else:
-        for m in messages:
-            sender = "👤 شما" if m.get("sender_type") == "user" else f"🤖 {m.get('sender_name', 'پشتیبان')}"
-            msg_text = m.get("message_text", "") or ""
-            has_photo = "📷 [عکس]" if m.get("photo_file_id") else ""
-            ts = str(m.get("created_at", ""))[:16]
-            text += f"\n{sender} ({ts}):\n{msg_text}\n{has_photo}\n"
-    return text
+        return s
+
+
+def _build_ticket_detail_text(ticket, messages, screenshot_links=None) -> str:
+    """متن جزئیات تیکت — دقیقاً مثل ربات کاربران/ادمین (اسکرین‌شات به‌صورت لینک قابل‌کلیک)."""
+    from html import escape
+    try:
+        code = str(ticket.get("ticket_code") or ticket.get("id") or "-")
+    except Exception:
+        code = "-"
+    title = str(ticket.get("title") or "").strip() or "-"
+    lines = [
+        f"🧾 شناسه تیکت: {escape(code)}",
+        "❖⬩--------------------------------⬩❖",
+    ]
+    for idx, item in enumerate(messages or [], start=1):
+        sender_type = str(item.get("sender_type") or "").strip().lower()
+        sender_title = "◈سوال:" if sender_type == "user" else "◈پاسخ:"
+        text_part = str(item.get("message_text") or "").strip()
+        when = _fmt_ticket_time(item.get("created_at"))
+        has_photo = bool(str(item.get("photo_file_id") or "").strip())
+        lines.append(f"📅تاریخ ایجاد: {escape(when)}")
+        if idx == 1:
+            lines.append("◈عنوان:")
+            lines.append(escape(title))
+        lines.append(sender_title)
+        if text_part:
+            lines.append(escape(text_part))
+        if has_photo:
+            link = str((screenshot_links or {}).get(idx) or "").strip()
+            if link:
+                lines.append(f'<a href="{escape(link, quote=True)}">اسکرین‌شات</a>')
+            else:
+                lines.append("اسکرین‌شات")
+        lines.append("❖⬩------------------------------⬩❖")
+    out = "\n".join(lines)
+    if len(out) > 3900:
+        return out[:3890] + "\n..."
+    return out
+
+
+SHOT_START_PREFIX = "tshotu"
+
+
+async def _get_bot_username(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """گرفتن نام‌کاربری ربات مشتری فعلی برای ساخت لینک اسکرین‌شات."""
+    cached = str(context.bot_data.get("_cb_bot_username") or "").strip().lstrip("@")
+    if cached:
+        return cached
+    try:
+        me = await context.bot.get_me()
+        username = str(getattr(me, "username", "") or "").strip().lstrip("@")
+        if username:
+            context.bot_data["_cb_bot_username"] = username
+        return username
+    except Exception:
+        return ""
+
+
+def _build_shot_payload(ticket_code: int, message_id: int) -> str:
+    return f"{SHOT_START_PREFIX}_{int(ticket_code)}_{int(message_id)}"
+
+
+def _parse_shot_payload(payload: str):
+    m = re.match(rf"^{re.escape(SHOT_START_PREFIX)}_(\d+)_(\d+)$", str(payload or "").strip())
+    if not m:
+        return 0, 0
+    try:
+        return int(m.group(1)), int(m.group(2))
+    except Exception:
+        return 0, 0
+
+
+async def build_ticket_screenshot_links(context: ContextTypes.DEFAULT_TYPE, ticket_code: int, messages) -> dict:
+    """برای هر پیامی که عکس دارد یک لینک اسکرین‌شات می‌سازد (tshotu_...)."""
+    username = await _get_bot_username(context)
+    if not username:
+        return {}
+    links = {}
+    for idx, item in enumerate(messages or [], start=1):
+        fid = str(item.get("photo_file_id") or "").strip()
+        mid = int(item.get("id") or 0)
+        if not fid or mid <= 0:
+            continue
+        links[idx] = f"https://t.me/{username}?start={_build_shot_payload(ticket_code, mid)}"
+    return links
+
+
+async def handle_ticket_shot_start(update: Update, context: ContextTypes.DEFAULT_TYPE, payload: str) -> bool:
+    """هندل دپ‌لینک اسکرین‌شات (tshotu_code_msgid)."""
+    code, msg_id = _parse_shot_payload(payload)
+    if code <= 0 or msg_id <= 0:
+        return False
+    agent_id = context.bot_data.get("agent_id", 0)
+    if not agent_id:
+        return True
+    try:
+        rows = get_ticket_messages(agent_id, code)
+    except Exception:
+        rows = []
+    target = None
+    idx = 0
+    for i, item in enumerate(rows or [], start=1):
+        if int(item.get("id") or 0) == int(msg_id):
+            target = item
+            idx = i
+            break
+    if not target or not str(target.get("photo_file_id") or "").strip():
+        await update.message.reply_text("❌ اسکرین‌شات یافت نشد یا دسترسی ندارید.")
+        return True
+    caption = f"🖼 اسکرین‌شات #{idx} | تیکت #{code}"
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به تیکت", callback_data=f"support:view:{code}:1")]])
+    try:
+        await update.message.reply_photo(photo=target["photo_file_id"], caption=caption, reply_markup=kb)
+    except Exception:
+        try:
+            await update.message.reply_text("❌ نمایش اسکرین‌شات ممکن نشد.", reply_markup=kb)
+        except Exception:
+            pass
+    return True
 
 
 async def _notify_agent_ticket_reply(context: ContextTypes.DEFAULT_TYPE, agent_id: int, ticket: dict, message_text: str, photo_file_id: str = "") -> None:
