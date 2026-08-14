@@ -174,7 +174,7 @@ async def handle_ticket_shot_start(update: Update, context: ContextTypes.DEFAULT
 
 
 async def _notify_agent_ticket_reply(context: ContextTypes.DEFAULT_TYPE, agent_id: int, ticket: dict, message_text: str, photo_file_id: str = "") -> None:
-    """خبر دادن به نماینده که مشتری به تیکت پاسخ داده است (بدون ضمیمه عکس؛ عکس فقط در لینک اسکرین‌شات)."""
+    """خبر دادن به نماینده که مشتری به تیکت پاسخ داده است (عکس مستقیم ارسال می‌شود)."""
     try:
         from Shared.agent_db import get_agent_by_id
         agent = get_agent_by_id(agent_id)
@@ -185,18 +185,27 @@ async def _notify_agent_ticket_reply(context: ContextTypes.DEFAULT_TYPE, agent_i
         bot = Bot(token=token)
         code = ticket.get("ticket_code", "?")
         title = ticket.get("title") or "بدون موضوع"
-        photo_tag = "\n📷 (عکس در لینک اسکرین‌شات تیکت قابل‌مشاهده است)" if photo_file_id else ""
         notify_text = (
             f"💬 پاسخ جدید مشتری به تیکت #{code}\n"
             f"📋 موضوع: {title}\n\n"
             f"{message_text or '[بدون متن]'}"
-            f"{photo_tag}"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👁 مشاهده تیکت", callback_data=f"agbot:ticket:view:{code}")],
             [InlineKeyboardButton("💬 پاسخ", callback_data=f"agbot:ticket:reply:{code}"),
              InlineKeyboardButton("✅ بستن", callback_data=f"agbot:ticket:close:{code}")],
         ])
+        if photo_file_id:
+            try:
+                tg_file = await context.bot.get_file(photo_file_id)
+                bio = BytesIO()
+                await tg_file.download_to_memory(out=bio)
+                bio.seek(0)
+                bio.name = f"ticket_{code}.jpg"
+                await bot.send_photo(chat_id=agent_tg_id, photo=bio, caption=notify_text[:1024], reply_markup=kb)
+                return
+            except Exception as e:
+                logger.warning("notify agent ticket reply photo failed: %s", e)
         await bot.send_message(chat_id=agent_tg_id, text=notify_text, reply_markup=kb)
     except Exception:
         return
@@ -213,19 +222,28 @@ async def _notify_agent_new_ticket(context: ContextTypes.DEFAULT_TYPE, agent_id:
         bot = Bot(token=token)
         code = ticket.get("ticket_code", "?")
         title = ticket.get("title") or "بدون موضوع"
-        photo_tag = "\n📷 (عکس در لینک اسکرین‌شات تیکت قابل‌مشاهده است)" if photo_file_id else ""
         notify_text = (
             f"📩 تیکت جدید #{code}\n"
             f"📋 موضوع: {title}\n"
             f"👤 مشتری: {ticket.get('full_name') or ticket.get('username') or ticket.get('telegram_id')}\n\n"
             f"{message_text or '[بدون متن]'}"
-            f"{photo_tag}"
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("👁 مشاهده تیکت", callback_data=f"agbot:ticket:view:{code}")],
             [InlineKeyboardButton("💬 پاسخ", callback_data=f"agbot:ticket:reply:{code}"),
              InlineKeyboardButton("✅ بستن", callback_data=f"agbot:ticket:close:{code}")],
         ])
+        if photo_file_id:
+            try:
+                tg_file = await context.bot.get_file(photo_file_id)
+                bio = BytesIO()
+                await tg_file.download_to_memory(out=bio)
+                bio.seek(0)
+                bio.name = f"ticket_{code}.jpg"
+                await bot.send_photo(chat_id=agent_tg_id, photo=bio, caption=notify_text[:1024], reply_markup=kb)
+                return
+            except Exception as e:
+                logger.warning("notify agent new ticket photo failed: %s", e)
         await bot.send_message(chat_id=agent_tg_id, text=notify_text, reply_markup=kb)
     except Exception:
         return
