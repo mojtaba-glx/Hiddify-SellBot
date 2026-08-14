@@ -520,59 +520,29 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         elif mode.startswith("reply:"):
-            photo_file_id = ""
-            if update.message.photo:
-                photo_file_id = update.message.photo[-1].file_id
-                if not msg_text:
-                    msg_text = "[عکس]"
             code = int(mode.split(":")[1])
             ticket = get_ticket(agent_id, code)
             if not ticket:
                 await update.message.reply_text("❌ تیکت یافت نشد.", reply_markup=main_menu_keyboard())
                 context.user_data.pop(UD_STATE, None)
                 return
-            add_ticket_message(
-                agent_id=agent_id,
-                ticket_code=code,
-                sender_type="user",
-                sender_name=user.full_name or user.username or "کاربر",
-                message_text=msg_text,
-                photo_file_id=photo_file_id,
+            if str(ticket.get("status") or "").strip().lower() == "closed":
+                await update.message.reply_text("❌ این تیکت بسته شده است.", reply_markup=main_menu_keyboard())
+                context.user_data.pop(UD_STATE, None)
+                return
+            # مرحله ۱: ثبت متن پاسخ سپس رفتن به مرحله اسکرین‌شات (مثل ربات کاربران)
+            context.user_data["pending_reply"] = {
+                "ticket_code": code,
+                "reply_text": msg_text,
+                "photo_file_id": "",
+            }
+            context.user_data[UD_STATE] = STATE_TICKET_WAITING_PHOTO
+            await update.message.reply_text(
+                "🖼 لطفاً اگر اسکرین‌شات دارید ارسال کنید.\n"
+                "اگر اسکرین‌شات ندارید روی دکمه «رد کردن» بزنید.",
+                reply_markup=ticket_skip_screenshot_keyboard("reply"),
             )
-            # تیکت دوباره «باز» محسوب می‌شود (دقیقاً مثل ربات کاربران)
-            try:
-                update_ticket_status(agent_id, code, "open")
-            except Exception:
-                pass
-            # خبر دادن به نماینده که مشتری پاسخ داده است
-            try:
-                fresh = get_ticket(agent_id, code)
-                if fresh:
-                    await _notify_agent_ticket_reply(context, agent_id, fresh, msg_text, photo_file_id)
-            except Exception:
-                pass
-            # برگشت به صفحه «جزئیات تیکت» با دکمه‌های پاسخ/بستن
-            try:
-                fresh = get_ticket(agent_id, code)
-                msgs = get_ticket_messages(agent_id, code) if fresh else []
-                detail_text = _build_ticket_detail_text(fresh, msgs)
-                await update.message.reply_text(
-                    detail_text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
-                    parse_mode="HTML",
-                )
-                for m in msgs:
-                    pfid = m.get("photo_file_id", "")
-                    if pfid:
-                        try:
-                            await update.message.reply_photo(photo=pfid, caption=f"📷 عکس تیکت #{code}")
-                        except Exception:
-                            pass
-            except Exception:
-                await update.message.reply_text(
-                    "✅ پاسخ شما ثبت شد.",
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
-                )
+            return
 
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_TICKET_MODE, None)
@@ -581,25 +551,34 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- Ticket optional screenshot handler ----
     if state == STATE_TICKET_WAITING_PHOTO:
-        pending = context.user_data.get("pending_ticket", {})
+        is_reply = bool(context.user_data.get("pending_reply"))
+        if is_reply:
+            pending = context.user_data.get("pending_reply", {})
+        else:
+            pending = context.user_data.get("pending_ticket", {})
         if not pending:
             context.user_data.pop(UD_STATE, None)
             await update.message.reply_text("❌ اطلاعات تیکت پیدا نشد. دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
             return
+        _flow = "reply" if is_reply else "new"
         if not update.message.photo:
             await update.message.reply_text(
                 "🖼 لطفاً عکس ارسال کنید یا دکمه «رد کردن» را بزنید.",
-                reply_markup=ticket_skip_screenshot_keyboard("new"),
+                reply_markup=ticket_skip_screenshot_keyboard(_flow),
             )
             return
         pending["photo_file_id"] = update.message.photo[-1].file_id
-        context.user_data["pending_ticket"] = pending
+        context.user_data["pending_reply" if is_reply else "pending_ticket"] = pending
         context.user_data[UD_STATE] = STATE_TICKET_CONFIRM
-        await update.message.reply_text(
-            _format_ticket_confirm_text(pending),
-            reply_markup=ticket_confirm_keyboard("new"),
-            parse_mode="HTML",
-        )
+        if is_reply:
+            preview_text = f"📩 <b>تایید اطلاعات پاسخ تیکت</b>\n\n📝 پاسخ: {pending.get('reply_text', '')}\n\n❗️در صورت تایید، دکمه «✅ارسال» را بزنید."
+            await update.message.reply_text(preview_text, reply_markup=ticket_confirm_keyboard("reply"), parse_mode="HTML")
+        else:
+            await update.message.reply_text(
+                _format_ticket_confirm_text(pending),
+                reply_markup=ticket_confirm_keyboard(_flow),
+                parse_mode="HTML",
+            )
         return
 
     # ---- Connect subscription handler ----

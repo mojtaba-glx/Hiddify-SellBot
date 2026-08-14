@@ -159,9 +159,9 @@ def cbot_menu_keyboard(bot_active: bool):
 # Ticket keyboards
 def tickets_menu_keyboard():
     return _ikb([
-        [IButton("\u23f3 \u062a\u06cc\u06a9\u062a\u200c\u0647\u0627\u06cc \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631", callback_data="agbot:ticket:pending")],
-        [IButton("\U0001f4ec \u062a\u06cc\u06a9\u062a\u200c\u0647\u0627\u06cc \u0628\u0627\u0632", callback_data="agbot:ticket:open")],
-        [IButton("\u2705 \u062a\u06cc\u06a9\u062a\u200c\u0647\u0627\u06cc \u0628\u0633\u062a\u0647", callback_data="agbot:ticket:closed")],
+        [IButton("📨 تیکت‌های در انتظار", callback_data="agbot:ticket:pending")],
+        [IButton("📬 تیکت‌های باز", callback_data="agbot:ticket:open")],
+        [IButton("📩 تیکت‌های بسته", callback_data="agbot:ticket:closed")],
         [IButton(BTN_BACK, callback_data="agbot:menu")],
     ])
 

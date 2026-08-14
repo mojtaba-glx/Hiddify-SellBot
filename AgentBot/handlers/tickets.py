@@ -19,9 +19,9 @@ from AgentBot.database import (
 logger = logging.getLogger(__name__)
 
 _STATUS_MAP = {
-    "pending": "\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631",
-    "open": "\U0001f4ec \u0628\u0627\u0632",
-    "closed": "\u2705 \u0628\u0633\u062a\u0647",
+    "pending": "❌ در انتظار",
+    "open": "✅ باز",
+    "closed": "📪 بسته",
 }
 
 
@@ -95,14 +95,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         title = _escape(str(ticket.get("title") or ticket.get("question", "")[:50] or "\u0628\u062f\u0648\u0646 \u0645\u0648\u0636\u0648\u0639"))
         name = _escape(ticket.get("full_name", "")) or f"\u06a9\u0627\u0631\u0628\u0631 #{ticket.get('telegram_id', '?')}"
 
-        # Build text summary
+        # Build text summary (هماهنگ با ربات ادمین)
         text = (
-            f"\U0001f4ec <b>\u062a\u06cc\u06a9\u062a #{ticket_code}</b>\n"
-            f"\U0001f4cb \u0645\u0648\u0636\u0648\u0639: {title}\n"
-            f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {name}\n"
-            f"\U0001f4c5 {_escape(str(ticket.get('created_at', ''))[:16])}\n"
-            f"\U0001f4cc \u0648\u0636\u0639\u06cc\u062a: {status_fa}\n\n"
-            f"\u2501\u2501\u2501 \u067e\u06cc\u0627\u0645\u200c\u0647\u0627 \u2501\u2501\u2501\n"
+            f"🧾 شناسه تیکت: {_escape(ticket_code)}\n"
+            f"📅 تاریخ ایجاد: {_escape(str(ticket.get('created_at', ''))[:19])}\n"
+            f"◈ وضعیت تیکت: {_escape(status_fa)}\n"
+            f"👤 کاربر: {name}\n"
+            f"🔹 نام کاربری: {_escape(ticket.get('username', '') or '-')}\n"
+            f"🔢 شناسه کاربر: {_escape(str(ticket.get('telegram_id', '') or '-'))}\n"
+            "❖⬩--------------------------------⬩❖\n"
         )
 
         # Find first photo in messages

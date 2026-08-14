@@ -372,16 +372,106 @@ async def _handle_support(query, context, agent_id, user, data):
                 except Exception:
                     pass
 
-    elif data.startswith(CB_SUPPORT_REPLY):
-        code = int(data.split(":")[-1])
-        context.user_data[UD_STATE] = STATE_TICKET_WAITING_TEXT
-        context.user_data[UD_TICKET_MODE] = f"reply:{code}"
-        await msg.edit_text(
-            "📩 <b>پاسخ به تیکت</b>\n\n"
-            "متن یا عکس خود را ارسال کنید:",
-            parse_mode="HTML",
-        )
-        await msg.reply_text("✍️ پاسخ خود را بنویسید:", reply_markup=cancel_keyboard())
+    elif data.startswith("support:reply:"):
+        _reply_sub = data.split(":")[2] if len(data.split(":")) > 2 else ""
+        if _reply_sub in ("skip", "send", "edit", "cancel"):
+            if _reply_sub == "skip":
+                pending = context.user_data.get("pending_reply", {})
+                if not pending or not pending.get("ticket_code"):
+                    await query.answer("اطلاعات پاسخ پیدا نشد.", show_alert=True)
+                    return
+                pending["photo_file_id"] = ""
+                context.user_data["pending_reply"] = pending
+                context.user_data[UD_STATE] = STATE_TICKET_CONFIRM
+                preview_text = f"📩 <b>تایید اطلاعات پاسخ تیکت</b>\n\n📝 پاسخ: {pending.get('reply_text', '')}\n\n❗️در صورت تایید، دکمه «✅ارسال» را بزنید."
+                try:
+                    await msg.edit_text(preview_text, reply_markup=ticket_confirm_keyboard("reply"), parse_mode="HTML")
+                except Exception:
+                    await msg.reply_text(preview_text, reply_markup=ticket_confirm_keyboard("reply"), parse_mode="HTML")
+            elif _reply_sub == "edit":
+                pending = context.user_data.get("pending_reply", {})
+                code = int((pending or {}).get("ticket_code") or 0)
+                context.user_data[UD_STATE] = STATE_TICKET_WAITING_TEXT
+                context.user_data[UD_TICKET_MODE] = f"reply:{code}"
+                context.user_data.pop("pending_reply", None)
+                try:
+                    await msg.edit_text("✍️ لطفا پاسخ خود را به صورت کامل ارسال نمایید:", parse_mode="HTML")
+                except Exception:
+                    pass
+                await msg.reply_text("✍️ پاسخ خود را بنویسید:", reply_markup=cancel_keyboard())
+            elif _reply_sub == "cancel":
+                context.user_data.pop(UD_STATE, None)
+                context.user_data.pop(UD_TICKET_MODE, None)
+                context.user_data.pop("pending_reply", None)
+                await msg.edit_text("❌ ارسال پاسخ لغو شد.", reply_markup=support_panel_keyboard())
+            else:  # send
+                from CustomerBot.handlers.receipt import _build_ticket_detail_text, _notify_agent_ticket_reply
+                pending = context.user_data.get("pending_reply", {})
+                if not pending or not pending.get("ticket_code"):
+                    await query.answer("اطلاعات پاسخ پیدا نشد.", show_alert=True)
+                    return
+                code = int(pending["ticket_code"])
+                reply_text = str(pending.get("reply_text") or "").strip()
+                photo_fid = str(pending.get("photo_file_id") or "").strip()
+                ticket = get_ticket(agent_id, code)
+                if not ticket:
+                    await query.answer("تیکت یافت نشد.", show_alert=True)
+                    return
+                if str(ticket.get("status") or "").strip().lower() == "closed":
+                    await query.answer("این تیکت بسته شده است.", show_alert=True)
+                    return
+                add_ticket_message(
+                    agent_id=agent_id,
+                    ticket_code=code,
+                    sender_type="user",
+                    sender_name=user.full_name or user.username or "کاربر",
+                    message_text=reply_text or "[عکس]",
+                    photo_file_id=photo_fid,
+                )
+                try:
+                    update_ticket_status(agent_id, code, "open")
+                except Exception:
+                    pass
+                try:
+                    fresh = get_ticket(agent_id, code)
+                    if fresh:
+                        await _notify_agent_ticket_reply(context, agent_id, fresh, reply_text, photo_fid)
+                except Exception:
+                    pass
+                context.user_data.pop(UD_STATE, None)
+                context.user_data.pop(UD_TICKET_MODE, None)
+                context.user_data.pop("pending_reply", None)
+                try:
+                    fresh = get_ticket(agent_id, code)
+                    msgs = get_ticket_messages(agent_id, code) if fresh else []
+                    detail_text = _build_ticket_detail_text(fresh, msgs)
+                    out_text = "✅ پاسخ شما ثبت شد.\n\n" + detail_text
+                    await msg.edit_text(out_text, reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False), parse_mode="HTML")
+                    for m in msgs:
+                        pfid = m.get("photo_file_id", "")
+                        if pfid:
+                            try:
+                                await msg.reply_photo(photo=pfid, caption=f"📷 عکس تیکت #{code}")
+                            except Exception:
+                                pass
+                except Exception:
+                    await msg.edit_text("✅ پاسخ شما ثبت شد.", reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False))
+            return
+        else:
+            try:
+                code = int(_reply_sub)
+            except (TypeError, ValueError):
+                await query.answer("درخواست نامعتبر.", show_alert=True)
+                return
+            context.user_data[UD_STATE] = STATE_TICKET_WAITING_TEXT
+            context.user_data[UD_TICKET_MODE] = f"reply:{code}"
+            await msg.edit_text(
+                "📩 <b>پاسخ به تیکت</b>\n\n"
+                "متن یا عکس خود را ارسال کنید:",
+                parse_mode="HTML",
+            )
+            await msg.reply_text("✍️ پاسخ خود را بنویسید:", reply_markup=cancel_keyboard())
+            return
 
     elif data.startswith(CB_SUPPORT_CLOSE):
         code = int(data.split(":")[-1])
