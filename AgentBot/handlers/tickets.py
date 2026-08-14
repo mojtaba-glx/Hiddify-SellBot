@@ -130,18 +130,23 @@ async def handle_ticket_shot_start(update, context, payload: str) -> bool:
             from telegram.request import HTTPXRequest
             from Shared.agent_db import get_all_active_customer_bots
             bot_rows = [b for b in get_all_active_customer_bots() if int(b.get("agent_id") or 0) == int(agent_id)]
-            token = (bot_rows[0].get("bot_token") if bot_rows else "") or ""
-            if not token:
-                raise RuntimeError("no customer bot token")
             request = HTTPXRequest(connect_timeout=15, read_timeout=60, write_timeout=60, pool_timeout=15)
-            cust_bot = Bot(token=token, request=request)
-            f = await cust_bot.get_file(fid)
-            raw = await f.download_as_bytearray()
-            bio = _io.BytesIO(raw)
-            bio.name = f"ticket_{code}.jpg"
-            bio.seek(0)
-            await update.message.reply_photo(photo=bio, caption=caption, reply_markup=kb)
-            sent = True
+            for bot_row in bot_rows:
+                token = str(bot_row.get("bot_token") or "").strip()
+                if not token:
+                    continue
+                try:
+                    cust_bot = Bot(token=token, request=request)
+                    f = await cust_bot.get_file(fid)
+                    raw = await f.download_as_bytearray()
+                    bio = _io.BytesIO(raw)
+                    bio.name = f"ticket_{code}.jpg"
+                    bio.seek(0)
+                    await update.message.reply_photo(photo=bio, caption=caption, reply_markup=kb)
+                    sent = True
+                    break
+                except Exception as e:
+                    logger.warning("ticket shot download token attempt failed code=%s msg=%s token=%s...: %s", code, msg_id, token[:12], e)
         except Exception as e:
             logger.warning("ticket shot download-from-customer-bot failed code=%s msg=%s: %s", code, msg_id, e)
             sent = False
@@ -376,8 +381,20 @@ async def _do_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, tic
         try:
             from Shared.agent_db import get_all_active_customer_bots
             bot_rows = [b for b in get_all_active_customer_bots() if int(b.get("agent_id") or 0) == int(agent_id)]
-            token = (bot_rows[0].get("bot_token") if bot_rows else "") or ""
-            notify_bot = Bot(token=token) if token else context.bot
+            notify_bot = None
+            for bot_row in bot_rows:
+                token = str(bot_row.get("bot_token") or "").strip()
+                if not token:
+                    continue
+                try:
+                    candidate = Bot(token=token)
+                    await candidate.get_me()
+                    notify_bot = candidate
+                    break
+                except Exception:
+                    continue
+            if notify_bot is None:
+                notify_bot = context.bot
             notify_text = f"\U0001f4ac \u067e\u0627\u0633\u062e \u062c\u062f\u06cc\u062f \u0628\u0631\u0627\u06cc \u062a\u06cc\u06a9\u062a #{ticket_code}:\n\n{reply_text}"
             if photo_file_id:
                 await notify_bot.send_photo(chat_id=ticket["telegram_id"], photo=photo_file_id, caption=notify_text[:1024])
