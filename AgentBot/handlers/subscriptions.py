@@ -1215,7 +1215,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             )
             return True
         plan_title = f"{plan['days']} \u0631\u0648\u0632 / {_fmt_gb(plan['gb'])}GB"
-        db_create_order(agent_id, 0, "", plan.get("wholesale_price", 0), "new", plan.get("id", 0), text)
+        db_create_order(agent_id, 0, "", plan.get("wholesale_price", 0), "new", plan.get("id", 0), text, volume_gb=plan.get("gb", 0))
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_SELECTED_PLAN, None)
         context.user_data.pop(UD_SELECTED_SERVER, None)

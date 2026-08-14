@@ -99,6 +99,7 @@ def init_db() -> None:
             service_id INTEGER DEFAULT 0,
             plan_id INTEGER DEFAULT 0,
             amount INTEGER DEFAULT 0,
+            volume_gb REAL DEFAULT 0,
             status TEXT DEFAULT 'pending',
             order_type TEXT DEFAULT '',
             description TEXT DEFAULT '',
@@ -108,6 +109,7 @@ def init_db() -> None:
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ao_agent ON agent_orders(agent_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ao_status ON agent_orders(status)")
+            _ensure_column(cur, "agent_orders", "volume_gb", "REAL DEFAULT 0")
 
             cur.execute("""
             CREATE TABLE IF NOT EXISTS agent_payments (
@@ -412,16 +414,16 @@ def get_ticket_messages(ticket_id: int) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def create_order(agent_id: int, customer_id: int, customer_name: str, amount: int, order_type: str, plan_id: int = 0, description: str = "") -> Dict[str, Any]:
+def create_order(agent_id: int, customer_id: int, customer_name: str, amount: int, order_type: str, plan_id: int = 0, description: str = "", volume_gb: float = 0) -> Dict[str, Any]:
     init_db()
     conn = _conn()
     try:
             cur = conn.cursor()
             now = _now()
             cur.execute(
-            "INSERT INTO agent_orders (agent_id, customer_id, customer_name, amount, status, order_type, plan_id, description, created_at, updated_at) "
-            "VALUES (?,?,?,?,'pending',?,?,?,?,?)",
-            (agent_id, customer_id, customer_name, amount, order_type, plan_id, description, now, now),
+            "INSERT INTO agent_orders (agent_id, customer_id, customer_name, amount, volume_gb, status, order_type, plan_id, description, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,'pending',?,?,?,?,?)",
+            (agent_id, customer_id, customer_name, amount, volume_gb, order_type, plan_id, description, now, now),
             )
             conn.commit()
             oid = cur.lastrowid
@@ -470,21 +472,21 @@ def get_order_stats(agent_id: int) -> Dict[str, Any]:
     try:
         cur = conn.cursor()
         cur.execute(
-            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {base_where}",
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {base_where}",
             params,
         )
         total_row = cur.fetchone()
 
         where_30 = base_where + " AND date(created_at) >= date('now', '-30 days')"
         cur.execute(
-            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_30}",
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_30}",
             params,
         )
         last30_row = cur.fetchone()
 
         where_month = base_where + " AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
         cur.execute(
-            f"SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_month}",
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(volume_gb), 0) AS gb, COALESCE(SUM(amount), 0) AS total FROM agent_orders WHERE {where_month}",
             params,
         )
         month_row = cur.fetchone()
@@ -493,10 +495,13 @@ def get_order_stats(agent_id: int) -> Dict[str, Any]:
 
     return {
         "total_count": int(total_row["c"] or 0),
+        "total_gb": float(total_row["gb"] or 0),
         "total_amount": int(total_row["total"] or 0),
         "last30_count": int(last30_row["c"] or 0),
+        "last30_gb": float(last30_row["gb"] or 0),
         "last30_amount": int(last30_row["total"] or 0),
         "month_count": int(month_row["c"] or 0),
+        "month_gb": float(month_row["gb"] or 0),
         "month_amount": int(month_row["total"] or 0),
     }
 

@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from AgentBot.constants import UD_STATE, STATE_SEARCH_ORDER
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import orders_menu_keyboard, back_keyboard, cancel_keyboard, orders_list_keyboard, order_search_results_keyboard
-from AgentBot.utils.helpers import _escape, _fmt_toman, _status_icon
+from AgentBot.utils.helpers import _escape, _fmt_toman, _fmt_gb, _status_icon
 from AgentBot.database import get_orders, get_order_stats, get_order_by_id, search_orders
 
 logger = logging.getLogger(__name__)
@@ -68,13 +68,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         text = (
             f"\U0001f539 \u0644\u06cc\u0633\u062a \u0633\u0641\u0627\u0631\u0634\u0627\u062a\n"
             f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u0633\u0641\u0627\u0631\u0634\u0627\u062a: {stats['total_count']}\n"
-            f"\U0001f538 \u0645\u062c\u0645\u0648\u0639 \u0645\u0628\u0644\u063a \u0633\u0641\u0627\u0631\u0634\u0627\u062a: {_fmt_toman(stats['total_amount'])} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\u2756 \u2b2c----------------------------------\u2b2c \u2756\n"
-            f"\U0001f538 \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {stats['last30_count']}\n"
-            f"\U0001f538 \u0645\u0628\u0644\u063a \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {_fmt_toman(stats['last30_amount'])} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\u2756 \u2b2c----------------------------------\u2b2c \u2756\n"
-            f"\U0001f538 \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {stats['month_count']}\n"
-            f"\U0001f538 \u0645\u0628\u0644\u063a \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {_fmt_toman(stats['month_amount'])} \u062a\u0648\u0645\u0627\u0646"
+            f"\U0001f538 \u0645\u062c\u0645\u0648\u0639 \u062d\u062c\u0645 \u0633\u0641\u0627\u0631\u0634\u0627\u062a(GB): {_fmt_gb(stats['total_gb'])}\n"
+            f"\U0001f538 \u0645\u062c\u0645\u0648\u0639 \u0627\u0631\u0632\u0634 \u0633\u0641\u0627\u0631\u0634\u0627\u062a: {_fmt_toman(stats['total_amount'])}\u062a\u0648\u0645\u0627\u0646\n"
+            f"\u2756 \u2b29----------------------------------\u2b29 \u2756\n"
+            f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {stats['last30_count']}\n"
+            f"\U0001f538 \u062d\u062c\u0645 \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647(GB): {_fmt_gb(stats['last30_gb'])}\n"
+            f"\U0001f538 \u0627\u0631\u0632\u0634 \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {_fmt_toman(stats['last30_amount'])}\u062a\u0648\u0645\u0627\u0646\n"
+            f"\u2756 \u2b29----------------------------------\u2b29 \u2756\n"
+            f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {stats['month_count']}\n"
+            f"\U0001f538 \u062d\u062c\u0645 \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647(GB): {_fmt_gb(stats['month_gb'])}\n"
+            f"\U0001f538 \u0627\u0631\u0632\u0634 \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {_fmt_toman(stats['month_amount'])}\u062a\u0648\u0645\u0627\u0646"
         )
         try:
             await query.edit_message_text(
