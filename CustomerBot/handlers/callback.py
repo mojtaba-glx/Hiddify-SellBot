@@ -1024,26 +1024,32 @@ async def _handle_trial(query, context, agent_id, user, data):
         await _back_to_main_menu(msg, "🔙 بازگشت")
 
 
-async def _notify_agent_new_trial(agent_id: int, user, service_name: str, gb: float, days: int, server_title: str) -> None:
+async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer_id: int, service_name: str, gb: float, days: int, server_title: str) -> None:
     """گزارش ساخت اکانت تست رایگان به ربات نماینده."""
     try:
         import os
-        from Shared.agent_db import get_agent_by_id
+        from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
+        from Shared.agent_db import get_agent_by_id, get_customer_by_id
         agent = get_agent_by_id(agent_id)
         agent_tg_id = int((agent or {}).get("telegram_id") or 0)
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()
         if not agent_tg_id or not token:
             return
         name = getattr(user, "full_name", "") or getattr(user, "username", "") or str(getattr(user, "id", ""))
+        btn_custom = str((get_customer_by_id(customer_id) or {}).get("full_name") or name or f"#{customer_id}").strip()
+        btn_label = f"\U0001f464 {btn_custom} | \U0001f511 {customer_id}"
         text = (
-            "\U0001f381 <b>\u0627\u06a9\u0627\u0646\u062a \u062a\u0633\u062a \u0631\u0627\u06cc\u06af\u0627\u0646 \u062c\u062f\u06cc\u062f</b>\n"
-            f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: <b>{name}</b>\n"
-            f"\U0001f4e6 \u0633\u0631\u0648\u06cc\u0633: {service_name}\n"
-            f"\U0001f4ca \u062d\u062c\u0645: {float(gb):g} \u06af\u06cc\u06af | \u23f0 \u0632\u0645\u0627\u0646: {int(days)} \u0631\u0648\u0632\n"
-            f"\U0001f5a5 \u0633\u0631\u0648\u0631: {server_title or '-'}"
+            "\U0001f4c4 <b>\u06af\u0632\u0627\u0631\u0634 \u0627\u06cc\u062c\u0627\u062f \u0627\u0634\u062a\u0631\u0627\u06a9 \u062a\u0633\u062a\u06cc</b>\n\n"
+            f"\U0001f464\u0627\u0634\u062a\u0631\u0627\u06a9: {service_name}\n"
+            f"\U0001f4f0\u0633\u0631\u0648\u0631: {server_title or '-'}\n"
+            f"\U0001f4ca\u062d\u062c\u0645: {float(gb):g} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a\n"
+            f"\u23f3\u0632\u0645\u0627\u0646: {int(days)} \u0631\u0648\u0632\n"
+            f"\U0001f511\u0634\u0646\u0627\u0633\u0647 \u0627\u0634\u062a\u0631\u0627\u06a9:{service_id}"
         )
-        from telegram import Bot
-        await Bot(token=token).send_message(chat_id=agent_tg_id, text=text, parse_mode="HTML")
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(btn_label, callback_data=f"agbot:set:users:detail:{customer_id}")]]
+        )
+        await Bot(token=token).send_message(chat_id=agent_tg_id, text=text, parse_mode="HTML", reply_markup=kb)
     except Exception:
         return
 
@@ -1151,6 +1157,8 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
     await _notify_agent_new_trial(
         agent_id,
         user,
+        svc.get("id"),
+        cust_id,
         service_name or f"\u062a\u0633\u062a \u0631\u0627\u06cc\u06af\u0627\u0646 {gb}GB",
         gb,
         days,
