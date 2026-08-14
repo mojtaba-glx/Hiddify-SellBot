@@ -87,6 +87,18 @@ from CustomerBot.services import (
 from Shared.qr_utils import make_qr_image
 
 
+def _agent_dyn_settings(agent_id: int, server_id: int = 0) -> dict:
+    """قیمت‌گذاری پویای خودِ نماینده را می‌خواند؛ اگر تنظیم نشده به سراسری برمی‌گردد."""
+    try:
+        s = get_setting(agent_id, "dynamic_plan_settings", {}) or {}
+        if isinstance(s, dict) and s:
+            return s
+    except Exception:
+        pass
+    from Shared.database import get_plan_dynamic_settings as _global_dyn
+    return _global_dyn(server_id)
+
+
 def _calc_dynamic_price(gb, months, dyn_settings) -> tuple[int, int]:
     settings = dyn_settings or {}
     gb_val = max(0, safe_int(gb, 0))
@@ -917,7 +929,7 @@ async def _handle_status(query, context, agent_id, user, data):
                 reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
         else:
-            dyn = get_plan_dynamic_settings(server_id)
+            dyn = _agent_dyn_settings(agent_id, server_id)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
             months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
             gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), safe_int(dyn.get("max_gb", 1000), 1000))
@@ -957,7 +969,7 @@ async def _handle_renew(query, context, agent_id, user, data):
                 reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
         else:
-            dyn = get_plan_dynamic_settings(server_id)
+            dyn = _agent_dyn_settings(agent_id, server_id)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
             months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
             gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), safe_int(dyn.get("max_gb", 1000), 1000))
@@ -974,7 +986,7 @@ async def _handle_renew(query, context, agent_id, user, data):
         # wizard تمدید پویا — تنظیم حجم/ماه
         server_id = int(parts[1]) if len(parts) > 1 else 0
         wiz_action = parts[2] if len(parts) > 2 else ""
-        dyn = get_plan_dynamic_settings(server_id)
+        dyn = _agent_dyn_settings(agent_id, server_id)
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
         months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
         step_gb = safe_int(dyn.get("step_gb", 1), 1)
@@ -1010,7 +1022,7 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not svc:
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
-        dyn = get_plan_dynamic_settings(server_id)
+        dyn = _agent_dyn_settings(agent_id, server_id)
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
         months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
         days = months * 30
@@ -1305,7 +1317,7 @@ async def _handle_buy(query, context, agent_id, user, data):
     if action == "wiz":
         server_id = int(parts[1]) if len(parts) > 1 else 0
         wiz_action = parts[2] if len(parts) > 2 else ""
-        dyn = get_plan_dynamic_settings(server_id)
+        dyn = _agent_dyn_settings(agent_id, server_id)
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
         months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
         step_gb = safe_int(dyn.get("step_gb", 1), 1)
@@ -1374,7 +1386,7 @@ async def _handle_buy(query, context, agent_id, user, data):
                 reply_markup=mixed_mode_keyboard(server_id),
             )
         else:
-            dyn = get_plan_dynamic_settings(server_id)
+            dyn = _agent_dyn_settings(agent_id, server_id)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
             months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
             step_gb = safe_int(dyn.get("step_gb", 1), 1)
@@ -1429,7 +1441,7 @@ async def _handle_buy(query, context, agent_id, user, data):
 
     elif data.startswith(CB_BUY_CONFIRM_DYN):
         server_id = int(parts[2]) if len(parts) > 2 else 0
-        dyn = get_plan_dynamic_settings(server_id) or {}
+        dyn = _agent_dyn_settings(agent_id, server_id) or {}
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)) or 0)
         months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)) or 0)
         gb = max(gb, int(safe_float(dyn.get("min_gb", 1), 1.0)))
@@ -1575,7 +1587,7 @@ async def _handle_buy(query, context, agent_id, user, data):
 
     elif data.startswith(CB_BUY_MIXED_DYN):
         server_id = int(parts[3]) if len(parts) > 3 else 0
-        dyn = get_plan_dynamic_settings(server_id)
+        dyn = _agent_dyn_settings(agent_id, server_id)
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
         months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
         step_gb = safe_int(dyn.get("step_gb", 1), 1)
