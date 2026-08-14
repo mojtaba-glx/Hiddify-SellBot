@@ -195,7 +195,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         title = _escape(str(ticket.get("title") or ticket.get("question", "")[:50] or "\u0628\u062f\u0648\u0646 \u0645\u0648\u0636\u0648\u0639"))
         name = _escape(ticket.get("full_name", "")) or f"\u06a9\u0627\u0631\u0628\u0631 #{ticket.get('telegram_id', '?')}"
 
-        # Build text summary (هماهنگ با ربات ادمین/کاربران — اسکرین‌شات به‌صورت لینک)
+        # Build text summary (دقیقاً مثل ربات ادمین — اسکرین‌شات به‌صورت لینک)
         text = (
             f"🧾 شناسه تیکت: {_escape(ticket_code)}\n"
             f"📅 تاریخ ایجاد: {_escape(str(ticket.get('created_at', ''))[:19])}\n"
@@ -203,26 +203,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"👤 کاربر: {name}\n"
             f"🔹 نام کاربری: {_escape(ticket.get('username', '') or '-')}\n"
             f"🔢 شناسه کاربر: {_escape(str(ticket.get('telegram_id', '') or '-'))}\n"
+            f"👨‍💻 ادمین: {_escape(ticket.get('admin_name', '') or 'تنظیم نشده')}\n"
             "❖⬩--------------------------------⬩❖\n"
         )
 
         shot_links = await _build_ticket_shot_links(context, ticket_code, msgs)
         if msgs:
             for idx, m in enumerate(msgs, start=1):
-                _agent_label = '\u0646\u0645\u0627\u06cc\u0646\u062f\u0647'
-                sender = "\U0001f464 \u0645\u0634\u062a\u0631\u06cc" if m.get("sender_type") == "user" else f"\U0001f916 {_escape(m.get('sender_name', _agent_label))}"
-                msg_text = _escape(m.get("message_text", ""))
-                photo_fid = m.get("photo_file_id", "")
-                ts = _escape(str(m.get("created_at", ""))[:16])
-                line = f"\n{sender} ({ts}):\n{msg_text}"
-                if photo_fid:
+                sender_type = str(m.get("sender_type") or "").strip().lower()
+                sender_name = str(m.get("sender_name") or "").strip() or ("کاربر" if sender_type == "user" else "نماینده")
+                msg_text = str(m.get("message_text") or "").strip()
+                when = str(m.get("created_at") or "-")
+                text += f"📅 تاریخ ایجاد: {_escape(when)} | #{idx}\n"
+                text += "◈ سوال:\n" if sender_type == "user" else "◈ پاسخ:\n"
+                text += f"{_escape(sender_name)}\n"
+                if msg_text:
+                    text += f"{_escape(msg_text)}\n"
+                if str(m.get("photo_file_id") or "").strip():
                     link = (shot_links or {}).get(idx) or ""
                     if link:
                         from html import escape as _he
-                        line += f'\n🖼 <a href="{_he(link, quote=True)}">اسکرین‌شات #{idx}</a>'
+                        text += f'🖼 <a href="{_he(link, quote=True)}">اسکرین‌شات #{idx}</a>\n'
                     else:
-                        line += f"\n🖼 اسکرین‌شات #{idx}"
-                text += line + "\n"
+                        text += f"🖼 اسکرین‌شات #{idx}\n"
+                text += "❖⬩------------------------------⬩❖\n"
         else:
             text += "(\u067e\u06cc\u0627\u0645\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f)"
 
