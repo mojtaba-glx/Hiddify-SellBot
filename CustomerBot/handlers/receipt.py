@@ -594,8 +594,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[UD_STATE] = STATE_TICKET_WAITING_TEXT
             await update.message.reply_text(
                 f"📋 موضوع: {title}\n\n"
-                f"📩 حالا متن پیام خود را ارسال کنید.\n"
-                f"💡 می‌توانید عکس هم ضمیمه کنید (عکس + کپشن):",
+                f"📩 حالا متن پیام خود را ارسال کنید:",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -619,8 +618,9 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             context.user_data[UD_STATE] = STATE_TICKET_WAITING_PHOTO
             await update.message.reply_text(
-                "🖼 لطفاً اگر اسکرین‌شات دارید ارسال کنید.\n"
-                "اگر اسکرین‌شات ندارید روی دکمه «رد کردن» بزنید.",
+                "🖼 لطفاً اگر اسکرین‌شات دارید ارسال کنید (عکس + کپشن).\n"
+                "اگر اسکرین‌شات ندارید روی دکمه «رد کردن» بزنید.\n\n"
+                "💡 می‌توانید عکس هم ضمیمه کنید (عکس + کپشن):",
                 reply_markup=ticket_skip_screenshot_keyboard("new"),
             )
             return
