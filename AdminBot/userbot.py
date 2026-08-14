@@ -4900,6 +4900,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     msg = update.message
     text = (msg.text or "").strip()
 
+    if context.user_data.get(PAYMENT_SEARCH_STATE):
+        await handle_payment_search_input(update, context)
+        return
+
+    if context.user_data.get(ORDERS_SEARCH_STATE_KEY):
+        await handle_orders_search_input(update, context)
+        return
+
     if context.user_data.get(SUB_TRACKING_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(SUB_TRACKING_STATE, None)
@@ -7778,6 +7786,32 @@ async def handle_payment_search_input(update: Update, context: ContextTypes.DEFA
         await send_payment_detail(pid, message.chat_id, context)
     else:
         await message.reply_text(f"❌ تراکنشی با شناسه {pid} یافت نشد.", reply_markup=admin_main_keyboard())
+
+
+async def handle_orders_search_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """جستجوی سفارش با ID"""
+    message = update.message
+    text = (message.text or "").strip()
+
+    if text in CANCEL_WORDS:
+        context.user_data.pop(ORDERS_SEARCH_STATE_KEY, None)
+        await message.reply_text("جستجو لغو شد.", reply_markup=admin_main_keyboard())
+        return
+
+    if not text.isdigit():
+        await message.reply_text("❌ لطفاً فقط شناسه سفارش (عدد) وارد کنید.")
+        return
+
+    oid = int(text)
+    order = userbot_db.get_order_by_id(oid)
+
+    context.user_data.pop(ORDERS_SEARCH_STATE_KEY, None)
+
+    if order:
+        await message.reply_text("✅ سفارش یافت شد.", reply_markup=admin_main_keyboard())
+        await send_order_detail(oid, message.chat_id, context)
+    else:
+        await message.reply_text(f"❌ سفارشی با شناسه {oid} یافت نشد.", reply_markup=admin_main_keyboard())
 
 
 # در فایل AdminBot/userbot.py
