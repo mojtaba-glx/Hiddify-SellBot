@@ -90,9 +90,34 @@ async def handle_ticket_shot_start(update, context, payload: str) -> bool:
     from AgentBot.keyboards import _ikb
     from Shared.tg_button_styles import inline_button as IButton
     kb = _ikb([[IButton("\U0001f519 \u0628\u0627\u0632\u06af\u0634\u062a \u0628\u0647 \u062a\u06cc\u06a9\u062a", callback_data=f"agbot:ticket:view:{code}")]])
+    fid = str(target["photo_file_id"] or "").strip()
+    sent = False
+    # ۱) مستقیم با file_id (فقط وقتی عکس متعلق به همین ربات باشد)
     try:
-        await update.message.reply_photo(photo=target["photo_file_id"], caption=caption, reply_markup=kb)
+        await update.message.reply_photo(photo=fid, caption=caption, reply_markup=kb)
+        sent = True
     except Exception:
+        sent = False
+    # ۲) درغیراین‌صورت فایل را از ربات مشتری (که عکس را آپلود کرده) دانلود و دوباره ارسال کن
+    if not sent:
+        try:
+            import io as _io
+            from Shared.agent_db import get_all_active_customer_bots
+            bot_rows = [b for b in get_all_active_customer_bots() if int(b.get("agent_id") or 0) == int(agent_id)]
+            token = (bot_rows[0].get("bot_token") if bot_rows else "") or ""
+            if not token:
+                raise RuntimeError("no customer bot token")
+            cust_bot = Bot(token=token)
+            f = await cust_bot.get_file(fid)
+            raw = await f.download_as_bytearray()
+            bio = _io.BytesIO(raw)
+            bio.name = f"ticket_{code}.jpg"
+            bio.seek(0)
+            await update.message.reply_photo(photo=bio, caption=caption, reply_markup=kb)
+            sent = True
+        except Exception:
+            sent = False
+    if not sent:
         try:
             await update.message.reply_text("❌ نمایش اسکرین‌شات ممکن نشد.", reply_markup=kb)
         except Exception:
