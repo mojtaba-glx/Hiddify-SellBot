@@ -663,18 +663,36 @@ async def _handle_status(query, context, agent_id, user, data):
     elif data.startswith(CB_STATUS_CONFIGS):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         ss = get_subs_settings(agent_id)
-        await msg.edit_text(
-            "🔗 لطفا نوع اتصال را انتخاب کنید:",
-            reply_markup=subscription_configs_keyboard(
-                svc_id,
-                show_direct_config=ss.get("show_direct_config", True),
-                show_sub_link=ss.get("show_sub_link", True),
-                show_auto_sub_link=ss.get("show_auto_sub_link", False),
-                show_sub_link_b64=ss.get("show_sub_link_b64", False),
-                show_multi_server=ss.get("show_multi_server", False),
-                show_multi_server_b64=ss.get("show_multi_server_b64", False),
-            ),
-        )
+        # مثل ربات کاربران: متن «📄اطلاعات اشتراک شما» بالای کیبورد باقی بماند
+        # و فقط کیبورد عوض شود (نه کل متن).
+        try:
+            await query.edit_message_reply_markup(
+                reply_markup=subscription_configs_keyboard(
+                    svc_id,
+                    show_direct_config=ss.get("show_direct_config", True),
+                    show_sub_link=ss.get("show_sub_link", True),
+                    show_auto_sub_link=ss.get("show_auto_sub_link", False),
+                    show_sub_link_b64=ss.get("show_sub_link_b64", False),
+                    show_multi_server=ss.get("show_multi_server", False),
+                    show_multi_server_b64=ss.get("show_multi_server_b64", False),
+                )
+            )
+        except Exception:
+            try:
+                await msg.edit_text(
+                    "🔗 لطفا نوع اتصال را انتخاب کنید:",
+                    reply_markup=subscription_configs_keyboard(
+                        svc_id,
+                        show_direct_config=ss.get("show_direct_config", True),
+                        show_sub_link=ss.get("show_sub_link", True),
+                        show_auto_sub_link=ss.get("show_auto_sub_link", False),
+                        show_sub_link_b64=ss.get("show_sub_link_b64", False),
+                        show_multi_server=ss.get("show_multi_server", False),
+                        show_multi_server_b64=ss.get("show_multi_server_b64", False),
+                    ),
+                )
+            except Exception:
+                pass
 
     elif data.startswith(CB_STATUS_DIRECT) or data.startswith(CB_STATUS_DIRECTCFG):
         # کانفیگ مستقیم: استخراج از لینک اشتراک همه نودها (در غیر این صورت API پنل)
