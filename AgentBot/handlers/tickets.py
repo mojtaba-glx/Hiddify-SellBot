@@ -1,7 +1,8 @@
 import logging
 
-from telegram import Bot, Update
+from telegram import Bot, Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from Shared.tg_button_styles import inline_button as IButton
 
 from AgentBot.constants import (
     TICKET_PENDING, TICKET_OPEN, TICKET_CLOSED,
@@ -392,10 +393,24 @@ async def _do_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, tic
             if notify_bot is None:
                 notify_bot = context.bot
             notify_text = f"\U0001f4ac \u067e\u0627\u0633\u062e \u062c\u062f\u06cc\u062f \u0628\u0631\u0627\u06cc \u062a\u06cc\u06a9\u062a #{ticket_code}:\n\n{reply_text}"
+            kb = InlineKeyboardMarkup([
+                [IButton("\U0001f441 \u0645\u0634\u0627\u0647\u062f\u0647 \u062a\u06cc\u06a9\u062a", callback_data=f"support:view:{ticket_code}:1")],
+                [IButton("\U0001f4ac \u067e\u0627\u0633\u062e", callback_data=f"support:reply:{ticket_code}")],
+            ])
             if photo_file_id:
-                await notify_bot.send_photo(chat_id=ticket["telegram_id"], photo=photo_file_id, caption=notify_text[:1024])
+                try:
+                    import io as _io
+                    tg_file = await context.bot.get_file(photo_file_id)
+                    bio = _io.BytesIO()
+                    await tg_file.download_to_memory(out=bio)
+                    bio.seek(0)
+                    bio.name = f"ticket_reply_{ticket_code}.jpg"
+                    await notify_bot.send_photo(chat_id=ticket["telegram_id"], photo=bio, caption=notify_text[:1024], reply_markup=kb)
+                except Exception as e:
+                    logger.warning("agent reply photo foreign-send failed code=%s: %s", ticket_code, e)
+                    await notify_bot.send_message(chat_id=ticket["telegram_id"], text=notify_text, reply_markup=kb)
             else:
-                await notify_bot.send_message(chat_id=ticket["telegram_id"], text=notify_text)
+                await notify_bot.send_message(chat_id=ticket["telegram_id"], text=notify_text, reply_markup=kb)
         except Exception as e:
             logger.warning(f"Failed to notify customer: {e}")
     context.user_data.pop(UD_STATE, None)
