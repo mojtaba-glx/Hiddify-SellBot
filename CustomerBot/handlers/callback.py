@@ -957,6 +957,8 @@ async def _handle_renew(query, context, agent_id, user, data):
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
         context.user_data["renew_target_service_id"] = int(svc_id)
+        context.user_data.pop(UD_BUY_GB, None)
+        context.user_data.pop(UD_BUY_MONTHS, None)
         server_id = svc.get("server_id", 0)
         mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
         if mode == "fixed":
@@ -1365,6 +1367,8 @@ async def _handle_buy(query, context, agent_id, user, data):
     elif data.startswith(CB_BUY_LOC):
         server_id = int(parts[2]) if len(parts) > 2 else 0
         mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
+        context.user_data.pop(UD_BUY_GB, None)
+        context.user_data.pop(UD_BUY_MONTHS, None)
 
         if mode == "fixed":
             plans = get_fixed_plans(agent_id)
@@ -1558,6 +1562,8 @@ async def _handle_buy(query, context, agent_id, user, data):
         await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
 
     elif data == CB_BUY_BACK_MAIN:
+        context.user_data.pop(UD_BUY_GB, None)
+        context.user_data.pop(UD_BUY_MONTHS, None)
         servers = get_main_servers()
         if servers:
             sc = int(br.get("server_columns", 1))
@@ -1568,6 +1574,8 @@ async def _handle_buy(query, context, agent_id, user, data):
             )
 
     elif data == CB_BUY_EXIT_MAIN:
+        context.user_data.pop(UD_BUY_GB, None)
+        context.user_data.pop(UD_BUY_MONTHS, None)
         await _back_to_main_menu(msg, "🔙 بازگشت به منوی اصلی")
 
     elif data.startswith(CB_BUY_MIXED_FIXED):
