@@ -1480,6 +1480,21 @@ async def _handle_buy(query, context, agent_id, user, data):
         gb = int(parts[3]) if len(parts) > 3 else 0
         days = int(parts[4]) if len(parts) > 4 else 0
         price = int(parts[5]) if len(parts) > 5 else 0
+        from AgentBot.database import get_cards as get_agent_cards
+        try:
+            agent_cards = get_agent_cards(agent_id) or []
+        except Exception:
+            agent_cards = []
+        active_cards = [c for c in agent_cards if int(c.get("is_active", 1)) != 0]
+        if not active_cards:
+            await msg.edit_text("❌ کارتی برای پرداخت وجود ندارد.", reply_markup=main_menu_keyboard())
+            return
+        chosen = random.choice(active_cards)
+        card = {
+            "number": str(chosen.get("card_number") or "").strip(),
+            "owner": str(chosen.get("owner_name") or "").strip(),
+            "bank": str(chosen.get("bank_name") or "").strip(),
+        }
         wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
         order = create_order(
             agent_id=agent_id,
@@ -1519,6 +1534,8 @@ async def _handle_buy(query, context, agent_id, user, data):
             card_text = (
                 f"💰 لطفا دقیقا مبلغ: `{rial_price}` ریال\n"
                 f"💰 معادل: `{pay_price}` تومان\n"
+                f"💳 به شماره کارت: `{card.get('number', '?')}`\n"
+                f"👤 به نام: {card.get('owner', '?')}\n"
                 f"❗️ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.\n\n"
                 f"⚡️ پس از تایید پرداخت، اشتراک شما به‌صورت خودکار ساخته و ارسال می‌شود."
             )
