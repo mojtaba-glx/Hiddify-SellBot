@@ -103,8 +103,8 @@ def _calc_dynamic_price(gb, months, dyn_settings) -> tuple[int, int]:
     settings = dyn_settings or {}
     gb_val = max(0, safe_int(gb, 0))
     months_val = max(0, safe_int(months, 0))
-    price_per_gb = max(0, safe_int(settings.get("price_per_gb"), 2000))
-    price_per_month = max(0, safe_int(settings.get("price_per_month"), 30000))
+    price_per_gb = max(0, safe_int(settings.get("price_per_gb"), 0))
+    price_per_month = max(0, safe_int(settings.get("price_per_month"), 0))
     base_price = (gb_val * price_per_gb) + (months_val * price_per_month)
 
     discount_step_gb = max(0, safe_int(settings.get("discount_step_gb"), 0))
@@ -1348,20 +1348,18 @@ async def _handle_buy(query, context, agent_id, user, data):
 
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = months
-        pgb = safe_int(dyn.get("price_per_gb", 0), 0)
-        pmo = safe_int(dyn.get("price_per_month", 0), 0)
-        total = int(gb * pgb) + (months * pmo)
+        total, off_pct = _calc_dynamic_price(gb, months, dyn)
 
         mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
         if mode == "mixed":
             await msg.edit_text(
                 "🎛 بسته دلخواه خود را بسازید:",
-                reply_markup=mixed_buy_keyboard(server_id, gb, months, total),
+                reply_markup=mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct),
             )
         else:
             await msg.edit_text(
                 "🎛 بسته دلخواه خود را بسازید:",
-                reply_markup=buy_wizard_keyboard(server_id, gb, months, total),
+                reply_markup=buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct),
             )
 
     elif data.startswith(CB_BUY_LOC):
@@ -1395,12 +1393,10 @@ async def _handle_buy(query, context, agent_id, user, data):
             months = max(months, 1)
             context.user_data[UD_BUY_GB] = gb
             context.user_data[UD_BUY_MONTHS] = months
-            pgb = safe_int(dyn.get("price_per_gb", 0), 0)
-            pmo = safe_int(dyn.get("price_per_month", 0), 0)
-            total = int(gb * pgb) + (months * pmo)
+            total, off_pct = _calc_dynamic_price(gb, months, dyn)
             await msg.edit_text(
                 "🎛 بسته دلخواه خود را بسازید:",
-                reply_markup=buy_wizard_keyboard(server_id, gb, months, total),
+                reply_markup=buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct),
             )
 
     elif data.startswith(CB_BUY_CAT):
@@ -1484,28 +1480,6 @@ async def _handle_buy(query, context, agent_id, user, data):
         gb = int(parts[3]) if len(parts) > 3 else 0
         days = int(parts[4]) if len(parts) > 4 else 0
         price = int(parts[5]) if len(parts) > 5 else 0
-        from Shared.database import get_random_card
-        from AgentBot.database import get_cards as get_agent_cards
-        try:
-            agent_cards = get_agent_cards(agent_id) or []
-        except Exception:
-            agent_cards = []
-        active_cards = [c for c in agent_cards if int(c.get("is_active", 1)) != 0]
-        if not active_cards:
-            active_cards = agent_cards
-        card = None
-        if active_cards:
-            chosen = random.choice(active_cards)
-            card = {
-                "number": str(chosen.get("card_number") or "").strip(),
-                "owner": str(chosen.get("owner_name") or "").strip(),
-                "bank": str(chosen.get("bank_name") or "").strip(),
-            }
-        if not card:
-            card = get_random_card()
-        if not card:
-            await msg.edit_text("❌ کارتی برای پرداخت وجود ندارد.", reply_markup=main_menu_keyboard())
-            return
         wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
         order = create_order(
             agent_id=agent_id,
@@ -1545,8 +1519,6 @@ async def _handle_buy(query, context, agent_id, user, data):
             card_text = (
                 f"💰 لطفا دقیقا مبلغ: `{rial_price}` ریال\n"
                 f"💰 معادل: `{pay_price}` تومان\n"
-                f"💳 به شماره کارت: `{card.get('number', '?')}`\n"
-                f"👤 به نام: {card.get('owner', '?')}\n"
                 f"❗️ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.\n\n"
                 f"⚡️ پس از تایید پرداخت، اشتراک شما به‌صورت خودکار ساخته و ارسال می‌شود."
             )
@@ -1596,10 +1568,10 @@ async def _handle_buy(query, context, agent_id, user, data):
         months = max(months, 1)
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = months
-        total = int(gb * safe_int(dyn.get("price_per_gb", 0), 0)) + (months * safe_int(dyn.get("price_per_month", 0), 0))
+        total, off_pct = _calc_dynamic_price(gb, months, dyn)
         await msg.edit_text(
             "🎛 بسته دلخواه خود را بسازید:",
-            reply_markup=mixed_buy_keyboard(server_id, gb, months, total),
+            reply_markup=mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct),
         )
 
 
