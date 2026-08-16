@@ -1485,9 +1485,20 @@ async def _handle_buy(query, context, agent_id, user, data):
             agent_cards = get_agent_cards(agent_id) or []
         except Exception:
             agent_cards = []
-        active_cards = [c for c in agent_cards if int(c.get("is_active", 1)) != 0]
+
+        def _card_is_active(c):
+            try:
+                return int(c.get("is_active", 1) or 1) != 0
+            except (TypeError, ValueError):
+                return True
+
+        active_cards = [c for c in agent_cards if _card_is_active(c)]
         if not active_cards:
-            await msg.edit_text("❌ کارتی برای پرداخت وجود ندارد.", reply_markup=main_menu_keyboard())
+            try:
+                await query.answer("❌ کارتی برای پرداخت ثبت نشده است", show_alert=True)
+            except Exception:
+                pass
+            await _back_to_main_menu(msg, "❌ کارتی برای پرداخت ثبت نشده است.")
             return
         chosen = random.choice(active_cards)
         card = {
