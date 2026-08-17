@@ -129,22 +129,70 @@ def _tx_detail_keyboard(pay: Dict[str, Any]):
     return _ikb(rows)
 
 
-async def _send_payment_detail(context: ContextTypes.DEFAULT_TYPE, chat_id: int, pay: Dict[str, Any], source_message=None) -> None:
+async def _receipt_file_via_customer_bot(agent_id: int, file_id: str):
+    """فایل عکس رسید را از طریق ربات مشتری دانلود می‌کند.
+
+    چون file_id با توکن ربات مشتری ساخته شده و ربات نماینده نمی‌تواند
+    مستقیم از آن استفاده کند، ابتدا دانلود و سپس به‌صورت بایت ارسال می‌شود.
+    """
+    from io import BytesIO
+    from telegram import Bot
+    from Shared.agent_db import get_active_customer_bot
+
+    token = ""
+    try:
+        bot_row = get_active_customer_bot(agent_id)
+        token = str((bot_row or {}).get("bot_token") or "").strip()
+    except Exception:
+        token = ""
+    if not token or not file_id:
+        return None
+    try:
+        customer_bot = Bot(token=token)
+        tg_file = await customer_bot.get_file(file_id)
+        bio = BytesIO()
+        await tg_file.download_to_memory(out=bio)
+        bio.seek(0)
+        bio.name = f"receipt_{str(file_id)[:12]}.jpg"
+        return bio
+    except Exception as e:
+        logger.warning("receipt download via customer bot failed agent=%s: %s", agent_id, e)
+        return None
+
+
+async def _send_receipt_photo_fallback(context: ContextTypes.DEFAULT_TYPE, agent_id: int, chat_id: int, receipt_fid: str, caption: str, kb, send_message_fallback) -> bool:
+    """ارسال عکس رسید؛ در صورت خطای file_id، دانلود+آپلود مجدد. True در صورت موفقیت."""
+    try:
+        await context.bot.send_photo(chat_id=chat_id, photo=receipt_fid, caption=caption, reply_markup=kb, parse_mode="HTML")
+        return True
+    except Exception as e:
+        logger.warning("send photo by file_id failed agent=%s: %s — trying reupload", agent_id, e)
+    bio = await _receipt_file_via_customer_bot(agent_id, receipt_fid)
+    if bio is None:
+        return False
+    try:
+        await context.bot.send_photo(chat_id=chat_id, photo=bio, caption=caption, reply_markup=kb, parse_mode="HTML")
+        return True
+    except Exception as e:
+        logger.warning("send reuploaded receipt photo failed agent=%s: %s", agent_id, e)
+    return False
+
+
+async def _send_payment_detail(context: ContextTypes.DEFAULT_TYPE, agent_id: int, chat_id: int, pay: Dict[str, Any], source_message=None) -> None:
     caption = _build_payment_detail_text(pay)
     kb = _tx_detail_keyboard(pay)
     receipt = _payment_receipt_fid(pay)
 
     if receipt:
-        try:
-            await context.bot.send_photo(chat_id=chat_id, photo=receipt, caption=caption, reply_markup=kb, parse_mode="HTML")
+        ok = await _send_receipt_photo_fallback(context, agent_id, chat_id, receipt, caption, kb, None)
+        if ok:
             if source_message is not None:
                 try:
                     await source_message.delete()
                 except Exception:
                     pass
             return
-        except Exception as e:
-            logger.warning("send tx detail photo failed pay=%s: %s", pay.get("id"), e)
+        logger.warning("tx detail photo unavailable pay=%s", pay.get("id"))
 
     if source_message is not None:
         await source_message.reply_text(caption, reply_markup=kb, parse_mode="HTML")
@@ -236,7 +284,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not pay:
             await query.answer("\u274c \u062a\u0631\u0627\u06a9\u0646\u0634 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", show_alert=True)
             return
-        await _send_payment_detail(context, query.message.chat_id, pay, source_message=query.message)
+        await _send_payment_detail(context, agent_id, query.message.chat_id, pay, source_message=query.message)
         return
 
     if p3 == "search":
@@ -277,17 +325,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not pay or int(pay.get("agent_id") or 0) != agent_id:
             await update.message.reply_text(f"❌ تراکنشی با شناسه {pid} یافت نشد.", reply_markup=tx_menu_keyboard(), parse_mode="HTML")
             return True
-        receipt = _payment_receipt_fid(pay)
-        kb = _tx_detail_keyboard(pay)
-        caption = _build_payment_detail_text(pay)
-        if receipt:
-            try:
-                await context.bot.send_photo(chat_id=update.message.chat_id, photo=receipt, caption=caption, reply_markup=kb, parse_mode="HTML")
-            except Exception as e:
-                logger.warning("send tx detail photo failed pay=%s: %s", pid, e)
-                await update.message.reply_text(caption, reply_markup=kb, parse_mode="HTML")
-        else:
-            await update.message.reply_text(caption, reply_markup=kb, parse_mode="HTML")
+        await _send_payment_detail(context, agent_id, update.message.chat_id, pay)
         return True
 
     payments = search_customer_payments(agent_id, text, limit=15)

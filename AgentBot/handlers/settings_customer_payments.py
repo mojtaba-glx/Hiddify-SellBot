@@ -222,17 +222,15 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         if receipt_fid:
-            await context.bot.send_photo(
-                chat_id=query.message.chat_id,
-                photo=receipt_fid,
-                caption=text,
-                reply_markup=_ikb(kb_rows),
-                parse_mode="HTML",
-            )
-            try:
-                await query.message.delete()
-            except Exception as del_err:
-                logger.debug("Failed to delete old message after sending photo: %s", del_err)
+            from AgentBot.handlers.settings_transactions import _send_receipt_photo_fallback
+            ok = await _send_receipt_photo_fallback(context, agent_id, query.message.chat_id, receipt_fid, text, _ikb(kb_rows), None)
+            if ok:
+                try:
+                    await query.message.delete()
+                except Exception as del_err:
+                    logger.debug("Failed to delete old message after sending photo: %s", del_err)
+            else:
+                await query.edit_message_text(text, reply_markup=_ikb(kb_rows), parse_mode="HTML")
         else:
             await query.edit_message_text(text, reply_markup=_ikb(kb_rows), parse_mode="HTML")
     except Exception as photo_err:
