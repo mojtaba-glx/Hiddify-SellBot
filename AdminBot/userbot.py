@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import math
 import os
 import logging
@@ -851,8 +852,7 @@ async def _send_payment_event_channel_report_if_enabled(pay: Dict[str, Any]) -> 
 
 def _build_payment_action_keyboard(payment_id: int, user_btn_title: str, uid: int, status: str = "") -> InlineKeyboardMarkup:
     rows = []
-    if (status or "").strip().lower() != "approved":
-        rows.append([InlineKeyboardButton("✏️ تغییر وضعیت تراکنش", callback_data=f"userbot:pay:chg:{payment_id}")])
+    rows.append([InlineKeyboardButton("✏️ تغییر وضعیت تراکنش", callback_data=f"userbot:pay:chg:{payment_id}")])
     rows.append([InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{uid}")])
     return InlineKeyboardMarkup(rows)
 
@@ -875,6 +875,164 @@ def _build_payment_change_options_keyboard(payment_id: int, current_status: str)
         rows.append([InlineKeyboardButton("⏳ در انتظار", callback_data=f"userbot:pay:set:{payment_id}:pending")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:pay:detail:{payment_id}")])
     return InlineKeyboardMarkup(rows)
+
+
+def _decode_renew_snapshot(raw: str) -> Dict[str, Any]:
+    try:
+        decoded = base64.b64decode((raw or "").strip(), validate=False)
+        data = json.loads(decoded.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+async def _notify_user_payment_status_change(pay: Dict[str, Any], new_status: str) -> None:
+    """اطلاع‌رسانی تغییر وضعیت تراکنش به کاربر داخل ربات کاربران."""
+    try:
+        tg_id = pay.get("telegram_id")
+        if not (tg_id and USER_BOT_TOKEN):
+            return
+        user_bot = Bot(token=USER_BOT_TOKEN)
+        tx_code = str(pay.get("tx_code") or pay.get("id") or "-")
+        if new_status == "rejected":
+            text = (
+                "❌ پرداخت شما رد شد.\n"
+                "در صورت نیاز با پشتیبانی تماس بگیرید.\n\n"
+                f"🎁 شناسه تراکنش: {tx_code}"
+            )
+        elif new_status == "pending":
+            text = (
+                "⏳ وضعیت پرداخت شما به حالت «در انتظار» برگشت و در حال بررسی مجدد است.\n\n"
+                f"🎁 شناسه تراکنش: {tx_code}"
+            )
+        else:
+            return
+        await user_bot.send_message(chat_id=int(tg_id), text=text)
+    except Exception as e:
+        logger.warning("Failed to notify user about payment %s status change: %s", pay.get("id"), e)
+
+
+async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List[str]]:
+    """
+    بازگشت اثر تراکنش «خرید مستقیم» تاییدشده قبل از تغییر وضعیت:
+    - تمدید: برگرداندن حجم/زمان به حالت قبل از تمدید (اسنپ‌شات)
+    - خرید جدید: حذف اشتراک از سرور اصلی + نودها + دیتابیس
+    خروجی: (ok, message, failed_servers)
+    """
+    meta = _parse_receipt_meta(str(pay.get("receipt_image") or ""))
+    if str(meta.get("pay_flow") or "").strip().lower() != "direct_buy":
+        return True, "", []
+
+    from UserBot import delivery as delivery_ops
+
+    pid = int(pay.get("id") or 0)
+    delivered_service_id = int(float(str(meta.get("delivered_service_id") or 0) or 0))
+    renew_service_id = int(float(str(meta.get("renew_service_id") or 0) or 0))
+    snapshot = _decode_renew_snapshot(str(meta.get("renew_snapshot") or ""))
+    failed: List[str] = []
+
+    if renew_service_id > 0:
+        if not snapshot:
+            # اشتراک تمدیدی بدون اسنپ‌شات قابل حذف نیست؛ طبق قانون فقط وضعیت بازگشت می‌خورد.
+            userbot_db._patch_payment_receipt_meta(pid, {"direct_done": "reverted"})
+            return True, "⚠️ اشتراک تمدیدی بود؛ اطلاعات قبل از تمدید ثبت نشده و اشتراک حذف نشد.", failed
+        service = userbot_db.get_service_by_id(renew_service_id)
+        if not service:
+            userbot_db._patch_payment_receipt_meta(pid, {"direct_done": "reverted", "renew_snapshot": None})
+            return True, "", []
+        usage_limit = float(snapshot.get("usage_limit") or 0.0)
+        usage_current = float(snapshot.get("usage_current") or 0.0)
+        days_left = int(snapshot.get("days_left") or 0)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        payload = {
+            "usage_limit_GB": usage_limit,
+            "package_days": days_left,
+            "start_date": now.strftime("%Y-%m-%d"),
+            "current_usage_GB": usage_current,
+            "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "is_active": True,
+        }
+        changed, failed = await delivery_ops.patch_service_on_panels(service, payload)
+        if changed == 0:
+            return False, "بازگشت تمدید روی هیچ سروری انجام نشد.", failed
+        userbot_db.update_service_runtime(
+            renew_service_id,
+            usage_current=usage_current,
+            usage_limit=usage_limit,
+            days_left=days_left,
+        )
+        userbot_db._patch_payment_receipt_meta(pid, {"direct_done": "reverted"})
+        return True, "🔁 تمدید به حالت قبل بازگشت.", failed
+
+    service = userbot_db.get_service_by_id(delivered_service_id) if delivered_service_id > 0 else None
+    if not service:
+        userbot_db._patch_payment_receipt_meta(
+            pid,
+            {"direct_done": "reverted", "delivered_service_id": None},
+        )
+        if delivered_service_id <= 0:
+            return True, "⚠️ رکورد سرویس متصل به این تراکنش ثبت نشده بود؛ فقط وضعیت تراکنش تغییر کرد.", failed
+        return True, "", failed
+
+    deleted, failed = await delivery_ops.delete_service_from_panels(service)
+    if deleted == 0:
+        return False, "حذف اشتراک روی هیچ سروری انجام نشد.", failed
+
+    userbot_db.delete_service(delivered_service_id)
+    try:
+        from Shared import agent_db as _agn
+        uuid = _extract_service_uuid(service)
+        if uuid:
+            _agn.soft_delete_service_by_uuid(uuid, int(service.get("server_id") or 0) or None)
+    except Exception:
+        pass
+    userbot_db._patch_payment_receipt_meta(
+        pid,
+        {"direct_done": "reverted", "delivered_service_id": None},
+    )
+    return True, "🗑 اشتراک تحویل‌شده حذف شد.", failed
+
+
+async def _notify_user_about_redelivery(pay: Dict[str, Any]) -> None:
+    """اطلاع‌رسانی به کاربر درباره تایید مجدد تراکنش ردشده."""
+    try:
+        tg_id = pay.get("telegram_id")
+        if not (tg_id and USER_BOT_TOKEN):
+            return
+        user_bot = Bot(token=USER_BOT_TOKEN)
+        tx_code = str(pay.get("tx_code") or pay.get("id") or "-")
+        await user_bot.send_message(
+            chat_id=int(tg_id),
+            text=(
+                "✅ پرداخت شما دوباره بررسی و تایید شد.\n"
+                "اشتراک شما به‌زودی داخل ربات تحویل داده می‌شود.\n\n"
+                f"🎁 شناسه تراکنش: {tx_code}"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Failed to notify user about re-approval of payment %s: %s", pay.get("id"), e)
+
+
+def _reset_direct_delivery_meta(payment_id: int) -> None:
+    """
+    ریست وضعیت تحویل خرید مستقیم تا بعد از تایید مجدد تراکنش ردشده،
+    حلقه تحویل در ربات کاربران، اشتراک را از نو بسازد و تحویل دهد.
+    """
+    try:
+        userbot_db._patch_payment_receipt_meta(
+            int(payment_id),
+            {
+                "direct_done": None,
+                "direct_done_at": None,
+                "direct_error": None,
+                "direct_error_at": None,
+                "direct_attempts": None,
+                "delivered_service_id": None,
+                "redelivered_at": None,
+            },
+        )
+    except Exception as e:
+        logger.warning("Failed to reset direct delivery meta for payment %s: %s", payment_id, e)
 
 
 def _relative_last_online(last_online_raw: Optional[str]) -> str:
@@ -8174,9 +8332,6 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             if not pay:
                 await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
                 return
-            if str(pay.get("status") or "").strip().lower() == "approved":
-                await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
-                return
             text = _build_payment_detail_text(pay) + "\n\n⚠️ آیا از تغییر وضعیت تراکنش، اطمینان دارید؟"
             kb = _build_payment_change_confirm_keyboard(pid)
             receipt_raw = pay.get('receipt_image') or ""
@@ -8217,9 +8372,6 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 if not pay:
                     await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
                     return
-                if str(pay.get("status") or "").strip().lower() == "approved":
-                    await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
-                    return
                 text = _build_payment_detail_text(pay) + "\n\nوضعیت جدید را انتخاب کنید:"
                 kb = _build_payment_change_options_keyboard(pid, str(pay.get("status") or "pending"))
                 if msg and getattr(msg, "photo", None):
@@ -8242,6 +8394,12 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             return
         pid = int(parts[3])
         new_status = parts[4]
+        prev_pay = userbot_db.get_payment_by_id(pid)
+        if not prev_pay:
+            await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+            return
+        prev_status = str(prev_pay.get("status") or "pending").strip().lower()
+
         ok, msg_text, _ = userbot_db.change_payment_status_with_wallet(pid, new_status)
         if not ok:
             await query.answer(msg_text, show_alert=True)
@@ -8256,6 +8414,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 pass
             pay = userbot_db.get_payment_by_id(pid)
             if pay:
+                if prev_status == "rejected":
+                    _reset_direct_delivery_meta(pid)
+                    await _notify_user_about_redelivery(pay)
                 uid = int(pay.get("user_id") or 0)
                 user_btn_title = (pay.get("full_name") or pay.get("username") or str(pay.get("telegram_id") or uid)).strip()
                 kb = None
@@ -8263,14 +8424,41 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                     kb = InlineKeyboardMarkup([
                         [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{uid}")]
                     ])
+                report_text = _build_payment_approved_report_text(pay)
+                if prev_status == "rejected":
+                    report_text += "\n\n🔁 تراکنش قبلا رد شده بود؛ اشتراک از نو ساخته و داخل ربات کاربران تحویل داده می‌شود."
                 await context.bot.send_message(
                     chat_id=cid,
-                    text=_build_payment_approved_report_text(pay),
+                    text=report_text,
                     reply_markup=kb,
                 )
                 await _send_auto_gift_message_if_needed(pay)
                 await _send_payment_event_channel_report_if_enabled(pay)
             return
+
+        if prev_status == "approved":
+            await _notify_user_payment_status_change(prev_pay, new_status)
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            ok_rev, rev_msg, failed = await _revert_approved_payment(userbot_db.get_payment_by_id(pid) or prev_pay)
+            if not ok_rev:
+                userbot_db.change_payment_status_with_wallet(pid, "approved")
+                await context.bot.send_message(
+                    chat_id=cid,
+                    text="❌ بازگشت تراکنش انجام نشد؛ وضعیت دوباره «تایید شده» شد.\n" + (rev_msg or ""),
+                )
+                return
+            text = _build_payment_detail_text(userbot_db.get_payment_by_id(pid) or prev_pay)
+            lines = [text]
+            if rev_msg:
+                lines.append(f"\n{rev_msg}")
+            if failed:
+                lines.append("⚠️ سرورهای دسترسی‌ناپذیر: " + "، ".join(dict.fromkeys(failed)))
+            await context.bot.send_message(chat_id=cid, text="\n".join(lines))
+            return
+
         await send_payment_detail(
             pid,
             cid,

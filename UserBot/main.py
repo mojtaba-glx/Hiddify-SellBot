@@ -8,6 +8,7 @@ import base64
 import time
 import hashlib
 import re
+import json
 import asyncio
 import socket
 import fcntl
@@ -4445,6 +4446,7 @@ async def _process_approved_direct_buy_payments(application) -> None:
                 "days": days,
                 "renew_service_id": renew_service_id,
             }
+            delivery_info: dict = {}
             ok = await _process_wallet_purchase(
                 context=fake_ctx,
                 user_id=tg_id,
@@ -4454,16 +4456,24 @@ async def _process_approved_direct_buy_payments(application) -> None:
                 service_name=service_name,
                 skip_wallet_charge=True,
                 tx_code_override=str(row.get("tx_code") or "").strip(),
+                delivery_info_out=delivery_info,
             )
             if ok:
-                _update_payment_receipt_meta(
-                    payment_id,
-                    {
-                        "direct_done": "1",
-                        "direct_done_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-                        "service_name": service_name,
-                    },
-                )
+                delivered_patch = {
+                    "direct_done": "1",
+                    "direct_done_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                    "service_name": service_name,
+                    "delivered_service_id": int(delivery_info.get("delivered_service_id") or 0),
+                }
+                renew_snapshot = delivery_info.get("renew_snapshot")
+                if isinstance(renew_snapshot, dict) and renew_snapshot:
+                    try:
+                        delivered_patch["renew_snapshot"] = base64.b64encode(
+                            json.dumps(renew_snapshot, ensure_ascii=False).encode("utf-8")
+                        ).decode("ascii")
+                    except Exception:
+                        pass
+                _update_payment_receipt_meta(payment_id, delivered_patch)
             else:
                 meta_after = _parse_receipt_meta(str(row.get("receipt_image") or ""))
                 attempts = _parse_direct_retry_count(meta_after) + 1
@@ -4789,6 +4799,7 @@ async def _process_wallet_purchase(
     service_name: str,
     skip_wallet_charge: bool = False,
     tx_code_override: str = "",
+    delivery_info_out: Optional[dict] = None,
 ) -> bool:
     internal_user_id = pending_wallet.get("internal_user_id")
     amount = int(pending_wallet.get("amount") or 0)
@@ -4858,6 +4869,14 @@ async def _process_wallet_purchase(
             )
             return False
         try:
+            renew_snapshot = {
+                "usage_current": _to_float(renew_service.get("usage_current"), 0.0),
+                "usage_limit": _to_float(renew_service.get("usage_limit"), 0.0),
+                "days_left": int(renew_service.get("days_left") or 0),
+                "name": str(renew_service.get("name") or "").strip(),
+            }
+            if isinstance(delivery_info_out, dict):
+                delivery_info_out["renew_snapshot"] = renew_snapshot
             usage_limit, days_left, last_online, renew_failed_servers = (
                 await _apply_service_renewal_on_targets(
                     renew_service,
@@ -5075,6 +5094,9 @@ async def _process_wallet_purchase(
                     node_item.get("server_id"),
                     e,
                 )
+
+    if isinstance(delivery_info_out, dict):
+        delivery_info_out["delivered_service_id"] = int(service_db_id or 0)
 
     # نودهای down هنگام ساخت: گزارش به ادمین تا بعداً sync شوند.
     created_server_ids = {int(int(n.get("server_id") or 0)) for n in (created_nodes or [])}
