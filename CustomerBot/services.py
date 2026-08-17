@@ -366,7 +366,7 @@ async def refresh_service_status(service_id: int) -> Dict[str, Any]:
             if not exists:
                 agent_db.update_service(service_id, {"is_active": 0, "days_left": 0})
                 agent_db.mark_service_missing(service_id)
-                agent_db.cleanup_stale_agent_services(14)
+                agent_db.cleanup_stale_agent_services(7)
                 logger.info("disabled stale customer service svc=%s uuid=%s", service_id, panel_uuid)
                 return {"ok": False, "error": "panel_user_not_found", "disabled": True}
         except Exception as list_error:
@@ -386,6 +386,11 @@ def _to_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _is_user_missing_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return ("http 404" in text) or ("not found" in text) or (" پیدا نشد" in text)
 
 
 def _to_int(value, default: int = 0) -> int:
@@ -897,6 +902,7 @@ async def sync_service_status_from_panels(service_id: int) -> Dict[str, Any]:
     max_limit = 0.0
     min_days_left: Optional[int] = None
     found_any = False
+    missing_any = False
     for srv, uuid, marzban_un in targets:
         try:
             user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
@@ -910,7 +916,22 @@ async def sync_service_status_from_panels(service_id: int) -> Dict[str, Any]:
             if derived_days is not None:
                 min_days_left = derived_days if min_days_left is None else min(min_days_left, derived_days)
         except Exception as e:
+            if _is_user_missing_error(e):
+                missing_any = True
             logger.warning("sync svc=%s node=%s failed: %s", service_id, uuid[:8], e)
+
+    if found_any:
+        try:
+            agent_db.mark_service_seen(service_id)
+        except Exception:
+            pass
+    elif missing_any:
+        try:
+            agent_db.mark_service_missing(service_id)
+            agent_db.cleanup_stale_agent_services(7)
+        except Exception:
+            pass
+        return {"ok": False, "error": "panel_user_not_found"}
 
     if not found_any:
         return {"ok": False, "error": "no_reachable_panel"}

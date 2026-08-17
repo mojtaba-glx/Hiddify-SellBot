@@ -1037,6 +1037,12 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not ok:
             await msg.reply_text("❌ تمدید اشتراک انجام نشد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
             return
+        try:
+            updated_svc = get_service_by_id(service_id) or svc
+            renew_price, _ = _calc_dynamic_price(gb, months, dyn)
+            await _send_subscription_report_to_agent(agent_id, user.id, updated_svc, "renew", int(renew_price or 0))
+        except Exception:
+            pass
         await _show_subscription_status(msg, agent_id, service_id)
 
     elif data.startswith("renew:plan:"):
@@ -1063,6 +1069,11 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not ok:
             await msg.reply_text("❌ تمدید اشتراک انجام نشد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
             return
+        try:
+            updated_svc = get_service_by_id(service_id) or svc
+            await _send_subscription_report_to_agent(agent_id, user.id, updated_svc, "renew", int(plan.get("price") or 0))
+        except Exception:
+            pass
         await _show_subscription_status(msg, agent_id, service_id)
 
     elif data.startswith(CB_RENEW_BACK):
@@ -1134,6 +1145,24 @@ async def _handle_trial(query, context, agent_id, user, data):
 
     elif data == CB_TRIAL_BACK:
         await _back_to_main_menu(msg, "🔙 بازگشت")
+
+
+async def _send_subscription_report_to_agent(agent_id: int, user_tg_id: int, svc, action: str, amount: int) -> None:
+    """ارسال گزارش ایجاد/تمدید اشتراک به ربات نماینده."""
+    try:
+        import os
+        from telegram import Bot
+        from Shared.subscription_reports import send_subscription_report
+        from Shared.agent_db import get_agent_by_id
+        agent = get_agent_by_id(agent_id)
+        agent_tg_id = int((agent or {}).get("telegram_id") or 0)
+        token = os.getenv("AGENT_BOT_TOKEN", "").strip()
+        if not agent_tg_id or not token:
+            return
+        bot = Bot(token=token)
+        await send_subscription_report(bot, agent_tg_id, agent_id, user_tg_id, svc, action, amount)
+    except Exception:
+        return
 
 
 async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer_id: int, service_name: str, gb: float, days: int, server_title: str) -> None:

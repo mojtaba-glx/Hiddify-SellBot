@@ -342,14 +342,20 @@ def _panel_days_left(u: dict) -> Optional[int]:
     return None
 
 
+def _is_user_missing_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return ("http 404" in text) or ("not found" in text) or (" پیدا نشد" in text)
+
+
 async def _panel_user_status(svc) -> Optional[str]:
     """بررسی وجود سرویس روی سرور و برگرداندن وضعیت: online / offline / expired.
-    اگر روی سرور پیدا نشود → None (نمایش داده نمی‌شود)."""
+    اگر روی سرور پیدا نشود → None (نمایش داده نمی‌شود) و در probe ثبت می‌شود."""
     try:
         sid = int(svc.get("server_id") or 0)
     except (TypeError, ValueError):
         sid = 0
     uuid = str(svc.get("panel_user_uuid") or "").strip()
+    service_id = int(svc.get("id") or 0)
     if sid <= 0 or not uuid:
         return None
     server = shared_db.get_server_by_id(sid)
@@ -358,10 +364,25 @@ async def _panel_user_status(svc) -> Optional[str]:
     from Shared import hiddify_api
     try:
         u = await hiddify_api.get_user_by_uuid(server, uuid)
-    except Exception:
+    except Exception as e:
+        if service_id and _is_user_missing_error(e):
+            try:
+                agent_db.mark_service_missing(service_id)
+            except Exception:
+                pass
         return None
     if not isinstance(u, dict) or not u:
+        if service_id:
+            try:
+                agent_db.mark_service_missing(service_id)
+            except Exception:
+                pass
         return None
+    if service_id:
+        try:
+            agent_db.mark_service_seen(service_id)
+        except Exception:
+            pass
     # منقضی / غیرفعال
     try:
         is_active = u.get("is_active", True)
@@ -981,9 +1002,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data.pop("rewiz_gb", None)
             context.user_data.pop("rewiz_months", None)
             context.user_data.pop("rewiz_wholesale", None)
+            renew_amount = int(context.user_data.get("rewiz_sale") or wholesale) if context.user_data.get("rewiz_sale") else wholesale
             context.user_data.pop("rewiz_sale", None)
             context.user_data.pop("rewiz_off", None)
             context.user_data.pop(UD_SELECTED_SERVICE, None)
+            try:
+                from Shared.subscription_reports import send_subscription_report
+                renew_user_tg = 0
+                renew_customer_id = int(updated.get("customer_id") or 0)
+                if renew_customer_id:
+                    renew_customer = agent_db.get_customer_by_id(renew_customer_id)
+                    renew_user_tg = int((renew_customer or {}).get("telegram_id") or 0)
+                if renew_user_tg:
+                    await send_subscription_report(
+                        context.bot,
+                        query.message.chat_id,
+                        agent_id,
+                        renew_user_tg,
+                        updated,
+                        "renew",
+                        renew_amount,
+                    )
+            except Exception as report_err:
+                logger.warning("Failed to send renew subscription report svc=%s: %s", svc_id, report_err)
             try:
                 await query.edit_message_text(
                     f"✅ <b>اشتراک با موفقیت تمدید شد!</b>\n\n"

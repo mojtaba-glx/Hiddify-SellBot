@@ -1344,8 +1344,8 @@ def mark_service_missing(service_id: int) -> Dict[str, Any]:
         conn.close()
 
 
-def cleanup_stale_agent_services(days: int = 14) -> int:
-    """حذف خودکار سرویس‌های طولانی‌مدت ناموجود در پنل پس از 14 روز."""
+def cleanup_stale_agent_services(days: int = 7) -> int:
+    """حذف خودکار سرویس‌های طولانی‌مدت ناموجود در پنل پس از 7 روز."""
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
@@ -1372,12 +1372,22 @@ def cleanup_stale_agent_services(days: int = 14) -> int:
 
 
 def get_services_by_customer(customer_id: int) -> List[Dict[str, Any]]:
-    """لیست تمام سرویس‌های یک مشتری."""
-    cleanup_stale_agent_services(14)
+    """لیست تمام سرویس‌های یک مشتری (فقط سرویس‌هایی که روی پنل هنوز وجود دارند)."""
+    cleanup_stale_agent_services(7)
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM agent_services WHERE customer_id = ? AND (deleted_at IS NULL OR deleted_at = '') ORDER BY id DESC", (customer_id,))
+    cur.execute(
+        """
+        SELECT s.* FROM agent_services s
+        LEFT JOIN agent_service_probe p ON p.service_id = s.id
+        WHERE s.customer_id = ?
+          AND (s.deleted_at IS NULL OR s.deleted_at = '')
+          AND COALESCE(p.missing_streak, 0) = 0
+        ORDER BY s.id DESC
+        """,
+        (customer_id,),
+    )
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -1583,6 +1593,7 @@ def delete_service(service_id: int) -> bool:
         conn.close()
         return False
     cur.execute("DELETE FROM agent_service_nodes WHERE service_id = ?", (service_id,))
+    cur.execute("DELETE FROM agent_service_probe WHERE service_id = ?", (service_id,))
     cur.execute("DELETE FROM agent_services WHERE id = ?", (service_id,))
     conn.commit()
     conn.close()

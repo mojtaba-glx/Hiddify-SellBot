@@ -297,7 +297,21 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             await query.answer("سرویس ساخته شد اما ثبت وضعیت پرداخت خطا داد. لاگ را بررسی کنید.", show_alert=True)
             return
         if int(order.get("order_id") or 0):
-            update_order_status(agent_id, int(order.get("order_id")), "approved")
+            update_order_status(agent_id, int(order.get("order_id") or 0), "approved")
+        if svc:
+            try:
+                from Shared.subscription_reports import send_subscription_report
+                await send_subscription_report(
+                    context.bot,
+                    query.message.chat_id,
+                    agent_id,
+                    user_tg_id,
+                    svc,
+                    "create",
+                    int(pay.get("amount") or order.get("price") or 0),
+                )
+            except Exception as report_err:
+                logger.warning("Failed to send create subscription report for payment %s: %s", pay_id, report_err)
     else:
         # No order info - just mark approved
         ok = update_customer_payment_status(agent_id, pay_id, "approved")
@@ -408,7 +422,7 @@ async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_T
     from AgentBot.handlers.settings_users import _build_profile_text
     from AgentBot.keyboards import users_profile_keyboard
     text = _build_profile_text(agent_id, customer)
-    kb = users_profile_keyboard(int(customer.get("id") or 0), user_tg_id, back_callback="agbot:custpay:menu")
+    kb = users_profile_keyboard(int(customer.get("id") or 0), user_tg_id, back_callback="agbot:set:users")
     try:
         await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception as edit_err:
@@ -420,7 +434,7 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
     import uuid
 
     from AgentBot.services.subscription_service import _get_cluster_servers
-    from Shared.agent_db import upsert_customer, create_service, add_service_node, get_customer_by_telegram_id
+    from Shared.agent_db import upsert_customer, create_service, add_service_node, get_customer_by_telegram_id, make_service_note
     from Shared.database import get_server_by_id
 
     # Get or create customer
@@ -453,12 +467,14 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         panel_name = f"vpn-{order_id_num:07d}"
     else:
         panel_name = f"vpn-{user_tg_id}-{int(time.time())}"
+    note = make_service_note(agent_id)
     payload = {
         "name": panel_name,
         "usage_limit_GB": volume_gb,
         "package_days": days,
         "uuid": new_uuid,
         "is_active": True,
+        "comment": note,
     }
 
     targets = _get_cluster_servers(server_id)
@@ -514,6 +530,7 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         days=days,
         wholesale_price=wholesale_price,
         sale_price=price,
+        note=note,
     )
     if svc:
         for item in created_nodes:
