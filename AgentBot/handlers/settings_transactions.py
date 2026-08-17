@@ -43,17 +43,43 @@ def _payment_method_title(pay: Dict[str, Any]) -> str:
     return _METHOD_TITLES.get(method, method or "-")
 
 
-def _parse_receipt_card_last4(pay: Dict[str, Any]) -> str:
-    raw = str(pay.get("receipt_image") or "").strip()
+def _parse_receipt_meta(raw: str) -> Dict[str, Any]:
+    """پارس receipt_image: file_id ساده | JSON خالص | \"{json}|key:val|...\"."""
+    raw = (raw or "").strip()
     if not raw:
-        return ""
+        return {}
+    if "|" not in raw and ":" not in raw:
+        return {"file_id": raw}
+    if "{" in raw and "|" in raw:
+        json_part, _, rest = raw.partition("|")
+        meta: Dict[str, Any] = {}
+        try:
+            parsed = json.loads(json_part)
+            if isinstance(parsed, dict):
+                meta.update(parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        for seg in rest.split("|"):
+            seg = seg.strip()
+            if ":" not in seg:
+                continue
+            k, _, v = seg.partition(":")
+            k, v = k.strip(), v.strip()
+            if k and v:
+                meta[k] = v
+        return meta
     try:
-        meta = json.loads(raw)
-        if isinstance(meta, dict):
-            return str(meta.get("card_last4") or "").strip()
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
     except (json.JSONDecodeError, TypeError):
         pass
-    return ""
+    return {}
+
+
+def _parse_receipt_card_last4(pay: Dict[str, Any]) -> str:
+    meta = _parse_receipt_meta(str(pay.get("receipt_image") or ""))
+    return str(meta.get("card_last4") or "").strip()
 
 
 def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
@@ -79,17 +105,9 @@ def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
 
 
 def _payment_receipt_fid(pay: Dict[str, Any]) -> str:
-    raw = str(pay.get("receipt_image") or "").strip()
-    if not raw:
-        return ""
-    if ":" not in raw and "|" not in raw:
-        return raw
-    try:
-        meta = json.loads(raw)
-        if isinstance(meta, dict) and str(meta.get("file_id") or "").strip():
-            return str(meta["file_id"]).strip()
-    except (json.JSONDecodeError, TypeError):
-        pass
+    meta = _parse_receipt_meta(str(pay.get("receipt_image") or ""))
+    if meta.get("file_id"):
+        return str(meta["file_id"]).strip()
     return ""
 
 
