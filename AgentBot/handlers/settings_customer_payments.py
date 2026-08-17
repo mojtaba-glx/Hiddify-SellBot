@@ -394,25 +394,32 @@ async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
 
 async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int) -> None:
     query = update.callback_query
-    cust = get_customer_user(agent_id, user_tg_id)
-    if not cust:
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    customer = agent_db.get_customer_by_telegram_id(agent_id, user_tg_id)
+    if not customer:
         try:
             await query.answer("❌ اطلاعات مشتری یافت نشد.", show_alert=True)
         except Exception:
             pass
         return
-    name = cust.get("full_name") or cust.get("username") or f"کاربر #{user_tg_id}"
-    username = str(cust.get("username") or "").strip()
-    info = (
-        "👤 پروفایل مشتری\n\n"
-        f"نام: {name}\n"
-        f"آیدی عددی: {user_tg_id}\n"
-        + (f"یوزرنیم: @{username}\n" if username else "")
-    )
+    from AgentBot.handlers.settings_users import _build_profile_text
+    from AgentBot.keyboards import users_profile_keyboard
+    text = _build_profile_text(agent_id, customer)
+    kb = users_profile_keyboard(int(customer.get("id") or 0), user_tg_id, back_callback="agbot:custpay:menu")
     try:
-        await query.answer(info, show_alert=True)
-    except Exception:
-        pass
+        if query.message and query.message.photo:
+            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
+        else:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception as edit_err:
+        logger.warning("custpay profile edit failed user=%s: %s", user_tg_id, edit_err)
+        try:
+            await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
 
 
 async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, wholesale_price: int = 0, tx_code: str = "") -> dict:
