@@ -410,16 +410,9 @@ async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_T
     text = _build_profile_text(agent_id, customer)
     kb = users_profile_keyboard(int(customer.get("id") or 0), user_tg_id, back_callback="agbot:custpay:menu")
     try:
-        if query.message and query.message.photo:
-            await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
-        else:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception as edit_err:
-        logger.warning("custpay profile edit failed user=%s: %s", user_tg_id, edit_err)
-        try:
-            await query.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            pass
+        logger.warning("custpay profile send failed user=%s: %s", user_tg_id, edit_err)
 
 
 async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, wholesale_price: int = 0, tx_code: str = "") -> dict:
