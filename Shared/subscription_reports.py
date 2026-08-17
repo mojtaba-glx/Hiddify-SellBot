@@ -40,7 +40,7 @@ def build_subscription_report_text(action: str, svc: dict, amount: int) -> str:
 
 
 async def send_subscription_report(bot, chat_id: int, agent_id: int, user_tg_id: int, svc: dict, action: str, amount: int) -> None:
-    """نمایش پروفایل مشتری + گزارش ایجاد/تمدید اشتراک + دکمه «پروفایل کاربر» برای نماینده."""
+    """ارسال گزارش ایجاد/تمدید اشتراک + دکمه «پروفایل کاربر» برای نماینده."""
     try:
         from telegram import InlineKeyboardMarkup
         from Shared.tg_button_styles import inline_button as IButton
@@ -51,12 +51,6 @@ async def send_subscription_report(bot, chat_id: int, agent_id: int, user_tg_id:
             customer = agent_db.get_customer_by_telegram_id(agent_id, user_tg_id)
         except Exception as e:
             logger.warning("subscription report: customer lookup failed user=%s: %s", user_tg_id, e)
-        if customer:
-            try:
-                from AgentBot.handlers.settings_users import _build_profile_text
-                text += _build_profile_text(agent_id, customer) + "\n\n"
-            except Exception as e:
-                logger.warning("subscription report: profile text failed user=%s: %s", user_tg_id, e)
         text += build_subscription_report_text(action, svc, amount)
 
         kb = None
