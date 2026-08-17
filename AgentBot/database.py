@@ -831,7 +831,9 @@ def get_customer_pending_card_payments(agent_id: int) -> List[Dict[str, Any]]:
             p["_wholesale_price"] = 0
             raw = p.get("receipt_image", "")
             try:
-                meta = json.loads(raw) if isinstance(raw, str) else {}
+                raw_str = raw if isinstance(raw, str) else ""
+                json_part = raw_str.split("|", 1)[0].strip() if raw_str else ""
+                meta = json.loads(json_part) if json_part.startswith("{") else {}
                 if isinstance(meta, dict):
                     if meta.get("type") == "buy" or meta.get("order_id"):
                         p["_order_id"] = int(meta.get("order_id", 0))

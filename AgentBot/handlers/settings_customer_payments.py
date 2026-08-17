@@ -200,15 +200,14 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     raw_receipt = pay.get("receipt_image", "")
-    receipt_fid = raw_receipt
-    try:
-        meta = json.loads(raw_receipt)
-        if isinstance(meta, dict) and meta.get("file_id"):
-            receipt_fid = meta["file_id"]
-        if isinstance(meta, dict) and str(meta.get("card_last4") or "").strip():
-            text += f"\n\U0001f4b3 \u06f4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a: <code>{meta['card_last4']}</code>\n"
-    except (json.JSONDecodeError, TypeError):
-        pass
+    from AgentBot.handlers.settings_transactions import _parse_receipt_meta
+    meta = _parse_receipt_meta(str(raw_receipt or ""))
+    receipt_fid = str(meta.get("file_id") or "").strip()
+    if not receipt_fid and raw_receipt and ":" not in str(raw_receipt) and "|" not in str(raw_receipt):
+        receipt_fid = str(raw_receipt).strip()
+    card_last4 = str(meta.get("card_last4") or "").strip()
+    if card_last4:
+        text += f"\n\U0001f4b3 \u06f4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a: <code>{card_last4}</code>\n"
     if not receipt_fid:
         text += "\n\n\u28fe \u0647\u06cc\u0686 \u0631\u0633\u06cc\u062f\u06cc \u0628\u0631\u0627\u06cc \u0627\u06cc\u0646 \u067e\u0631\u062f\u0627\u062e\u062a \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f."
 
@@ -331,7 +330,8 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
     card_last4 = str(pay.get("_card_last4") or "").strip()
     if not card_last4:
         try:
-            card_last4 = str((pay.get("receipt_image") and json.loads(pay["receipt_image"]).get("card_last4")) or "").strip()
+            from AgentBot.handlers.settings_transactions import _parse_receipt_meta
+            card_last4 = str(_parse_receipt_meta(str(pay.get("receipt_image") or "")).get("card_last4") or "").strip()
         except Exception:
             card_last4 = ""
     if card_last4:
