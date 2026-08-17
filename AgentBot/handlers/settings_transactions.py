@@ -57,22 +57,81 @@ def _parse_receipt_card_last4(pay: Dict[str, Any]) -> str:
 
 
 def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
+    tx_code = str(pay.get("tx_code") or "").strip() or str(pay.get("id") or "-")
+    username = (str(pay.get("username") or "").strip()) or "-"
+    if username != "-":
+        username = f"@{username}"
     lines = [
-        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {pay.get('id')}",
-        f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {_escape(_payment_customer_name(pay))}",
+        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(tx_code)}",
+        f"\U0001f464 \u06a9\u0627\u0631\u0628\u0631: {_escape((pay.get('full_name') or '-').strip() or '-')}",
+        f"\u25c8 \u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc: {_escape(username)}",
+        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u06a9\u0627\u0631\u0628\u0631: {_escape(str(pay.get('user_id') or '-'))}",
+        f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}",
+        f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646",
+        "\u2756 \u2022 -------------------------- \u2022 \u2756",
+        f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {_STATUS_TITLES.get(str(pay.get('status')), pay.get('status'))}",
+        f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_payment_method_title(pay)}",
     ]
-    tx_code = str(pay.get("tx_code") or "").strip()
-    if tx_code:
-        lines.append(f"\U0001f511 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634 \u0628\u0627\u0646\u06a9: {tx_code}")
-    lines.append(f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}")
-    lines.append(f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646")
-    lines.append("\u2756 \u2022 -------------------------- \u2022 \u2756")
-    lines.append(f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {_STATUS_TITLES.get(str(pay.get('status')), pay.get('status'))}")
-    lines.append(f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_payment_method_title(pay)}")
     card_last4 = _parse_receipt_card_last4(pay)
     if card_last4:
-        lines.append(f"\U0001f4b3 \u06a9\u0627\u0631\u062a (\u0622\u062e\u0631\u06cc\u0646 \u0686\u0647\u0627\u0631 \u0631\u0642\u0645): {card_last4}")
+        lines.append(f"\u25c8 \u06f4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a \u0645\u0628\u062f\u0627: {_escape(card_last4)}")
     return "\n".join(lines)
+
+
+def _payment_receipt_fid(pay: Dict[str, Any]) -> str:
+    raw = str(pay.get("receipt_image") or "").strip()
+    if not raw:
+        return ""
+    if ":" not in raw and "|" not in raw:
+        return raw
+    try:
+        meta = json.loads(raw)
+        if isinstance(meta, dict) and str(meta.get("file_id") or "").strip():
+            return str(meta["file_id"]).strip()
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return ""
+
+
+def _payment_user_button_title(pay: Dict[str, Any]) -> str:
+    name = (str(pay.get("full_name") or pay.get("username") or "").strip())
+    if name:
+        return name
+    uid = pay.get("user_id")
+    return f"\u06a9\u0627\u0631\u0628\u0631 #{uid}" if uid else "\u067e\u0631\u0648\u0641\u0627\u06cc\u0644 \u06a9\u0627\u0631\u0628\u0631"
+
+
+def _tx_detail_keyboard(pay: Dict[str, Any]):
+    from AgentBot.keyboards import _ikb, IButton, BTN_BACK
+
+    rows = [
+        [IButton(f"\U0001f464 {_payment_user_button_title(pay)}", callback_data=f"agbot:custpay:profile:{pay.get('user_id', 0)}")],
+        [IButton(BTN_BACK, callback_data=f"agbot:set:tx:{pay.get('status') or 'pending'}", style="danger")],
+    ]
+    return _ikb(rows)
+
+
+async def _send_payment_detail(context: ContextTypes.DEFAULT_TYPE, chat_id: int, pay: Dict[str, Any], source_message=None) -> None:
+    caption = _build_payment_detail_text(pay)
+    kb = _tx_detail_keyboard(pay)
+    receipt = _payment_receipt_fid(pay)
+
+    if receipt:
+        try:
+            await context.bot.send_photo(chat_id=chat_id, photo=receipt, caption=caption, reply_markup=kb, parse_mode="HTML")
+            if source_message is not None:
+                try:
+                    await source_message.delete()
+                except Exception:
+                    pass
+            return
+        except Exception as e:
+            logger.warning("send tx detail photo failed pay=%s: %s", pay.get("id"), e)
+
+    if source_message is not None:
+        await source_message.reply_text(caption, reply_markup=kb, parse_mode="HTML")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=kb, parse_mode="HTML")
 
 
 def _filter_params(p3: str) -> Dict[str, Any]:
@@ -159,11 +218,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not pay:
             await query.answer("\u274c \u062a\u0631\u0627\u06a9\u0646\u0634 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", show_alert=True)
             return
-        text = _build_payment_detail_text(pay)
-        try:
-            await query.edit_message_text(text, reply_markup=back_keyboard(f"agbot:set:tx:{pay.get('status')}"), parse_mode="HTML")
-        except Exception:
-            pass
+        await _send_payment_detail(context, query.message.chat_id, pay, source_message=query.message)
         return
 
     if p3 == "search":
@@ -204,11 +259,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not pay or int(pay.get("agent_id") or 0) != agent_id:
             await update.message.reply_text(f"❌ تراکنشی با شناسه {pid} یافت نشد.", reply_markup=tx_menu_keyboard(), parse_mode="HTML")
             return True
-        await update.message.reply_text(
-            _build_payment_detail_text(pay),
-            reply_markup=back_keyboard(f"agbot:set:tx:{pay.get('status')}"),
-            parse_mode="HTML",
-        )
+        receipt = _payment_receipt_fid(pay)
+        kb = _tx_detail_keyboard(pay)
+        caption = _build_payment_detail_text(pay)
+        if receipt:
+            try:
+                await context.bot.send_photo(chat_id=update.message.chat_id, photo=receipt, caption=caption, reply_markup=kb, parse_mode="HTML")
+            except Exception as e:
+                logger.warning("send tx detail photo failed pay=%s: %s", pid, e)
+                await update.message.reply_text(caption, reply_markup=kb, parse_mode="HTML")
+        else:
+            await update.message.reply_text(caption, reply_markup=kb, parse_mode="HTML")
         return True
 
     payments = search_customer_payments(agent_id, text, limit=15)
