@@ -16,6 +16,7 @@ from AgentBot.database import (
     get_customer_pending_card_payments,
     update_customer_payment_status,
     get_customer_user,
+    get_customer_payment_by_id_enriched,
 )
 from CustomerBot.database import update_order_status
 from Shared import agent_db
@@ -41,6 +42,142 @@ def _calc_wholesale_price(agent_id: int, pay: dict, order: dict | None = None) -
     return wholesale
 
 
+def _find_service_by_order(agent_id: int, order_id: int) -> dict:
+    """اگر قبلاً برای این سفارش سرویس ساخته شده، آن را برمی‌گرداند."""
+    try:
+        from Shared.agent_db import search_services_by_name
+        panel_name = f"vpn-{int(order_id):07d}"
+        rows, _total = search_services_by_name(agent_id, panel_name, page=1, page_size=5)
+        for r in rows or []:
+            if str(r.get("name") or "") == panel_name:
+                return r
+    except Exception:
+        pass
+    return {}
+
+
+def _change_status_options_keyboard(pay_id: int, current_status: str):
+    status = (current_status or "").strip().lower()
+    rows = []
+    if status != "approved":
+        rows.append([IButton("\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647", callback_data=f"agbot:custpay:set:{pay_id}:approved")])
+    if status != "rejected":
+        rows.append([IButton("\u274c \u0631\u062f \u0634\u062f\u0647", callback_data=f"agbot:custpay:set:{pay_id}:rejected")])
+    if status != "pending":
+        rows.append([IButton("\u23f3 \u062f\u0631 \u062d\u0627\u0644 \u0627\u0646\u062a\u0638\u0627\u0631", callback_data=f"agbot:custpay:set:{pay_id}:pending")])
+    rows.append([IButton(BTN_BACK, callback_data=f"agbot:custpay:chg:back:{pay_id}")])
+    return _ikb(rows)
+
+
+async def _show_change_options(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    pay = get_customer_payment_by_id_enriched(agent_id, pay_id)
+    if not pay:
+        await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+        return
+    current_status = str(pay.get("status") or "pending").strip().lower()
+    if current_status == "approved":
+        await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
+        return
+    from AgentBot.handlers.settings_transactions import _build_payment_detail_text
+    text = _build_payment_detail_text(pay) + "\n\nوضعیت جدید تراکنش را انتخاب کنید:"
+    kb = _change_status_options_keyboard(pay_id, current_status)
+    try:
+        if query.message and getattr(query.message, "photo", None):
+            await query.edit_message_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+            return
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("Failed to edit change-status options for payment %s: %s", pay_id, e)
+
+
+async def _redetail_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    pay = get_customer_payment_by_id_enriched(agent_id, pay_id)
+    if not pay:
+        await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+        return
+    from AgentBot.handlers.settings_transactions import _send_payment_detail
+    await _send_payment_detail(context, agent_id, query.message.chat_id, pay, source_message=query.message)
+
+
+async def _apply_change_status(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, new_status: str) -> None:
+    query = update.callback_query
+    new_status = (new_status or "").strip().lower()
+    if new_status not in {"pending", "approved", "rejected"}:
+        await query.answer("❌ وضعیت مقصد نامعتبر است.", show_alert=True)
+        return
+    pay = get_customer_payment_by_id_enriched(agent_id, pay_id)
+    if not pay:
+        await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+        return
+    old_status = str(pay.get("status") or "").strip().lower()
+    if old_status == "approved":
+        await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
+        return
+    if old_status == new_status:
+        await query.answer("وضعیت تراکنش تغییری نکرد.", show_alert=True)
+        return
+
+    if new_status == "approved":
+        order = pay.get("_order") or {}
+        order_id = int(pay.get("_order_id") or order.get("order_id") or 0)
+        if order_id and _find_service_by_order(agent_id, order_id):
+            await query.answer("⚠️ برای این سفارش سرویسی از قبل وجود دارد؛ امکان تایید مجدد نیست.", show_alert=True)
+            return
+        await _approve_payment(update, context, agent_id, pay_id, pay=pay)
+        return
+
+    if not update_customer_payment_status(agent_id, pay_id, new_status):
+        await query.answer("❌ تغییر وضعیت انجام نشد.", show_alert=True)
+        return
+
+    order = pay.get("_order") or {}
+    order_id = int(pay.get("_order_id") or order.get("order_id") or 0)
+    if order_id:
+        try:
+            update_order_status(agent_id, order_id, new_status)
+        except Exception as e:
+            logger.warning("Failed to update order %s status to %s: %s", order_id, new_status, e)
+
+    user_tg_id = int(pay.get("user_id") or 0)
+    amount = int(pay.get("amount") or 0)
+    if new_status == "rejected":
+        notify_text = (
+            f"\u274c \u067e\u0631\u062f\u0627\u062e\u062a \u0634\u0645\u0627 \u0628\u0647 \u0645\u0628\u0644\u063a {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646 \u0631\u062f \u0634\u062f.\n"
+            f"\u0644\u0637\u0641\u0627 \u0628\u0631\u0627\u06cc \u0627\u0637\u0644\u0627\u0639\u0627\u062a \u0628\u06cc\u0634\u062a\u0631 \u0628\u0627 \u067e\u0634\u062a\u06cc\u0628\u0627\u0646\u06cc \u062a\u0645\u0627\u0633 \u0628\u06af\u06cc\u0631\u06cc\u062f."
+        )
+        await _notify_customer(context, agent_id, user_tg_id, notify_text)
+        await _delete_pending_customer_message(context, agent_id, pay)
+    else:
+        notify_text = (
+            f"\u23f3 \u0648\u0636\u0639\u06cc\u062a \u067e\u0631\u062f\u0627\u062e\u062a \u0634\u0645\u0627 \u0628\u0647 \u0645\u0628\u0644\u063a {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646 \u0628\u0647 \u062d\u0627\u0644\u062a \u00ab\u062f\u0631 \u062d\u0627\u0644 \u0627\u0646\u062a\u0638\u0627\u0631\u00bb \u062a\u063a\u06cc\u06cc\u0631 \u06a9\u0631\u062f.\n"
+            f"پس از بررسی، نتیجه به اطلاع شما می‌رسد."
+        )
+        await _notify_customer(context, agent_id, user_tg_id, notify_text)
+
+    try:
+        await query.answer("✅ وضعیت تراکنش تغییر کرد.", show_alert=True)
+    except Exception:
+        pass
+    try:
+        pay_after = get_customer_payment_by_id_enriched(agent_id, pay_id) or pay
+        pay_after = dict(pay_after)
+        pay_after["status"] = new_status
+        from AgentBot.handlers.settings_transactions import _send_payment_detail
+        await _send_payment_detail(context, agent_id, query.message.chat_id, pay_after, source_message=query.message)
+    except Exception as e:
+        logger.warning("Failed to redisplay payment %s after status change: %s", pay_id, e)
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     query = update.callback_query
     if not query:
@@ -51,7 +188,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     sub = parts[2] if len(parts) > 2 else ""
     agent_id = get_agent_id(context)
 
-    if action == "custpay" and sub not in {"approve", "reject", "profile"}:
+    if action == "custpay" and sub not in {"approve", "reject", "profile", "chg", "set"}:
         try:
             await query.answer()
         except Exception:
@@ -86,6 +223,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if sub == "profile":
             user_tg_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
             await _show_customer_profile(update, context, agent_id, user_tg_id)
+            return
+
+        if sub == "chg":
+            if len(parts) == 5 and parts[3] == "back":
+                pay_id = int(parts[4]) if parts[4].isdigit() else 0
+                await _redetail_payment(update, context, agent_id, pay_id)
+                return
+            pay_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            await _show_change_options(update, context, agent_id, pay_id)
+            return
+
+        if sub == "set":
+            if len(parts) == 5:
+                pay_id = int(parts[3]) if parts[3].isdigit() else 0
+                await _apply_change_status(update, context, agent_id, pay_id, parts[4])
+                return
+            await query.answer("❌ داده نامعتبر.", show_alert=True)
             return
 
         if sub == "back":
@@ -241,10 +395,11 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.warning("Failed to edit message as fallback for payment %s: %s", pay_id, edit_err)
 
 
-async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
+async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:
     query = update.callback_query
-    payments = get_customer_pending_card_payments(agent_id)
-    pay = next((p for p in payments if p["id"] == pay_id), None)
+    if pay is None:
+        payments = get_customer_pending_card_payments(agent_id)
+        pay = next((p for p in payments if p["id"] == pay_id), None)
     if not pay:
         await query.answer("❌ پرداخت در لیست در انتظار پیدا نشد.", show_alert=True)
         return
@@ -356,10 +511,11 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             logger.warning("Failed to send approval reply for payment %s: %s", pay_id, reply_err)
 
 
-async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
+async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:
     query = update.callback_query
-    payments = get_customer_pending_card_payments(agent_id)
-    pay = next((p for p in payments if p["id"] == pay_id), None)
+    if pay is None:
+        payments = get_customer_pending_card_payments(agent_id)
+        pay = next((p for p in payments if p["id"] == pay_id), None)
     if not pay:
         await query.answer("❌ پرداخت در لیست در انتظار پیدا نشد.", show_alert=True)
         return
@@ -384,6 +540,7 @@ async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
     done_text = "❌ پرداخت رد شد."
     customer_name = pay.get("full_name") or pay.get("username") or f"Customer {user_tg_id}"
     done_kb = _ikb([
+        [IButton("✏️ تغییر وضعیت", callback_data=f"agbot:custpay:chg:{pay_id}")],
         [IButton(f"👤 {customer_name}", callback_data=f"agbot:custpay:profile:{user_tg_id}")],
     ])
     try:

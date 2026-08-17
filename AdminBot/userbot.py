@@ -849,11 +849,11 @@ async def _send_payment_event_channel_report_if_enabled(pay: Dict[str, Any]) -> 
         logger.warning("Failed sending payment event-channel report: %s", e)
 
 
-def _build_payment_action_keyboard(payment_id: int, user_btn_title: str, uid: int) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton("✏️ تغییر وضعیت تراکنش", callback_data=f"userbot:pay:chg:{payment_id}")],
-        [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{uid}")],
-    ]
+def _build_payment_action_keyboard(payment_id: int, user_btn_title: str, uid: int, status: str = "") -> InlineKeyboardMarkup:
+    rows = []
+    if (status or "").strip().lower() != "approved":
+        rows.append([InlineKeyboardButton("✏️ تغییر وضعیت تراکنش", callback_data=f"userbot:pay:chg:{payment_id}")])
+    rows.append([InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{uid}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -4727,7 +4727,7 @@ async def send_payment_detail(
     caption = _build_payment_detail_text(pay)
 
     user_btn_title = (pay.get('full_name') or pay.get('username') or str(uid)).strip()
-    kb = _build_payment_action_keyboard(payment_id, user_btn_title, uid)
+    kb = _build_payment_action_keyboard(payment_id, user_btn_title, uid, status=str(pay.get('status') or ""))
 
     # اگر قرار است متن بدون عکس نمایش داده شود و پیام فعلی عکس‌دار است،
     # پیام جدید می‌فرستیم و قبلی را حذف می‌کنیم تا چت شلوغ نشود.
@@ -8174,6 +8174,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             if not pay:
                 await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
                 return
+            if str(pay.get("status") or "").strip().lower() == "approved":
+                await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
+                return
             text = _build_payment_detail_text(pay) + "\n\n⚠️ آیا از تغییر وضعیت تراکنش، اطمینان دارید؟"
             kb = _build_payment_change_confirm_keyboard(pid)
             receipt_raw = pay.get('receipt_image') or ""
@@ -8213,6 +8216,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 pay = userbot_db.get_payment_by_id(pid)
                 if not pay:
                     await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+                    return
+                if str(pay.get("status") or "").strip().lower() == "approved":
+                    await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
                     return
                 text = _build_payment_detail_text(pay) + "\n\nوضعیت جدید را انتخاب کنید:"
                 kb = _build_payment_change_options_keyboard(pid, str(pay.get("status") or "pending"))

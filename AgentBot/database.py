@@ -804,6 +804,61 @@ def _customer_conn() -> Optional[sqlite3.Connection]:
     return conn
 
 
+def _enrich_payment_row(cur, p: Dict[str, Any]) -> None:
+    """متادیتای پرداخت (سفارش، قیمت عمده و...) را از receipt_image پر می‌کند."""
+    p["_order_id"] = 0
+    p["_pay_type"] = "buy"
+    p["_order"] = None
+    p["_server_id"] = 0
+    p["_gb"] = 0
+    p["_days"] = 0
+    p["_sale_price"] = int(p.get("amount") or 0)
+    p["_wholesale_price"] = 0
+    raw = p.get("receipt_image", "")
+    try:
+        raw_str = raw if isinstance(raw, str) else ""
+        json_part = raw_str.split("|", 1)[0].strip() if raw_str else ""
+        meta = json.loads(json_part) if json_part.startswith("{") else {}
+        if isinstance(meta, dict):
+            if meta.get("type") == "buy" or meta.get("order_id"):
+                p["_order_id"] = int(meta.get("order_id", 0))
+                p["_pay_type"] = "buy"
+            p["_server_id"] = meta.get("server_id", 0)
+            p["_gb"] = meta.get("gb", 0)
+            p["_days"] = meta.get("days", 0)
+            p["_sale_price"] = int(meta.get("sale_price") or p.get("amount") or 0)
+            p["_wholesale_price"] = int(meta.get("wholesale_price") or 0)
+            p["_card_last4"] = str(meta.get("card_last4") or "").strip()
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if not p["_order_id"]:
+        ikey = p.get("idempotency_key", "")
+        if ikey.startswith("receipt_"):
+            parts = ikey.split("_")
+            if len(parts) >= 3:
+                try:
+                    p["_order_id"] = int(parts[2])
+                    if p["_order_id"] > 0:
+                        p["_pay_type"] = "buy"
+                except ValueError:
+                    pass
+    if p["_order_id"]:
+        try:
+            cur.execute(
+                "SELECT * FROM customer_orders WHERE agent_id=? AND order_id=?",
+                (int(p.get("agent_id") or 0), p["_order_id"]),
+            )
+            order_row = cur.fetchone()
+            if order_row:
+                p["_order"] = dict(order_row)
+                if not int(p["_order"].get("server_id") or 0):
+                    p["_order"]["server_id"] = int(p.get("_server_id") or 0)
+                if not int(p["_order"].get("wholesale_price") or 0):
+                    p["_order"]["wholesale_price"] = int(p.get("_wholesale_price") or 0)
+        except Exception:
+            pass
+
+
 def get_customer_pending_card_payments(agent_id: int) -> List[Dict[str, Any]]:
     conn = _customer_conn()
     if not conn:
@@ -819,61 +874,33 @@ def get_customer_pending_card_payments(agent_id: int) -> List[Dict[str, Any]]:
         )
         rows = cur.fetchall()
         result = [dict(r) for r in rows]
-        # Parse metadata from receipt_image (JSON) or idempotency_key
         for p in result:
-            p["_order_id"] = 0
-            p["_pay_type"] = "buy"
-            p["_order"] = None
-            p["_server_id"] = 0
-            p["_gb"] = 0
-            p["_days"] = 0
-            p["_sale_price"] = int(p.get("amount") or 0)
-            p["_wholesale_price"] = 0
-            raw = p.get("receipt_image", "")
-            try:
-                raw_str = raw if isinstance(raw, str) else ""
-                json_part = raw_str.split("|", 1)[0].strip() if raw_str else ""
-                meta = json.loads(json_part) if json_part.startswith("{") else {}
-                if isinstance(meta, dict):
-                    if meta.get("type") == "buy" or meta.get("order_id"):
-                        p["_order_id"] = int(meta.get("order_id", 0))
-                        p["_pay_type"] = "buy"
-                    p["_server_id"] = meta.get("server_id", 0)
-                    p["_gb"] = meta.get("gb", 0)
-                    p["_days"] = meta.get("days", 0)
-                    p["_sale_price"] = int(meta.get("sale_price") or p.get("amount") or 0)
-                    p["_wholesale_price"] = int(meta.get("wholesale_price") or 0)
-                    p["_card_last4"] = str(meta.get("card_last4") or "").strip()
-            except (json.JSONDecodeError, TypeError):
-                pass
-            if not p["_order_id"]:
-                ikey = p.get("idempotency_key", "")
-                if ikey.startswith("receipt_"):
-                    parts = ikey.split("_")
-                    if len(parts) >= 3:
-                        try:
-                            p["_order_id"] = int(parts[2])
-                            if p["_order_id"] > 0:
-                                p["_pay_type"] = "buy"
-                        except ValueError:
-                            pass
-            # Get order details if buy
-            if p["_order_id"]:
-                try:
-                    cur.execute(
-                        "SELECT * FROM customer_orders WHERE agent_id=? AND order_id=?",
-                        (agent_id, p["_order_id"]),
-                    )
-                    order_row = cur.fetchone()
-                    if order_row:
-                        p["_order"] = dict(order_row)
-                        if not int(p["_order"].get("server_id") or 0):
-                            p["_order"]["server_id"] = int(p.get("_server_id") or 0)
-                        if not int(p["_order"].get("wholesale_price") or 0):
-                            p["_order"]["wholesale_price"] = int(p.get("_wholesale_price") or 0)
-                except Exception:
-                    pass
+            _enrich_payment_row(cur, p)
         return result
+    finally:
+        conn.close()
+
+
+def get_customer_payment_by_id_enriched(agent_id: int, payment_id: int) -> Optional[Dict[str, Any]]:
+    conn = _customer_conn()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT cp.*, cu.full_name, cu.username FROM customer_payments cp "
+            "LEFT JOIN customer_users cu ON cu.agent_id=cp.agent_id AND cu.telegram_id=cp.user_id "
+            "WHERE cp.agent_id=? AND cp.id=?",
+            (agent_id, int(payment_id)),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        p = dict(row)
+        _enrich_payment_row(cur, p)
+        return p
+    except Exception:
+        return None
     finally:
         conn.close()
 
@@ -884,6 +911,15 @@ def update_customer_payment_status(agent_id: int, payment_id: int, status: str) 
         return False
     try:
         cur = conn.cursor()
+        cur.execute(
+            "SELECT status FROM customer_payments WHERE agent_id=? AND id=?",
+            (agent_id, payment_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        if str(dict(row).get("status") or "").strip().lower() == "approved" and str(status).strip().lower() != "approved":
+            return False
         now = _now()
         cur.execute(
             "UPDATE customer_payments SET status=?, updated_at=? WHERE agent_id=? AND id=?",

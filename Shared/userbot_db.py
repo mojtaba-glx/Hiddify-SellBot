@@ -3287,6 +3287,9 @@ def change_payment_status_with_wallet(payment_id: int, new_status: str) -> Tuple
         if old_status == target:
             return True, "وضعیت تراکنش تغییری نکرد.", pay
 
+        if old_status == "approved":
+            return False, "🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", None
+
         # Wallet delta rules:
         # - non-approved -> approved: +amount
         # - approved -> non-approved: -amount (must have enough balance)

@@ -120,12 +120,12 @@ def _payment_user_button_title(pay: Dict[str, Any]) -> str:
 
 
 def _tx_detail_keyboard(pay: Dict[str, Any]):
-    from AgentBot.keyboards import _ikb, IButton, BTN_BACK
+    from AgentBot.keyboards import _ikb, IButton
 
-    rows = [
-        [IButton(f"\U0001f464 {_payment_user_button_title(pay)}", callback_data=f"agbot:custpay:profile:{pay.get('user_id', 0)}")],
-        [IButton(BTN_BACK, callback_data=f"agbot:set:tx:{pay.get('status') or 'pending'}", style="danger")],
-    ]
+    rows = []
+    if str(pay.get("status") or "").strip().lower() != "approved":
+        rows.append([IButton("\u270f\ufe0f \u062a\u063a\u06cc\u06cc\u0631 \u0648\u0636\u0639\u06cc\u062a", callback_data=f"agbot:custpay:chg:{pay.get('id', 0)}")])
+    rows.append([IButton(f"\U0001f464 {_payment_user_button_title(pay)}", callback_data=f"agbot:custpay:profile:{pay.get('user_id', 0)}")])
     return _ikb(rows)
 
 
