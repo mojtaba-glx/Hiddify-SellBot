@@ -22,7 +22,7 @@ from AgentBot.keyboards import (
     plans_cats_keyboard, plans_cat_del_keyboard,
     plans_cat_detail_keyboard, plans_cat_del_confirm_keyboard,
     plans_plans_keyboard, plans_plan_del_keyboard,
-    back_keyboard, cancel_keyboard,
+    back_keyboard, cancel_keyboard, main_menu_keyboard,
 )
 from AgentBot.utils.helpers import _fmt_toman, _normalize_digits
 from AgentBot.database import (
@@ -167,12 +167,12 @@ async def _render_discount_menu(update: Update, context: ContextTypes.DEFAULT_TY
     text = "\n".join(lines)
     if query:
         try:
-            await query.edit_message_text(text, reply_markup=discount_settings_keyboard(), parse_mode="HTML")
+            await query.edit_message_text(text, reply_markup=discount_settings_keyboard(simple_enabled, tiered_enabled), parse_mode="HTML")
             return
         except Exception:
             pass
     try:
-        await update.message.reply_text(text, reply_markup=discount_settings_keyboard(), parse_mode="HTML")
+        await update.message.reply_text(text, reply_markup=discount_settings_keyboard(simple_enabled, tiered_enabled), parse_mode="HTML")
     except Exception:
         pass
 
@@ -224,7 +224,7 @@ async def _roleme_discount_menu(context: ContextTypes.DEFAULT_TYPE, update: Upda
 
     text = "\n".join(lines)
     try:
-        await update.message.reply_text(text, reply_markup=discount_settings_keyboard(), parse_mode="HTML")
+        await update.message.reply_text(text, reply_markup=discount_settings_keyboard(simple_enabled, tiered_enabled), parse_mode="HTML")
     except Exception:
         pass
 
@@ -792,7 +792,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if state == STATE_FIXED_ADD_CAT_TITLE:
         add_fixed_category(agent_id, text)
         context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text("\u2705 \u062f\u0633\u062a\u0647 \u0627\u0636\u0627\u0641\u0647 \u0634\u062f.")
+        await update.message.reply_text("\u2705 \u062f\u0633\u062a\u0647 \u0627\u0636\u0627\u0641\u0647 \u0634\u062f.", reply_markup=main_menu_keyboard())
         await _send_fixed_menu(update, context)
         return True
 
@@ -803,7 +803,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             edit_fixed_category(agent_id, cid, title=text)
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop("edit_cat_id", None)
-        await update.message.reply_text("\u2705 \u0639\u0646\u0648\u0627\u0646 \u0628\u0631\u0648\u0632 \u0634\u062f.")
+        await update.message.reply_text("\u2705 \u0639\u0646\u0648\u0627\u0646 \u0628\u0631\u0648\u0632 \u0634\u062f.", reply_markup=main_menu_keyboard())
         await _send_fixed_menu(update, context)
         return True
 
@@ -853,7 +853,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop("fixed_cat_id", None)
             context.user_data.pop("fixed_new_plan", None)
-            await update.message.reply_text("\u2705 \u067e\u0644\u0646 \u0627\u0636\u0627\u0641\u0647 \u0634\u062f.")
+            await update.message.reply_text("\u2705 \u067e\u0644\u0646 \u0627\u0636\u0627\u0641\u0647 \u0634\u062f.", reply_markup=main_menu_keyboard())
             await _send_plans_list(update, context, cid)
         return True
 
@@ -899,7 +899,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                     discount_simple_enabled=False,
                     discount_simple_expire_at=0,
                 )
-                await update.message.reply_text("✅ تخفیف حجمی خاموش شد.")
+                await update.message.reply_text("✅ تخفیف حجمی خاموش شد.", reply_markup=main_menu_keyboard())
             else:
                 _set_discount_settings(
                     agent_id,
@@ -912,7 +912,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 )
                 await update.message.reply_text(
                     f"✅ تخفیف ذخیره شد.\n"
-                    f"از {threshold} گیگ به بالا، {percent}٪ تخفیف روی قیمت نهایی اعمال می‌شود."
+                    f"از {threshold} گیگ به بالا، {percent}٪ تخفیف روی قیمت نهایی اعمال می‌شود.",
+                    reply_markup=main_menu_keyboard(),
                 )
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_DYN_FIELD, None)
@@ -935,10 +936,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             )
             if tiers:
                 await update.message.reply_text(
-                    f"✅ تخفیف پلکانی ذخیره شد.\n{plans_storage.format_discount_tiers(tiers)}"
+                    f"✅ تخفیف پلکانی ذخیره شد.\n{plans_storage.format_discount_tiers(tiers)}",
+                    reply_markup=main_menu_keyboard(),
                 )
             else:
-                await update.message.reply_text("✅ تخفیف پلکانی خاموش شد.")
+                await update.message.reply_text("✅ تخفیف پلکانی خاموش شد.", reply_markup=main_menu_keyboard())
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_DYN_FIELD, None)
             await _roleme_discount_menu(context, update, agent_id)
@@ -957,7 +959,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                     discount_simple_enabled=False,
                     discount_simple_expire_at=0,
                 )
-                await update.message.reply_text("✅ تایمر تخفیف حذف شد و تخفیف حجمی ساده خاموش شد.")
+                await update.message.reply_text("✅ تایمر تخفیف حذف شد و تخفیف حجمی ساده خاموش شد.", reply_markup=main_menu_keyboard())
             else:
                 expire_at = int(time.time()) + hours * 3600
                 _set_discount_settings(
@@ -968,7 +970,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 await update.message.reply_text(
                     "✅ تایمر تخفیف حجمی ساده تنظیم شد.\n"
                     f"تخفیف به مدت {hours} ساعت (تا {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')}) فعال است "
-                    "و پس از اتمام، به‌صورت خودکار خاموش می‌شود."
+                    "و پس از اتمام، به‌صورت خودکار خاموش می‌شود.",
+                    reply_markup=main_menu_keyboard(),
                 )
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_DYN_FIELD, None)
@@ -1015,7 +1018,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         set_setting(agent_id, "dynamic_plan_settings", settings)
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_DYN_FIELD, None)
-        await update.message.reply_text("\u2705 \u0628\u0647 \u200c\u0631\u0648\u0632\u0631\u0633\u0627\u0646\u06cc \u0634\u062f.")
+        await update.message.reply_text("\u2705 \u0628\u0647 \u200c\u0631\u0648\u0632\u0631\u0633\u0627\u0646\u06cc \u0634\u062f.", reply_markup=main_menu_keyboard())
         await show_menu(update, context)
         return True
 
@@ -1036,7 +1039,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             "min_month": nums[5], "max_month": nums[6], "step_month": nums[7],
         })
         context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text("\u2705 \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u067e\u0648\u06cc\u0627 \u0630\u062e\u06cc\u0631\u0647 \u0634\u062f.", reply_markup=plans_menu_keyboard(get_setting(agent_id, "plan_display_mode", "dynamic")))
+        await update.message.reply_text("\u2705 \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u067e\u0648\u06cc\u0627 \u0630\u062e\u06cc\u0631\u0647 \u0634\u062f.", reply_markup=main_menu_keyboard())
         return True
 
     return False

@@ -498,10 +498,12 @@ def dyn_settings_keyboard():
     ])
 
 
-def discount_settings_keyboard():
+def discount_settings_keyboard(simple_enabled=False, tiered_enabled=False):
+    simple_style = "danger" if simple_enabled else "success"
+    tiered_style = "danger" if tiered_enabled else "success"
     return _ikb([
-        [IButton('\U0001f48e \u062d\u062c\u0645\u06cc \u0633\u0627\u062f\u0647', callback_data='agbot:plans:discount:toggle:simple')],
-        [IButton('\U0001f3a9 \u067e\u0644\u06a9\u0627\u0646\u06cc', callback_data='agbot:plans:discount:toggle:tiers')],
+        [IButton('\U0001f48e \u062d\u062c\u0645\u06cc \u0633\u0627\u062f\u0647', callback_data='agbot:plans:discount:toggle:simple', style=simple_style)],
+        [IButton('\U0001f3a9 \u067e\u0644\u06a9\u0627\u0646\u06cc', callback_data='agbot:plans:discount:toggle:tiers', style=tiered_style)],
         [IButton('\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634 \u062a\u062e\u0641\u06cc\u0641 \u062d\u062c\u0645\u06cc \u0633\u0627\u062f\u0647', callback_data='agbot:plans:discount:edit:simple')],
         [IButton('\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634 \u062a\u062e\u0641\u06cc\u0641 \u067e\u0644\u06a9\u0627\u0646\u06cc', callback_data='agbot:plans:discount:edit:tiers')],
         [IButton('\u23f1\ufe0f \u062a\u0627\u06cc\u0645\u0631 \u062a\u062e\u0641\u06cc\u0641 \u062d\u062c\u0645\u06cc \u0633\u0627\u062f\u0647', callback_data='agbot:plans:discount:edit:timer')],

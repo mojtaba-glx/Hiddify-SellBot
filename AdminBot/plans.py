@@ -1220,7 +1220,7 @@ async def handle_plans_message(
             await message.reply_text("❌ دسته برای ویرایش مشخص نیست.")
             return
         plans_storage.edit_plan_category(server_id, int(cat_id), title=text)
-        await message.reply_text("✅ عنوان دسته بروزرسانی شد.")
+        await message.reply_text("✅ عنوان دسته بروزرسانی شد.", reply_markup=_finish_reply_kb())
         # برگشت به صفحه همان دسته
         await _send_category_detail(server_id, int(cat_id), chat_id, context)
         context.user_data.pop("plans_edit_cat_id", None)
@@ -1239,7 +1239,8 @@ async def handle_plans_message(
         title = context.user_data.pop("plans_new_cat_title", "بدون عنوان")
         cat = plans_storage.add_plan_category(server_id, title, priority=prio)
         await message.reply_text(
-            f"✅ دسته با موفقیت اضافه شد.\nعنوان: {cat['title']}\nاولویت: {cat['priority']}"
+            f"✅ دسته با موفقیت اضافه شد.\nعنوان: {cat['title']}\nاولویت: {cat['priority']}",
+            reply_markup=_finish_reply_kb(),
         )
         # برگشت به لیست دسته‌ها
         await _send_categories_menu(server_id, chat_id, context)
@@ -1260,7 +1261,7 @@ async def handle_plans_message(
             )
             return
         plans_storage.edit_plan_category(server_id, int(cat_id), priority=prio)
-        await message.reply_text("✅ اولویت دسته بروزرسانی شد.")
+        await message.reply_text("✅ اولویت دسته بروزرسانی شد.", reply_markup=_finish_reply_kb())
         # برگشت به صفحه همان دسته
         await _send_category_detail(server_id, int(cat_id), chat_id, context)
         context.user_data.pop("plans_edit_cat_id", None)
@@ -1347,6 +1348,7 @@ async def handle_plans_message(
             f"قیمت: {plan['price']:,} تومان\n"
             f"مدت: {plan['days']} روز\n"
             f"حجم: {plan['gb']} گیگ",
+            reply_markup=_finish_reply_kb(),
         )
 
         # بعد از افزودن پلن، برگرد به لیست پلن‌های همان دسته

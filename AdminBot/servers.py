@@ -3954,7 +3954,7 @@ async def handle_edit_server_flow(
     if _is_cancel_text(text):
         context.user_data.pop("state", None)
         context.user_data.pop("edit_server_id", None)
-        await message.reply_text("❌ ویرایش سرور لغو شد.")
+        await message.reply_text("❌ ویرایش سرور لغو شد.", reply_markup=admin_main_keyboard())
         await send_servers_list(chat_id=message.chat_id, context=context)
         return
 
@@ -4025,7 +4025,7 @@ async def handle_edit_server_flow(
         updates["priority"] = priority
         msg_ok = "✅ اولویت سرور بروزرسانی شد."
     else:
-        await message.reply_text("❌ حالت ویرایش سرور نامعتبر است.")
+        await message.reply_text("❌ حالت ویرایش سرور نامعتبر است.", reply_markup=admin_main_keyboard())
         context.user_data.pop("state", None)
         context.user_data.pop("edit_server_id", None)
         return
@@ -4034,10 +4034,10 @@ async def handle_edit_server_flow(
         database.update_server(server_id, updates)
     except Exception as e:
         logger.exception("update_server error: %s", e)
-        await message.reply_text(f"❌ خطا در بروزرسانی سرور:\n{e}")
+        await message.reply_text(f"❌ خطا در بروزرسانی سرور:\n{e}", reply_markup=admin_main_keyboard())
         return
 
-    await message.reply_text(msg_ok)
+    await message.reply_text(msg_ok, reply_markup=admin_main_keyboard())
     context.user_data.pop("state", None)
     context.user_data.pop("edit_server_id", None)
 
@@ -6044,7 +6044,7 @@ async def handle_server_inline_callback(
         if field == "cancel":
             context.user_data.pop("state", None)
             context.user_data.pop("edit_server_id", None)
-            await msg.edit_text("❌ ویرایش سرور لغو شد.")
+            await msg.reply_text("❌ ویرایش سرور لغو شد.", reply_markup=admin_main_keyboard())
             return
 
         await msg.edit_text("❌ گزینه‌ی ویرایش سرور نامعتبر است.")
