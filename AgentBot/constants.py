@@ -127,6 +127,8 @@ UD_FIXED_NEW_PLAN = "fixed_new_plan"
 UD_FIXED_CAT_ID = "fixed_cat_id"
 
 STATE_DYN_EDIT_FIELD = "st:dyn_edit_field"
+UD_DYN_DISCOUNT_PHASE = "dyn_discount_phase"
+UD_DYN_DISCOUNT_THRESHOLD = "dyn_discount_threshold"
 STATE_FIXED_ADD_CAT_TITLE = "st:fixed_add_cat_title"
 STATE_FIXED_EDIT_CAT_TITLE = "st:fixed_edit_cat_title"
 STATE_FIXED_ADD_PLAN_TITLE = "st:fixed_add_plan_title"

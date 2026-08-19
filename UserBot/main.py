@@ -1232,9 +1232,14 @@ def _is_unlimited_time(days_val: int) -> bool:
 def _main_menu_keyboard():
     br = _get_buy_renew_settings()
     mkt = _get_marketing_settings()
+    try:
+        ref_settings = userbot_db.get_referral_settings()
+        ref_enabled = bool(ref_settings.get("referral_enabled", False))
+    except Exception:
+        ref_enabled = False
     return main_menu_keyboard(
         show_renew=bool(br.get("show_renew_in_main_menu", True)),
-        show_invite=bool(mkt.get("show_gift_button", False)),
+        show_invite=bool(mkt.get("show_gift_button", False)) or ref_enabled,
     )
 
 
@@ -1458,7 +1463,7 @@ def _calc_dynamic_price(gb: int, months: int, dyn_settings: Optional[Dict[str, A
 
     off_percent = 0
     discount_tiered_enabled = bool(settings.get("discount_tiered_enabled", False))
-    discount_simple_enabled = bool(settings.get("discount_simple_enabled", False))
+    discount_simple_enabled = plans_storage.is_simple_discount_active(settings)
     discount_tiers = plans_storage.normalize_discount_tiers(settings.get("discount_tiers", []))
     
     # محاسبه تخفیف پلاکانی اگر فعال باشد
@@ -4954,6 +4959,7 @@ async def _process_wallet_purchase(
     now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
     service_db_id = renew_service_id if is_renew_flow else None
+    wallet_purchase_payment_id = 0
     try:
         with userbot_db._get_conn() as conn:
             cur = conn.cursor()
@@ -5056,8 +5062,18 @@ async def _process_wallet_purchase(
                         now,
                     ),
                 )
+                wallet_purchase_payment_id = int(cur.lastrowid or 0)
         if not skip_wallet_charge:
             userbot_db.decrease_user_wallet(internal_user_id, amount)
+            if wallet_purchase_payment_id > 0:
+                try:
+                    userbot_db.try_grant_referral_purchase_reward(internal_user_id, wallet_purchase_payment_id)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to process referral purchase reward for wallet purchase (user=%s): %s",
+                        internal_user_id,
+                        e,
+                    )
     except Exception as e:
         logger.exception("Failed to persist wallet purchase for telegram_id=%s", user_id)
         await context.bot.send_message(
@@ -5347,6 +5363,100 @@ async def _connect_panel_subscription_by_uuid(
 
 
 # --- 5. هندلر دستور استارت ---
+async def _render_invite_home_text(context: ContextTypes.DEFAULT_TYPE, internal_user_id: int) -> str:
+    """متن صفحه اصلی «دعوت دوستان» با آمار کاربر."""
+    try:
+        settings = userbot_db.get_referral_settings()
+    except Exception:
+        settings = {}
+    try:
+        stats = userbot_db.get_referral_user_stats(int(internal_user_id or 0))
+    except Exception:
+        stats = {}
+    bot_username = await _get_user_bot_username(context)
+    code = ""
+    try:
+        code = userbot_db.get_or_create_user_referral_code(int(internal_user_id or 0))
+    except Exception:
+        code = ""
+    invite_link = f"https://t.me/{bot_username}?start=ref_{code}" if bot_username and code else ""
+
+    def _toman(v: Any) -> str:
+        try:
+            return f"{int(v or 0):,}"
+        except Exception:
+            return "0"
+
+    trial_amount = _toman(settings.get("trial_reward_amount"))
+    purchase_amount = _toman(settings.get("purchase_reward_amount"))
+    enabled = bool(settings.get("referral_enabled", False))
+
+    ref_settings_text = userbot_db.DEFAULT_REFERRAL_SETTINGS["invite_intro_text"]
+    try:
+        intro = str(settings.get("invite_intro_text") or ref_settings_text)
+        intro = intro.format(
+            invite_link=invite_link or "—",
+            trial_reward=f"{trial_amount} تومان",
+            purchase_reward=f"{purchase_amount} تومان",
+        )
+    except Exception:
+        intro = (
+            "🎁 دوستان خود را دعوت کنید و از هر دعوت پاداش بگیرید.\n\n"
+            f"🔗 لینک دعوت:\n{invite_link or '—'}"
+        )
+
+    if not enabled:
+        return "🎁 سیستم دعوت دوستان به‌طور موقت غیرفعال است."
+
+    total_referrals = int(stats.get("total_referrals") or 0)
+    successful = int(stats.get("successful_referrals") or 0)
+    pending = int(stats.get("pending_purchase") or 0)
+    total_rewards = int(stats.get("total_rewards") or 0)
+    paid_count = int(stats.get("paid_rewards_count") or 0)
+
+    stats_text = (
+        f"👥 کل دعوت‌ها: {total_referrals}\n"
+        f"✅ دعوت‌های موفق: {successful}\n"
+        f"⏳ در انتظار خرید: {pending}\n"
+        f"🎁 مجموع پاداش‌ها: {total_rewards:,} تومان\n"
+        f"🧾 تعداد جوایز دریافتی: {paid_count}"
+    )
+
+    return f"{intro}\n\n❖ ◈━━━━━━━━━━━━━━━◈ ❖\n{stats_text}"
+
+
+def _handle_referral_start_payload(payload: str, internal_user_id: int) -> bool:
+    """
+    If the /start deep-link payload is a referral code, register the referral.
+    Returns True when the payload was consumed as a referral (registered or the
+    user already has an inviter). Returns False when the payload should fall
+    through to the rest of the /start flow (e.g. a coupon code that merely
+    looks like a referral payload but belongs to no user).
+    """
+    ref_code = userbot_db.normalize_referral_payload(payload)
+    if not ref_code:
+        return False
+    try:
+        settings = userbot_db.get_referral_settings()
+        if not bool(settings.get("referral_enabled", False)):
+            return False
+    except Exception:
+        return False
+    try:
+        if not userbot_db.get_user_by_referral_code(ref_code):
+            # Such an invitation code does not exist; let the payload flow on
+            # (could be a coupon code), and do not show any referral error.
+            return False
+        created, status, _ref_id = userbot_db.register_referral(int(internal_user_id or 0), ref_code, payload)
+        # سکوت در هر حالت: ثبت جدید، self-referral یا already-referred پیامی ندارد.
+        if created or status in {"already_referred", "self_referral"}:
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to register referral invitee={internal_user_id}: {e}")
+        return False
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
@@ -5410,6 +5520,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     start_payload = _extract_start_payload(update)
+    referral_consumed = False
     if start_payload:
         shot_handled = await _handle_user_ticket_shot_start(
             update=update,
@@ -5431,7 +5542,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             if connect_handled:
                 return
-    
+
+        referral_consumed = _handle_referral_start_payload(start_payload, int(internal_user_id))
     text_settings = _get_text_settings()
     welcome_text = (
         text_settings.get("welcome_message")
@@ -5450,6 +5562,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(formatted_text, reply_markup=_main_menu_keyboard())
 
     if start_payload:
+        # referral codes must never be treated as a coupon code
+        if referral_consumed:
+            return
         try:
             ok, result_text, amount = userbot_db.redeem_zarin_voucher(start_payload, int(internal_user_id))
         except Exception as e:
@@ -5792,21 +5907,11 @@ reply_markup=renew_services_keyboard(visible_services),
         )
 
     elif "دعوت دوستان" in text:
-        mkt = _get_marketing_settings()
-        if not bool(mkt.get("show_gift_button", False)):
-            await update.message.reply_text(
-                "🚫 بخش هدیه در حال حاضر غیرفعال است.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-        bot_username = await _get_user_bot_username(context)
-        invite_link = f"https://t.me/{bot_username}" if bot_username else "لینک دعوت هنوز تنظیم نشده است."
+        u_db = userbot_db.get_user_by_telegram_id(user_id) or {}
+        internal_uid = int(u_db.get("id") or 0)
+        invite_text = await _render_invite_home_text(context, internal_uid)
         await update.message.reply_text(
-            _format_text_template(
-                text_settings.get("invite_info_text")
-                or "🎁 دعوت دوستان خود از هدایای ویژه ای بهره مند شوید",
-                invite_link=invite_link,
-            ),
+            invite_text,
             reply_markup=invite_banner_keyboard(),
         )
 
@@ -5931,9 +6036,21 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("invite:"):
         await query.answer()
         action = data.split(":", 1)[1].strip().lower() if ":" in data else ""
+        u_db = userbot_db.get_user_by_telegram_id(user_id) or {}
+        internal_uid = int(u_db.get("id") or 0)
+
         if action == "get_banner":
             bot_username = await _get_user_bot_username(context)
-            invite_link = f"https://t.me/{bot_username}" if bot_username else "لینک دعوت هنوز تنظیم نشده است."
+            code = ""
+            try:
+                code = userbot_db.get_or_create_user_referral_code(internal_uid)
+            except Exception:
+                code = ""
+            invite_link = (
+                f"https://t.me/{bot_username}?start=ref_{code}"
+                if bot_username and code
+                else "لینک دعوت هنوز تنظیم نشده است."
+            )
             banner_text = _format_text_template(
                 text_settings.get("invite_banner_text")
                 or "🎁 بنر دعوت اختصاصی شما\n\n🔗 لینک دعوت شما:\n{invite_link}",
@@ -5951,6 +6068,76 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             await context.bot.send_message(chat_id=user_id, text=banner_text)
+            return
+
+        if action == "rewards":
+            try:
+                stats = userbot_db.get_referral_user_stats(internal_uid)
+            except Exception:
+                stats = {}
+            settings = userbot_db.get_referral_settings()
+            text = (
+                "🎁 جوایز من\n"
+                "❖ ◈━━━━━━━━━━━━━━━◈ ❖\n"
+                f"🤝 پاداش تست: {int(settings.get('trial_reward_amount') or 0):,} تومان\n"
+                f"🛒 پاداش خرید اول: {int(settings.get('purchase_reward_amount') or 0):,} تومان\n"
+                f"🎯 جوایز دریافتی: {int(stats.get('paid_rewards_count') or 0)}\n"
+                f"💰 مجموع پاداش‌ها: {int(stats.get('total_rewards') or 0):,} تومان\n"
+            )
+            await context.bot.send_message(chat_id=user_id, text=text)
+            return
+
+        if action == "list":
+            try:
+                refs, total = userbot_db.list_referrals(limit=20, inviter_id=internal_uid)
+            except Exception:
+                refs, total = [], 0
+            if not refs:
+                await context.bot.send_message(chat_id=user_id, text="👥 هنوز کسی را دعوت نکرده‌اید.")
+                return
+            lines = [f"👥 دعوت‌های من ({total} نفر)\n❖ ◈━━━━━━━━━━━━━━━◈ ❖"]
+            for idx, ref in enumerate(refs, start=1):
+                invitee_name = str(ref.get("invitee_full_name") or ref.get("invitee_username") or "—").strip()
+                status_icon = "✅" if str(ref.get("status") or "") == "active" else "❌"
+                lines.append(f"{idx}. {invitee_name} | {status_icon}")
+            await context.bot.send_message(chat_id=user_id, text="\n".join(lines))
+            return
+
+        if action == "stats":
+            try:
+                stats = userbot_db.get_referral_user_stats(internal_uid)
+            except Exception:
+                stats = {}
+            text = (
+                "📊 آمار دعوت\n"
+                "❖ ◈━━━━━━━━━━━━━━━◈ ❖\n"
+                f"👥 کل دعوت‌ها: {int(stats.get('total_referrals') or 0)}\n"
+                f"✅ دعوت‌های موفق: {int(stats.get('successful_referrals') or 0)}\n"
+                f"⏳ در انتظار خرید: {int(stats.get('pending_purchase') or 0)}\n"
+                f"🧪 پاداش‌های تست: {int(stats.get('trial_rewards_count') or 0)}\n"
+                f"🛒 پاداش‌های خرید: {int(stats.get('purchase_rewards_count') or 0)}\n"
+            )
+            await context.bot.send_message(chat_id=user_id, text=text)
+            return
+
+        if action == "history":
+            try:
+                rewards, total = userbot_db.list_referral_rewards(limit=20, inviter_id=internal_uid)
+            except Exception:
+                rewards, total = [], 0
+            if not rewards:
+                await context.bot.send_message(chat_id=user_id, text="📜 هنوز پاداشی دریافت نکرده‌اید.")
+                return
+            labels = userbot_db.REFERRAL_REWARD_LABELS
+            lines = [f"📜 تاریخچه جوایز ({total} مورد)\n❖ ◈━━━━━━━━━━━━━━━◈ ❖"]
+            for idx, rw in enumerate(rewards, start=1):
+                rtype = str(rw.get("reward_type") or "")
+                label = labels.get(rtype, rtype)
+                amount = int(rw.get("amount_toman") or 0)
+                status_icon = "✅" if str(rw.get("status") or "") == "paid" else "❌"
+                created = str(rw.get("created_at") or "")[:10]
+                lines.append(f"{idx}. {label} | {amount:,} تومان | {status_icon} {created}")
+            await context.bot.send_message(chat_id=user_id, text="\n".join(lines))
             return
         return
 
@@ -8051,6 +8238,14 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 service_db_id = cur.lastrowid
             userbot_db.set_free_trial_used(internal_user_id, 1)
+            try:
+                userbot_db.try_grant_referral_trial_reward(internal_user_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to process referral trial reward (invitee user=%s): %s",
+                    internal_user_id,
+                    e,
+                )
         except Exception as e:
             logger.exception("Failed persisting free trial for telegram_id=%s", user_id)
             await update.message.reply_text(

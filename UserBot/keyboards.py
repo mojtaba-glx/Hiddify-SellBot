@@ -352,7 +352,15 @@ def subscription_links_keyboard(service_id=None):
 
 def invite_banner_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📩دریافت بنر دعوت", callback_data="invite:get_banner")],
+        [InlineKeyboardButton("📤 لینک دعوت من", callback_data="invite:get_banner")],
+        [
+            InlineKeyboardButton("🎁 جوایز من", callback_data="invite:rewards"),
+            InlineKeyboardButton("👥 دعوت‌های من", callback_data="invite:list"),
+        ],
+        [
+            InlineKeyboardButton("📊 آمار دعوت", callback_data="invite:stats"),
+            InlineKeyboardButton("📜 تاریخچه جوایز", callback_data="invite:history"),
+        ],
     ])
 
 

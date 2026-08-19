@@ -553,6 +553,7 @@ async def handle_wallet_charge_text(update: Update, context: ContextTypes.DEFAUL
         f"💰 مبلغ: <b>{_fmt_toman(amount)}</b> تومان\n"
         f"💳 موجودی جدید: <b>{_fmt_toman(wallet['balance'])}</b> تومان",
         reply_markup=admin_main_keyboard(),
+        parse_mode="HTML",
     )
     await send_agent_detail(update, context, agent_id)
     return True

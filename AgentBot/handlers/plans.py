@@ -1,4 +1,7 @@
 import logging
+import time
+from datetime import datetime
+from typing import Dict, Any
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -9,11 +12,13 @@ from AgentBot.constants import (
     STATE_FIXED_ADD_CAT_TITLE, STATE_FIXED_EDIT_CAT_TITLE,
     STATE_FIXED_ADD_PLAN_TITLE, STATE_FIXED_ADD_PLAN_PRICE,
     STATE_FIXED_ADD_PLAN_DAYS, STATE_FIXED_ADD_PLAN_GB,
+    UD_DYN_DISCOUNT_PHASE, UD_DYN_DISCOUNT_THRESHOLD,
 )
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
     _ikb, IButton, BTN_BACK,
     plans_menu_keyboard, plans_mode_keyboard, dyn_settings_keyboard,
+    discount_settings_keyboard,
     plans_cats_keyboard, plans_cat_del_keyboard,
     plans_cat_detail_keyboard, plans_cat_del_confirm_keyboard,
     plans_plans_keyboard, plans_plan_del_keyboard,
@@ -26,8 +31,19 @@ from AgentBot.database import (
     add_fixed_category, edit_fixed_category, delete_fixed_category,
     get_fixed_plans, get_fixed_plan, add_fixed_plan, delete_fixed_plan,
 )
+from Shared import plans_storage
 
 logger = logging.getLogger(__name__)
+
+DISCOUNT_DEFAULTS = {
+    "discount_simple_enabled": False,
+    "discount_step_gb": 50,
+    "discount_percent_step": 5,
+    "discount_percent_max": 50,
+    "discount_tiered_enabled": False,
+    "discount_tiers": [],
+    "discount_simple_expire_at": 0,
+}
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -42,6 +58,228 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+def _get_discount_settings(agent_id: int) -> Dict[str, Any]:
+    settings = get_setting(agent_id, "dynamic_plan_settings", {}) or {}
+    if not isinstance(settings, dict):
+        settings = {}
+    for k, v in DISCOUNT_DEFAULTS.items():
+        settings.setdefault(k, v)
+    settings["discount_tiers"] = plans_storage.normalize_discount_tiers(settings.get("discount_tiers", []))
+    return settings
+
+
+def _set_discount_settings(agent_id: int, **kwargs: Any) -> None:
+    settings = get_setting(agent_id, "dynamic_plan_settings", {}) or {}
+    if not isinstance(settings, dict):
+        settings = {}
+    for k, v in kwargs.items():
+        if k not in DISCOUNT_DEFAULTS:
+            continue
+        if isinstance(DISCOUNT_DEFAULTS[k], list):
+            settings[k] = plans_storage.normalize_discount_tiers(v)
+        elif isinstance(DISCOUNT_DEFAULTS[k], bool):
+            settings[k] = str(v).strip().lower() in {"1", "true", "yes", "on"} if not isinstance(v, bool) else v
+        else:
+            settings[k] = int(v)
+    set_setting(agent_id, "dynamic_plan_settings", settings)
+
+
+def _discount_timer_line(settings: Dict[str, Any]) -> str:
+    expire_at = settings.get("discount_simple_expire_at") or 0
+    try:
+        expire_at = float(expire_at)
+    except (TypeError, ValueError):
+        expire_at = 0
+    if expire_at <= 0 or time.time() >= expire_at:
+        return ""
+    remaining = int(expire_at - time.time())
+    days = remaining // 86400
+    hours = (remaining % 86400) // 3600
+    minutes = (remaining % 3600) // 60
+    parts = []
+    if days > 0:
+        parts.append(f"{days} روز")
+    if hours > 0:
+        parts.append(f"{hours} ساعت")
+    if minutes > 0:
+        parts.append(f"{minutes} دقیقه")
+    remaining_txt = " و ".join(parts) if parts else "کمتر از یک دقیقه"
+    return (
+        f"⏱ تایمر تخفیف حجمی ساده: {remaining_txt} مانده "
+        f"(پایان: {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')})"
+    )
+
+
+async def _render_discount_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    agent_id = get_agent_id(context)
+    settings = _get_discount_settings(agent_id)
+
+    # اگر تایمر منقضی شده، خودکار غیرفعال کن
+    expire_at = settings.get("discount_simple_expire_at") or 0
+    try:
+        expire_at = float(expire_at)
+    except (TypeError, ValueError):
+        expire_at = 0
+    if expire_at > 0 and time.time() >= expire_at:
+        _set_discount_settings(
+            agent_id,
+            discount_simple_enabled=False,
+            discount_simple_expire_at=0,
+        )
+        settings = _get_discount_settings(agent_id)
+
+    simple_enabled = plans_storage.is_simple_discount_enabled(settings)
+    tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
+    timer_line = _discount_timer_line(settings)
+
+    lines = [
+        "🎛 <b>مدیریت حرفه‌ای تخفیف‌ها</b>",
+        "",
+        f"🎁 تخفیف حجمی ساده: {'فعال ✅' if simple_enabled else 'غیرفعال ❌'}",
+        f"🎚 تخفیف پلاکانی: {'فعال ✅' if tiered_enabled else 'غیرفعال ❌'}",
+        "",
+        "برای تغییر وضعیت هر نوع تخفیف روی دکمه‌ی همان نوع بزنید، یا از دکمه‌های ویرایش برای تنظیم مقادیر استفاده کنید.",
+    ]
+    if timer_line:
+        lines.append(timer_line)
+
+    if simple_enabled:
+        lines.append(
+            f"• تخفیف حجمی ساده: از {settings['discount_step_gb']} گیگ به بالا، "
+            f"{settings['discount_percent_step']}٪ تا سقف {settings['discount_percent_max']}٪"
+        )
+    elif int(settings.get('discount_step_gb', 0)) > 0 and int(settings.get('discount_percent_step', 0)) > 0:
+        lines.append(
+            f"• تنظیمات ذخیره‌شده تخفیف حجمی ساده: از {settings['discount_step_gb']} گیگ به بالا، "
+            f"{settings['discount_percent_step']}٪ تا سقف {settings['discount_percent_max']}٪ (غیرفعال)"
+        )
+
+    if tiered_enabled:
+        lines.append(f"• پله‌های تخفیف پلاکانی: {plans_storage.format_discount_tiers(settings.get('discount_tiers', []))}")
+    elif settings.get("discount_tiers"):
+        lines.append(
+            f"• پله‌های تخفیف پلاکانی ذخیره‌شده: {plans_storage.format_discount_tiers(settings.get('discount_tiers', []))} (غیرفعال)"
+        )
+
+    text = "\n".join(lines)
+    if query:
+        try:
+            await query.edit_message_text(text, reply_markup=discount_settings_keyboard(), parse_mode="HTML")
+            return
+        except Exception:
+            pass
+    try:
+        await update.message.reply_text(text, reply_markup=discount_settings_keyboard(), parse_mode="HTML")
+    except Exception:
+        pass
+
+
+async def _roleme_discount_menu(context: ContextTypes.DEFAULT_TYPE, update: Update, agent_id: int) -> None:
+    settings = _get_discount_settings(agent_id)
+
+    expire_at = settings.get("discount_simple_expire_at") or 0
+    try:
+        expire_at = float(expire_at)
+    except (TypeError, ValueError):
+        expire_at = 0
+    if expire_at > 0 and time.time() >= expire_at:
+        _set_discount_settings(agent_id, discount_simple_enabled=False, discount_simple_expire_at=0)
+        settings = _get_discount_settings(agent_id)
+
+    simple_enabled = plans_storage.is_simple_discount_enabled(settings)
+    tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
+    timer_line = _discount_timer_line(settings)
+
+    lines = [
+        "🎛 <b>مدیریت حرفه‌ای تخفیف‌ها</b>",
+        "",
+        f"🎁 تخفیف حجمی ساده: {'فعال ✅' if simple_enabled else 'غیرفعال ❌'}",
+        f"🎚 تخفیف پلاکانی: {'فعال ✅' if tiered_enabled else 'غیرفعال ❌'}",
+        "",
+        "برای تغییر وضعیت هر نوع تخفیف روی دکمه‌ی همان نوع بزنید، یا از دکمه‌های ویرایش برای تنظیم مقادیر استفاده کنید.",
+    ]
+    if timer_line:
+        lines.append(timer_line)
+
+    if simple_enabled:
+        lines.append(
+            f"• تخفیف حجمی ساده: از {settings['discount_step_gb']} گیگ به بالا، "
+            f"{settings['discount_percent_step']}٪ تا سقف {settings['discount_percent_max']}٪"
+        )
+    elif int(settings.get('discount_step_gb', 0)) > 0 and int(settings.get('discount_percent_step', 0)) > 0:
+        lines.append(
+            f"• تنظیمات ذخیره‌شده تخفیف حجمی ساده: از {settings['discount_step_gb']} گیگ به بالا، "
+            f"{settings['discount_percent_step']}٪ تا سقف {settings['discount_percent_max']}٪ (غیرفعال)"
+        )
+
+    if tiered_enabled:
+        lines.append(f"• پله‌های تخفیف پلاکانی: {plans_storage.format_discount_tiers(settings.get('discount_tiers', []))}")
+    elif settings.get("discount_tiers"):
+        lines.append(
+            f"• پله‌های تخفیف پلاکانی ذخیره‌شده: {plans_storage.format_discount_tiers(settings.get('discount_tiers', []))} (غیرفعال)"
+        )
+
+    text = "\n".join(lines)
+    try:
+        await update.message.reply_text(text, reply_markup=discount_settings_keyboard(), parse_mode="HTML")
+    except Exception:
+        pass
+
+
+async def _discount_simple_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    agent_id = get_agent_id(context)
+    settings = _get_discount_settings(agent_id)
+    simple_enabled = plans_storage.is_simple_discount_enabled(settings)
+
+    if simple_enabled:
+        _set_discount_settings(
+            agent_id,
+            discount_simple_enabled=False,
+            discount_simple_expire_at=0,
+        )
+    else:
+        update_kwargs = {"discount_simple_enabled": True, "discount_simple_expire_at": 0}
+        if (
+            int(settings.get("discount_step_gb", 0)) <= 0
+            or int(settings.get("discount_percent_step", 0)) <= 0
+            or int(settings.get("discount_percent_max", 0)) <= 0
+        ):
+            update_kwargs["discount_step_gb"] = settings.get("discount_step_gb", 50) or 50
+            update_kwargs["discount_percent_step"] = settings.get("discount_percent_step", 5) or 5
+            update_kwargs["discount_percent_max"] = settings.get("discount_percent_max", 50) or 50
+        _set_discount_settings(agent_id, **update_kwargs)
+
+    await _render_discount_menu(update, context)
+
+
+async def _discount_tiers_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    agent_id = get_agent_id(context)
+    settings = _get_discount_settings(agent_id)
+    tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
+
+    if tiered_enabled:
+        _set_discount_settings(agent_id, discount_tiered_enabled=False)
+        await _render_discount_menu(update, context)
+        return
+
+    if settings.get("discount_tiers"):
+        _set_discount_settings(agent_id, discount_tiered_enabled=True)
+        await _render_discount_menu(update, context)
+        return
+
+    try:
+        await query.answer(
+            "⚠️ هیچ پله‌ای برای تخفیف پلاکانی تنظیم نشده است. ابتدا از «ویرایش تخفیف پلکانی» استفاده کنید.",
+            show_alert=True,
+        )
+    except Exception:
+        pass
+    await _render_discount_menu(update, context)
 
 
 async def _send_fixed_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, msg=None) -> None:
@@ -410,6 +648,64 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # ---- Dynamic plan handlers ----
+    if action == "discount":
+        sub = parts[3] if len(parts) > 3 else ""
+
+        if not sub:
+            await _render_discount_menu(update, context)
+            return
+
+        if sub == "toggle":
+            which = parts[4] if len(parts) > 4 else ""
+            if which == "simple":
+                await _discount_simple_toggle(update, context)
+            elif which == "tiers":
+                await _discount_tiers_toggle(update, context)
+            return
+
+        if sub == "edit":
+            which = parts[4] if len(parts) > 4 else ""
+            if which == "simple":
+                context.user_data[UD_STATE] = STATE_DYN_EDIT_FIELD
+                context.user_data[UD_DYN_FIELD] = "discount_simple"
+                context.user_data[UD_DYN_DISCOUNT_PHASE] = "threshold"
+                await query.answer()
+                await context.bot.send_message(
+                    query.message.chat_id,
+                    "🎁 <b>تخفیف حجمی (ساده)</b>\n\n"
+                    "از چه حجمی به بالا تخفیف فعال شود؟ (بر حسب گیگ)\n"
+                    "مثال: 50\n"
+                    "برای خاموش کردن کامل تخفیف، عدد 0 بفرست.",
+                    reply_markup=cancel_keyboard(), parse_mode="HTML",
+                )
+                return
+            if which == "tiers":
+                context.user_data[UD_STATE] = STATE_DYN_EDIT_FIELD
+                context.user_data[UD_DYN_FIELD] = "discount_tiers"
+                await query.answer()
+                await context.bot.send_message(
+                    query.message.chat_id,
+                    "🎚 <b>تخفیف پلکانی</b>\n\n"
+                    "هر پله را با فرمت <code>حجم:درصد</code> وارد کن و پله‌ها را با کاما یا خط جدید جدا کن.\n"
+                    "مثال: <code>50:5, 100:10, 200:15</code>\n"
+                    "یعنی: از ۵۰ گیگ ۵٪، از ۱۰۰ گیگ ۱۰٪ و از ۲۰۰ گیگ ۱۵٪ تخفیف.\n"
+                    "برای خاموش کردن تخفیف، عدد 0 بفرست.",
+                    reply_markup=cancel_keyboard(), parse_mode="HTML",
+                )
+                return
+            if which == "timer":
+                context.user_data[UD_STATE] = STATE_DYN_EDIT_FIELD
+                context.user_data[UD_DYN_FIELD] = "discount_timer"
+                await query.answer()
+                await context.bot.send_message(
+                    query.message.chat_id,
+                    "⏱ <b>تایمر تخفیف حجمی (ساده)</b>\n\n"
+                    "مدت زمان را به ساعت ارسال کن (مثلاً 12 یا 24).\n"
+                    "برای اتمام تایمر و خاموش شدن خودکار تخفیف، عدد 0 بفرست.",
+                    reply_markup=cancel_keyboard(), parse_mode="HTML",
+                )
+                return
+
     if action == "dyn_edit":
         field = parts[3] if len(parts) > 3 else ""
         if field not in ("price_per_gb", "price_per_month", "volume_range", "time_range"):
@@ -437,19 +733,34 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if action == "dynset":
-        settings = get_setting(agent_id, "dynamic_plan_settings", {})
+        settings = _get_discount_settings(agent_id)
+        simple_enabled = plans_storage.is_simple_discount_enabled(settings)
+        tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
+        discount_info = []
+        if simple_enabled:
+            discount_info.append(
+                f"• تخفیف حجمی ساده: از {settings.get('discount_step_gb', 0)} گیگ به بالا، "
+                f"{settings.get('discount_percent_step', 0)}٪ تا سقف {settings.get('discount_percent_max', 0)}٪"
+            )
+        if tiered_enabled:
+            discount_info.append(
+                f"• تخفیف پلکانی: {plans_storage.format_discount_tiers(settings.get('discount_tiers', []))}"
+            )
+        if not discount_info:
+            discount_info.append("• تخفیفی فعال نیست")
         text = (
             "\u2699\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645 \u067e\u0644\u0646 \u067e\u0648\u06cc\u0627</b>\n\n"
             "\U0001f4b0 \u0642\u06cc\u0645\u062a \u0647\u0631 \u06af\u06cc\u06af: {}\n"
             "\U0001f4b0 \u0642\u06cc\u0645\u062a \u0647\u0631 \u0645\u0627\u0647: {}\n\n"
             "\U0001f4ca \u062d\u062c\u0645 \u0642\u0627\u0628\u0644 \u0641\u0631\u0648\u0634: \u0627\u0632 {} \u062a\u0627 {} \u06af\u06cc\u06af (\u06af\u0627\u0645: {})\n"
             "\u23f0 \u0632\u0645\u0627\u0646 \u0627\u0634\u062a\u0631\u0627\u06a9: \u0627\u0632 {} \u062a\u0627 {} \u0645\u0627\u0647 (\u06af\u0627\u0645: {})\n\n"
-            "\U0001f39f \u062a\u062e\u0641\u06cc\u0641 \u0647\u0627: \u062f\u0631 \u0646\u0633\u062e\u0647 \u0628\u0639\u062f\u06cc"
+            "\U0001f39f <b>\u062a\u062e\u0641\u06cc\u0641 \u0647\u0627:</b>\n{}"
         ).format(
             _fmt_toman(settings.get("price_per_gb", 0)),
             _fmt_toman(settings.get("price_per_month", 0)),
             settings.get("min_gb", 1), settings.get("max_gb", 999), settings.get("step_gb", 1),
             settings.get("min_month", 1), settings.get("max_month", 12), settings.get("step_month", 1),
+            "\n".join(discount_info),
         )
         try:
             await query.edit_message_text(text, reply_markup=dyn_settings_keyboard(), parse_mode="HTML")
@@ -470,6 +781,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if text in CANCEL_TEXTS:
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_DYN_FIELD, None)
+        context.user_data.pop(UD_DYN_DISCOUNT_PHASE, None)
+        context.user_data.pop(UD_DYN_DISCOUNT_THRESHOLD, None)
         context.user_data.pop("edit_cat_id", None)
         context.user_data.pop("fixed_cat_id", None)
         context.user_data.pop("fixed_new_plan", None)
@@ -548,6 +861,120 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if state == STATE_DYN_EDIT_FIELD:
         field = context.user_data.get(UD_DYN_FIELD, "")
         raw = _normalize_digits(text)
+
+        if field == "discount_simple":
+            phase = context.user_data.get(UD_DYN_DISCOUNT_PHASE, "threshold")
+
+            if phase == "threshold":
+                try:
+                    threshold = int(raw)
+                except ValueError:
+                    await update.message.reply_text("❌ لطفاً عدد حجم را به صورت صحیح وارد کنید (مثلاً 50).", reply_markup=cancel_keyboard())
+                    return True
+                threshold = max(0, threshold)
+                context.user_data[UD_DYN_DISCOUNT_THRESHOLD] = threshold
+                context.user_data[UD_DYN_DISCOUNT_PHASE] = "percent"
+                await update.message.reply_text(
+                    "الان درصد تخفیف را ارسال کن (مثلاً 25).\n"
+                    "برای خاموش کردن کامل تخفیف 0 بفرست.",
+                    reply_markup=cancel_keyboard(),
+                )
+                return True
+
+            try:
+                percent = int(raw.replace("%", ""))
+            except ValueError:
+                await update.message.reply_text("❌ لطفاً درصد تخفیف را به صورت عددی بفرست (مثلاً 25).", reply_markup=cancel_keyboard())
+                return True
+            threshold = int(context.user_data.pop(UD_DYN_DISCOUNT_THRESHOLD, 0))
+            context.user_data.pop(UD_DYN_DISCOUNT_PHASE, None)
+
+            if percent <= 0 or threshold <= 0:
+                _set_discount_settings(
+                    agent_id,
+                    discount_step_gb=0,
+                    discount_percent_step=0,
+                    discount_percent_max=0,
+                    discount_tiers=[],
+                    discount_simple_enabled=False,
+                    discount_simple_expire_at=0,
+                )
+                await update.message.reply_text("✅ تخفیف حجمی خاموش شد.")
+            else:
+                _set_discount_settings(
+                    agent_id,
+                    discount_step_gb=threshold,
+                    discount_percent_step=percent,
+                    discount_percent_max=percent,
+                    discount_tiers=[],
+                    discount_simple_enabled=True,
+                    discount_simple_expire_at=0,
+                )
+                await update.message.reply_text(
+                    f"✅ تخفیف ذخیره شد.\n"
+                    f"از {threshold} گیگ به بالا، {percent}٪ تخفیف روی قیمت نهایی اعمال می‌شود."
+                )
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop(UD_DYN_FIELD, None)
+            await _roleme_discount_menu(context, update, agent_id)
+            return True
+
+        if field == "discount_tiers":
+            try:
+                tiers = plans_storage.parse_discount_tiers_text(text)
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ فرمت پله‌ها معتبر نیست. مثال درست: 50:5,100:10,200:15",
+                    reply_markup=cancel_keyboard(),
+                )
+                return True
+            _set_discount_settings(
+                agent_id,
+                discount_tiers=tiers,
+                discount_tiered_enabled=True,
+            )
+            if tiers:
+                await update.message.reply_text(
+                    f"✅ تخفیف پلکانی ذخیره شد.\n{plans_storage.format_discount_tiers(tiers)}"
+                )
+            else:
+                await update.message.reply_text("✅ تخفیف پلکانی خاموش شد.")
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop(UD_DYN_FIELD, None)
+            await _roleme_discount_menu(context, update, agent_id)
+            return True
+
+        if field == "discount_timer":
+            try:
+                hours = int(raw)
+            except ValueError:
+                await update.message.reply_text("❌ لطفاً مدت زمان را به ساعت به صورت عددی ارسال کنید (مثلاً 12).", reply_markup=cancel_keyboard())
+                return True
+
+            if hours <= 0:
+                _set_discount_settings(
+                    agent_id,
+                    discount_simple_enabled=False,
+                    discount_simple_expire_at=0,
+                )
+                await update.message.reply_text("✅ تایمر تخفیف حذف شد و تخفیف حجمی ساده خاموش شد.")
+            else:
+                expire_at = int(time.time()) + hours * 3600
+                _set_discount_settings(
+                    agent_id,
+                    discount_simple_enabled=True,
+                    discount_simple_expire_at=expire_at,
+                )
+                await update.message.reply_text(
+                    "✅ تایمر تخفیف حجمی ساده تنظیم شد.\n"
+                    f"تخفیف به مدت {hours} ساعت (تا {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')}) فعال است "
+                    "و پس از اتمام، به‌صورت خودکار خاموش می‌شود."
+                )
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop(UD_DYN_FIELD, None)
+            await _roleme_discount_menu(context, update, agent_id)
+            return True
+
         settings = get_setting(agent_id, "dynamic_plan_settings", {})
         if field == "price_per_gb":
             try:

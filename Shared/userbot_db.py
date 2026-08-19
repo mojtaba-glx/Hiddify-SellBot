@@ -1,9 +1,13 @@
 # Shared/userbot_db.py
 from __future__ import annotations
 
-import sqlite3
 import json
+import os
 import re
+import sqlite3
+import threading
+import urllib.request
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
@@ -107,6 +111,43 @@ DEFAULT_PAYMENT_SETTINGS = {
     "enable_crypto": False,
     "event_channel_enabled": False,
     "event_channel_id": "",
+}
+
+DEFAULT_REFERRAL_SETTINGS = {
+    "referral_enabled": False,
+    "trial_reward_enabled": True,
+    "trial_reward_amount": 0,
+    "purchase_reward_enabled": True,
+    "purchase_reward_amount": 0,
+    "max_successful_referrals": 0,  # 0 = نامحدود
+    "min_purchase_amount": 0,       # حداقل مبلغ برای پاداش خرید
+    "invite_intro_text": (
+        "🎁 دعوت دوستان\n"
+        "❖ ◈━━━━━━━━━━━━━━━◈ ❖\n"
+        "دوستت رو دعوت کن و از هر دعوت پاداش بگیر!\n\n"
+        "🤝 پاداش تست دوستت برای تو: {trial_reward}\n"
+        "🛒 پاداش اولین خرید دوستت: {purchase_reward}\n\n"
+        "🔗 لینک دعوت:\n{invite_link}"
+    ),
+    "trial_reward_notify_text": (
+        "🎉 پاداش دعوت!\n"
+        "دوست شما «{invitee_name}» اکانت تست رایگان خود را فعال کرد.\n"
+        "🎁 {amount} تومان به کیف پول شما اضافه شد.\n"
+        "موجودی فعلی: {wallet} تومان"
+    ),
+    "purchase_reward_notify_text": (
+        "🎉 پاداش دعوت!\n"
+        "دوست شما «{invitee_name}» اولین خرید خود را انجام داد.\n"
+        "🎁 {amount} تومان به کیف پول شما اضافه شد.\n"
+        "موجودی فعلی: {wallet} تومان"
+    ),
+}
+REFERRAL_REWARD_KINDS = ("trial", "purchase")
+REFERRAL_REWARD_SOURCE_MANUAL = "manual"
+REFERRAL_REWARD_LABELS = {
+    "trial": "پاداش تست دعوت‌شده",
+    "purchase": "پاداش اولین خرید دعوت‌شده",
+    REFERRAL_REWARD_SOURCE_MANUAL: "پاداش دستی ادمین",
 }
 DEFAULT_BACKUP_RESTORE_SETTINGS = {
     "auto_backup_enabled": True,
@@ -213,7 +254,9 @@ def init_db() -> None:
             created_at TEXT,
             wallet_balance INTEGER DEFAULT 0,
             is_banned INTEGER DEFAULT 0,
-            got_free_trial INTEGER DEFAULT 0
+            got_free_trial INTEGER DEFAULT 0,
+            invited_by_user_id INTEGER DEFAULT 0,
+            referral_code TEXT DEFAULT ''
         )
     """)
 
@@ -392,6 +435,43 @@ def init_db() -> None:
         "CREATE INDEX IF NOT EXISTS idx_userbot_tickets_updated_id ON userbot_tickets(updated_at, id)"
     )
 
+    # Referral system: Source of Truth رابطه دعوت + دفتر پاداش‌ها
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS userbot_referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inviter_id INTEGER NOT NULL,
+            invitee_id INTEGER NOT NULL UNIQUE,
+            invited_by_code TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            rejection_reason TEXT DEFAULT '',
+            fraud_flag INTEGER DEFAULT 0,
+            invitee_qualified INTEGER DEFAULT 1,
+            first_seen_payload TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS userbot_referral_rewards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referral_id INTEGER,
+            inviter_id INTEGER NOT NULL,
+            invitee_id INTEGER NOT NULL DEFAULT 0,
+            reward_type TEXT NOT NULL,
+            reward_source TEXT NOT NULL,
+            amount_toman INTEGER NOT NULL DEFAULT 0,
+            voucher_code TEXT NOT NULL UNIQUE,
+            payment_id INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'paid',
+            revoked_at TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
@@ -471,6 +551,48 @@ def _migrate_db():
             print("Migrated: marzban_username column added to userbot_service_nodes.")
         except sqlite3.OperationalError:
             pass
+
+    # Referral system: ensure referral helpers are present on old databases
+    try:
+        cur.execute("SELECT invited_by_user_id FROM userbot_users LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE userbot_users ADD COLUMN invited_by_user_id INTEGER DEFAULT 0")
+            print("Migrated: invited_by_user_id column added to userbot_users.")
+        except sqlite3.OperationalError:
+            pass
+    try:
+        cur.execute("SELECT referral_code FROM userbot_users LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE userbot_users ADD COLUMN referral_code TEXT DEFAULT ''")
+            print("Migrated: referral_code column added to userbot_users.")
+        except sqlite3.OperationalError:
+            pass
+
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_userbot_referrals_inviter ON userbot_referrals(inviter_id)"
+    )
+    try:
+        cur.execute("SELECT invitee_qualified FROM userbot_referrals LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE userbot_referrals ADD COLUMN invitee_qualified INTEGER DEFAULT 1")
+            print("Migrated: invitee_qualified column added to userbot_referrals.")
+        except sqlite3.OperationalError:
+            pass
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_userbot_referral_rewards_pair
+        ON userbot_referral_rewards(referral_id, reward_type)
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_userbot_referral_rewards_inviter ON userbot_referral_rewards(inviter_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_userbot_users_referral_code ON userbot_users(referral_code)"
+    )
 
     conn.commit()
     conn.close()
@@ -3314,18 +3436,41 @@ def change_payment_status_with_wallet(payment_id: int, new_status: str) -> Tuple
         )
         conn.commit()
 
+        # Referral funnel: every transition into/out of "approved"
+        # (admin approval, SMS auto-approval, batch approval) passes here.
+        # Grant/revoke are atomic and idempotent; results are attached to the
+        # returned payment row so callers can send notifications.
+        referral_reward_result = None
+        referral_revoked = None
+        if user_id and old_status != "approved" and target == "approved":
+            try:
+                referral_reward_result = try_grant_referral_purchase_reward(int(user_id), int(payment_id))
+            except Exception:
+                referral_reward_result = None
+        if user_id and old_status == "approved" and target != "approved":
+            try:
+                referral_revoked = revoke_referral_purchase_reward_by_payment(int(payment_id))
+            except Exception:
+                referral_revoked = None
+
         cur.execute(
             """
             SELECT p.*, u.username, u.full_name, u.telegram_id
             FROM userbot_payments p
-            LEFT JOIN userbot_users u ON p.user_id = u.id
+            LEFT JOIN userbot_users u ON u.id = p.user_id
             WHERE p.id = ?
             LIMIT 1
             """,
             (payment_id,),
         )
         updated = cur.fetchone()
-        return True, "وضعیت تراکنش با موفقیت تغییر کرد.", (dict(updated) if updated else pay)
+        updated_pay = dict(updated) if updated else pay
+        if referral_reward_result and referral_reward_result.get("reward"):
+            updated_pay["_referral_reward"] = referral_reward_result["reward"]
+            updated_pay["_referral_reward_is_new"] = bool(referral_reward_result.get("is_new"))
+        if referral_revoked:
+            updated_pay["_revoked_referral_reward"] = referral_revoked
+        return True, "وضعیت تراکنش با موفقیت تغییر کرد.", updated_pay
     finally:
         conn.close()
 
@@ -3987,7 +4132,7 @@ def get_zarin_vouchers_dashboard() -> Dict[str, Any]:
             """
             SELECT
                 COUNT(*) AS total,
-                COALESCE(SUM(amount_toman), 0) AS total_amount,
+                COALESCE(SUM(amount_toman * max_uses), 0) AS total_amount,
                 COALESCE(SUM(used_count), 0) AS used_count,
                 COALESCE(SUM(max_uses), 0) AS max_uses
             FROM userbot_zarin_vouchers
@@ -4806,6 +4951,1010 @@ def get_user_ticket_by_code(user_id: int, ticket_code: int) -> Optional[Dict[str
         )
         row = cur.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+# ==========================================
+#     بخش رفرال (دعوت دوستان)
+# ==========================================
+
+REFERRAL_PAYLOAD_PREFIX = "ref_"
+REFERRAL_CODE_RE = re.compile(r"^[a-z0-9_]{6,20}$")
+
+
+def _referral_now() -> str:
+    return datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _invitee_display_name(cur_or_conn, invitee_user_id: int) -> str:
+    """Best-effort display name of an invitee (username > full_name)."""
+    try:
+        cur = cur_or_conn.cursor() if hasattr(cur_or_conn, "cursor") else cur_or_conn
+        cur.execute(
+            "SELECT username, full_name FROM userbot_users WHERE id = ? LIMIT 1",
+            (int(invitee_user_id or 0),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return "دوست شما"
+        username = str(row["username"] or "").strip()
+        full_name = str(row["full_name"] or "").strip()
+        return full_name or username or "دوست شما"
+    except Exception:
+        return "دوست شما"
+
+
+def _format_referral_reward_text(reward: Dict[str, Any], settings: Dict[str, Any], inviter_wallet: int, invitee_name: str) -> str:
+    reward_type = str(reward.get("reward_type") or "").strip().lower()
+    amount = int(reward.get("amount_toman") or 0)
+    template = ""
+    if reward_type == "trial":
+        template = str(settings.get("trial_reward_notify_text") or DEFAULT_REFERRAL_SETTINGS["trial_reward_notify_text"])
+    elif reward_type == "purchase":
+        template = str(settings.get("purchase_reward_notify_text") or DEFAULT_REFERRAL_SETTINGS["purchase_reward_notify_text"])
+    else:
+        template = "🎉 پاداش دعوت دریافت شد."
+    try:
+        return template.format(
+            invitee_name=invitee_name,
+            amount=f"{amount:,}",
+            wallet=f"{int(inviter_wallet):,}",
+        )
+    except Exception:
+        return (
+            f"🎉 پاداش دعوت!\n🎁 {amount:,} تومان به کیف پول شما اضافه شد.\n"
+            f"موجودی فعلی: {int(inviter_wallet):,} تومان"
+        )
+
+
+def _send_referral_reward_notice_background(reward: Dict[str, Any]) -> None:
+    """
+    Fire-and-forget Telegram notice to the inviter when a referral reward is paid.
+    Uses only stdlib so it never blocks or breaks the reward transaction.
+    """
+    try:
+        token = str(os.getenv("USER_BOT_TOKEN", "") or os.getenv("BOT_TOKEN", "") or "").strip()
+        if not token:
+            return
+        inviter_id = int(reward.get("inviter_id") or 0)
+        if inviter_id <= 0:
+            return
+        conn = _get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT telegram_id, wallet_balance FROM userbot_users WHERE id = ? LIMIT 1", (inviter_id,))
+            inviter = cur.fetchone()
+            if not inviter:
+                return
+            telegram_id = int(inviter["telegram_id"] or 0)
+            if telegram_id <= 0:
+                return
+            invitee_name = _invitee_display_name(cur, int(reward.get("invitee_id") or 0))
+            settings = get_referral_settings()
+            text = _format_referral_reward_text(reward, settings, int(inviter["wallet_balance"] or 0), invitee_name)
+        finally:
+            conn.close()
+
+        api_url = f"https://api.telegram.org/bot{urllib.parse.quote(token)}/sendMessage"
+
+        def _post() -> None:
+            try:
+                payload = json.dumps({"chat_id": telegram_id, "text": text}).encode("utf-8")
+                req = urllib.request.Request(
+                    api_url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=15):
+                    pass
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_post, daemon=True)
+        t.start()
+    except Exception:
+        pass
+
+
+def get_referral_settings() -> Dict[str, Any]:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT value FROM userbot_settings WHERE key = 'referral_settings' LIMIT 1")
+        row = cur.fetchone()
+        settings = dict(DEFAULT_REFERRAL_SETTINGS)
+        if row and row["value"]:
+            try:
+                raw = json.loads(row["value"])
+                if isinstance(raw, dict):
+                    for key in settings.keys():
+                        if key in raw and raw[key] is not None:
+                            settings[key] = raw[key]
+            except Exception:
+                pass
+        settings["referral_enabled"] = _as_bool(settings.get("referral_enabled"), False)
+        settings["trial_reward_enabled"] = _as_bool(settings.get("trial_reward_enabled"), True)
+        settings["trial_reward_amount"] = max(0, int(settings.get("trial_reward_amount") or 0))
+        settings["purchase_reward_enabled"] = _as_bool(settings.get("purchase_reward_enabled"), True)
+        settings["purchase_reward_amount"] = max(0, int(settings.get("purchase_reward_amount") or 0))
+        settings["max_successful_referrals"] = max(0, int(settings.get("max_successful_referrals") or 0))
+        settings["min_purchase_amount"] = max(0, int(settings.get("min_purchase_amount") or 0))
+        settings["invite_intro_text"] = str(
+            settings.get("invite_intro_text") or DEFAULT_REFERRAL_SETTINGS["invite_intro_text"]
+        )
+        return settings
+    finally:
+        conn.close()
+
+
+def set_referral_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    current = get_referral_settings()
+    if isinstance(settings, dict):
+        for key in current.keys():
+            if key in settings and settings[key] is not None:
+                current[key] = settings[key]
+    current["referral_enabled"] = _as_bool(current.get("referral_enabled"), False)
+    current["trial_reward_enabled"] = _as_bool(current.get("trial_reward_enabled"), True)
+    current["trial_reward_amount"] = max(0, int(current.get("trial_reward_amount") or 0))
+    current["purchase_reward_enabled"] = _as_bool(current.get("purchase_reward_enabled"), True)
+    current["purchase_reward_amount"] = max(0, int(current.get("purchase_reward_amount") or 0))
+    current["max_successful_referrals"] = max(0, int(current.get("max_successful_referrals") or 0))
+    current["min_purchase_amount"] = max(0, int(current.get("min_purchase_amount") or 0))
+    current["invite_intro_text"] = str(
+        current.get("invite_intro_text") or DEFAULT_REFERRAL_SETTINGS["invite_intro_text"]
+    )
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO userbot_settings (key, value) VALUES ('referral_settings', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (json.dumps(current, ensure_ascii=False),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return current
+
+
+def toggle_referral_setting(name: str) -> Dict[str, Any]:
+    if name not in {"referral_enabled", "trial_reward_enabled", "purchase_reward_enabled"}:
+        raise ValueError("invalid referral setting name")
+    settings = get_referral_settings()
+    settings[name] = not bool(settings.get(name))
+    return set_referral_settings(settings)
+
+
+def set_referral_value(name: str, value: Any) -> Dict[str, Any]:
+    settings = get_referral_settings()
+    if name == "invite_intro_text":
+        settings[name] = str(value or "")
+    elif name in {"trial_reward_amount", "purchase_reward_amount", "max_successful_referrals", "min_purchase_amount"}:
+        settings[name] = max(0, int(value))
+    else:
+        raise ValueError("invalid referral setting name")
+    return set_referral_settings(settings)
+
+
+def normalize_referral_payload(payload: str) -> str:
+    """
+    Extract referral code from a /start deep-link payload.
+    Returns an empty string when the payload is not a valid referral payload.
+    """
+    p = str(payload or "").strip().lower()
+    if not p.startswith(REFERRAL_PAYLOAD_PREFIX):
+        return ""
+    code = p[len(REFERRAL_PAYLOAD_PREFIX):].strip()
+    if not code or not REFERRAL_CODE_RE.fullmatch(code):
+        return ""
+    return code
+
+
+def get_or_create_user_referral_code(user_id: int) -> str:
+    """Return the user's public referral code, creating one if needed."""
+    init_db()
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return ""
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT referral_code FROM userbot_users WHERE id = ? LIMIT 1", (uid,))
+        row = cur.fetchone()
+        if row and str(row["referral_code"] or "").strip():
+            return str(row["referral_code"]).strip()
+        alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+        code = ""
+        for _ in range(200):
+            candidate = "".join(random.choice(alphabet) for _ in range(8))
+            cur.execute("SELECT 1 FROM userbot_users WHERE referral_code = ? LIMIT 1", (candidate,))
+            if not cur.fetchone():
+                code = candidate
+                break
+        if not code:
+            code = f"u{uid}x"
+        cur.execute(
+            "UPDATE userbot_users SET referral_code = ? WHERE id = ? AND (referral_code IS NULL OR referral_code = '')",
+            (code, uid),
+        )
+        if cur.rowcount > 0:
+            conn.commit()
+            return code
+        cur.execute("SELECT referral_code FROM userbot_users WHERE id = ? LIMIT 1", (uid,))
+        row = cur.fetchone()
+        return str((row["referral_code"] if row else "") or "").strip()
+    finally:
+        conn.close()
+
+
+def get_user_by_referral_code(code: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    c = str(code or "").strip().lower()
+    if not c:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM userbot_users WHERE referral_code = ? LIMIT 1", (c,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def register_referral(invitee_user_id: int, inviter_code: str, payload: str = "") -> Tuple[bool, str, int]:
+    """
+    Register an invitee under an inviter (source of truth: userbot_referrals).
+    Returns: (created, status, referral_id)
+    status: ok | invalid_code | not_found | self_referral | already_referred | banned_inviter | invalid_invitee
+    """
+    uid = int(invitee_user_id or 0)
+    if uid <= 0:
+        return False, "invalid_invitee", 0
+    code = str(inviter_code or "").strip().lower()
+    if not code:
+        return False, "invalid_code", 0
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("SELECT * FROM userbot_referrals WHERE invitee_id = ? LIMIT 1", (uid,))
+        existing = cur.fetchone()
+        if existing:
+            conn.rollback()
+            # یک invitee فقط یک inviter اصلی دارد؛ کد جدید نادیده گرفته می‌شود.
+            return False, "already_referred", int(existing["id"] or 0)
+        cur.execute("SELECT id, is_banned FROM userbot_users WHERE referral_code = ? LIMIT 1", (code,))
+        inviter = cur.fetchone()
+        if not inviter:
+            conn.rollback()
+            return False, "not_found", 0
+        inviter_id = int(inviter["id"] or 0)
+        if inviter_id == uid:
+            conn.rollback()
+            return False, "self_referral", 0
+        if int(inviter["is_banned"] or 0) == 1:
+            conn.rollback()
+            return False, "banned_inviter", 0
+        # Anti-fraud snapshot: invitees with prior approved purchases never earn rewards.
+        cur.execute(
+            "SELECT COUNT(*) FROM userbot_payments WHERE user_id = ? AND status = 'approved'",
+            (uid,),
+        )
+        qualified = 1 if int((cur.fetchone() or [0])[0] or 0) == 0 else 0
+        now = _referral_now()
+        cur.execute(
+            """
+            INSERT INTO userbot_referrals
+            (inviter_id, invitee_id, invited_by_code, status, rejection_reason, fraud_flag, invitee_qualified, first_seen_payload, created_at, updated_at)
+            VALUES (?, ?, ?, 'active', '', 0, ?, ?, ?, ?)
+            """,
+            (inviter_id, uid, code, qualified, str(payload or "")[:120], now, now),
+        )
+        referral_id = int(cur.lastrowid or 0)
+        cur.execute("UPDATE userbot_users SET invited_by_user_id = ? WHERE id = ?", (inviter_id, uid))
+        conn.commit()
+        return True, "ok", referral_id
+    except sqlite3.IntegrityError:
+        # race condition: ثبت موازی زودتر انجام شده است
+        conn.rollback()
+        cur2 = conn.cursor()
+        cur2.execute("SELECT id FROM userbot_referrals WHERE invitee_id = ? LIMIT 1", (uid,))
+        row = cur2.fetchone()
+        return False, "already_referred", int(row["id"] or 0) if row else 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_referral_by_invitee(invitee_user_id: int) -> Optional[Dict[str, Any]]:
+    init_db()
+    uid = int(invitee_user_id or 0)
+    if uid <= 0:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM userbot_referrals WHERE invitee_id = ? LIMIT 1", (uid,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_referral_by_id(referral_id: int) -> Optional[Dict[str, Any]]:
+    init_db()
+    rid = int(referral_id or 0)
+    if rid <= 0:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM userbot_referrals WHERE id = ? LIMIT 1", (rid,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_referral_status(referral_id: int, status: str, reason: str = "") -> bool:
+    init_db()
+    rid = int(referral_id or 0)
+    st = str(status or "").strip().lower()
+    if rid <= 0 or st not in {"active", "rejected"}:
+        return False
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE userbot_referrals SET status = ?, rejection_reason = ?, updated_at = ? WHERE id = ?",
+            (st, str(reason or "")[:200], _referral_now(), rid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def set_referral_fraud_flag(referral_id: int, flag: bool) -> bool:
+    init_db()
+    rid = int(referral_id or 0)
+    if rid <= 0:
+        return False
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE userbot_referrals SET fraud_flag = ?, updated_at = ? WHERE id = ?",
+            (1 if flag else 0, _referral_now(), rid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def try_grant_referral_trial_reward(invitee_user_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Grant the trial reward to the inviter after the invitee's valid free trial.
+    Idempotent and atomic (wallet credit + voucher ledger + reward row in one tx).
+    Returns a result dict {"reward": row, "is_new": bool} on success, None otherwise.
+    """
+    return _grant_referral_reward(int(invitee_user_id or 0), "trial", 0)
+
+
+def try_grant_referral_purchase_reward(invitee_user_id: int, payment_id: int = 0) -> Optional[Dict[str, Any]]:
+    """
+    Grant the first-purchase reward to the inviter.
+    Idempotent and atomic; only the first qualifying approved payment counts.
+    Returns a result dict {"reward": row, "is_new": bool} on success, None otherwise.
+    """
+    return _grant_referral_reward(int(invitee_user_id or 0), "purchase", int(payment_id or 0))
+
+
+def _has_approved_payments(cur: sqlite3.Cursor, user_id: int) -> bool:
+    cur.execute(
+        "SELECT COUNT(*) FROM userbot_payments WHERE user_id = ? AND status = 'approved'",
+        (int(user_id or 0),),
+    )
+    return int((cur.fetchone() or [0])[0] or 0) > 0
+
+
+def _grant_referral_reward(
+    invitee_user_id: int, reward_type: str, payment_id: int
+) -> Optional[Dict[str, Any]]:
+    """
+    Atomic, idempotent grant of a referral reward.
+    Anti-fraud eligibility:
+      - invitee must have no prior approved payments (prevents self-accounts).
+      - only the invitee's first qualifying approved payment triggers a reward.
+    Returns {"reward": dict, "is_new": bool} or None.
+    """
+    if reward_type not in REFERRAL_REWARD_KINDS:
+        return None
+    uid = int(invitee_user_id or 0)
+    if uid <= 0:
+        return None
+    settings = get_referral_settings()
+    if not bool(settings.get("referral_enabled", False)):
+        return None
+    if reward_type == "trial":
+        if not bool(settings.get("trial_reward_enabled", True)):
+            return None
+        amount = int(settings.get("trial_reward_amount") or 0)
+    else:
+        if not bool(settings.get("purchase_reward_enabled", True)):
+            return None
+        amount = int(settings.get("purchase_reward_amount") or 0)
+    if amount <= 0:
+        return None
+
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+
+        cur.execute(
+            "SELECT * FROM userbot_referrals WHERE invitee_id = ? AND status = 'active' LIMIT 1",
+            (uid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        ref = dict(row)
+        if int(ref.get("fraud_flag") or 0) == 1:
+            conn.rollback()
+            return None
+        if int(ref.get("invitee_qualified", 1) or 0) != 1:
+            # Invitee already had an approved purchase before joining (anti-fraud snapshot).
+            conn.rollback()
+            return None
+        inviter_id = int(ref.get("inviter_id") or 0)
+        if inviter_id <= 0:
+            conn.rollback()
+            return None
+
+        cur.execute(
+            "SELECT id, is_banned, telegram_id FROM userbot_users WHERE id = ? LIMIT 1",
+            (inviter_id,),
+        )
+        inviter = cur.fetchone()
+        if not inviter or int(inviter["is_banned"] or 0) == 1:
+            conn.rollback()
+            return None
+
+        # Idempotency: only one reward of each type per invitee.
+        cur.execute(
+            "SELECT * FROM userbot_referral_rewards WHERE referral_id = ? AND reward_type = ? LIMIT 1",
+            (int(ref["id"] or 0), reward_type),
+        )
+        existing = cur.fetchone()
+        if existing:
+            conn.rollback()
+            return {"reward": dict(existing), "is_new": False}
+
+        # Anti-fraud: a reward is only paid once per (referral, reward_type);
+        # the invitee must not already have an approved purchase.
+        if reward_type == "purchase":
+            pid = int(payment_id or 0)
+            if pid <= 0:
+                conn.rollback()
+                return None
+            cur.execute("SELECT * FROM userbot_payments WHERE id = ? LIMIT 1", (pid,))
+            pay = cur.fetchone()
+            if not pay:
+                conn.rollback()
+                return None
+            if str(pay["status"] or "").strip().lower() != "approved":
+                conn.rollback()
+                return None
+            if int(pay["user_id"] or 0) != uid:
+                conn.rollback()
+                return None
+            pay_amount = int(pay["amount"] or 0)
+            if pay_amount <= 0:
+                conn.rollback()
+                return None
+            min_amount = max(0, int(settings.get("min_purchase_amount") or 0))
+            if pay_amount < min_amount:
+                conn.rollback()
+                return None
+            # Only the FIRST approved payment of the invitee triggers a purchase reward.
+            cur.execute(
+                "SELECT id FROM userbot_payments WHERE user_id = ? AND status = 'approved' ORDER BY id ASC LIMIT 1",
+                (uid,),
+            )
+            first_row = cur.fetchone()
+            if not first_row or int(first_row["id"] or 0) != pid:
+                conn.rollback()
+                return None
+        elif _has_approved_payments(cur, uid):
+            # Trial reward: the invitee must not already have an approved purchase.
+            conn.rollback()
+            return None
+
+        max_allowed = max(0, int(settings.get("max_successful_referrals") or 0))
+        if max_allowed > 0:
+            cur.execute(
+                "SELECT COUNT(*) FROM userbot_referral_rewards WHERE inviter_id = ? AND reward_type = ? AND status = 'paid'",
+                (inviter_id, reward_type),
+            )
+            paid_count = int((cur.fetchone() or [0])[0] or 0)
+            if paid_count >= max_allowed:
+                conn.rollback()
+                return None
+
+        voucher_prefix = "REF-TRIAL" if reward_type == "trial" else "REF-BUY"
+        voucher_code = f"{voucher_prefix}-{int(ref['id'] or 0)}"
+        now = _referral_now()
+
+        cur.execute("SELECT code FROM userbot_zarin_vouchers WHERE code = ? LIMIT 1", (voucher_code,))
+        if not cur.fetchone():
+            cur.execute(
+                """
+                INSERT INTO userbot_zarin_vouchers
+                (code, amount_toman, zarinpal_link, max_uses, used_count, is_active, expires_at, created_at, updated_at)
+                VALUES (?, ?, '', 1, 0, 1, '', ?, ?)
+                """,
+                (voucher_code, amount, now, now),
+            )
+        cur.execute(
+            "SELECT 1 FROM userbot_zarin_voucher_redemptions WHERE code = ? AND user_id = ? LIMIT 1",
+            (voucher_code, inviter_id),
+        )
+        if not cur.fetchone():
+            cur.execute(
+                "INSERT INTO userbot_zarin_voucher_redemptions (code, user_id, redeemed_at) VALUES (?, ?, ?)",
+                (voucher_code, inviter_id, now),
+            )
+            cur.execute(
+                "UPDATE userbot_users SET wallet_balance = wallet_balance + ? WHERE id = ?",
+                (amount, inviter_id),
+            )
+            cur.execute(
+                """
+                UPDATE userbot_zarin_vouchers
+                SET used_count = used_count + 1,
+                    updated_at = ?,
+                    is_active = CASE WHEN used_count + 1 >= max_uses THEN 0 ELSE is_active END
+                WHERE code = ?
+                """,
+                (now, voucher_code),
+            )
+
+        cur.execute(
+            """
+            INSERT INTO userbot_referral_rewards
+            (referral_id, inviter_id, invitee_id, reward_type, reward_source, amount_toman, voucher_code, payment_id, status, revoked_at, created_at)
+            VALUES (?, ?, ?, ?, 'system', ?, ?, ?, 'paid', '', ?)
+            """,
+            (
+                int(ref["id"] or 0),
+                inviter_id,
+                uid,
+                reward_type,
+                amount,
+                voucher_code,
+                int(payment_id or 0),
+                now,
+            ),
+        )
+        conn.commit()
+
+        cur.execute(
+            "SELECT * FROM userbot_referral_rewards WHERE referral_id = ? AND reward_type = ? LIMIT 1",
+            (int(ref["id"] or 0), reward_type),
+        )
+        new_row = cur.fetchone()
+        if not new_row:
+            return None
+        try:
+            _send_referral_reward_notice_background(dict(new_row))
+        except Exception:
+            pass
+        return {"reward": dict(new_row), "is_new": True}
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        try:
+            cur.execute(
+                """
+                SELECT r.* FROM userbot_referral_rewards r
+                JOIN userbot_referrals ref ON ref.id = r.referral_id
+                WHERE ref.invitee_id = ? AND r.reward_type = ? LIMIT 1
+                """,
+                (uid, reward_type),
+            )
+            row = cur.fetchone()
+            if row:
+                return {"reward": dict(row), "is_new": False}
+            return None
+        except Exception:
+            return None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def revoke_referral_reward_by_id(reward_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Admin rollback: revoke a paid referral reward.
+    Deducts up to zero from the inviter's wallet, deactivates the voucher row and
+    flags the referral for admin review. Trial rewards are untouched.
+    Returns the revoked reward row or None.
+    """
+    rid = int(reward_id or 0)
+    if rid <= 0:
+        return None
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute(
+            "SELECT * FROM userbot_referral_rewards WHERE id = ? AND status = 'paid' LIMIT 1",
+            (rid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        reward = dict(row)
+        inviter_id = int(reward.get("inviter_id") or 0)
+        amount = int(reward.get("amount_toman") or 0)
+        now = _referral_now()
+        if inviter_id > 0 and amount > 0:
+            # کسر تا صفر؛ کیف پول هرگز منفی نمی‌شود
+            cur.execute(
+                "UPDATE userbot_users SET wallet_balance = CASE WHEN wallet_balance >= ? THEN wallet_balance - ? ELSE 0 END WHERE id = ?",
+                (amount, amount, inviter_id),
+            )
+        cur.execute(
+            "UPDATE userbot_referral_rewards SET status = 'revoked', revoked_at = ? WHERE id = ?",
+            (now, rid),
+        )
+        cur.execute(
+            "UPDATE userbot_zarin_vouchers SET is_active = 0, updated_at = ? WHERE code = ?",
+            (now, str(reward.get("voucher_code") or "")),
+        )
+        if int(reward.get("referral_id") or 0) > 0:
+            cur.execute(
+                "UPDATE userbot_referrals SET fraud_flag = 1, updated_at = ? WHERE id = ?",
+                (now, int(reward["referral_id"])),
+            )
+        conn.commit()
+        return reward
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def revoke_referral_purchase_reward_by_payment(payment_id: int) -> Optional[Dict[str, Any]]:
+    """Revoke the purchase reward tied to a refunded/rejected payment (if any)."""
+    pid = int(payment_id or 0)
+    if pid <= 0:
+        return None
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id FROM userbot_referral_rewards WHERE payment_id = ? AND reward_type = 'purchase' AND status = 'paid' LIMIT 1",
+            (pid,),
+        )
+        row = cur.fetchone()
+        reward_id = int(row["id"] or 0) if row else 0
+    finally:
+        conn.close()
+    if reward_id <= 0:
+        return None
+    return revoke_referral_reward_by_id(reward_id)
+
+
+def grant_manual_referral_reward(user_id: int, amount_toman: int) -> Optional[Dict[str, Any]]:
+    """Admin manual reward: gift-system voucher + wallet credit + reward ledger row."""
+    uid = int(user_id or 0)
+    amount = max(0, int(amount_toman or 0))
+    if uid <= 0 or amount <= 0:
+        return None
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("SELECT id FROM userbot_users WHERE id = ? LIMIT 1", (uid,))
+        if not cur.fetchone():
+            conn.rollback()
+            return None
+        now = _referral_now()
+        voucher_code = f"REF-MAN-{uid}-{random.randint(1000, 9999)}"
+        for _ in range(100):
+            cur.execute("SELECT 1 FROM userbot_zarin_vouchers WHERE code = ? LIMIT 1", (voucher_code,))
+            if not cur.fetchone():
+                break
+            voucher_code = f"REF-MAN-{uid}-{random.randint(1000, 9999)}"
+        cur.execute(
+            """
+            INSERT INTO userbot_zarin_vouchers
+            (code, amount_toman, zarinpal_link, max_uses, used_count, is_active, expires_at, created_at, updated_at)
+            VALUES (?, ?, '', 1, 1, 0, '', ?, ?)
+            """,
+            (voucher_code, amount, now, now),
+        )
+        cur.execute(
+            "INSERT INTO userbot_zarin_voucher_redemptions (code, user_id, redeemed_at) VALUES (?, ?, ?)",
+            (voucher_code, uid, now),
+        )
+        cur.execute(
+            "UPDATE userbot_users SET wallet_balance = wallet_balance + ? WHERE id = ?",
+            (amount, uid),
+        )
+        cur.execute(
+            """
+            INSERT INTO userbot_referral_rewards
+            (referral_id, inviter_id, invitee_id, reward_type, reward_source, amount_toman, voucher_code, payment_id, status, revoked_at, created_at)
+            VALUES (NULL, ?, 0, 'manual', ?, ?, ?, 0, 'paid', '', ?)
+            """,
+            (uid, REFERRAL_REWARD_SOURCE_MANUAL, amount, voucher_code, now),
+        )
+        reward_id = int(cur.lastrowid or 0)
+        conn.commit()
+        cur.execute("SELECT * FROM userbot_referral_rewards WHERE id = ? LIMIT 1", (reward_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_referral_reward(reward_id: int) -> Optional[Dict[str, Any]]:
+    init_db()
+    rid = int(reward_id or 0)
+    if rid <= 0:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM userbot_referral_rewards WHERE id = ? LIMIT 1", (rid,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_referrals(limit: int = 50, offset: int = 0, inviter_id: int = 0, status: str = "") -> Tuple[List[Dict[str, Any]], int]:
+    init_db()
+    lim = max(1, int(limit or 50))
+    off = max(0, int(offset or 0))
+    inviter = int(inviter_id or 0)
+    st = str(status or "").strip().lower()
+    where = ["1=1"]
+    params: List[Any] = []
+    if inviter > 0:
+        where.append("r.inviter_id = ?")
+        params.append(inviter)
+    if st in {"active", "rejected"}:
+        where.append("r.status = ?")
+        params.append(st)
+    where_sql = " AND ".join(where)
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM userbot_referrals r WHERE {where_sql}", params)
+        total = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            f"""
+            SELECT r.*,
+                   inv.username AS inviter_username, inv.full_name AS inviter_full_name, inv.telegram_id AS inviter_telegram_id,
+                   invt.username AS invitee_username, invt.full_name AS invitee_full_name, invt.telegram_id AS invitee_telegram_id
+            FROM userbot_referrals r
+            LEFT JOIN userbot_users inv ON inv.id = r.inviter_id
+            LEFT JOIN userbot_users invt ON invt.id = r.invitee_id
+            WHERE {where_sql}
+            ORDER BY r.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, lim, off),
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def list_referral_rewards(limit: int = 50, offset: int = 0, inviter_id: int = 0, reward_type: str = "", status: str = "") -> Tuple[List[Dict[str, Any]], int]:
+    init_db()
+    lim = max(1, int(limit or 50))
+    off = max(0, int(offset or 0))
+    inviter = int(inviter_id or 0)
+    rtype = str(reward_type or "").strip().lower()
+    st = str(status or "").strip().lower()
+    where = ["1=1"]
+    params: List[Any] = []
+    if inviter > 0:
+        where.append("rw.inviter_id = ?")
+        params.append(inviter)
+    if rtype in {*REFERRAL_REWARD_KINDS, "manual"}:
+        where.append("rw.reward_type = ?")
+        params.append(rtype)
+    if st in {"paid", "revoked"}:
+        where.append("rw.status = ?")
+        params.append(st)
+    where_sql = " AND ".join(where)
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM userbot_referral_rewards rw WHERE {where_sql}", params)
+        total = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            f"""
+            SELECT rw.*,
+                   inv.username AS inviter_username, inv.full_name AS inviter_full_name,
+                   invt.username AS invitee_username, invt.full_name AS invitee_full_name
+            FROM userbot_referral_rewards rw
+            LEFT JOIN userbot_users inv ON inv.id = rw.inviter_id
+            LEFT JOIN userbot_users invt ON invt.id = rw.invitee_id
+            WHERE {where_sql}
+            ORDER BY rw.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, lim, off),
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def get_referral_user_stats(inviter_user_id: int) -> Dict[str, Any]:
+    init_db()
+    uid = int(inviter_user_id or 0)
+    result = {
+        "total_referrals": 0,
+        "active_referrals": 0,
+        "successful_referrals": 0,
+        "pending_purchase": 0,
+        "total_rewards": 0,
+        "paid_rewards_count": 0,
+        "trial_rewards_count": 0,
+        "purchase_rewards_count": 0,
+    }
+    if uid <= 0:
+        return result
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM userbot_referrals WHERE inviter_id = ?", (uid,))
+        result["total_referrals"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_referrals WHERE inviter_id = ? AND status = 'active'", (uid,))
+        result["active_referrals"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT referral_id) FROM userbot_referral_rewards
+            WHERE inviter_id = ? AND reward_type = 'purchase' AND status = 'paid'
+            """,
+            (uid,),
+        )
+        result["successful_referrals"] = int((cur.fetchone() or [0])[0] or 0)
+        result["pending_purchase"] = max(0, result["active_referrals"] - result["successful_referrals"])
+        cur.execute(
+            "SELECT COALESCE(SUM(amount_toman), 0), COUNT(*), "
+            "COALESCE(SUM(CASE WHEN reward_type = 'trial' THEN 1 ELSE 0 END), 0), "
+            "COALESCE(SUM(CASE WHEN reward_type = 'purchase' THEN 1 ELSE 0 END), 0) "
+            "FROM userbot_referral_rewards WHERE inviter_id = ? AND status = 'paid'",
+            (uid,),
+        )
+        row = cur.fetchone()
+        if row:
+            result["total_rewards"] = int(row[0] or 0)
+            result["paid_rewards_count"] = int(row[1] or 0)
+            result["trial_rewards_count"] = int(row[2] or 0)
+            result["purchase_rewards_count"] = int(row[3] or 0)
+        return result
+    finally:
+        conn.close()
+
+
+def get_referral_admin_stats() -> Dict[str, Any]:
+    init_db()
+    result = {
+        "total_referrals": 0,
+        "active_referrals": 0,
+        "rejected_referrals": 0,
+        "fraud_flagged": 0,
+        "trial_rewards_count": 0,
+        "trial_rewards_amount": 0,
+        "purchase_rewards_count": 0,
+        "purchase_rewards_amount": 0,
+        "revoked_rewards_count": 0,
+        "total_reward_cost": 0,
+        "revenue_generated": 0,
+        "conversion_rate": 0.0,
+        "top_referrers": [],
+    }
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM userbot_referrals")
+        result["total_referrals"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_referrals WHERE status = 'active'")
+        result["active_referrals"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_referrals WHERE status = 'rejected'")
+        result["rejected_referrals"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_referrals WHERE fraud_flag = 1")
+        result["fraud_flagged"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN reward_type = 'trial' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN reward_type = 'trial' AND status = 'paid' THEN amount_toman ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN reward_type = 'purchase' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN reward_type = 'purchase' AND status = 'paid' THEN amount_toman ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'revoked' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_toman ELSE 0 END), 0)
+            FROM userbot_referral_rewards
+            WHERE reward_type IN ('trial', 'purchase')
+            """
+        )
+        row = cur.fetchone()
+        if row:
+            result["trial_rewards_count"] = int(row[0] or 0)
+            result["trial_rewards_amount"] = int(row[1] or 0)
+            result["purchase_rewards_count"] = int(row[2] or 0)
+            result["purchase_rewards_amount"] = int(row[3] or 0)
+            result["revoked_rewards_count"] = int(row[4] or 0)
+            result["total_reward_cost"] = int(row[5] or 0)
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(p.amount), 0)
+            FROM userbot_referral_rewards rw
+            JOIN userbot_payments p ON p.id = rw.payment_id
+            WHERE rw.reward_type = 'purchase' AND rw.status = 'paid' AND p.status = 'approved'
+            """
+        )
+        result["revenue_generated"] = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            "SELECT COUNT(*) FROM userbot_referral_rewards WHERE reward_type = 'purchase' AND status = 'paid'"
+        )
+        paid_purchase_rewards = int((cur.fetchone() or [0])[0] or 0)
+        result["paid_purchase_rewards"] = paid_purchase_rewards
+        if result["total_referrals"] > 0:
+            result["conversion_rate"] = round(
+                (paid_purchase_rewards / int(result["total_referrals"])) * 100, 1
+            )
+        cur.execute(
+            """
+            SELECT rw.inviter_id AS inviter_id,
+                   u.username AS inviter_username,
+                   u.full_name AS inviter_full_name,
+                   COUNT(*) AS referrals,
+                   COALESCE(SUM(CASE WHEN rw.reward_type = 'purchase' AND rw.status = 'paid' THEN 1 ELSE 0 END), 0) AS successful,
+                   COALESCE(SUM(CASE WHEN rw.status = 'paid' THEN rw.amount_toman ELSE 0 END), 0) AS rewards
+            FROM userbot_referrals r
+            JOIN userbot_referral_rewards rw ON rw.referral_id = r.id
+            LEFT JOIN userbot_users u ON u.id = rw.inviter_id
+            WHERE rw.reward_type IN ('trial', 'purchase')
+            GROUP BY rw.inviter_id
+            ORDER BY successful DESC, rewards DESC
+            LIMIT 10
+            """
+        )
+        result["top_referrers"] = [dict(r) for r in cur.fetchall()]
+        return result
     finally:
         conn.close()
 

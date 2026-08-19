@@ -1,4 +1,5 @@
 import asyncio
+import time
 import random
 from html import escape
 from typing import Optional
@@ -34,6 +35,7 @@ from CustomerBot.constants import (
     CB_GUIDE_BACK, CB_FORCEJOIN_CHECK,
     CB_AGENT_MSG_REPLY,
     BTN_PAY_DONE, BTN_BACK,
+    ACTION_COOLDOWN,
 )
 from CustomerBot.database import (
     get_buy_renew_settings, get_text_settings, get_subs_settings,
@@ -86,6 +88,23 @@ from CustomerBot.services import (
 )
 from Shared.qr_utils import make_qr_image
 
+_plans_storage = None
+
+
+def _active_discount_simple(settings) -> bool:
+    """تخفیف حجمی ساده را با احترام به تایمر و حالت ذخیره‌شده فعال محسوب می‌کند."""
+    global _plans_storage
+    if _plans_storage is None:
+        from Shared import plans_storage as _plans_storage
+    return _plans_storage.is_simple_discount_active(settings) if settings else False
+
+
+def _normalized_discount_tiers(settings) -> list:
+    global _plans_storage
+    if _plans_storage is None:
+        from Shared import plans_storage as _plans_storage
+    return _plans_storage.normalize_discount_tiers(settings.get("discount_tiers", [])) if settings else []
+
 
 def _agent_dyn_settings(agent_id: int, server_id: int = 0) -> dict:
     """قیمت‌گذاری پویای خودِ نماینده را می‌خواند؛ اگر تنظیم نشده به سراسری برمی‌گردد."""
@@ -97,6 +116,57 @@ def _agent_dyn_settings(agent_id: int, server_id: int = 0) -> dict:
         pass
     from Shared.database import get_plan_dynamic_settings as _global_dyn
     return _global_dyn(server_id)
+
+
+def _dyn_month_limits(dyn: dict) -> tuple[int, int, int]:
+    """حداقل/حداکثر ماه و گام از تنظیمات پویا (پشتیبانی از min_month و min_months)."""
+    try:
+        min_month = int(dyn.get("min_month", dyn.get("min_months", 1)) or 1)
+    except (TypeError, ValueError):
+        min_month = 1
+    try:
+        max_month = int(dyn.get("max_month", dyn.get("max_months", 12)) or 12)
+    except (TypeError, ValueError):
+        max_month = 12
+    try:
+        step_month = int(dyn.get("step_month", 1) or 1)
+    except (TypeError, ValueError):
+        step_month = 1
+    min_month = max(1, min_month)
+    max_month = max(min_month, max_month)
+    step_month = max(1, step_month)
+    return min_month, max_month, step_month
+
+
+def _clamp_months(months, min_month: int, max_month: int) -> int:
+    return max(min_month, min(months, max_month))
+
+
+WIZARD_TTL_SECONDS = 600  # 10 دقیقه
+
+UD_WIZARD_START_TS = "wizard_start_ts"
+
+
+def _wizard_expired(context) -> bool:
+    """اگر زمان شروع ویزارد گذشته و از سقف TTL گذشته باشد True برمی‌گرداند."""
+    start_ts = context.user_data.get(UD_WIZARD_START_TS)
+    if not start_ts:
+        return False
+    try:
+        return (time.time() - float(start_ts)) >= WIZARD_TTL_SECONDS
+    except (TypeError, ValueError):
+        return False
+
+
+def _start_buy_wizard(context) -> None:
+    """زمان شروع ویزارد خرید را ثبت می‌کند (برای سنجش انقضای نشست)."""
+    context.user_data[UD_WIZARD_START_TS] = time.time()
+
+
+def _reset_buy_wizard(context) -> None:
+    """تمام داده‌های ویزارد خرید/تمدید را پاک می‌کند تا از نو شروع شود."""
+    for key in (UD_WIZARD_START_TS, UD_BUY_GB, UD_BUY_MONTHS, UD_BUY_SERVER_ID, UD_BUY_PLAN_ID):
+        context.user_data.pop(key, None)
 
 
 def _calc_dynamic_price(gb, months, dyn_settings) -> tuple[int, int]:
@@ -111,12 +181,11 @@ def _calc_dynamic_price(gb, months, dyn_settings) -> tuple[int, int]:
     discount_percent_step = max(0, safe_int(settings.get("discount_percent_step"), 0))
     discount_percent_max = max(0, safe_int(settings.get("discount_percent_max"), 0))
     discount_tiered_enabled = bool(settings.get("discount_tiered_enabled", False))
-    discount_simple_enabled = bool(settings.get("discount_simple_enabled", False))
 
     off_percent = 0
-    if discount_tiered_enabled and settings.get("discount_tiers"):
+    tiers = _normalized_discount_tiers(settings)
+    if discount_tiered_enabled and tiers:
         tiered_off = 0
-        tiers = sorted(settings.get("discount_tiers", []), key=lambda t: int(t.get("gb", 0)))
         for tier in tiers:
             try:
                 if gb_val >= int(tier.get("gb", 0)):
@@ -127,6 +196,7 @@ def _calc_dynamic_price(gb, months, dyn_settings) -> tuple[int, int]:
                 continue
         off_percent = max(off_percent, max(0, min(tiered_off, 100)))
 
+    discount_simple_enabled = _active_discount_simple(settings)
     if discount_simple_enabled and discount_step_gb > 0 and discount_percent_step > 0 and gb_val >= discount_step_gb:
         stages = gb_val // discount_step_gb
         simple_off = stages * discount_percent_step
@@ -152,7 +222,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ خطا در پیکربندی", show_alert=True)
         return
 
-    if is_rate_limited(f"cb_{user.id}_{data}"):
+    # دکمه‌های ویزارد (+/-) را نباید با rate limit قوی بلاک کرد؛ کاربر باید سریع بزند
+    is_wizard_tap = data.startswith("wiz:") or data.startswith("rwiz:")
+    if is_rate_limited(
+        f"cb_{user.id}_{data}",
+        cooldown=0.25 if is_wizard_tap else ACTION_COOLDOWN,
+    ):
         await query.answer("⏳ لطفاً کمی صبر کنید.")
         return
 
@@ -930,10 +1005,12 @@ async def _handle_status(query, context, agent_id, user, data):
             )
         else:
             dyn = _agent_dyn_settings(agent_id, server_id)
+            _start_buy_wizard(context)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
             gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), safe_int(dyn.get("max_gb", 1000), 1000))
-            months = max(months, 1)
+            min_month, max_month, _ = _dyn_month_limits(dyn)
+            months = _clamp_months(months, min_month, max_month)
             context.user_data[UD_BUY_GB] = gb
             context.user_data[UD_BUY_MONTHS] = months
             price, off_pct = _calc_dynamic_price(gb, months, dyn)
@@ -972,10 +1049,12 @@ async def _handle_renew(query, context, agent_id, user, data):
             )
         else:
             dyn = _agent_dyn_settings(agent_id, server_id)
+            _start_buy_wizard(context)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
             gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), safe_int(dyn.get("max_gb", 1000), 1000))
-            months = max(months, 1)
+            min_month, max_month, _ = _dyn_month_limits(dyn)
+            months = _clamp_months(months, min_month, max_month)
             context.user_data[UD_BUY_GB] = gb
             context.user_data[UD_BUY_MONTHS] = months
             price, off_pct = _calc_dynamic_price(gb, months, dyn)
@@ -989,19 +1068,45 @@ async def _handle_renew(query, context, agent_id, user, data):
         server_id = int(parts[1]) if len(parts) > 1 else 0
         wiz_action = parts[2] if len(parts) > 2 else ""
         dyn = _agent_dyn_settings(agent_id, server_id)
+
+        if _wizard_expired(context):
+            _reset_buy_wizard(context)
+            _start_buy_wizard(context)
+            gb = int(safe_float(dyn.get("min_gb", 1), 1.0))
+            min_month, max_month, _ = _dyn_month_limits(dyn)
+            months = min_month
+            price, off_pct = _calc_dynamic_price(gb, months, dyn)
+            await msg.edit_text(
+                "⏳ نشست تمدید به پایان رسیده بود؛ از ابتدا شروع میشود:\n\n🎛 بسته تمدید را انتخاب کنید:",
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+            )
+            context.user_data[UD_BUY_GB] = gb
+            context.user_data[UD_BUY_MONTHS] = months
+            return
+
+        _start_buy_wizard(context)
+
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
         step_gb = safe_int(dyn.get("step_gb", 1), 1)
         max_gb = safe_int(dyn.get("max_gb", 1000), 1000)
         min_gb = safe_float(dyn.get("min_gb", 1), 1.0)
+        min_month, max_month, step_month = _dyn_month_limits(dyn)
+        months = _clamp_months(months, min_month, max_month)
         if wiz_action == "gb_inc":
             gb = min(gb + step_gb, max_gb)
         elif wiz_action == "gb_dec":
             gb = max(min_gb, gb - step_gb)
         elif wiz_action == "month_inc":
-            months += 1
+            if months >= max_month:
+                await msg.answer("⏳ حداکثر دوره {max_month} ماه می‌باشد.".replace("{max_month}", str(max_month)), show_alert=True)
+                return
+            months = min(max_month, months + step_month)
         elif wiz_action == "month_dec":
-            months = max(1, months - 1)
+            if months <= min_month:
+                await msg.answer("⏳ حداقل دوره {min_month} ماه می‌باشد.".replace("{min_month}", str(min_month)), show_alert=True)
+                return
+            months = max(min_month, months - step_month)
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = months
         price, off_pct = _calc_dynamic_price(gb, months, dyn)
@@ -1026,7 +1131,7 @@ async def _handle_renew(query, context, agent_id, user, data):
             return
         dyn = _agent_dyn_settings(agent_id, server_id)
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
         days = months * 30
         extra_gb = float(gb)
         vol_mode, time_mode = _renew_admin_modes()
@@ -1349,19 +1454,48 @@ async def _handle_buy(query, context, agent_id, user, data):
         server_id = int(parts[1]) if len(parts) > 1 else 0
         wiz_action = parts[2] if len(parts) > 2 else ""
         dyn = _agent_dyn_settings(agent_id, server_id)
+
+        if _wizard_expired(context):
+            _reset_buy_wizard(context)
+            _start_buy_wizard(context)
+            gb = int(safe_float(dyn.get("min_gb", 1), 1.0))
+            min_month, max_month, _ = _dyn_month_limits(dyn)
+            months = min_month
+            total, off_pct = _calc_dynamic_price(gb, months, dyn)
+            mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
+            kb = (mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct)
+                  if mode == "mixed" else buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct))
+            await msg.edit_text(
+                "⏳ نشست ساخت بسته به پایان رسیده بود؛ بسته از ابتدا ساخته میشود:\n\n🎛 بسته دلخواه خود را بسازید:",
+                reply_markup=kb,
+            )
+            context.user_data[UD_BUY_GB] = gb
+            context.user_data[UD_BUY_MONTHS] = months
+            return
+
+        _start_buy_wizard(context)
+
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
         step_gb = safe_int(dyn.get("step_gb", 1), 1)
         max_gb = safe_int(dyn.get("max_gb", 1000), 1000)
+        min_month, max_month, step_month = _dyn_month_limits(dyn)
+        months = _clamp_months(months, min_month, max_month)
 
         if wiz_action == "gb_inc":
             gb = min(gb + step_gb, max_gb)
         elif wiz_action == "gb_dec":
             gb = max(safe_float(dyn.get("min_gb", 1), 1.0), gb - step_gb)
         elif wiz_action == "month_inc":
-            months += 1
+            if months >= max_month:
+                await msg.answer("⏳ حداکثر دوره {max_month} ماه می‌باشد.".replace("{max_month}", str(max_month)), show_alert=True)
+                return
+            months = min(max_month, months + step_month)
         elif wiz_action == "month_dec":
-            months = max(1, months - 1)
+            if months <= min_month:
+                await msg.answer("⏳ حداقل دوره {min_month} ماه می‌باشد.".replace("{min_month}", str(min_month)), show_alert=True)
+                return
+            months = max(min_month, months - step_month)
         elif wiz_action == "show_fixed":
             # استفاده از پلن‌های نماینده
             plans = get_fixed_plans(agent_id)
@@ -1418,12 +1552,14 @@ async def _handle_buy(query, context, agent_id, user, data):
             )
         else:
             dyn = _agent_dyn_settings(agent_id, server_id)
+            _start_buy_wizard(context)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+            months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
             step_gb = safe_int(dyn.get("step_gb", 1), 1)
             max_gb = safe_int(dyn.get("max_gb", 1000), 1000)
             gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), max_gb)
-            months = max(months, 1)
+            min_month, max_month, _ = _dyn_month_limits(dyn)
+            months = _clamp_months(months, min_month, max_month)
             context.user_data[UD_BUY_GB] = gb
             context.user_data[UD_BUY_MONTHS] = months
             total, off_pct = _calc_dynamic_price(gb, months, dyn)
@@ -1471,15 +1607,26 @@ async def _handle_buy(query, context, agent_id, user, data):
     elif data.startswith(CB_BUY_CONFIRM_DYN):
         server_id = int(parts[2]) if len(parts) > 2 else 0
         dyn = _agent_dyn_settings(agent_id, server_id) or {}
+
+        if _wizard_expired(context):
+            _reset_buy_wizard(context)
+            await msg.edit_text(
+                "⏳ نشست ساخت بسته به پایان رسیده و منقضی شده است. لطفاً دوباره از منوی خرید شروع کنید.",
+                reply_markup=_ikb([[InlineKeyboardButton("🔙 بازگشت", callback_data=CB_BUY_BACK_MAIN)]]),
+            )
+            return
+
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)) or 0)
-        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)) or 0)
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)) or 0)
         gb = max(gb, int(safe_float(dyn.get("min_gb", 1), 1.0)))
-        months = max(months, 1)
+        min_month, max_month, _ = _dyn_month_limits(dyn)
+        months = _clamp_months(months, min_month, max_month)
         days = months * 30
         price, _ = _calc_dynamic_price(gb, months, dyn)
         context.user_data[UD_BUY_SERVER_ID] = server_id
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = months
+        context.user_data.pop(UD_WIZARD_START_TS, None)
         await msg.edit_text(
             f"📄 اطلاعات پلن انتخاب شده\n\n"
             f"📊 حجم: {gb:g} گیگ\n"
@@ -1625,12 +1772,14 @@ async def _handle_buy(query, context, agent_id, user, data):
     elif data.startswith(CB_BUY_MIXED_DYN):
         server_id = int(parts[3]) if len(parts) > 3 else 0
         dyn = _agent_dyn_settings(agent_id, server_id)
+        _start_buy_wizard(context)
         gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_months", 1), 1)))
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
         step_gb = safe_int(dyn.get("step_gb", 1), 1)
         max_gb = safe_int(dyn.get("max_gb", 1000), 1000)
         gb = min(max(gb, safe_float(dyn.get("min_gb", 1), 1.0)), max_gb)
-        months = max(months, 1)
+        min_month, max_month, _ = _dyn_month_limits(dyn)
+        months = _clamp_months(months, min_month, max_month)
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = months
         total, off_pct = _calc_dynamic_price(gb, months, dyn)

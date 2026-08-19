@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import json
+import time
 from typing import Dict, Any, List, Optional
 
 _PLANS_FILE = Path(__file__).with_name("plans.json")
@@ -313,11 +314,96 @@ _DEFAULT_DYNAMIC_SETTINGS = {
     "discount_percent_max": 50,
     "discount_tiered_enabled": False,
     "discount_tiers": [],
+    "discount_simple_expire_at": 0,
 }
 
 
 def _normalize_digit_text(value: Any) -> str:
     return str(value or "").translate(_PERSIAN_DIGITS_TRANS)
+
+
+def is_simple_discount_active(settings: Dict[str, Any]) -> bool:
+    """تخفیف حجمی ساده را فعال تلقی می‌کند مگر اینکه تایمر آن منقضی شده باشد."""
+    if not settings or not bool(settings.get("discount_simple_enabled", False)):
+        return False
+    expire_at = settings.get("discount_simple_expire_at") or 0
+    try:
+        expire_at = float(expire_at)
+    except (TypeError, ValueError):
+        return True
+    if expire_at <= 0:
+        return True
+    return time.time() < expire_at
+
+
+def is_simple_discount_enabled(settings: Dict[str, Any]) -> bool:
+    """تشخیص فعال بودن تخفیف حجمی ساده با احترام به تایمر و سازگاری با حالت قدیمی."""
+    if not settings:
+        return False
+    if "discount_simple_enabled" in settings:
+        return is_simple_discount_active(settings)
+    discount_tiers = normalize_discount_tiers(settings.get("discount_tiers", []))
+    return (
+        not discount_tiers
+        and int(settings.get("discount_step_gb", 0)) > 0
+        and int(settings.get("discount_percent_step", 0)) > 0
+        and int(settings.get("discount_percent_max", 0)) > 0
+    )
+
+
+def is_tiered_discount_enabled(settings: Dict[str, Any]) -> bool:
+    """تشخیص فعال بودن تخفیف پلاکانی با سازگاری با حالت قدیمی."""
+    if not settings:
+        return False
+    if "discount_tiered_enabled" in settings:
+        return bool(settings.get("discount_tiered_enabled"))
+    return bool(normalize_discount_tiers(settings.get("discount_tiers", [])))
+
+
+def format_discount_tiers(tiers: Any) -> str:
+    """نمایش متنی پله‌های تخفیف، مثل: «از 50 گیگ: 5٪ | از 100 گیگ: 10٪»."""
+    normalized = normalize_discount_tiers(tiers)
+    if not normalized:
+        return "غیرفعال"
+    return " | ".join(f"از {item['gb']} گیگ: {item['percent']}٪" for item in normalized)
+
+
+def parse_discount_tiers_text(text: Any) -> List[Dict[str, int]]:
+    """تبدیل متن پله‌های تخفیف («50:5,100:10» یا «50=5-100=10») به لیست پله‌ها."""
+    raw = _normalize_digit_text(text).strip()
+    if raw in {"0", "۰", "خاموش", "غیرفعال"}:
+        return []
+
+    items = []
+    normalized = raw.replace("،", ",").replace("\n", ",").replace("؛", ",")
+    for part in normalized.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        separator = next((sep for sep in (":", "=", "-") if sep in part), None)
+        if not separator:
+            raise ValueError
+        gb_text, percent_text = part.split(separator, 1)
+        gb = int(
+            _normalize_digit_text(
+                gb_text.replace("گیگ", "").replace("gb", "").replace("GB", "")
+            ).replace(",", "").strip()
+        )
+        percent = int(
+            _normalize_digit_text(percent_text)
+            .replace("%", "")
+            .replace("٪", "")
+            .replace(",", "")
+            .strip()
+        )
+        if gb <= 0 or percent <= 0:
+            raise ValueError
+        items.append({"gb": gb, "percent": percent})
+
+    tiers = normalize_discount_tiers(items)
+    if not tiers:
+        raise ValueError
+    return tiers
 
 
 def normalize_discount_tiers(raw: Any) -> List[Dict[str, int]]:

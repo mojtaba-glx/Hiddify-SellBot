@@ -97,6 +97,10 @@ ZARIN_COUPON_LIMIT_STATE = "userbot_zarin_coupon_limit"
 ZARIN_COUPON_EXP_STATE = "userbot_zarin_coupon_exp"
 ZARIN_COUPON_BULK_STATE = "userbot_zarin_coupon_bulk"
 
+# Referral (دعوت دوستان)
+REFERRAL_VALUE_EDIT_STATE = "userbot_referral_value_edit"
+REFERRAL_MANUAL_REWARD_STATE = "userbot_referral_manual_reward"
+
 GIFT_CAMPAIGN_PRESETS: Dict[str, Dict[str, Any]] = {
     "welcome": {
         "title": "🎁 خوش‌آمدگویی",
@@ -1732,6 +1736,9 @@ def build_userbot_main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🎁مدیریت هدایا", callback_data="userbot:gifts_menu")
+        ],
+        [
+            InlineKeyboardButton("🤝مدیریت رفرال", callback_data="userbot:referral_menu")
         ],
         [
             InlineKeyboardButton("📑مدیریت تیکت‌ها", callback_data="userbot:tickets_menu"),
@@ -5995,6 +6002,78 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         await send_marketing_settings_menu(msg.chat_id, context)
         return
 
+    if context.user_data.get(REFERRAL_VALUE_EDIT_STATE):
+        edit_state = context.user_data.get(REFERRAL_VALUE_EDIT_STATE) or {}
+        edit_name = str(edit_state.get("name") or "").strip()
+        raw_text = (text or "").strip()
+        if raw_text in CANCEL_WORDS:
+            context.user_data.pop(REFERRAL_VALUE_EDIT_STATE, None)
+            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await send_referral_admin_settings(msg.chat_id, context)
+            return
+        if edit_name == "invite_intro_text":
+            context.user_data.pop(REFERRAL_VALUE_EDIT_STATE, None)
+            if not raw_text:
+                await msg.reply_text("❌ متن خالی است.", reply_markup=admin_main_keyboard())
+                return
+            try:
+                userbot_db.set_referral_value("invite_intro_text", raw_text)
+            except Exception as e:
+                await msg.reply_text(f"خطا در ذخیره: {e}", reply_markup=admin_main_keyboard())
+                return
+            await msg.reply_text("✅ متن صفحه دعوت ذخیره شد.", reply_markup=admin_main_keyboard())
+            await send_referral_admin_settings(msg.chat_id, context)
+            return
+        try:
+            value = int(raw_text.replace(",", "").replace("٬", ""))
+        except Exception:
+            await msg.reply_text("❌ عدد نامعتبر. لطفاً فقط عدد وارد کنید.", reply_markup=userbot_cancel_keyboard())
+            return
+        try:
+            userbot_db.set_referral_value(edit_name, value)
+        except Exception as e:
+            await msg.reply_text(f"خطا در ذخیره: {e}", reply_markup=admin_main_keyboard())
+            return
+        context.user_data.pop(REFERRAL_VALUE_EDIT_STATE, None)
+        await msg.reply_text("✅ تنظیمات رفرال ذخیره شد.", reply_markup=admin_main_keyboard())
+        await send_referral_admin_settings(msg.chat_id, context)
+        return
+
+    if context.user_data.get(REFERRAL_MANUAL_REWARD_STATE):
+        raw_text = (text or "").strip()
+        if raw_text in CANCEL_WORDS:
+            context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
+            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await send_referral_admin_menu(msg.chat_id, context)
+            return
+        parts = raw_text.replace("٬", "").replace(",", "").split()
+        if len(parts) != 2:
+            await msg.reply_text(
+                "❌ فرمت نامعتبر است.\nبه‌صورت «شناسه داخلی مبلغ» ارسال کنید. مثال: 42 50000",
+                reply_markup=userbot_cancel_keyboard(),
+            )
+            return
+        try:
+            target_user_id = int(parts[0])
+            amount = int(parts[1])
+        except Exception:
+            await msg.reply_text("❌ عدد نامعتبر.", reply_markup=userbot_cancel_keyboard())
+            return
+        try:
+            reward = userbot_db.grant_manual_referral_reward(target_user_id, amount)
+        except Exception as e:
+            await msg.reply_text(f"خطا در ایجاد پاداش دستی: {e}", reply_markup=admin_main_keyboard())
+            return
+        context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
+        if not reward:
+            await msg.reply_text("❌ پاداش دستی ایجاد نشد (کاربر یا مبلغ نامعتبر).", reply_markup=admin_main_keyboard())
+            return
+        await msg.reply_text(
+            f"✅ پاداش دستی ایجاد شد.\n👤 کاربر: {target_user_id}\n💰 مبلغ: {amount:,} تومان\n🎁 پاداش #{reward.get('id')}",
+            reply_markup=admin_main_keyboard(),
+        )
+        return
+
     if context.user_data.get(INVITE_BANNER_PHOTO_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(INVITE_BANNER_PHOTO_EDIT_STATE, None)
@@ -7109,6 +7188,339 @@ async def send_gifts_help(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mess
         [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
     ])
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+# ===============================
+#   بخش رفرال (دعوت دوستان)
+# ===============================
+
+def build_referral_admin_menu_keyboard() -> InlineKeyboardMarkup:
+    try:
+        settings = userbot_db.get_referral_settings()
+    except Exception:
+        settings = {}
+    enabled_icon = "✅" if bool(settings.get("referral_enabled", False)) else "❌"
+    rows = [
+        [InlineKeyboardButton("📊 داشبورد رفرال", callback_data="userbot:referral:dashboard")],
+        [
+            InlineKeyboardButton("⚙️ تنظیمات", callback_data="userbot:referral:settings"),
+            InlineKeyboardButton(f"🎁 فعال/غیرفعال | {enabled_icon}", callback_data="userbot:referral:toggle"),
+        ],
+        [
+            InlineKeyboardButton("👥 لیست دعوت‌ها", callback_data="userbot:referral:list:1"),
+            InlineKeyboardButton("💰 لیست پاداش‌ها", callback_data="userbot:referral:rewards:1"),
+        ],
+        [InlineKeyboardButton("🧾 پاداش دستی", callback_data="userbot:referral:manual")],
+        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def build_referral_settings_keyboard() -> InlineKeyboardMarkup:
+    try:
+        settings = userbot_db.get_referral_settings()
+    except Exception:
+        settings = {}
+    trial_icon = "✅" if bool(settings.get("trial_reward_enabled", True)) else "❌"
+    purchase_icon = "✅" if bool(settings.get("purchase_reward_enabled", True)) else "❌"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🧪 پاداش تست | {trial_icon}", callback_data="userbot:referral:toggle:trial_reward_enabled")],
+        [InlineKeyboardButton(f"🛒 پاداش خرید | {purchase_icon}", callback_data="userbot:referral:toggle:purchase_reward_enabled")],
+        [InlineKeyboardButton("✏️ مبلغ پاداش تست", callback_data="userbot:referral:edit:trial_reward_amount")],
+        [InlineKeyboardButton("✏️ مبلغ پاداش خرید", callback_data="userbot:referral:edit:purchase_reward_amount")],
+        [InlineKeyboardButton("✏️ سقف دعوت موفق", callback_data="userbot:referral:edit:max_successful_referrals")],
+        [InlineKeyboardButton("✏️ حداقل مبلغ خرید", callback_data="userbot:referral:edit:min_purchase_amount")],
+        [InlineKeyboardButton("✏️ متن صفحه دعوت", callback_data="userbot:referral:edit:invite_intro_text")],
+        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")],
+    ])
+
+
+def _referral_setting_value_label(name: str, value: Any) -> str:
+    if name == "trial_reward_amount":
+        return f"مبلغ پاداش تست (تومان): {int(value or 0):,}"
+    if name == "purchase_reward_amount":
+        return f"مبلغ پاداش خرید اول (تومان): {int(value or 0):,}"
+    if name == "max_successful_referrals":
+        return f"سقف دعوت موفق (0 = نامحدود): {int(value or 0)}"
+    if name == "min_purchase_amount":
+        return f"حداقل مبلغ خرید برای پاداش (تومان): {int(value or 0):,}"
+    return str(value)
+
+
+async def send_referral_admin_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    try:
+        stats = userbot_db.get_referral_admin_stats()
+    except Exception:
+        stats = {}
+    text = (
+        "🤝 مدیریت رفرال (دعوت دوستان)\n"
+        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
+        f"👥 کل دعوت‌ها: {int(stats.get('total_referrals') or 0)}\n"
+        f"🟢 فعال: {int(stats.get('active_referrals') or 0)}\n"
+        f"🚫 رد شده: {int(stats.get('rejected_referrals') or 0)}\n"
+        f"🛡 پرچم تقلب: {int(stats.get('fraud_flagged') or 0)}\n"
+        f"🧪 پاداش‌های تست: {int(stats.get('trial_rewards_count') or 0)}\n"
+        f"🛒 پاداش‌های خرید: {int(stats.get('purchase_rewards_count') or 0)}\n"
+        f"💸 مجموع هزینه پاداش: {int(stats.get('total_reward_cost') or 0):,} تومان\n"
+        f"💰 درآمد ایجادشده: {int(stats.get('revenue_generated') or 0):,} تومان\n"
+        f"📈 نرخ تبدیل: {stats.get('conversion_rate') or 0}٪"
+    )
+    kb = build_referral_admin_menu_keyboard()
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_referral_admin_settings(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    try:
+        settings = userbot_db.get_referral_settings()
+    except Exception:
+        settings = {}
+    enabled = "✅ فعال" if bool(settings.get("referral_enabled", False)) else "❌ غیرفعال"
+    text = (
+        "⚙️ تنظیمات رفرال\n"
+        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
+        f"وضعیت: {enabled}\n"
+        f"{_referral_setting_value_label('trial_reward_amount', settings.get('trial_reward_amount'))}\n"
+        f"{_referral_setting_value_label('purchase_reward_amount', settings.get('purchase_reward_amount'))}\n"
+        f"{_referral_setting_value_label('max_successful_referrals', settings.get('max_successful_referrals'))}\n"
+        f"{_referral_setting_value_label('min_purchase_amount', settings.get('min_purchase_amount'))}\n"
+    )
+    kb = build_referral_settings_keyboard()
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_referral_list(chat_id: int, context: ContextTypes.DEFAULT_TYPE, page: int = 1, message=None) -> None:
+    page = max(1, int(page or 1))
+    page_size = 10
+    try:
+        refs, total = userbot_db.list_referrals(limit=page_size, offset=(page - 1) * page_size)
+    except Exception:
+        refs, total = [], 0
+    if not refs:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")]])
+        text = "👥 هنوز دعوتی ثبت نشده است."
+        if message:
+            try:
+                await message.edit_text(text, reply_markup=kb)
+            except BadRequest:
+                await context.bot.send_message(chat_id, text, reply_markup=kb)
+        else:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+        return
+
+    total_pages = max(1, math.ceil(total / page_size))
+    lines = [f"👥 لیست دعوت‌ها ({total} مورد — صفحه {page}/{total_pages})", "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖"]
+    for ref in refs:
+        inviter = str(ref.get("inviter_full_name") or ref.get("inviter_username") or ref.get("inviter_telegram_id") or "—")
+        invitee = str(ref.get("invitee_full_name") or ref.get("invitee_username") or ref.get("invitee_telegram_id") or "—")
+        status_icon = "🟢" if str(ref.get("status") or "") == "active" else "🔴"
+        fraud_icon = "🚩" if int(ref.get("fraud_flag") or 0) else ""
+        qualified = "" if int(ref.get("invitee_qualified", 1)) else " (فاقد شرایط)"
+        lines.append(f"#{ref.get('id')} | {inviter} ⟵ {invitee} {status_icon}{fraud_icon}{qualified}")
+    text = "\n".join(lines)
+
+    rows = []
+    row: List[Any] = []
+    for ref in refs:
+        row.append(InlineKeyboardButton(f"#{ref.get('id')}", callback_data=f"userbot:referral:detail:{ref.get('id')}"))
+        if len(row) == 5:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("➡️ قبلی", callback_data=f"userbot:referral:list:{page - 1}"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton("⬅️ بعدی", callback_data=f"userbot:referral:list:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")])
+    kb = InlineKeyboardMarkup(rows)
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_referral_detail(referral_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    ref = userbot_db.get_referral_by_id(int(referral_id or 0))
+    if not ref:
+        await context.bot.send_message(chat_id, "❌ دعوت یافت نشد.")
+        return
+    try:
+        rewards, _ = userbot_db.list_referral_rewards(limit=20, inviter_id=int(ref.get("inviter_id") or 0))
+    except Exception:
+        rewards = []
+    related = [r for r in rewards if int(r.get("referral_id") or 0) == int(ref.get("id") or 0)]
+
+    inviter_db = userbot_db.get_user_by_id(int(ref.get("inviter_id") or 0)) or {}
+    invitee_db = userbot_db.get_user_by_id(int(ref.get("invitee_id") or 0)) or {}
+    labels = userbot_db.REFERRAL_REWARD_LABELS
+
+    reward_lines = []
+    for rw in related:
+        label = labels.get(str(rw.get("reward_type") or ""), str(rw.get("reward_type") or ""))
+        amount = int(rw.get("amount_toman") or 0)
+        status_icon = "✅" if str(rw.get("status") or "") == "paid" else "🔻"
+        reward_lines.append(f"• {label}: {amount:,} تومان {status_icon}")
+
+    text = (
+        f"🔎 جزئیات دعوت #{ref.get('id')}\n"
+        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
+        f"👤 دعوت‌کننده: {inviter_db.get('full_name') or inviter_db.get('username') or '—'} "
+        f"(ID: {ref.get('inviter_id')})\n"
+        f"🙋 دعوت‌شده: {invitee_db.get('full_name') or invitee_db.get('username') or '—'} "
+        f"(ID: {ref.get('invitee_id')})\n"
+        f"📦 وضعیت: {ref.get('status')}\n"
+        f"🚩 پرچم تقلب: {'بله' if int(ref.get('fraud_flag') or 0) else 'خیر'}\n"
+        f"🎯 واجد شرایط پاداش: {'بله' if int(ref.get('invitee_qualified', 1)) else 'خیر'}\n"
+        f"🕐 ثبت: {ref.get('created_at') or '—'}\n"
+    )
+    if reward_lines:
+        text += "\n💰 پاداش‌ها:\n" + "\n".join(reward_lines)
+    if str(ref.get("rejection_reason") or "").strip():
+        text += f"\n📝 دلیل رد: {ref.get('rejection_reason')}"
+
+    status = str(ref.get("status") or "").lower()
+    fraud = int(ref.get("fraud_flag") or 0)
+    rows = []
+    if status == "active":
+        rows.append([InlineKeyboardButton("🚫 رد دعوت", callback_data=f"userbot:referral:reject:{ref.get('id')}")])
+    else:
+        rows.append([InlineKeyboardButton("✅ فعال‌سازی مجدد", callback_data=f"userbot:referral:activate:{ref.get('id')}")])
+    fraud_label = "🧹 حذف پرچم تقلب" if fraud else "🚩 ثبت پرچم تقلب"
+    rows.append([InlineKeyboardButton(fraud_label, callback_data=f"userbot:referral:fraud:{ref.get('id')}")])
+    for rw in related:
+        if str(rw.get("status") or "") == "paid":
+            rows.append([
+                InlineKeyboardButton(
+                    f"💥 لغو پاداش #{rw.get('id')}",
+                    callback_data=f"userbot:referral:revoke_reward:{rw.get('id')}",
+                )
+            ])
+    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral:list:1")])
+    kb = InlineKeyboardMarkup(rows)
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_referral_rewards_list(chat_id: int, context: ContextTypes.DEFAULT_TYPE, page: int = 1, message=None) -> None:
+    page = max(1, int(page or 1))
+    page_size = 10
+    try:
+        rewards, total = userbot_db.list_referral_rewards(limit=page_size, offset=(page - 1) * page_size)
+    except Exception:
+        rewards, total = [], 0
+    if not rewards:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")]])
+        text = "💰 هنوز پاداشی ثبت نشده است."
+        if message:
+            try:
+                await message.edit_text(text, reply_markup=kb)
+            except BadRequest:
+                await context.bot.send_message(chat_id, text, reply_markup=kb)
+        else:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+        return
+
+    total_pages = max(1, math.ceil(total / page_size))
+    labels = userbot_db.REFERRAL_REWARD_LABELS
+    lines = [f"💰 لیست پاداش‌ها ({total} مورد — صفحه {page}/{total_pages})", "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖"]
+    for rw in rewards:
+        label = labels.get(str(rw.get("reward_type") or ""), str(rw.get("reward_type") or ""))
+        inviter = str(rw.get("inviter_full_name") or rw.get("inviter_username") or rw.get("inviter_id") or "—")
+        amount = int(rw.get("amount_toman") or 0)
+        status_icon = "✅" if str(rw.get("status") or "") == "paid" else "🔻"
+        lines.append(f"#{rw.get('id')} | {label} | {inviter} | {amount:,} تومان {status_icon}")
+    text = "\n".join(lines)
+
+    rows = []
+    row: List[Any] = []
+    for rw in rewards:
+        status_icon = "✅" if str(rw.get("status") or "") == "paid" else "🔻"
+        row.append(InlineKeyboardButton(f"#{rw.get('id')}{status_icon}", callback_data=f"userbot:referral:reward:{rw.get('id')}"))
+        if len(row) == 5:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("➡️ قبلی", callback_data=f"userbot:referral:rewards:{page - 1}"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton("⬅️ بعدی", callback_data=f"userbot:referral:rewards:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")])
+    kb = InlineKeyboardMarkup(rows)
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_referral_reward_detail(reward_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    rw = userbot_db.get_referral_reward(int(reward_id or 0))
+    if not rw:
+        await context.bot.send_message(chat_id, "❌ پاداش یافت نشد.")
+        return
+    labels = userbot_db.REFERRAL_REWARD_LABELS
+    inviter_db = userbot_db.get_user_by_id(int(rw.get("inviter_id") or 0)) or {}
+    invitee_db = userbot_db.get_user_by_id(int(rw.get("invitee_id") or 0)) or {}
+    invitee_label = (
+        f"{invitee_db.get('full_name') or invitee_db.get('username') or '—'} (ID: {rw.get('invitee_id')})"
+        if invitee_db else "—"
+    )
+    text = (
+        f"🎁 جزئیات پاداش #{rw.get('id')}\n"
+        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
+        f"نوع: {labels.get(str(rw.get('reward_type') or ''), str(rw.get('reward_type') or ''))}\n"
+        f"منبع: {rw.get('reward_source')}\n"
+        f"👤 دریافت‌کننده: {inviter_db.get('full_name') or inviter_db.get('username') or '—'} (ID: {rw.get('inviter_id')})\n"
+        f"🙋 دعوت‌شده: {invitee_label}\n"
+        f"💰 مبلغ: {int(rw.get('amount_toman') or 0):,} تومان\n"
+        f"🏷 کوپن: {rw.get('voucher_code') or '—'}\n"
+        f"💳 پرداخت مرتبط: {int(rw.get('payment_id') or 0) or '—'}\n"
+        f"📦 وضعیت: {rw.get('status')}\n"
+        f"🕐 ثبت: {rw.get('created_at') or '—'}\n"
+    )
+    if str(rw.get("revoked_at") or "").strip():
+        text += f"🔻 لغو: {rw.get('revoked_at')}"
+    rows = []
+    if str(rw.get("status") or "") == "paid":
+        rows.append([InlineKeyboardButton("💥 لغو پاداش", callback_data=f"userbot:referral:revoke_reward:{rw.get('id')}")])
+    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral:rewards:1")])
+    kb = InlineKeyboardMarkup(rows)
     if message:
         try:
             await message.edit_text(text, reply_markup=kb)
@@ -9083,6 +9495,184 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         code = str(data.rsplit(":", 1)[-1] or "").strip()
         await query.answer()
         await send_zarin_coupon_detail(cid, context, code=code, message=msg)
+        return
+
+    # --- رفرال (دعوت دوستان) ---
+    if data == "userbot:referral_menu":
+        await query.answer()
+        await send_referral_admin_menu(cid, context, message=msg)
+        return
+
+    if data == "userbot:referral:dashboard":
+        await query.answer()
+        try:
+            stats = userbot_db.get_referral_admin_stats()
+        except Exception:
+            stats = {}
+        top = stats.get("top_referrers") or []
+        top_lines = []
+        for idx, item in enumerate(top, start=1):
+            name = str(item.get("inviter_full_name") or item.get("inviter_username") or item.get("inviter_id") or "—")
+            top_lines.append(f"{idx}. {name} | موفق:{int(item.get('successful') or 0)} | پاداش:{int(item.get('rewards') or 0):,}")
+        text = (
+            "📊 داشبورد رفرال\n"
+            "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
+            f"👥 کل دعوت‌ها: {int(stats.get('total_referrals') or 0)}\n"
+            f"🟢 فعال: {int(stats.get('active_referrals') or 0)}\n"
+            f"⏳ در انتظار خرید: {max(0, int(stats.get('active_referrals') or 0) - int(stats.get('paid_purchase_rewards') or 0))}\n"
+            f"🧪 پاداش‌های تست: {int(stats.get('trial_rewards_count') or 0)} ({int(stats.get('trial_rewards_amount') or 0):,} تومان)\n"
+            f"🛒 پاداش‌های خرید: {int(stats.get('purchase_rewards_count') or 0)} ({int(stats.get('purchase_rewards_amount') or 0):,} تومان)\n"
+            f"💸 مجموع هزینه پاداش: {int(stats.get('total_reward_cost') or 0):,} تومان\n"
+            f"🔻 لغوشده: {int(stats.get('revoked_rewards_count') or 0)}\n"
+            f"💰 درآمد ایجادشده: {int(stats.get('revenue_generated') or 0):,} تومان\n"
+            f"📈 نرخ تبدیل: {stats.get('conversion_rate') or 0}٪\n"
+            f"🚩 پرچم تقلب: {int(stats.get('fraud_flagged') or 0)}\n"
+        )
+        if top_lines:
+            text += "\n🏆 برترین دعوت‌کننده‌ها:\n" + "\n".join(top_lines)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")]])
+        try:
+            await msg.edit_text(text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(cid, text, reply_markup=kb)
+        return
+
+    if data == "userbot:referral:settings":
+        await query.answer()
+        await send_referral_admin_settings(cid, context, message=msg)
+        return
+
+    if data == "userbot:referral:toggle":
+        try:
+            settings = userbot_db.toggle_referral_setting("referral_enabled")
+        except Exception as e:
+            await query.answer(f"خطا: {e}", show_alert=True)
+            return
+        await query.answer("✅ رفرال فعال شد." if bool(settings.get("referral_enabled")) else "🚫 رفرال غیرفعال شد.")
+        await send_referral_admin_menu(cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:toggle:"):
+        name = str(data.rsplit(":", 1)[-1] or "").strip()
+        try:
+            userbot_db.toggle_referral_setting(name)
+        except Exception as e:
+            await query.answer(f"خطا: {e}", show_alert=True)
+            return
+        await query.answer("✅ تغییر کرد.")
+        await send_referral_admin_settings(cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:edit:"):
+        name = str(data.rsplit(":", 1)[-1] or "").strip()
+        if name not in {"trial_reward_amount", "purchase_reward_amount", "max_successful_referrals", "min_purchase_amount", "invite_intro_text"}:
+            await query.answer("❌ نامعتبر.", show_alert=True)
+            return
+        context.user_data[REFERRAL_VALUE_EDIT_STATE] = {"name": name}
+        await query.answer()
+        prompts = {
+            "trial_reward_amount": "💰 مبلغ پاداش تست (تومان) را ارسال کنید:",
+            "purchase_reward_amount": "💰 مبلغ پاداش خرید اول (تومان) را ارسال کنید:",
+            "max_successful_referrals": "🔢 سقف دعوت موفق برای هر فرد (0 = نامحدود) را ارسال کنید:",
+            "min_purchase_amount": "💰 حداقل مبلغ خرید برای پاداش (تومان) را ارسال کنید:",
+            "invite_intro_text": "📝 متن صفحه دعوت کاربران را ارسال کنید:\n(از {invite_link}، {trial_reward} و {purchase_reward} می‌توانید استفاده کنید)",
+        }
+        await msg.reply_text(prompts[name], reply_markup=userbot_cancel_keyboard())
+        return
+
+    if data.startswith("userbot:referral:list:"):
+        try:
+            page = int(str(data.rsplit(":", 1)[-1] or 1))
+        except ValueError:
+            page = 1
+        await query.answer()
+        await send_referral_list(cid, context, page=page, message=msg)
+        return
+
+    if data.startswith("userbot:referral:detail:"):
+        try:
+            ref_id = int(str(data.rsplit(":", 1)[-1] or 0))
+        except ValueError:
+            ref_id = 0
+        await query.answer()
+        await send_referral_detail(ref_id, cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:reject:"):
+        try:
+            ref_id = int(str(data.rsplit(":", 1)[-1] or 0))
+        except ValueError:
+            ref_id = 0
+        ok = userbot_db.set_referral_status(ref_id, "rejected", "رد شده توسط ادمین")
+        await query.answer("✅ دعوت رد شد." if ok else "❌ تغییر وضعیت انجام نشد.")
+        await send_referral_detail(ref_id, cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:activate:"):
+        try:
+            ref_id = int(str(data.rsplit(":", 1)[-1] or 0))
+        except ValueError:
+            ref_id = 0
+        ok = userbot_db.set_referral_status(ref_id, "active", "")
+        await query.answer("✅ دعوت دوباره فعال شد." if ok else "❌ تغییر وضعیت انجام نشد.")
+        await send_referral_detail(ref_id, cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:fraud:"):
+        try:
+            ref_id = int(str(data.rsplit(":", 1)[-1] or 0))
+        except ValueError:
+            ref_id = 0
+        ref = userbot_db.get_referral_by_id(ref_id) or {}
+        new_flag = int(ref.get("fraud_flag") or 0) != 1
+        userbot_db.set_referral_fraud_flag(ref_id, new_flag)
+        await query.answer("🚩 پرچم تقلب ثبت شد." if new_flag else "🧹 پرچم تقلب حذف شد.")
+        await send_referral_detail(ref_id, cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:revoke_reward:"):
+        try:
+            reward_id = int(str(data.rsplit(":", 1)[-1] or 0))
+        except ValueError:
+            reward_id = 0
+        revoked = userbot_db.revoke_referral_reward_by_id(reward_id)
+        if revoked:
+            await query.answer("💥 پاداش لغو شد و مبلغ از کیف پول کسر گردید.")
+        else:
+            await query.answer("❌ پاداش قابل لغو نیست.", show_alert=True)
+            return
+        ref_id = int((revoked or {}).get("referral_id") or 0)
+        if ref_id > 0:
+            await send_referral_detail(ref_id, cid, context, message=msg)
+        else:
+            await send_referral_reward_detail(reward_id, cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:rewards:"):
+        try:
+            page = int(str(data.rsplit(":", 1)[-1] or 1))
+        except ValueError:
+            page = 1
+        await query.answer()
+        await send_referral_rewards_list(cid, context, page=page, message=msg)
+        return
+
+    if data.startswith("userbot:referral:reward:"):
+        try:
+            reward_id = int(str(data.rsplit(":", 1)[-1] or 0))
+        except ValueError:
+            reward_id = 0
+        await query.answer()
+        await send_referral_reward_detail(reward_id, cid, context, message=msg)
+        return
+
+    if data == "userbot:referral:manual":
+        context.user_data[REFERRAL_MANUAL_REWARD_STATE] = {"step": "input"}
+        await query.answer()
+        await msg.reply_text(
+            "🧾 پاداش دستی\nبرای یک کاربر به‌صورت «شناسه داخلی مبلغ» ارسال کنید.\nمثال: 42 50000\n(مبلغ به تومان)",
+            reply_markup=userbot_cancel_keyboard(),
+        )
         return
 
     # --- 7. تنظیمات ربات کاربران ---
