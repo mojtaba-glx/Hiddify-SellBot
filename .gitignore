@@ -14,6 +14,10 @@ Pre*.zip
 *.db
 Shared/*.db
 
+# Runtime config created by the bot itself
+Shared/plans.json
+Shared/servers.json
+
 # Python cache/venv
 __pycache__/
 *.pyc
