@@ -1383,9 +1383,8 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             try {
                 startActivity(new Intent(Settings.ACTION_SETTINGS));
-} catch (Exception ignored) {
-                    Toast.makeText(this, "تنظیمات گوشی باز نشد؛ دستی وارد Battery app settings شو", Toast.LENGTH_LONG).show();
-                }
+            } catch (Exception ignored) {
+                Toast.makeText(this, "تنظیمات گوشی باز نشد؛ دستی وارد Battery app settings شو", Toast.LENGTH_LONG).show();
             }
         }
     }
