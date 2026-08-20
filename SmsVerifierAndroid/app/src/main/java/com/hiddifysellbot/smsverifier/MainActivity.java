@@ -3,6 +3,7 @@ package com.hiddifysellbot.smsverifier;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -16,6 +17,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.provider.Telephony;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -51,6 +53,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int REQ_SMS_PERMISSION = 1001;
     private static final int REQ_NOTIFICATION_PERMISSION = 1002;
+    private static final int REQ_DEFAULT_SMS = 1003;
     private static final int REQ_EXPORT_BACKUP = 2001;
     private static final int REQ_IMPORT_BACKUP = 2002;
     private static final int MAX_VISIBLE_BANK_SMS = 15;
@@ -91,6 +94,7 @@ public class MainActivity extends Activity {
     private TextView conversationsMetricView;
     private LinearLayout bankSmsListView;
     private TextView historyView;
+    private TextView smsDefaultStatusView;
 
     private int bgColor;
     private int cardColor;
@@ -163,6 +167,17 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_DEFAULT_SMS) {
+            refreshSmsRoleStatus();
+            Toast.makeText(
+                    this,
+                    isDefaultSmsApp()
+                            ? "✅ این اپ حالا اپ پیش‌فرض پیامک است. تشخیص پیامک فعال شد."
+                            : "پیش‌فرض پیامک فعال نشد. در صورت ادامه مشکل، دستی از تنظیمات گوشی انجام بده.",
+                    Toast.LENGTH_LONG
+            ).show();
+            return;
+        }
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
@@ -833,6 +848,40 @@ public class MainActivity extends Activity {
             }
         });
 
+        LinearLayout smsRoleCard = addCard(securityContent);
+        addSectionTitle(smsRoleCard, "📨 دسترسی کامل پیامک (اندروید 12/13)");
+        TextView smsRoleHelp = new TextView(this);
+        smsRoleHelp.setText("از اندروید ۱۲/۱۳، سیستم‌عامل اجازه خواندن صندوق پیامک را فقط به «اپ پیش‌فرض پیامک» می‌دهد. اگر این اپ پیش‌فرض پیامک نباشد، پیامک‌های واریز در لیست دیده نمی‌شوند و «مسیر پیامک» شناسایی نمی‌شود.");
+        smsRoleHelp.setTextColor(mutedColor);
+        smsRoleHelp.setTextSize(12);
+        smsRoleHelp.setLineSpacing(0, 1.15f);
+        smsRoleHelp.setPadding(0, 0, 0, dp(8));
+        smsRoleCard.addView(smsRoleHelp, matchWrap());
+
+        smsDefaultStatusView = new TextView(this);
+        smsDefaultStatusView.setTextSize(12);
+        smsDefaultStatusView.setTextColor(textColor);
+        smsDefaultStatusView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        smsRoleCard.addView(smsDefaultStatusView, matchWrap());
+
+        addButtonRow(smsRoleCard,
+                new String[]{"📨 فعال‌سازی پیش‌فرض پیامک", "🔄 بررسی وضعیت"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                openSmsDefaultRole();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                refreshSmsRoleStatus();
+                            }
+                        }
+                });
+        refreshSmsRoleStatus();
+
         addButtonRow(securityCard,
                 new String[]{"🤖 تنظیمات تلگرام", "📊 گزارش‌ها"},
                 new View.OnClickListener[]{
@@ -1334,20 +1383,111 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             try {
                 startActivity(new Intent(Settings.ACTION_SETTINGS));
-            } catch (Exception ignored) {
-                Toast.makeText(this, "تنظیمات گوشی باز نشد؛ دستی وارد Battery app settings شو", Toast.LENGTH_LONG).show();
+} catch (Exception ignored) {
+                    Toast.makeText(this, "تنظیمات گوشی باز نشد؛ دستی وارد Battery app settings شو", Toast.LENGTH_LONG).show();
+                }
             }
         }
     }
 
-    private void scanInboxNow() {
+    private boolean isDefaultSmsApp() {
+        try {
+            String currentDefault = Telephony.Sms.getDefaultSmsPackage(this);
+            return getPackageName().equals(currentDefault);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void openSmsDefaultRole() {
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                RoleManager roleManager = (RoleManager) getSystemService(ROLE_SERVICE);
+                if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_SMS)) {
+                    if (roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
+                        Toast.makeText(this, "✅ این اپ از قبل اپ پیش‌فرض پیامک است.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    startActivityForResult(
+                            roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS),
+                            REQ_DEFAULT_SMS
+                    );
+                    return;
+                }
+            } catch (Exception e) {
+                // fallback به تنظیمات دستی
+            }
+        }
+        openSmsDefaultFallbackSettings();
+    }
+
+    private void openSmsDefaultFallbackSettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+                startActivity(new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS));
+            } else {
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
+            }
+            Toast.makeText(this, "در لیست، پیامک را انتخاب کن و این اپ را به عنوان پیش‌فرض پیامک بگذار", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.parse("package:" + getPackageName())));
+            } catch (Exception ignored) {
+                Toast.makeText(this, "با دستی به تنظیمات گوشی برو و این اپ را پیش‌فرض پیامک کن", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private void refreshSmsRoleStatus() {
+        if (smsDefaultStatusView == null) {
+            return;
+        }
+        boolean isDefault = isDefaultSmsApp();
+        if (isDefault) {
+            smsDefaultStatusView.setText("✅ این اپ اپ پیش‌فرض پیامک است.\nخواندن صندوق پیامک و تشخیص واریزی در اندروید ۱۲/۱۳ فعال است.");
+            styleGradientRounded(smsDefaultStatusView, softGreenColor, inputColor, greenColor, dp(18));
+        } else {
+            smsDefaultStatusView.setText("⚠️ این اپ اپ پیش‌فرض پیامک نیست.\nدر اندروید ۱۲/۱۳، بدون این حالت گاهی صندوق پیامک خوانده نمی‌شود و «مسیر پیامک» شناسایی نمی‌شود. با دکمه زیر فعالش کن.");
+            styleGradientRounded(smsDefaultStatusView, softGoldColor, inputColor, goldColor, dp(18));
+        }
+    }
+
+    private void showSmsDefaultDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("📨 دسترسی کامل پیامک")
+                .setMessage("در اندروید ۱۲/۱۳ برای خواندن و تشخیص خودکار پیامک‌های بانکی، این اپ باید «اپ پیش‌فرض پیامک» باشد (مثل این تلفن که فقط برای همین کار وصل است).\n\nفعال‌سازی می‌کنید؟")
+                .setPositiveButton("✅ فعال‌سازی", new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        openSmsDefaultRole();
+                    }
+                })
+                .setNegativeButton("بعداً", null)
+                .setNeutralButton("راهنمای دستی", new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        openSmsDefaultFallbackSettings();
+                    }
+                })
+                .show();
+    }
+
+private void scanInboxNow() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 && checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             requestSmsPermission();
             Toast.makeText(this, "اجازه READ_SMS را بده و دوباره دکمه بررسی پیامک‌ها را بزن", Toast.LENGTH_LONG).show();
             return;
         }
+        if (Build.VERSION.SDK_INT >= 29 && !isDefaultSmsApp()) {
+            showSmsDefaultDialog();
+            return;
+        }
+        startInboxScan();
+    }
 
+    private void startInboxScan() {
         Toast.makeText(this, "در حال بررسی پیامک‌های قبلی...", Toast.LENGTH_SHORT).show();
         executor.execute(new Runnable() {
             @Override
@@ -1639,6 +1779,7 @@ public class MainActivity extends Activity {
 
     private void showSecurityScreen() {
         showOnly(securityContent);
+        refreshSmsRoleStatus();
         scrollToTop();
     }
 
