@@ -503,6 +503,53 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
     return body, service
 
 
+_UUID_SERVER_CACHE: dict = {}
+_UUID_SERVER_CACHE_TTL = 600
+
+
+def _looks_like_panel_uuid(value: str, min_len: int = 32, max_len: int = 64) -> bool:
+    """هیورستیک ساده برای تشخیص uuid پنل در لینک‌های قدیمی /sub/{uuid}/all.txt."""
+    raw = str(value or "").strip()
+    if not raw or len(raw) < min_len or len(raw) > max_len:
+        return False
+    return "-" in raw
+
+
+def _build_panel_uuid_body_via_any_server(uuid: str, is_b64: bool) -> tuple[str, dict]:
+    """برای لینک‌های قدیمی بدون پیشوند server، سروری که این uuid را دارد پیدا می‌کند.
+
+    فقط وقتی فراخوانی می‌شود که uuid به هیچ سرویسی در دیتابیس‌های محلی وصل نباشد.
+    نتیجه کوتاه‌مدت کش می‌شود تا بار اضافی روی پنل‌ها ایجاد نشود.
+    """
+    uuid = str(uuid or "").strip()
+    if not uuid:
+        return "", {}
+
+    now = time.time()
+    cached = _UUID_SERVER_CACHE.get(uuid)
+    if cached and cached[0] > now:
+        server_id = cached[1]
+        if server_id:
+            body, service = _build_panel_uuid_subscription_body(f"panel-srv-{server_id}", uuid, is_b64)
+            if body:
+                return body, service
+
+    for srv in database.get_servers() or []:
+        try:
+            server_id = int(srv.get("id") or 0)
+        except (TypeError, ValueError):
+            server_id = 0
+        if server_id <= 0:
+            continue
+        body, service = _build_panel_uuid_subscription_body(f"panel-srv-{server_id}", uuid, is_b64)
+        if body:
+            _UUID_SERVER_CACHE[uuid] = (now + _UUID_SERVER_CACHE_TTL, server_id)
+            return body, service
+
+    _UUID_SERVER_CACHE[uuid] = (now + _UUID_SERVER_CACHE_TTL, 0)
+    return "", {}
+
+
 class _SubHandler(BaseHTTPRequestHandler):
     def _write(
         self,
@@ -646,6 +693,11 @@ class _SubHandler(BaseHTTPRequestHandler):
                 if _panel_server_id_from_token(token) and uuid_hint:
                     self._write(404, "subscription is empty")
                     return
+                if not uuid_hint and _looks_like_panel_uuid(token):
+                    probe_body, probe_service = _build_panel_uuid_body_via_any_server(token, is_b64)
+                    if probe_body:
+                        self._write(200, probe_body, headers=self._subscription_headers(probe_service, is_b64))
+                        return
                 self._write(404, "subscription token not found")
                 return
             service = (
