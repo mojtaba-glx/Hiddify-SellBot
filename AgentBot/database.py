@@ -964,6 +964,54 @@ def get_customer_user(agent_id: int, telegram_id: int) -> Optional[Dict[str, Any
         conn.close()
 
 
+def upsert_customer_user(agent_id: int, telegram_id: int, username: str = "", full_name: str = "") -> Optional[int]:
+    """ایجاد یا به‌روزرسانی ردیف مشتری در customer_users (در صورت نبود، می‌سازد).
+
+    مشابه upsert_user ربات مشتری؛ برای زمانی استفاده می‌شود که مشتری هنوز
+    در customer_users ثبت نشده اما پرداختش در انتظار تایید است.
+    """
+    conn = _customer_conn()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS customer_users ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " agent_id INTEGER NOT NULL,"
+            " telegram_id INTEGER NOT NULL,"
+            " username TEXT,"
+            " full_name TEXT,"
+            " created_at TEXT,"
+            " UNIQUE(agent_id, telegram_id))"
+        )
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            "SELECT id FROM customer_users WHERE agent_id=? AND telegram_id=?",
+            (agent_id, telegram_id),
+        )
+        row = cur.fetchone()
+        if row:
+            uid = row["id"]
+            cur.execute(
+                "UPDATE customer_users SET username=?, full_name=? WHERE id=?",
+                (username, full_name, uid),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO customer_users (agent_id, telegram_id, username, full_name, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (agent_id, telegram_id, username, full_name, now),
+            )
+            uid = cur.lastrowid
+        conn.commit()
+        return int(uid)
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def get_customer_payments(
     agent_id: int,
     status: Optional[str] = None,

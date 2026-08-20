@@ -590,10 +590,19 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
 
     from AgentBot.services.subscription_service import _get_cluster_servers
     from Shared.agent_db import upsert_customer, create_service, add_service_node, get_customer_by_telegram_id, make_service_note
+    from AgentBot.database import upsert_customer_user, get_customer_user
     from Shared.database import get_server_by_id
 
-    # Get or create customer
+    # Get or create customer (محلی customer_users) — اگر ردیف مشتری موجود نشد، می‌سازیم
     cust = get_customer_user(agent_id, user_tg_id)
+    if not cust:
+        upsert_customer_user(
+            agent_id,
+            user_tg_id,
+            str(order.get("username") or "").strip(),
+            str(order.get("full_name") or "").strip(),
+        )
+        cust = get_customer_user(agent_id, user_tg_id)
     if not cust:
         raise RuntimeError("customer_not_found")
 
