@@ -8923,13 +8923,12 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                     amount_txt = _format_toman(amount_value)
                     pay_meta = _parse_receipt_meta(str(pay.get("receipt_image") or ""))
                     is_direct_buy = str(pay_meta.get("pay_flow") or "").strip().lower() == "direct_buy"
+                    notify_text = ""
                     if new_st == "approved":
                         if is_direct_buy:
-                            notify_text = (
-                                "🎉 تراکنش شما تایید شد\n"
-                                "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.\n\n"
-                                f"🎁 شناسه تراکنش: {pay.get('tx_code') or pay.get('id') or '-'}"
-                            )
+                            # تحویل مستقیم و پیام تأیید توسط ربات کاربران (حلقه direct_done) انجام
+                            # می‌شود؛ از ارسال پیام تکراری «تراکنش تایید شد» در اینجا صرف‌نظر می‌کنیم.
+                            notify_text = ""
                         else:
                             notify_text = (
                                 "✅ پرداخت شما تایید شد.\n"
@@ -8942,7 +8941,8 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                             "مبلغ به کیف پول شما اضافه نشد.\n"
                             "در صورت نیاز با پشتیبانی تماس بگیرید."
                         )
-                    await user_bot.send_message(chat_id=tg_id, text=notify_text)
+                    if notify_text:
+                        await user_bot.send_message(chat_id=tg_id, text=notify_text)
             except Exception as e:
                 logger.warning(f"Failed to notify user for payment {pid}: {e}")
             

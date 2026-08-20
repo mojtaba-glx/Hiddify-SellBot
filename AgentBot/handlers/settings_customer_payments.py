@@ -716,11 +716,13 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
 
 
 async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, service_id: int) -> None:
-    """ارسال پیام «📄 اطلاعات اشتراک شما» همراه کیبورد وضعیت به مشتری پس از ساخت سرویس."""
+    """ارسال لینک اشتراک + QR (یا کانفیگ مستقیم) به مشتری بلافاصله پس از ساخت سرویس."""
     try:
+        from html import escape
         from CustomerBot.database import get_subs_settings, get_buy_renew_settings
-        from CustomerBot.keyboards import subscription_status_keyboard
-        from CustomerBot.services import build_subscription_status_text
+        from CustomerBot.keyboards import subscription_links_keyboard, subscription_status_keyboard
+        from CustomerBot.services import build_subscription_status_text, get_service_node_base_urls, collect_all_direct_configs_for_service, get_or_create_bot_sub_links
+        from Shared.qr_utils import make_qr_image
         from Shared.agent_db import get_service_by_id
 
         svc = get_service_by_id(service_id)
@@ -733,26 +735,143 @@ async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_
             return
         customer_bot = Bot(token=customer_token)
         subs_settings = get_subs_settings(agent_id)
-        br = get_buy_renew_settings(agent_id)
-        svc_text = build_subscription_status_text(svc, subs_settings, br)
-        show_detach = bool(svc.get("comment") == "connected")
-        kb = subscription_status_keyboard(
-            service_id,
-            show_direct_config=subs_settings.get("show_direct_config", True),
-            show_sub_link=subs_settings.get("show_sub_link", True),
-            show_detach=show_detach,
-        )
-        await customer_bot.send_message(
-            chat_id=user_tg_id,
-            text=svc_text,
-            parse_mode="Markdown",
-            reply_markup=kb,
-            read_timeout=20,
-            write_timeout=20,
-            connect_timeout=10,
-            pool_timeout=20,
-        )
-        logger.info("Subscription %s delivered to customer %s", service_id, user_tg_id)
+        sent_kind = ""
+
+        config_items: list[tuple[str, str]] = []
+        base_urls = get_service_node_base_urls(svc)
+        if base_urls:
+            base_url = base_urls[0]
+            if subs_settings.get("show_sub_link", True):
+                config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+            if subs_settings.get("show_auto_sub_link", False):
+                config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+            if subs_settings.get("show_sub_link_b64", False):
+                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+            if subs_settings.get("show_multi_server", False):
+                try:
+                    managed_link, _ = get_or_create_bot_sub_links(svc)
+                    if managed_link:
+                        config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
+                except Exception as e:
+                    logger.warning("Failed to build managed sub link after delivery (service_id=%s): %s", service_id, e)
+            if subs_settings.get("show_multi_server_b64", False):
+                try:
+                    _, managed_link_b64 = get_or_create_bot_sub_links(svc)
+                    if managed_link_b64:
+                        config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
+                except Exception as e:
+                    logger.warning("Failed to build managed sub b64 link after delivery (service_id=%s): %s", service_id, e)
+
+        if len(config_items) == 1:
+            primary_link = config_items[0][1]
+            qr_image = make_qr_image(primary_link)
+            qr_caption = (
+                "🎉 اشتراک شما آماده‌ی استفاده است ✅\n\n"
+                f"{config_items[0][0]}\n"
+                f"<code>{escape(primary_link)}</code>\n\n"
+                "📄 جهت کپی شدن لینک کافیست یک‌بار روی لینک بالا لمس کنید."
+            )
+            try:
+                await customer_bot.send_photo(
+                    chat_id=user_tg_id,
+                    photo=qr_image,
+                    caption=qr_caption,
+                    parse_mode="HTML",
+                    reply_markup=subscription_links_keyboard(service_id),
+                    read_timeout=20,
+                    write_timeout=20,
+                    connect_timeout=10,
+                    pool_timeout=20,
+                )
+            except Exception:
+                try:
+                    await customer_bot.send_message(
+                        chat_id=user_tg_id,
+                        text=qr_caption,
+                        parse_mode="HTML",
+                        reply_markup=subscription_links_keyboard(service_id),
+                        disable_web_page_preview=True,
+                    )
+                except Exception:
+                    pass
+            sent_kind = "qr"
+
+        if len(config_items) > 1:
+            # وقتی چند روش نمایش لینک فعال است، به‌جای انتخاب/تکرار لینک‌ها،
+            # اطلاعات اشتراک نمایش داده می‌شود تا مشتری از کیبورد وضعیت انتخاب کند.
+            sent_kind = "show_status"
+
+        if not sent_kind and subs_settings.get("show_direct_config", True):
+            links = await asyncio.to_thread(collect_all_direct_configs_for_service, svc)
+            clean_links = [str(x).strip() for x in (links or []) if str(x).strip()]
+            if clean_links:
+                all_links_text = "\n".join(clean_links)
+                one_block_text = (
+                    "🔗 کانفیگ‌های مستقیم\n"
+                    "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
+                    f"<pre><code class=\"language-shell\">{escape(all_links_text)}</code></pre>"
+                )
+                if len(one_block_text) <= 3900:
+                    await customer_bot.send_message(
+                        chat_id=user_tg_id,
+                        text=one_block_text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                    sent_kind = "direct_config"
+                else:
+                    max_payload = 2800
+                    parts_list: list[list[str]] = []
+                    cur: list[str] = []
+                    cur_len = 0
+                    for link in clean_links:
+                        add = len(link) + 1
+                        if cur and cur_len + add > max_payload:
+                            parts_list.append(cur)
+                            cur = [link]
+                            cur_len = add
+                        else:
+                            cur.append(link)
+                            cur_len += add
+                    if cur:
+                        parts_list.append(cur)
+                    for idx, chunk in enumerate(parts_list, start=1):
+                        header = "🔗 کانفیگ‌های مستقیم" if len(parts_list) == 1 else f"🔗 کانفیگ‌های مستقیم ({idx}/{len(parts_list)})"
+                        part_text = (
+                            f"{header}\n"
+                            "برای کپی، باکس زیر را کپی کنید:\n"
+                            f"<pre><code class=\"language-shell\">{escape(chr(10).join(chunk))}</code></pre>"
+                        )
+                        await customer_bot.send_message(
+                            chat_id=user_tg_id,
+                            text=part_text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                        )
+                    sent_kind = "direct_config"
+
+        if not sent_kind or sent_kind == "show_status":
+            br = get_buy_renew_settings(agent_id)
+            svc_text = build_subscription_status_text(svc, subs_settings, br)
+            show_detach = bool(svc.get("comment") == "connected")
+            kb = subscription_status_keyboard(
+                service_id,
+                show_direct_config=subs_settings.get("show_direct_config", True),
+                show_sub_link=subs_settings.get("show_sub_link", True),
+                show_detach=show_detach,
+            )
+            await customer_bot.send_message(
+                chat_id=user_tg_id,
+                text=svc_text,
+                parse_mode="Markdown",
+                reply_markup=kb,
+                read_timeout=20,
+                write_timeout=20,
+                connect_timeout=10,
+                pool_timeout=20,
+            )
+
+        logger.info("Subscription %s delivered to customer %s (kind=%s)", service_id, user_tg_id, sent_kind or "status")
     except Exception as e:
         logger.warning("Failed to deliver subscription %s to customer %s: %s", service_id, user_tg_id, e)
 

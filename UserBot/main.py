@@ -4794,6 +4794,98 @@ async def _send_buy_flow_for_server(
     )
 
 
+async def _send_config_and_qr_after_delivery(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    service: dict,
+) -> str:
+    """
+    بلافاصله پس از ساخت/تمدید اشتراک، لینک کانفیگ + QR را برای کاربر ارسال می‌کند.
+    خروجی: نوع تحویل ارسال‌شده ('qr' / 'direct_config') یا رشته خالی در صورت عدم ارسال.
+    """
+    settings = _get_subscription_settings()
+    base_urls = _get_service_node_base_urls(service)
+    service_id = int(service.get("id") or 0)
+
+    config_items: list[tuple[str, str]] = []
+    if base_urls:
+        base_url = base_urls[0]
+        if settings.get("show_sub_link", True):
+            config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+        if settings.get("show_auto_sub_link", False):
+            config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+        if settings.get("show_sub_link_b64", False):
+            config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+        if settings.get("show_multi_server", False):
+            try:
+                managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
+                if managed_link:
+                    config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
+            except Exception as e:
+                logger.warning("Failed to build managed sub link after delivery (service_id=%s): %s", service_id, e)
+        if settings.get("show_multi_server_b64", False):
+            try:
+                _, managed_link_b64 = _get_or_create_bot_sub_links(int(service_id), service=service)
+                if managed_link_b64:
+                    config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
+            except Exception as e:
+                logger.warning("Failed to build managed sub b64 link after delivery (service_id=%s): %s", service_id, e)
+
+    if len(config_items) == 1:
+        primary_link = config_items[0][1]
+        qr_image = make_qr_image(primary_link)
+        qr_caption = (
+            "🎉 اشتراک شما آماده‌ی استفاده است ✅\n\n"
+            f"{config_items[0][0]}\n"
+            f"<code>{escape(primary_link)}</code>\n\n"
+            "📄 جهت کپی شدن لینک کافیست یک‌بار روی لینک بالا لمس کنید."
+        )
+        try:
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=qr_image,
+                caption=qr_caption,
+                parse_mode="HTML",
+                reply_markup=subscription_links_keyboard(service_id) if service_id else None,
+            )
+        except Exception:
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=qr_caption,
+                    parse_mode="HTML",
+                    reply_markup=subscription_links_keyboard(service_id) if service_id else None,
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+        return "qr"
+
+    if len(config_items) > 1:
+        # وقتی چند روش نمایش لینک فعال است، به‌جای انتخاب/تکرار لینک‌ها،
+        # اطلاعات اشتراک نمایش داده می‌شود تا کاربر از کیبورد وضعیت انتخاب کند.
+        return ""
+
+    if settings.get("show_direct_config", True):
+        try:
+            await _send_service_direct_configs_shell(
+                context,
+                user_id=user_id,
+                service_id=service_id,
+                service=service,
+            )
+            return "direct_config"
+        except Exception as e:
+            logger.warning(
+                "Failed to send direct configs after delivery (service_id=%s): %s",
+                service_id,
+                e,
+            )
+
+    return ""
+
+
 async def _process_wallet_purchase(
     *,
     context: ContextTypes.DEFAULT_TYPE,
@@ -5142,18 +5234,24 @@ async def _process_wallet_purchase(
         "comment": f"code:{service_code}",
     }
     settings = _get_subscription_settings()
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=_build_subscription_status_text(delivered_service),
-        parse_mode="Markdown",
-        reply_markup=subscription_status_keyboard(
-            service_db_id,
-            show_direct_config=settings.get("show_direct_config", True),
-            show_sub_link=settings.get("show_sub_link", True),
-            show_configs=_should_show_configs_button(settings),
-            show_detach=_is_connected_service(delivered_service),
-        ),
+    delivered_kind = await _send_config_and_qr_after_delivery(
+        context,
+        user_id=chat_id,
+        service=delivered_service,
     )
+    if not delivered_kind:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=_build_subscription_status_text(delivered_service),
+            parse_mode="Markdown",
+            reply_markup=subscription_status_keyboard(
+                service_db_id,
+                show_direct_config=settings.get("show_direct_config", True),
+                show_sub_link=settings.get("show_sub_link", True),
+                show_configs=_should_show_configs_button(settings),
+                show_detach=_is_connected_service(delivered_service),
+            ),
+        )
 
     if ADMIN_ID and ADMIN_BOT_TOKEN:
         try:
