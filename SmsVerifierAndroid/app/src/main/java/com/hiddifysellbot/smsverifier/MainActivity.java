@@ -3,6 +3,7 @@ package com.hiddifysellbot.smsverifier;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -1456,23 +1457,23 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("📨 دسترسی کامل پیامک")
                 .setMessage("در اندروید ۱۲/۱۳ برای خواندن و تشخیص خودکار پیامک‌های بانکی، این اپ باید «اپ پیش‌فرض پیامک» باشد (مثل این تلفن که فقط برای همین کار وصل است).\n\nفعال‌سازی می‌کنید؟")
-                .setPositiveButton("✅ فعال‌سازی", new View.OnClickListener() {
+                .setPositiveButton("✅ فعال‌سازی", new DialogInterface.OnClickListener() {
                     @Override
-                    public void onClick(View v) {
+                    public void onClick(DialogInterface dialog, int which) {
                         openSmsDefaultRole();
                     }
                 })
                 .setNegativeButton("بعداً", null)
-                .setNeutralButton("راهنمای دستی", new View.OnClickListener() {
+                .setNeutralButton("راهنمای دستی", new DialogInterface.OnClickListener() {
                     @Override
-                    public void onClick(View v) {
+                    public void onClick(DialogInterface dialog, int which) {
                         openSmsDefaultFallbackSettings();
                     }
                 })
                 .show();
     }
 
-private void scanInboxNow() {
+    private void scanInboxNow() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 && checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             requestSmsPermission();
