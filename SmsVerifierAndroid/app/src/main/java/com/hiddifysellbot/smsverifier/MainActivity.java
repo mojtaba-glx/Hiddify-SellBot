@@ -852,7 +852,7 @@ public class MainActivity extends Activity {
         LinearLayout smsRoleCard = addCard(securityContent);
         addSectionTitle(smsRoleCard, "📨 دسترسی کامل پیامک (اندروید 12/13)");
         TextView smsRoleHelp = new TextView(this);
-        smsRoleHelp.setText("از اندروید ۱۲/۱۳، سیستم‌عامل اجازه خواندن صندوق پیامک را فقط به «اپ پیش‌فرض پیامک» می‌دهد. اگر این اپ پیش‌فرض پیامک نباشد، پیامک‌های واریز در لیست دیده نمی‌شوند و «مسیر پیامک» شناسایی نمی‌شود.");
+        smsRoleHelp.setText("از اندروید ۱۲/۱۳، سیستم‌عامل اجازه خواندن صندوق پیامک را فقط به «اپ پیش‌فرض پیامک» می‌دهد.\nروی MIUI، پیامک‌های بانکی/اعلانی یک مجوز جداگانه دارند که باید با دکمه «مجوز پیامک اعلانی MIUI» از امنیت گوشی فعال شود؛ در آن صفحه، مجوز «پیامک» را روی «همیشه اجازه بده» بگذار.");
         smsRoleHelp.setTextColor(mutedColor);
         smsRoleHelp.setTextSize(12);
         smsRoleHelp.setLineSpacing(0, 1.15f);
@@ -882,6 +882,17 @@ public class MainActivity extends Activity {
                         }
                 });
         refreshSmsRoleStatus();
+
+        addButtonRow(smsRoleCard,
+                new String[]{"🔧 مجوز پیامک اعلانی MIUI"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                openMiuiSmsPermissionSettings();
+                            }
+                        }
+                });
 
         addButtonRow(securityCard,
                 new String[]{"🤖 تنظیمات تلگرام", "📊 گزارش‌ها"},
@@ -1435,6 +1446,31 @@ public class MainActivity extends Activity {
                         .setData(Uri.parse("package:" + getPackageName())));
             } catch (Exception ignored) {
                 Toast.makeText(this, "با دستی به تنظیمات گوشی برو و این اپ را پیش‌فرض پیامک کن", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private void openMiuiSmsPermissionSettings() {
+        try {
+            Intent intent = new Intent("miui.intent.action.APP_PERM_EDITOR");
+            intent.setClassName("com.miui.securitycenter",
+                    "com.miui.permcenter.permissions.PermissionsEditorActivity");
+            intent.putExtra("extra_pkgname", getPackageName());
+            startActivity(intent);
+        } catch (Exception e) {
+            try {
+                Intent intent = new Intent("miui.intent.action.APP_PERM_EDITOR");
+                intent.setClassName("com.miui.securitycenter",
+                        "com.miui.permcenter.permissions.AppPermissionsEditorActivity");
+                intent.putExtra("extra_pkgname", getPackageName());
+                startActivity(intent);
+            } catch (Exception e2) {
+                try {
+                    startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(Uri.parse("package:" + getPackageName())));
+                } catch (Exception e3) {
+                    Toast.makeText(this, "دستی: تنظیمات ← اپها ← این اپ ← مجوزها ← پیامک ← همه را Allow کن", Toast.LENGTH_LONG).show();
+                }
             }
         }
     }
