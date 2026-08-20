@@ -1049,14 +1049,9 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
         lock_reason = _service_lock_reason(svc)
         if not lock_reason and int((svc or {}).get("is_active") or 0) != 1:
             lock_reason = "service_not_found"
+        locked_status = ""
         if lock_reason:
-            status_line = _build_status_config_line(svc, lock_reason)
-            if is_b64 and status_line:
-                try:
-                    status_line = base64.b64encode(status_line.encode("utf-8")).decode("ascii")
-                except Exception:
-                    pass
-            return status_line or "", svc
+            locked_status = _build_status_config_line(svc, lock_reason)
 
         lines: list[str] = []
         seen: set = set()
@@ -1073,11 +1068,19 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
                     continue
                 seen.add(raw)
                 lines.append(raw)
+
+        if lock_reason and not lines:
+            if is_b64 and locked_status:
+                try:
+                    locked_status = base64.b64encode(locked_status.encode("utf-8")).decode("ascii")
+                except Exception:
+                    pass
+            return locked_status or "", svc
     except Exception as e:
         logger.warning("agent sub build failed for uuid=%s: %s", str(svc.get("panel_user_uuid") or "")[:12], e)
         return "", {}
 
-    status_line = _build_status_config_line(svc)
+    status_line = locked_status or _build_status_config_line(svc)
     if status_line and lines:
         lines.insert(0, status_line)
 
