@@ -15,7 +15,7 @@ from collections import deque
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from telegram import Update, Bot, BotCommand, BotCommandScopeChat
+from telegram import Update, Bot, BotCommand, BotCommandScopeChat, InlineKeyboardMarkup
 from telegram.error import Forbidden, BadRequest
 from telegram.ext import (
     ApplicationBuilder,
@@ -50,6 +50,7 @@ from Shared import node_ops  # noqa: E402
 from Shared import userbot_db  # noqa: E402
 from Shared import database  # noqa: E402
 from Shared import agent_enforcer  # noqa: E402
+from Shared.tg_button_styles import inline_button as InlineKeyboardButton  # noqa: E402
 
 # ===============================
 #   تنظیمات عمومی
@@ -407,6 +408,30 @@ def _build_renewal_reminder_message(
     return "\n".join(lines)
 
 
+def _build_expired_notice_message(service_name: str, *, reason: str = "time") -> str:
+    title = str(service_name or "").strip() or "اشتراک شما"
+    if reason == "usage":
+        detail = "حجم اشتراک شما به اتمام رسیده است."
+    elif reason == "both":
+        detail = "حجم و مدت اشتراک شما به اتمام رسیده است."
+    else:
+        detail = "مدت اشتراک شما به اتمام رسیده است."
+    return "\n".join(
+        [
+            "⚠️ اشتراک شما منقضی شد",
+            f"🔹 اشتراک: «{title}»",
+            f"متأسفانه {detail}",
+            "لطفاً جهت تمدید از دکمه زیر اقدام فرمایید.",
+        ]
+    )
+
+
+def _build_renew_button_keyboard(service_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("تمدید اشتراک", callback_data=f"status:renew:{int(service_id or 0)}", style="danger")]]
+    )
+
+
 def _is_unlimited_volume(limit_gb: float, br: dict) -> bool:
     if not bool(br.get("renew_unlimited_volume", False)):
         return False
@@ -437,7 +462,7 @@ def _get_user_notify_bot() -> Bot | None:
 
 
 async def _run_subscription_reminder_cycle() -> dict:
-    summary = {"scanned": 0, "days_sent": 0, "usage_sent": 0, "unreachable": 0, "errors": 0}
+    summary = {"scanned": 0, "days_sent": 0, "usage_sent": 0, "expired_sent": 0, "unreachable": 0, "errors": 0}
     reminder = userbot_db.get_sub_reminder_settings()
     if not bool(reminder.get("enabled", True)):
         return summary
@@ -453,6 +478,7 @@ async def _run_subscription_reminder_cycle() -> dict:
     services = userbot_db.get_services_for_reminder()
     sent_days_keys: set[tuple[int, int, int]] = set()
     sent_usage_keys: set[tuple[int, int, int]] = set()
+    sent_expired_keys: set[tuple[int, int]] = set()
 
     for svc in services:
         summary["scanned"] += 1
@@ -478,18 +504,46 @@ async def _run_subscription_reminder_cycle() -> dict:
             state = userbot_db.get_service_reminder_state(service_id)
             last_days_notified = int(state.get("days_sent", -1))
             last_usage_notified = int(state.get("usage_sent", -1))
+            last_expired_notified = int(state.get("expired_sent", 0))
 
-            should_days = (not unlimited_time) and days_left >= 0 and days_left <= days_threshold
+            should_days = (not unlimited_time) and days_left > 0 and days_left <= days_threshold
             remaining_bucket = int(max(0, math.ceil(remaining_gb))) if remaining_gb >= 0 else -1
             should_usage = (
                 (not unlimited_volume)
                 and usage_limit > 0
-                and remaining_gb >= 0
+                and remaining_gb > 0
                 and remaining_bucket <= int(math.ceil(usage_threshold))
             )
 
             new_days_state = last_days_notified
             new_usage_state = last_usage_notified
+            new_expired_state = last_expired_notified
+
+            expired_by_time = (not unlimited_time) and days_left <= 0
+            expired_by_usage = (not unlimited_volume) and usage_limit > 0 and usage_current >= usage_limit
+            if expired_by_time and expired_by_usage:
+                expire_reason = "both"
+            elif expired_by_usage:
+                expire_reason = "usage"
+            elif expired_by_time:
+                expire_reason = "time"
+            else:
+                expire_reason = None
+
+            if expire_reason and last_expired_notified == 0:
+                expire_key = (telegram_id, service_id)
+                if expire_key not in sent_expired_keys:
+                    await bot.send_message(
+                        chat_id=telegram_id,
+                        text=_build_expired_notice_message(service_name, reason=expire_reason),
+                        reply_markup=_build_renew_button_keyboard(service_id),
+                    )
+                    sent_expired_keys.add(expire_key)
+                    summary["expired_sent"] += 1
+                new_expired_state = 1
+            elif not expire_reason and last_expired_notified != 0:
+                # Reset arm when the subscription is renewed/upgraded again.
+                new_expired_state = 0
 
             if should_days and days_left != last_days_notified:
                 day_key = (telegram_id, service_id, days_left)
@@ -519,11 +573,16 @@ async def _run_subscription_reminder_cycle() -> dict:
                 # Reset arm when user is out of reminder window.
                 new_usage_state = -1
 
-            if new_days_state != last_days_notified or new_usage_state != last_usage_notified:
+            if (
+                new_days_state != last_days_notified
+                or new_usage_state != last_usage_notified
+                or new_expired_state != last_expired_notified
+            ):
                 userbot_db.set_service_reminder_state(
                     service_id,
                     days_sent=new_days_state,
                     usage_sent=new_usage_state,
+                    expired_sent=new_expired_state,
                 )
         except Exception as e:
             msg = str(e or "").strip().lower()
@@ -592,7 +651,7 @@ async def enforce_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"نود قطع‌شده: {summary['nodes_disabled']}\n"
         f"نود قطع‌ناموفق: {summary['nodes_disable_failed']}\n"
         f"خطا: {summary['errors']}\n\n"
-        f"🔔 یادآور تمدید: روز={reminder_summary['days_sent']} | حجم={reminder_summary['usage_sent']} | دسترسی‌ندارد={reminder_summary['unreachable']} | خطا={reminder_summary['errors']}"
+        f"🔔 یادآور تمدید: روز={reminder_summary['days_sent']} | حجم={reminder_summary['usage_sent']} | منقضی‌شده={reminder_summary['expired_sent']} | دسترسی‌ندارد={reminder_summary['unreachable']} | خطا={reminder_summary['errors']}"
     )
 
 
@@ -619,7 +678,7 @@ async def agent_enforce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def _enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     summary = await service_enforcer.run_global_usage_enforcer(scan_all=False)
-    reminder_summary = {"days_sent": 0, "usage_sent": 0, "unreachable": 0, "errors": 0}
+    reminder_summary = {"days_sent": 0, "usage_sent": 0, "expired_sent": 0, "unreachable": 0, "errors": 0}
     now_ts = int(asyncio.get_running_loop().time())
     bot_data = context.application.bot_data if context and context.application else {}
     last_ts = int(bot_data.get("_sub_reminder_last_ts") or 0)
@@ -627,7 +686,7 @@ async def _enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         reminder_summary = await _run_subscription_reminder_cycle()
         bot_data["_sub_reminder_last_ts"] = now_ts
     logger.info(
-        "Global enforcer cycle done: scanned=%s/%s synced=%s services_disabled=%s nodes_disabled=%s nodes_disable_failed=%s errors=%s | reminders: days=%s usage=%s unreachable=%s errors=%s",
+        "Global enforcer cycle done: scanned=%s/%s synced=%s services_disabled=%s nodes_disabled=%s nodes_disable_failed=%s errors=%s | reminders: days=%s usage=%s expired=%s unreachable=%s errors=%s",
         summary["services_scanned"],
         summary.get("services_total", summary["services_scanned"]),
         summary["services_synced"],
@@ -637,6 +696,7 @@ async def _enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         summary["errors"],
         reminder_summary["days_sent"],
         reminder_summary["usage_sent"],
+        reminder_summary["expired_sent"],
         reminder_summary["unreachable"],
         reminder_summary["errors"],
     )

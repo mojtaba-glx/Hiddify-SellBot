@@ -231,6 +231,7 @@ def init_db() -> None:
             service_id INTEGER PRIMARY KEY,
             days_sent INTEGER DEFAULT -1,
             usage_sent INTEGER DEFAULT -1,
+            expired_sent INTEGER DEFAULT 0,
             updated_at TEXT DEFAULT ''
         )
     """)
@@ -269,6 +270,15 @@ def _migrate_db():
     except sqlite3.OperationalError:
         try:
             cur.execute("ALTER TABLE agent_services ADD COLUMN deleted_at TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+
+    # expired_sent ستون برای agent_service_reminder_state (پیام انقضا)
+    try:
+        cur.execute("SELECT expired_sent FROM agent_service_reminder_state LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE agent_service_reminder_state ADD COLUMN expired_sent INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
 
@@ -1770,11 +1780,22 @@ def get_agent_services_for_reminder(agent_id: int) -> List[Dict[str, Any]]:
             JOIN agent_customers c ON c.id = s.customer_id
             WHERE s.agent_id = ?
               AND c.telegram_id IS NOT NULL
-              AND s.is_active = 1
+              AND (s.is_active = 1
+                   OR (s.days_left IS NOT NULL AND s.days_left <= 0)
+                   OR (s.usage_limit IS NOT NULL
+                       AND s.usage_limit > 0
+                       AND s.usage_current IS NOT NULL
+                       AND s.usage_current >= s.usage_limit))
               AND (s.deleted_at IS NULL OR s.deleted_at = '')
               AND EXISTS (
                 SELECT 1 FROM agent_service_nodes n
-                WHERE n.service_id = s.id AND COALESCE(n.is_active, 1) = 1
+                WHERE n.service_id = s.id
+                  AND (COALESCE(n.is_active, 1) = 1
+                       OR (s.days_left IS NOT NULL AND s.days_left <= 0)
+                       OR (s.usage_limit IS NOT NULL
+                           AND s.usage_limit > 0
+                           AND s.usage_current IS NOT NULL
+                           AND s.usage_current >= s.usage_limit))
               )
             ORDER BY s.id DESC
             """,
@@ -1790,26 +1811,33 @@ def get_service_reminder_state(service_id: int) -> Dict[str, Any]:
     init_db()
     sid = int(service_id or 0)
     if sid <= 0:
-        return {"days_sent": -1, "usage_sent": -1}
+        return {"days_sent": -1, "usage_sent": -1, "expired_sent": 0}
     conn = _get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT days_sent, usage_sent FROM agent_service_reminder_state WHERE service_id = ? LIMIT 1",
+            "SELECT days_sent, usage_sent, expired_sent FROM agent_service_reminder_state WHERE service_id = ? LIMIT 1",
             (sid,),
         )
         row = cur.fetchone()
         if not row:
-            return {"days_sent": -1, "usage_sent": -1}
+            return {"days_sent": -1, "usage_sent": -1, "expired_sent": 0}
         return {
             "days_sent": int(row["days_sent"]) if row["days_sent"] is not None else -1,
             "usage_sent": int(row["usage_sent"]) if row["usage_sent"] is not None else -1,
+            "expired_sent": int(row["expired_sent"]) if row["expired_sent"] is not None else 0,
         }
     finally:
         conn.close()
 
 
-def set_service_reminder_state(service_id: int, *, days_sent: Optional[int] = None, usage_sent: Optional[int] = None) -> None:
+def set_service_reminder_state(
+    service_id: int,
+    *,
+    days_sent: Optional[int] = None,
+    usage_sent: Optional[int] = None,
+    expired_sent: Optional[int] = None,
+) -> None:
     """ثبت وضعیت یادآوری تمدید یک سرویس."""
     init_db()
     sid = int(service_id or 0)
@@ -1818,19 +1846,21 @@ def set_service_reminder_state(service_id: int, *, days_sent: Optional[int] = No
     current = get_service_reminder_state(sid)
     d_val = int(days_sent) if days_sent is not None else int(current.get("days_sent", -1))
     u_val = int(usage_sent) if usage_sent is not None else int(current.get("usage_sent", -1))
+    e_val = int(expired_sent) if expired_sent is not None else int(current.get("expired_sent", 0))
     conn = _get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            INSERT INTO agent_service_reminder_state (service_id, days_sent, usage_sent, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO agent_service_reminder_state (service_id, days_sent, usage_sent, expired_sent, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(service_id) DO UPDATE SET
                 days_sent = excluded.days_sent,
                 usage_sent = excluded.usage_sent,
+                expired_sent = excluded.expired_sent,
                 updated_at = excluded.updated_at
             """,
-            (sid, d_val, u_val, _now()),
+            (sid, d_val, u_val, e_val, _now()),
         )
         conn.commit()
     finally:

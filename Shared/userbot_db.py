@@ -319,6 +319,7 @@ def init_db() -> None:
             service_id INTEGER PRIMARY KEY,
             days_sent INTEGER DEFAULT 0,
             usage_sent INTEGER DEFAULT 0,
+            expired_sent INTEGER DEFAULT 0,
             updated_at TEXT
         )
         """
@@ -593,6 +594,16 @@ def _migrate_db():
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_userbot_users_referral_code ON userbot_users(referral_code)"
     )
+
+    # Expiry notice: track whether the "subscription expired" notification was sent
+    try:
+        cur.execute("SELECT expired_sent FROM userbot_service_reminder_state LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE userbot_service_reminder_state ADD COLUMN expired_sent INTEGER DEFAULT 0")
+            print("Migrated: expired_sent column added to userbot_service_reminder_state.")
+        except sqlite3.OperationalError:
+            pass
 
     conn.commit()
     conn.close()
@@ -2744,7 +2755,12 @@ def get_services_for_reminder() -> List[Dict[str, Any]]:
                 SELECT 1
                 FROM userbot_service_nodes n
                 WHERE n.service_id = s.id
-                  AND COALESCE(n.is_active, 1) = 1
+                  AND (COALESCE(n.is_active, 1) = 1
+                       OR (s.days_left IS NOT NULL AND s.days_left <= 0)
+                       OR (s.usage_limit IS NOT NULL
+                           AND s.usage_limit > 0
+                           AND s.usage_current IS NOT NULL
+                           AND s.usage_current >= s.usage_limit))
               )
             ORDER BY s.id DESC
             """
@@ -2759,13 +2775,13 @@ def get_service_reminder_state(service_id: int) -> Dict[str, Any]:
     init_db()
     sid = int(service_id or 0)
     if sid <= 0:
-        return {"days_sent": -1, "usage_sent": -1}
+        return {"days_sent": -1, "usage_sent": -1, "expired_sent": 0}
     conn = _get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            SELECT days_sent, usage_sent
+            SELECT days_sent, usage_sent, expired_sent
             FROM userbot_service_reminder_state
             WHERE service_id = ?
             LIMIT 1
@@ -2774,10 +2790,11 @@ def get_service_reminder_state(service_id: int) -> Dict[str, Any]:
         )
         row = cur.fetchone()
         if not row:
-            return {"days_sent": -1, "usage_sent": -1}
+            return {"days_sent": -1, "usage_sent": -1, "expired_sent": 0}
         return {
             "days_sent": int(row["days_sent"] if row["days_sent"] is not None else -1),
             "usage_sent": int(row["usage_sent"] if row["usage_sent"] is not None else -1),
+            "expired_sent": int(row["expired_sent"] if row["expired_sent"] is not None else 0),
         }
     finally:
         conn.close()
@@ -2788,6 +2805,7 @@ def set_service_reminder_state(
     *,
     days_sent: Optional[int] = None,
     usage_sent: Optional[int] = None,
+    expired_sent: Optional[int] = None,
 ) -> None:
     init_db()
     sid = int(service_id or 0)
@@ -2798,20 +2816,22 @@ def set_service_reminder_state(
     current = get_service_reminder_state(sid)
     d_val = int(days_sent) if days_sent is not None else int(current.get("days_sent", -1))
     u_val = int(usage_sent) if usage_sent is not None else int(current.get("usage_sent", -1))
+    e_val = int(expired_sent) if expired_sent is not None else int(current.get("expired_sent", 0))
 
     conn = _get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            INSERT INTO userbot_service_reminder_state (service_id, days_sent, usage_sent, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO userbot_service_reminder_state (service_id, days_sent, usage_sent, expired_sent, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(service_id) DO UPDATE SET
                 days_sent = excluded.days_sent,
                 usage_sent = excluded.usage_sent,
+                expired_sent = excluded.expired_sent,
                 updated_at = excluded.updated_at
             """,
-            (sid, d_val, u_val, now),
+            (sid, d_val, u_val, e_val, now),
         )
         conn.commit()
     finally:

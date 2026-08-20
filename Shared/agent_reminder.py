@@ -9,7 +9,9 @@
 import logging
 import math
 
+from telegram import InlineKeyboardMarkup
 from Shared import agent_db
+from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,30 @@ def build_renewal_reminder_message(service_name, *, days_left=None, remaining_gb
     return "\n".join(lines)
 
 
+def build_expired_notice_message(service_name, *, reason="time"):
+    title = str(service_name or "").strip() or "اشتراک شما"
+    if reason == "usage":
+        detail = "حجم اشتراک شما به اتمام رسیده است."
+    elif reason == "both":
+        detail = "حجم و مدت اشتراک شما به اتمام رسیده است."
+    else:
+        detail = "مدت اشتراک شما به اتمام رسیده است."
+    return "\n".join(
+        [
+            "⚠️ اشتراک شما منقضی شد",
+            f"🔹 اشتراک: «{title}»",
+            f"متأسفانه {detail}",
+            "لطفاً جهت تمدید از دکمه زیر اقدام فرمایید.",
+        ]
+    )
+
+
+def build_renew_button_keyboard(service_id):
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("تمدید اشتراک", callback_data=f"status:renew:{int(service_id or 0)}", style="danger")]]
+    )
+
+
 def _is_unlimited_volume(limit_gb, br):
     if not bool(br.get("renew_unlimited_volume", False)):
         return False
@@ -73,7 +99,7 @@ def _is_unlimited_time(days_val, br):
 
 
 async def run_agent_reminder_cycle(bot, agent_id):
-    summary = {"scanned": 0, "days_sent": 0, "usage_sent": 0, "unreachable": 0, "errors": 0}
+    summary = {"scanned": 0, "days_sent": 0, "usage_sent": 0, "expired_sent": 0, "unreachable": 0, "errors": 0}
     try:
         from CustomerBot.database import get_buy_renew_settings
         br = get_buy_renew_settings(agent_id)
@@ -93,6 +119,7 @@ async def run_agent_reminder_cycle(bot, agent_id):
     services = agent_db.get_agent_services_for_reminder(agent_id)
     sent_days_keys = set()
     sent_usage_keys = set()
+    sent_expired_keys = set()
     for svc in services:
         summary["scanned"] += 1
         try:
@@ -113,14 +140,42 @@ async def run_agent_reminder_cycle(bot, agent_id):
             state = agent_db.get_service_reminder_state(service_id)
             last_days_notified = _to_int(state.get("days_sent"), -1)
             last_usage_notified = _to_int(state.get("usage_sent"), -1)
-            should_days = (not unlimited_time) and days_left >= 0 and days_left <= days_threshold
+            last_expired_notified = _to_int(state.get("expired_sent"), 0)
+            should_days = (not unlimited_time) and days_left > 0 and days_left <= days_threshold
             remaining_bucket = int(max(0, math.ceil(remaining_gb))) if remaining_gb >= 0 else -1
             should_usage = (
-                (not unlimited_volume) and usage_limit > 0 and remaining_gb >= 0
+                (not unlimited_volume) and usage_limit > 0 and remaining_gb > 0
                 and remaining_bucket <= int(math.ceil(usage_threshold))
             )
             new_days_state = last_days_notified
             new_usage_state = last_usage_notified
+            new_expired_state = last_expired_notified
+
+            expired_by_time = (not unlimited_time) and days_left <= 0
+            expired_by_usage = (not unlimited_volume) and usage_limit > 0 and usage_current >= usage_limit
+            if expired_by_time and expired_by_usage:
+                expire_reason = "both"
+            elif expired_by_usage:
+                expire_reason = "usage"
+            elif expired_by_time:
+                expire_reason = "time"
+            else:
+                expire_reason = None
+
+            if expire_reason and last_expired_notified == 0:
+                expire_key = (telegram_id, service_id)
+                if expire_key not in sent_expired_keys:
+                    await bot.send_message(
+                        chat_id=telegram_id,
+                        text=build_expired_notice_message(service_name, reason=expire_reason),
+                        reply_markup=build_renew_button_keyboard(service_id),
+                    )
+                    sent_expired_keys.add(expire_key)
+                    summary["expired_sent"] += 1
+                new_expired_state = 1
+            elif not expire_reason and last_expired_notified != 0:
+                new_expired_state = 0
+
             if should_days and days_left != last_days_notified:
                 day_key = (telegram_id, service_id, days_left)
                 if day_key not in sent_days_keys:
@@ -139,8 +194,17 @@ async def run_agent_reminder_cycle(bot, agent_id):
                 new_usage_state = remaining_bucket
             elif not should_usage and last_usage_notified != -1:
                 new_usage_state = -1
-            if new_days_state != last_days_notified or new_usage_state != last_usage_notified:
-                agent_db.set_service_reminder_state(service_id, days_sent=new_days_state, usage_sent=new_usage_state)
+            if (
+                new_days_state != last_days_notified
+                or new_usage_state != last_usage_notified
+                or new_expired_state != last_expired_notified
+            ):
+                agent_db.set_service_reminder_state(
+                    service_id,
+                    days_sent=new_days_state,
+                    usage_sent=new_usage_state,
+                    expired_sent=new_expired_state,
+                )
         except Exception as e:
             msg = str(e or "").strip().lower()
             if "chat not found" in msg or "forbidden" in msg or "blocked" in msg:

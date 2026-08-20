@@ -159,7 +159,14 @@ async def run_single_bot(token: str, agent_id: int):
             if now - last_reminder_ts >= AGENT_REMINDER_INTERVAL:
                 try:
                     summary = await agent_reminder.run_agent_reminder_cycle(app.bot, agent_id)
-                    logger.info('Agent #%d reminder: scanned=%s days=%s usage=%s', agent_id, summary['scanned'], summary['days_sent'], summary['usage_sent'])
+                    logger.info(
+                        'Agent #%d reminder: scanned=%s days=%s usage=%s expired=%s',
+                        agent_id,
+                        summary['scanned'],
+                        summary['days_sent'],
+                        summary['usage_sent'],
+                        summary['expired_sent'],
+                    )
                 except Exception as e:
                     logger.warning('Agent #%d reminder error: %s', agent_id, e)
                 last_reminder_ts = now
