@@ -6237,7 +6237,7 @@ async def handle_server_inline_callback(
         if field == "xui_sub_domain":
             set_server_state(EDIT_SERVER_XUI_SUB_DOMAIN)
             await msg.edit_text(
-                "🌐 لطفاً دامنه ساب جدید را وارد کنید:\nمثال: eu.example.com\nبرای خالی گذاشتن «0» یا «skip» بفرستید.",
+                "🌐 لطفاً دامنه ساب جدید را وارد کنید:\nمثال: sub.example.com\nبرای خالی گذاشتن «0» یا «skip» بفرستید.",
                 reply_markup=cancel_kb,
             )
             return
