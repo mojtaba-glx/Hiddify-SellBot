@@ -1567,11 +1567,25 @@ async def create_inbound_from_link(
     # پورت
     port = int(port_override) if port_override else int(parsed.get("port") or 443)
 
-    # بررسی تکراری بودن پورت
+    # بررسی تکراری بودن پورت (شامل پورت خود پنل)
     inbounds = await _list_inbounds(server)
     used_ports = {_to_int(ib.get("port"), 0) for ib in inbounds}
+    # پورت خود پنل (443 یا 2056) را هم جزو اشغالی حساب کن
+    try:
+        panel_url = str(server.get("panel_url") or "")
+        if panel_url:
+            pu = urlparse(panel_url)
+            panel_port = pu.port or (443 if pu.scheme == "https" else 80)
+            if panel_port:
+                used_ports.add(panel_port)
+    except Exception:
+        pass
     if port in used_ports:
-        raise XuiApiError(f"پورت {port} قبلاً استفاده شده. پورت دیگری بدهید (مثلاً {port+1}).")
+        # پیشنهاد پورت جایگزین
+        alt = port + 1
+        while alt in used_ports and alt < 65535:
+            alt += 1
+        raise XuiApiError(f"پورت {port} قبلاً استفاده شده (پنل یا اینباند دیگر). پورت دیگری بدهید (مثلاً {alt}).")
 
     protocol = (parsed.get("protocol") or "").strip().lower()
     # نگاشت پروتکل hysteria2 به hysteria برای X-UI قدیم
@@ -1595,7 +1609,22 @@ async def create_inbound_from_link(
     # ساخت JSON اینباند بر اساس پروتکل
     inbound_json = _build_inbound_json(protocol, port, parsed, remark)
     async with _XuiContext(server) as ctx:
-        resp = await ctx.request("POST", "inbounds/add", json_body=inbound_json)
+        try:
+            resp = await ctx.request("POST", "inbounds/add", json_body=inbound_json)
+        except XuiApiError as e:
+            msg = str(e).lower()
+            # اگر تایم‌اوت بود ولی اینباند ساخته شده، دوباره لیست بگیر
+            if "timed out" in msg or "timeout" in msg or "timed" in msg:
+                await asyncio.sleep(2)
+                try:
+                    inbounds2 = await _list_inbounds(server)
+                    for ib in inbounds2:
+                        if _to_int(ib.get("port"), 0) == port and (ib.get("protocol") or "").lower() == protocol:
+                            # به نظر ساخته شده
+                            return {"id": ib.get("id"), "port": port, "recovered_after_timeout": True}
+                except Exception:
+                    pass
+            raise
     # resp معمولاً شامل id اینباند جدید است
     return resp if isinstance(resp, dict) else {"raw": resp}
 
