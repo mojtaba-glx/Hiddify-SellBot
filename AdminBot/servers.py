@@ -3761,8 +3761,9 @@ async def handle_add_server_flow(
         context.user_data["state"] = ADD_STATE_XUI_INBOUND
         await message.reply_text(
             "🧩 شناسه اینباند فروش (Inbound ID) را وارد کنید (اختیاری):\n"
-            "اگر خالی باشد، اولین اینباند فعال (vless/trojan/vmess/shadowsocks) انتخاب می‌شود.\n\n"
-            "برای گذشتن از این مرحله، «0» یا «skip» یا «-» را بفرستید.",
+            "اگر خالی/skip باشد، اولین اینباند فعال انتخاب می‌شود.\n"
+            "`0` = همه اینباندهای فعال، `1` = تک اینباند، `1,2,3` = چند اینباند\n\n"
+            "مثال: `0` یا `1` یا `1,2,3`",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -3770,18 +3771,30 @@ async def handle_add_server_flow(
     # مرحله X-UI: شناسه اینباند
     if state == ADD_STATE_XUI_INBOUND:
         raw_inbound = text.strip()
-        if raw_inbound not in {"skip", "-", "_", ".", "done", "نه", "خیر", "0"}:
-            try:
-                inbound_id = int(raw_inbound)
-                if inbound_id <= 0:
-                    raise ValueError
-                new_server["xui_inbound_id"] = inbound_id
-            except ValueError:
-                await message.reply_text(
-                    "❌ شناسه اینباند باید یک عدد صحیح مثبت باشد (یا «0»/«skip» برای خودکار).",
-                    reply_markup=cancel_keyboard(),
-                )
-                return
+        if raw_inbound not in {"skip", "-", "_", ".", "done", "نه", "خیر"}:
+            # 0 = همه اینباندها، 1 = تک اینباند، 1,2,3 = چند اینباند
+            normalized = raw_inbound.replace("،", ",").replace(" ", ",")
+            parts = [p.strip() for p in normalized.split(",") if p.strip()]
+            if not parts:
+                pass  # خالی = خودکار (اولین اینباند)
+            elif parts == ["0"]:
+                new_server["xui_inbound_id"] = "0"
+            else:
+                try:
+                    ids = []
+                    for p in parts:
+                        n = int(p)
+                        if n <= 0:
+                            raise ValueError
+                        ids.append(str(n))
+                    new_server["xui_inbound_id"] = ",".join(ids)
+                except ValueError:
+                    await message.reply_text(
+                        "❌ شناسه اینباند باید عدد باشد.\n"
+                        "مثال: `1` (تک)، `1,2,3` (چندتا)، `0` (همه)",
+                        reply_markup=cancel_keyboard(),
+                    )
+                    return
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_LIMIT
         await message.reply_text(
