@@ -421,6 +421,10 @@ EDIT_SERVER_ADMIN_UUID = "edit_server_admin_uuid"
 EDIT_SERVER_USER_PROXY = "edit_server_user_proxy"
 EDIT_SERVER_LIMIT = "edit_server_limit"
 EDIT_SERVER_PRIORITY = "edit_server_priority"
+EDIT_SERVER_XUI_USERNAME = "edit_server_xui_username"
+EDIT_SERVER_XUI_PASSWORD = "edit_server_xui_password"
+EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
+EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
 
 # افزودن کاربر
 ADD_USER_NAME = "add_user_name"
@@ -1989,23 +1993,52 @@ def build_server_detail_text(
         except Exception:
             plans_count = 0
     priority = int(server.get("priority") or 0)
-    version_text = SERVER_DISPLAY_VERSION or f"V{int(server.get('version') or 11)}"
-    safe_title = escape(str(title))
+    is_xui = str(server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    if is_xui:
+        version_text = "X-UI"
+        # برای X-UI آدرس پنل خودش لینک است (شامل base path)
+        admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
+    else:
+        version_text = SERVER_DISPLAY_VERSION or f"V{int(server.get('version') or 11)}"
+        admin_panel_url = ""
+        if panel_url.startswith(("http://", "https://")):
+            panel_base = panel_url.rstrip("/")
+            if admin_proxy and admin_uuid:
+                admin_panel_url = f"{panel_base}/{admin_proxy}/{admin_uuid}/"
+            elif admin_proxy:
+                admin_panel_url = f"{panel_base}/{admin_proxy}/"
+            else:
+                admin_panel_url = panel_base
 
-    admin_panel_url = ""
-    if panel_url.startswith(("http://", "https://")):
-        panel_base = panel_url.rstrip("/")
-        if admin_proxy and admin_uuid:
-            admin_panel_url = f"{panel_base}/{admin_proxy}/{admin_uuid}/"
-        elif admin_proxy:
-            admin_panel_url = f"{panel_base}/{admin_proxy}/"
-        else:
-            admin_panel_url = panel_base
+    safe_title = escape(str(title))
 
     if admin_panel_url:
         title_line = f'<a href="{escape(admin_panel_url, quote=True)}">🖥 سرور: {safe_title}</a>'
     else:
         title_line = f"🖥 سرور: {safe_title}"
+
+    if is_xui:
+        # برای X-UI اطلاعات اضافی
+        xui_info = ""
+        try:
+            xui_user = (server.get("xui_username") or "").strip()
+            if xui_user:
+                xui_info += f"\n👤 یوزر پنل: {escape(xui_user)}"
+            inbound_info = str(server.get("xui_inbound_id") or "").strip()
+            if inbound_info == "0":
+                xui_info += f"\n🧩 اینباند: همه (0)"
+            elif inbound_info:
+                xui_info += f"\n🧩 اینباند: {escape(inbound_info)}"
+        except Exception:
+            pass
+        return (
+            f"{title_line}\n"
+            "❖ • -------------------------- • ❖\n"
+            f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
+            f"📋 تعداد پلن ها: {plans_count}\n"
+            f"🟩 اولویت: {priority}\n"
+            f"📦 پنل: {escape(version_text)}{xui_info}"
+        )
 
     return (
         f"{title_line}\n"
@@ -4136,6 +4169,49 @@ async def handle_edit_server_flow(
             return
         updates["priority"] = priority
         msg_ok = "✅ اولویت سرور بروزرسانی شد."
+    elif state == EDIT_SERVER_XUI_USERNAME:
+        updates["xui_username"] = text.strip()
+        msg_ok = "✅ نام کاربری پنل X-UI بروزرسانی شد."
+    elif state == EDIT_SERVER_XUI_PASSWORD:
+        updates["xui_password"] = text.strip()
+        msg_ok = "✅ رمز پنل X-UI بروزرسانی شد."
+    elif state == EDIT_SERVER_XUI_SUB_DOMAIN:
+        sub = text.strip()
+        if sub in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            updates["xui_sub_domain"] = ""
+            msg_ok = "✅ دامنه ساب پاک شد (از آدرس پنل استفاده می‌شود)."
+        else:
+            sub = sub.rstrip("/")
+            if not sub.startswith(("http://", "https://")):
+                sub = "https://" + sub
+            updates["xui_sub_domain"] = sub
+            msg_ok = "✅ دامنه ساب بروزرسانی شد."
+    elif state == EDIT_SERVER_XUI_INBOUND:
+        raw = text.strip()
+        if raw in {"skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            updates["xui_inbound_id"] = ""
+            msg_ok = "✅ اینباند روی حالت خودکار (اولین فعال) تنظیم شد."
+        elif raw == "0":
+            updates["xui_inbound_id"] = "0"
+            msg_ok = "✅ اینباند روی «همه» (0) تنظیم شد."
+        else:
+            normalized = raw.replace("،", ",").replace(" ", ",")
+            parts = [p.strip() for p in normalized.split(",") if p.strip()]
+            try:
+                ids = []
+                for p in parts:
+                    n = int(p)
+                    if n <= 0:
+                        raise ValueError
+                    ids.append(str(n))
+                updates["xui_inbound_id"] = ",".join(ids)
+                msg_ok = f"✅ اینباند روی {','.join(ids)} تنظیم شد."
+            except ValueError:
+                await message.reply_text(
+                    "❌ شناسه اینباند باید عدد باشد.\nمثال: `0` (همه) یا `1` یا `1,2,3`",
+                    reply_markup=cancel_keyboard(),
+                )
+                return
     else:
         await message.reply_text("❌ حالت ویرایش سرور نامعتبر است.", reply_markup=admin_main_keyboard())
         context.user_data.pop("state", None)
@@ -4183,69 +4259,87 @@ async def send_server_edit_menu(
 
     text = await build_server_detail_text_live(server)
 
-    kb = InlineKeyboardMarkup(
-        [
+    is_xui = str(server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    if is_xui:
+        kb = InlineKeyboardMarkup(
             [
-                InlineKeyboardButton(
-                    "📌ویرایش عنوان", callback_data=f"seredit:{server_id}:title"
-                )
-            ],
+                [InlineKeyboardButton("📌ویرایش عنوان", callback_data=f"seredit:{server_id}:title")],
+                [InlineKeyboardButton("🌐ویرایش آدرس پنل", callback_data=f"seredit:{server_id}:panel_url")],
+                [InlineKeyboardButton("👤ویرایش نام کاربری پنل", callback_data=f"seredit:{server_id}:xui_username")],
+                [InlineKeyboardButton("🔑ویرایش رمز پنل", callback_data=f"seredit:{server_id}:xui_password")],
+                [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xui_sub_domain")],
+                [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xui_inbound")],
+                [InlineKeyboardButton("🗿ویرایش محدودیت کاربر", callback_data=f"seredit:{server_id}:limit")],
+                [InlineKeyboardButton("🔢ویرایش اولویت ترتیب", callback_data=f"seredit:{server_id}:priority")],
+                [InlineKeyboardButton("🔗ویرایش دامنه", callback_data=f"server:{server_id}:domains")],
+                [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
+                [InlineKeyboardButton("🔙بازگشت", callback_data=f"server:{server_id}")],
+            ]
+        )
+    else:
+        kb = InlineKeyboardMarkup(
             [
-                InlineKeyboardButton(
-                    "🗿ویرایش محدودیت کاربر",
-                    callback_data=f"seredit:{server_id}:limit",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔢ویرایش اولویت ترتیب",
-                    callback_data=f"seredit:{server_id}:priority",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔗ویرایش دامنه",
-                    callback_data=f"server:{server_id}:domains",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔐ویرایش کد مسیر ادمین",
-                    callback_data=f"seredit:{server_id}:admin_proxy",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔐ویرایش کد مسیر کاربران",
-                    callback_data=f"seredit:{server_id}:user_proxy",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔑ویرایش کلید ادمین (UUID/API)",
-                    callback_data=f"seredit:{server_id}:admin_uuid",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🌐ویرایش آدرس پنل",
-                    callback_data=f"seredit:{server_id}:panel_url",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🗑️حذف سرور",
-                    callback_data=f"serverdel:{server_id}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔙بازگشت",
-                    callback_data=f"server:{server_id}",
-                )
-            ],
-        ]
-    )
+                [
+                    InlineKeyboardButton(
+                        "📌ویرایش عنوان", callback_data=f"seredit:{server_id}:title"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🗿ویرایش محدودیت کاربر",
+                        callback_data=f"seredit:{server_id}:limit",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔢ویرایش اولویت ترتیب",
+                        callback_data=f"seredit:{server_id}:priority",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔗ویرایش دامنه",
+                        callback_data=f"server:{server_id}:domains",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔐ویرایش کد مسیر ادمین",
+                        callback_data=f"seredit:{server_id}:admin_proxy",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔐ویرایش کد مسیر کاربران",
+                        callback_data=f"seredit:{server_id}:user_proxy",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔑ویرایش کلید ادمین (UUID/API)",
+                        callback_data=f"seredit:{server_id}:admin_uuid",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🌐ویرایش آدرس پنل",
+                        callback_data=f"seredit:{server_id}:panel_url",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🗑️حذف سرور",
+                        callback_data=f"serverdel:{server_id}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔙بازگشت",
+                        callback_data=f"server:{server_id}",
+                    )
+                ],
+            ]
+        )
 
     if message is not None:
         await message.edit_text(
@@ -6119,6 +6213,38 @@ async def handle_server_inline_callback(
             set_server_state(EDIT_SERVER_USER_PROXY)
             await msg.edit_text(
                 "🔑 لطفاً کد مسیر جدید کاربران را وارد کنید (User Proxy Path):",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xui_username":
+            set_server_state(EDIT_SERVER_XUI_USERNAME)
+            await msg.edit_text(
+                "👤 لطفاً نام کاربری جدید پنل X-UI را وارد کنید:",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xui_password":
+            set_server_state(EDIT_SERVER_XUI_PASSWORD)
+            await msg.edit_text(
+                "🔑 لطفاً رمز جدید پنل X-UI را وارد کنید:",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xui_sub_domain":
+            set_server_state(EDIT_SERVER_XUI_SUB_DOMAIN)
+            await msg.edit_text(
+                "🌐 لطفاً دامنه ساب جدید را وارد کنید:\nمثال: eu.example.com\nبرای خالی گذاشتن «0» یا «skip» بفرستید.",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xui_inbound":
+            set_server_state(EDIT_SERVER_XUI_INBOUND)
+            await msg.edit_text(
+                "🧩 لطفاً شناسه اینباند جدید را وارد کنید:\n`0`=همه، `1`=تک، `1,2,3`=چندتا\nمثال: 0 یا 1 یا 1,2",
                 reply_markup=cancel_kb,
             )
             return
