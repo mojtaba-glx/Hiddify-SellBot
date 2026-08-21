@@ -822,25 +822,38 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
         raise XuiApiError("هیچ اینباند قابل‌فروشی برای ساخت کاربر یافت نشد.")
 
     user_uuid = uuid4()
+    # نام کاربر برای نمایش در پنل (به جای uuid) - از payload می‌آید مثل "test"
+    raw_name = str(payload.get("name") or payload.get("email") or "").strip()
+    # اگر نام فارسی/تست بود همان را بگذار، وگرنه uuid
+    base_email = raw_name if raw_name else user_uuid
+    # برای اطمینان از یونیک بودن پنل‌واید، اگر نام تکراری بود بعداً suffix می‌خورد
     first_client: Optional[Dict[str, Any]] = None
     first_inbound: Optional[Dict[str, Any]] = None
 
     created: List[Tuple[int, str]] = []  # (inbound_id, client_email_or_id)
     async with _XuiContext(server) as ctx:
         try:
-            for inbound in targets:
+            for idx, inbound in enumerate(targets):
                 protocol = (inbound.get("protocol") or "").strip().lower()
                 clients = _settings_clients(inbound.get("settings"))
                 template = clients[0] if clients else {}
                 client = _new_client_dict(protocol, uuid=user_uuid, template=template)
                 client = _apply_payload_to_client(client, protocol, payload)
-                # برای جلوگیری از Duplicate email در پنل (ایمیل باید یونیک پنل‌واید باشد)
-                # subId را همان uuid نگه می‌داریم (برای تجمیع سابسکریپشن)، ولی email را یونیک می‌کنیم
-                if len(targets) > 1:
-                    client["email"] = f"{user_uuid}-{_to_int(inbound.get('id'), 0)}"
-                    # subId را دست نمی‌زنیم تا /sub/uuid همه را جمع کند
-                    if "subId" in client:
-                        client["subId"] = user_uuid
+                # نمایش در پنل: به جای uuid، نام کاربر را بگذار (درخواست کاربر)
+                # برای چنداینبانده، اولی دقیقاً نام، بقیه نام-اینباند تا یونیک بماند
+                if len(targets) == 1:
+                    client["email"] = base_email
+                else:
+                    if idx == 0:
+                        client["email"] = base_email
+                    else:
+                        client["email"] = f"{base_email}-{_to_int(inbound.get('id'), 0)}"
+                # subId را همان uuid نگه می‌داریم تا /sub/uuid همه را جمع کند
+                if "subId" in client:
+                    client["subId"] = user_uuid
+                # tgId/remark را هم برای نمایش بهتر ست می‌کنیم
+                if "tgId" in client:
+                    client["tgId"] = base_email
                 settings_body = json.dumps({"clients": [client]})
                 await ctx.request(
                     "POST",
