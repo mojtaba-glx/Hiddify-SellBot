@@ -3744,7 +3744,7 @@ async def handle_add_server_flow(
         await message.reply_text(
             "🌐 دامنه سابسکریپشن (Subscription Domain) را وارد کنید (اختیاری):\n"
             "اگر خالی گذاشته شود، از آدرس پنل استفاده می‌شود.\n\n"
-            "برای گذشتن از این مرحله، «skip» یا «-» را بفرستید.",
+            "برای گذشتن از این مرحله، «0» یا «skip» یا «-» را بفرستید.",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -3752,7 +3752,7 @@ async def handle_add_server_flow(
     # مرحله X-UI: دامنه ساب
     if state == ADD_STATE_XUI_SUB_DOMAIN:
         sub_domain = text.strip()
-        if sub_domain not in {"skip", "-", "_", ".", "done", "نه", "خیر"}:
+        if sub_domain not in {"skip", "-", "_", ".", "done", "نه", "خیر", "0"}:
             sub_domain = sub_domain.rstrip("/")
             if not sub_domain.startswith(("http://", "https://")):
                 sub_domain = "https://" + sub_domain
