@@ -3710,7 +3710,8 @@ async def handle_add_server_flow(
                     [
                         InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
                         InlineKeyboardButton("X-UI", callback_data="servers:add:type:xui"),
-                    ]
+                    ],
+                    [InlineKeyboardButton("🔙بازگشت", callback_data="servers:list_back")],
                 ]
             ),
         )
@@ -6292,6 +6293,9 @@ async def handle_server_inline_callback(
     await query.answer()
 
     if data == "servers:list_back":
+        # اگر از افزودن سرور آمده، state را پاک کن
+        for k in ("state", "new_server", "add_user", "add_user_server_id", "add_user_plan_id"):
+            context.user_data.pop(k, None)
         await send_servers_list(chat_id=chat_id, context=context, message=msg)
         return
 
@@ -6328,7 +6332,8 @@ async def handle_server_inline_callback(
                     [
                         InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
                         InlineKeyboardButton("X-UI", callback_data="servers:add:type:xui"),
-                    ]
+                    ],
+                    [InlineKeyboardButton("🔙بازگشت", callback_data="servers:list_back")],
                 ]
             ),
         )
