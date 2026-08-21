@@ -2112,6 +2112,12 @@ def build_user_ops_keyboard(server_id: int) -> InlineKeyboardMarkup:
 
 
 def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
+    # برای X-UI دکمه ساخت اینباند از لینک را اضافه کن
+    try:
+        srv = database.get_server_by_id(server_id)
+        is_xui = str((srv or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    except Exception:
+        is_xui = False
     keyboard = [
         [InlineKeyboardButton("👤لیست کاربران", callback_data=f"server:{server_id}:users")],
         [InlineKeyboardButton("🛡️عملیات کاربری", callback_data=f"server:{server_id}:user_ops")],
@@ -2121,8 +2127,10 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
         [InlineKeyboardButton("⚙️لیست نودها", callback_data=f"server:{server_id}:nodes")],
         [InlineKeyboardButton("🔄همگام سازی نودها", callback_data=f"server:{server_id}:sync_nodes")],
-        [InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")],
     ]
+    if is_xui:
+        keyboard.insert(4, [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:create_inbound_from_link")])
+    keyboard.append([InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -5150,11 +5158,86 @@ async def handle_server_state_message(
         await handle_add_user_flow(state, update, context)
         return
 
+    if state == "xui_create_inbound_from_link":
+        await handle_xui_create_inbound_from_link(update, context)
+        return
+
     if state == SEARCH_SMART_INPUT:
         await handle_smart_search_input(update, context)
         return
 
     logger.warning("Unknown state in handle_server_state_message: %s", state)
+
+
+async def handle_xui_create_inbound_from_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message:
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        context.user_data.pop("state", None)
+        context.user_data.pop("create_inbound_server_id", None)
+        await message.reply_text("❌ ساخت اینباند لغو شد.", reply_markup=admin_main_keyboard())
+        return
+    server_id = int(context.user_data.get("create_inbound_server_id") or 0)
+    server = database.get_server_by_id(server_id)
+    if not server:
+        context.user_data.pop("state", None)
+        context.user_data.pop("create_inbound_server_id", None)
+        await message.reply_text("❌ سرور پیدا نشد.", reply_markup=admin_main_keyboard())
+        return
+    # لینک را از متن بگیر (ممکنه چند خط باشه، اولین لینک)
+    link = ""
+    for line in text.splitlines():
+        line=line.strip()
+        if line.startswith(("vless://", "vmess://", "trojan://", "hysteria2://", "hy2://", "ss://")):
+            link = line
+            break
+    if not link:
+        # کل متن را به عنوان لینک بگیر اگر single line بود
+        if text.startswith(("vless://", "vmess://", "trojan://", "hysteria2://", "hy2://", "ss://")):
+            link = text.strip()
+    if not link:
+        await message.reply_text(
+            "❌ لینک نامعتبر است. لطفاً یک لینک vless/vmess/hysteria2/trojan بفرستید.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]),
+        )
+        return
+    await message.reply_text("⏳ در حال ساخت اینباند...")
+    try:
+        from Shared import xui_api
+
+        # پارس اولیه برای نمایش
+        parsed = xui_api.parse_config_link(link)
+        # ساخت اینباند
+        result = await xui_api.create_inbound_from_link(server, link)
+        # پاکسازی state
+        context.user_data.pop("state", None)
+        context.user_data.pop("create_inbound_server_id", None)
+        # نمایش نتیجه
+        inbound_id = ""
+        try:
+            # resp ممکنه شامل id باشد
+            if isinstance(result, dict):
+                inbound_id = str(result.get("id") or result.get("obj", {}).get("id") or "")
+        except Exception:
+            inbound_id = ""
+        await message.reply_text(
+            f"✅ اینباند با موفقیت ساخته شد.\n\n"
+            f"🔧 پروتکل: {parsed.get('protocol')}\n"
+            f"🔌 پورت: {parsed.get('port')}\n"
+            + (f"🆔 ID اینباند: {inbound_id}\n" if inbound_id else "")
+            + f"🌐 دامنه: {parsed.get('host')} → پنل: {server.get('panel_url')}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به سرور", callback_data=f"server:{server_id}")]]),
+        )
+    except Exception as e:
+        err = str(e)
+        if len(err) > 700:
+            err = err[:700] + "..."
+        await message.reply_text(
+            f"❌ خطا در ساخت اینباند:\n{err}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]),
+        )
 
 
 # ===============================
@@ -6798,6 +6881,25 @@ async def handle_server_inline_callback(
                     f"❌ خطا در مایگریشن کاربران قدیمی:\n\n{e}",
                     reply_markup=build_node_sync_menu_keyboard(server_id),
                 )
+            return
+
+        if action == "create_inbound_from_link":
+            server = database.get_server_by_id(server_id)
+            if not server or str(server.get("panel_type") or "").strip().lower() not in {"xui", "x-ui"}:
+                await msg.edit_text("❌ این قابلیت فقط برای پنل X-UI است.")
+                return
+            from AdminBot.states import XUI_CREATE_INBOUND_FROM_LINK
+
+            context.user_data["state"] = XUI_CREATE_INBOUND_FROM_LINK
+            context.user_data["create_inbound_server_id"] = server_id
+            await msg.edit_text(
+                "🔗 لطفاً لینک کانفیگ (vless/vmess/hysteria2/trojan) را ارسال کنید:\n\n"
+                "مثال:\n`vless://uuid@host:443?security=tls&type=httpupgrade...`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]
+                ),
+            )
             return
 
 # ===============================

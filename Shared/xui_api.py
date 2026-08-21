@@ -34,7 +34,8 @@ import re
 import uuid as _uuid_mod
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote, urlparse
+import urllib.parse
+from urllib.parse import quote, urlparse, parse_qsl, unquote
 
 import httpx
 
@@ -1396,3 +1397,267 @@ def _build_direct_links(server: Dict[str, Any], inbound: Dict[str, Any], client:
         logger.warning("xui direct link build failed for %s: %s", protocol, exc)
         return []
     return [link] if link else []
+
+
+# ---------------------------------------------------------------------------
+# Config link parser + inbound creation from link (هوشمند)
+# ---------------------------------------------------------------------------
+def parse_config_link(link: str) -> Dict[str, Any]:
+    """Parse a client config link (vless/vmess/hysteria2/trojan) into a dict.
+
+    Returns dict with: protocol, uuid/password, host, port, network, security,
+    sni, host_header, path, fp, alpn, etc.
+    Raises XuiApiError on unsupported / invalid link.
+    """
+    link = (link or "").strip()
+    if not link:
+        raise XuiApiError("لینک خالی است.")
+    if link.startswith("vless://"):
+        return _parse_vless_link(link)
+    if link.startswith("vmess://"):
+        return _parse_vmess_link(link)
+    if link.startswith("hysteria2://") or link.startswith("hy2://"):
+        return _parse_hysteria2_link(link)
+    if link.startswith("trojan://"):
+        return _parse_trojan_link(link)
+    if link.startswith("ss://"):
+        return _parse_ss_link(link)
+    raise XuiApiError(f"پروتکل لینک پشتیبانی نمی‌شود: {link[:20]}")
+
+
+def _parse_vless_link(link: str) -> Dict[str, Any]:
+    # vless://uuid@host:port?params#name
+    try:
+        u = urlparse(link)
+        uuid = u.username or ""
+        host = u.hostname or ""
+        port = u.port or 443
+        qs = dict(urllib.parse.parse_qsl(u.query))
+        # hash part is remark, ignore
+        return {
+            "protocol": "vless",
+            "uuid": uuid,
+            "host": host,
+            "port": int(port),
+            "network": (qs.get("type") or "tcp").lower(),
+            "security": (qs.get("security") or "none").lower(),
+            "sni": qs.get("sni") or "",
+            "host_header": qs.get("host") or qs.get("headerType") or host,
+            "path": urllib.parse.unquote(qs.get("path") or ""),
+            "fp": qs.get("fp") or "chrome",
+            "alpn": urllib.parse.unquote(qs.get("alpn") or ""),
+            "flow": qs.get("flow") or "",
+            "allowInsecure": qs.get("allowInsecure") or qs.get("insecure") or "0",
+            "raw_qs": qs,
+        }
+    except Exception as e:
+        raise XuiApiError(f"پارس vless ناموفق: {e}")
+
+
+def _parse_vmess_link(link: str) -> Dict[str, Any]:
+    try:
+        b64 = link[8:]  # after vmess://
+        # add padding if needed
+        b64 += "=" * (-len(b64) % 4)
+        data = json.loads(base64.b64decode(b64).decode())
+        return {
+            "protocol": "vmess",
+            "uuid": data.get("id") or "",
+            "host": data.get("add") or "",
+            "port": int(data.get("port") or 443),
+            "network": (data.get("net") or "tcp").lower(),
+            "security": "tls" if (data.get("tls") or "none").lower() == "tls" else "none",
+            "sni": data.get("sni") or "",
+            "host_header": data.get("host") or data.get("add") or "",
+            "path": data.get("path") or "",
+            "fp": data.get("fp") or "chrome",
+            "alpn": data.get("alpn") or "",
+            "raw": data,
+        }
+    except Exception as e:
+        raise XuiApiError(f"پارس vmess ناموفق: {e}")
+
+
+def _parse_hysteria2_link(link: str) -> Dict[str, Any]:
+    try:
+        # hysteria2://uuid@host:port?obfs=...&sni=...#name  or hy2://
+        # urlparse needs to handle hy2:// as scheme
+        norm = link.replace("hy2://", "hysteria2://", 1)
+        u = urlparse(norm)
+        uuid = u.username or ""
+        host = u.hostname or ""
+        port = u.port or 443
+        qs = dict(urllib.parse.parse_qsl(u.query))
+        return {
+            "protocol": "hysteria2",
+            "uuid": uuid,
+            "password": uuid,  # hysteria2 uses auth as uuid
+            "host": host,
+            "port": int(port),
+            "obfs": qs.get("obfs") or "none",
+            "obfs_password": qs.get("obfs-password") or qs.get("obfs_password") or "",
+            "sni": qs.get("sni") or host,
+            "insecure": qs.get("insecure") or qs.get("allowInsecure") or "1",
+            "raw_qs": qs,
+        }
+    except Exception as e:
+        raise XuiApiError(f"پارس hysteria2 ناموفق: {e}")
+
+
+def _parse_trojan_link(link: str) -> Dict[str, Any]:
+    try:
+        u = urlparse(link)
+        pwd = u.username or ""
+        host = u.hostname or ""
+        port = u.port or 443
+        qs = dict(urllib.parse.parse_qsl(u.query))
+        return {
+            "protocol": "trojan",
+            "password": pwd,
+            "uuid": pwd,
+            "host": host,
+            "port": int(port),
+            "network": (qs.get("type") or "tcp").lower(),
+            "security": (qs.get("security") or "tls").lower(),
+            "sni": qs.get("sni") or host,
+            "host_header": qs.get("host") or host,
+            "path": urllib.parse.unquote(qs.get("path") or ""),
+            "raw_qs": qs,
+        }
+    except Exception as e:
+        raise XuiApiError(f"پارس trojan ناموفق: {e}")
+
+
+def _parse_ss_link(link: str) -> Dict[str, Any]:
+    raise XuiApiError("shadowsocks از لینک فعلاً پشتیبانی نمی‌شود - دستی بسازید.")
+
+
+async def create_inbound_from_link(
+    server: Dict[str, Any],
+    link: str,
+    *,
+    port_override: Optional[int] = None,
+    remark: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a new inbound on X-UI panel from a client config link.
+
+    - دامنهٔ اصلی لینک (مثلاً direct.example.com) با دامنهٔ پنل (eu.example.com) جایگزین می‌شود
+    - اگر پورت تکراری بود، خطا می‌دهد تا کاربر پورت دیگر بدهد
+    - remark اگر داده نشود از hash لینک یا protocol می‌آید
+    """
+    parsed = parse_config_link(link)
+    # دامنه پنل را از server بگیر
+    panel_domain = ""
+    try:
+        origin = _public_origin(server)
+        # origin is https://eu.example.com[:port]
+        panel_domain = urlparse(origin).hostname or ""
+    except Exception:
+        panel_domain = ""
+    orig_host = (parsed.get("host") or "").strip()
+    # اگر دامنه لینک با دامنه پنل فرق داشت، SNI/host را به دامنه پنل تغییر بده
+    if panel_domain and orig_host and orig_host.lower() != panel_domain.lower():
+        if parsed.get("sni") and parsed["sni"].lower() == orig_host.lower():
+            parsed["sni"] = panel_domain
+        if parsed.get("host_header") and parsed["host_header"].lower() == orig_host.lower():
+            parsed["host_header"] = panel_domain
+        # host لینک هم برای ساخت کانفیگ جدید، پورت مقصد پنل است، ولی inbound روی پنل باید روی 0.0.0.0 گوش دهد
+        # پس host لینک را نگه می‌داریم برای SNI، ولی inbound host نیازی نیست
+
+    # پورت
+    port = int(port_override) if port_override else int(parsed.get("port") or 443)
+
+    # بررسی تکراری بودن پورت
+    inbounds = await _list_inbounds(server)
+    used_ports = {_to_int(ib.get("port"), 0) for ib in inbounds}
+    if port in used_ports:
+        raise XuiApiError(f"پورت {port} قبلاً استفاده شده. پورت دیگری بدهید (مثلاً {port+1}).")
+
+    protocol = (parsed.get("protocol") or "").strip().lower()
+    # نگاشت پروتکل hysteria2 به hysteria برای X-UI قدیم
+    if protocol == "hysteria2":
+        protocol = "hysteria2"
+        if protocol not in SUPPORTED_PROTOCOLS and "hysteria" in SUPPORTED_PROTOCOLS:
+            # اگر نسخه قدیم فقط hysteria می‌شناسد، همان را بگذار
+            pass
+
+    # remark
+    if not remark:
+        try:
+            # از hash لینک
+            if "#" in link:
+                remark = urllib.parse.unquote(link.split("#", 1)[1]).strip()
+        except Exception:
+            remark = ""
+        if not remark:
+            remark = f"{protocol}-{port}"
+
+    # ساخت JSON اینباند بر اساس پروتکل
+    inbound_json = _build_inbound_json(protocol, port, parsed, remark)
+    async with _XuiContext(server) as ctx:
+        resp = await ctx.request("POST", "inbounds/add", json_body=inbound_json)
+    # resp معمولاً شامل id اینباند جدید است
+    return resp if isinstance(resp, dict) else {"raw": resp}
+
+
+def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark: str) -> Dict[str, Any]:
+    # پایه مشترک
+    base: Dict[str, Any] = {
+        "port": port,
+        "protocol": protocol,
+        "tag": f"inbound-{port}",
+        "remark": remark,
+        "enable": True,
+        "expiryTime": 0,
+        "settings": json.dumps({"clients": [], "decryption": "none", "fallbacks": []} if protocol in ("vless", "vmess") else {"clients": [], "password": ""}),
+        "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
+        "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
+    }
+    # برای hysteria2 تنظیمات فرق دارد
+    if protocol in ("hysteria", "hysteria2"):
+        base["settings"] = json.dumps({
+            "clients": [],
+            "obfs": {"type": parsed.get("obfs") or "salamander", "salamander": {"password": parsed.get("obfs_password") or ""}},
+        })
+        # streamSettings برای hysteria معمولاً خالی یا با tls
+        base["streamSettings"] = json.dumps({
+            "network": "udp",
+            "security": "tls",
+            "tlsSettings": {"serverName": parsed.get("sni") or "", "alpn": ["h3"], "certificates": [{"ocspStapling": 3600}]},
+        })
+    return base
+
+
+def _stream_settings_for_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    network = (parsed.get("network") or "tcp").lower()
+    security = (parsed.get("security") or "none").lower()
+    out: Dict[str, Any] = {"network": network, "security": security}
+    if security == "tls":
+        tls: Dict[str, Any] = {
+            "serverName": parsed.get("sni") or parsed.get("host") or "",
+            "alpn": [a.strip() for a in (parsed.get("alpn") or "h2,http/1.1").split(",") if a.strip()] or ["h2", "http/1.1"],
+            "fingerprint": parsed.get("fp") or "chrome",
+            "certificates": [{"ocspStapling": 3600}],
+        }
+        out["tlsSettings"] = tls
+    elif security == "reality":
+        out["realitySettings"] = {
+            "serverNames": [parsed.get("sni") or ""],
+            "privateKey": "",
+            "publicKey": "",
+            "shortIds": [""],
+        }
+    # network-specific
+    if network == "ws":
+        out["wsSettings"] = {
+            "path": parsed.get("path") or "/",
+            "headers": {"Host": parsed.get("host_header") or ""},
+        }
+    elif network == "httpupgrade":
+        out["httpupgradeSettings"] = {
+            "path": parsed.get("path") or "/",
+            "host": parsed.get("host_header") or "",
+        }
+    elif network == "grpc":
+        out["grpcSettings"] = {"serviceName": parsed.get("path") or "", "multiMode": False}
+    return out

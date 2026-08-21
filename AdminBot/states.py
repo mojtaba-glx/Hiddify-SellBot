@@ -25,6 +25,12 @@ EDIT_SERVER_ADMIN_PROXY = "edit_server_admin_proxy"
 EDIT_SERVER_ADMIN_UUID = "edit_server_admin_uuid"
 EDIT_SERVER_USER_PROXY = "edit_server_user_proxy"
 EDIT_SERVER_LIMIT = "edit_server_limit"
+EDIT_SERVER_PRIORITY = "edit_server_priority"
+EDIT_SERVER_XUI_USERNAME = "edit_server_xui_username"
+EDIT_SERVER_XUI_PASSWORD = "edit_server_xui_password"
+EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
+EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
+XUI_CREATE_INBOUND_FROM_LINK = "xui_create_inbound_from_link"
 
 # ===============================
 #   ویرایش کاربر
