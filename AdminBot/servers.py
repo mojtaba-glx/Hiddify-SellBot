@@ -5162,6 +5162,10 @@ async def handle_server_state_message(
         await handle_xui_create_inbound_from_link(update, context)
         return
 
+    if state == "xui_create_inbound_from_link_port":
+        await handle_xui_create_inbound_from_link_port(update, context)
+        return
+
     if state == SEARCH_SMART_INPUT:
         await handle_smart_search_input(update, context)
         return
@@ -5203,31 +5207,114 @@ async def handle_xui_create_inbound_from_link(update: Update, context: ContextTy
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]),
         )
         return
+    try:
+        from Shared import xui_api
+
+        parsed = xui_api.parse_config_link(link)
+    except Exception as e:
+        await message.reply_text(
+            f"❌ خطا در پارس لینک:\n{e}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]),
+        )
+        return
+    # ذخیره لینک برای مرحله بعد و سوال پورت
+    context.user_data["create_inbound_link"] = link
+    context.user_data["create_inbound_parsed_port"] = str(parsed.get("port") or "")
+    from AdminBot.states import XUI_CREATE_INBOUND_FROM_LINK_PORT
+
+    context.user_data["state"] = XUI_CREATE_INBOUND_FROM_LINK_PORT
+    # پیشنهاد پورت: اگر پورت لینک اشغال بود، بعدی را پیشنهاد بده
+    try:
+        inbounds = await xui_api._list_inbounds(server)  # type: ignore
+        used = {int(ib.get("port") or 0) for ib in inbounds}
+        try:
+            pu = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(str(server.get("panel_url") or ""))
+            pp = pu.port or (443 if pu.scheme == "https" else 80)
+            if pp:
+                used.add(pp)
+        except Exception:
+            pass
+        orig_port = int(parsed.get("port") or 443)
+        suggest = orig_port
+        if suggest in used:
+            nxt = suggest + 1
+            while nxt in used and nxt < 65535:
+                nxt += 1
+            suggest = nxt
+        port_msg = f"🔌 پورت داخل لینک: `{orig_port}`\n"
+        if suggest != orig_port:
+            port_msg += f"⚠️ این پورت قبلاً استفاده شده، پیشنهاد: `{suggest}`\n"
+        port_msg += f"\nروی کدام پورت بسازم؟\nعدد را بفرستید (مثلاً `{suggest}`) یا `skip` برای همان `{orig_port}`"
+    except Exception:
+        port_msg = f"روی کدام پورت بسازم؟ (پورت لینک: `{parsed.get('port')}`)\nعدد را بفرستید یا `skip`"
+    await message.reply_text(
+        f"🔍 لینک تشخیص داده شد:\n"
+        f"🔧 پروتکل: `{parsed.get('protocol')}`\n"
+        f"{port_msg}",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]),
+    )
+    return
+
+
+async def handle_xui_create_inbound_from_link_port(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.message
+    if not message:
+        return
+    text = (message.text or "").strip()
+    if _is_cancel_text(text):
+        context.user_data.pop("state", None)
+        context.user_data.pop("create_inbound_server_id", None)
+        context.user_data.pop("create_inbound_link", None)
+        context.user_data.pop("create_inbound_parsed_port", None)
+        await message.reply_text("❌ ساخت اینباند لغو شد.", reply_markup=admin_main_keyboard())
+        return
+    server_id = int(context.user_data.get("create_inbound_server_id") or 0)
+    link = str(context.user_data.get("create_inbound_link") or "").strip()
+    server = database.get_server_by_id(server_id)
+    if not server or not link:
+        context.user_data.pop("state", None)
+        context.user_data.pop("create_inbound_server_id", None)
+        context.user_data.pop("create_inbound_link", None)
+        await message.reply_text("❌ اطلاعات ناقص است.", reply_markup=admin_main_keyboard())
+        return
+    # پورت را بگیر
+    raw = text.strip().lower()
+    port_override = None
+    if raw not in {"skip", "-", "0", ""}:
+        try:
+            port_override = int(raw)
+            if not (1 <= port_override <= 65535):
+                raise ValueError
+        except ValueError:
+            await message.reply_text(
+                "❌ پورت نامعتبر است. عدد 1 تا 65535 بفرستید یا `skip` برای همان پورت لینک.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]),
+            )
+            return
     await message.reply_text("⏳ در حال ساخت اینباند...")
     try:
         from Shared import xui_api
 
-        # پارس اولیه برای نمایش
-        parsed = xui_api.parse_config_link(link)
-        # ساخت اینباند
-        result = await xui_api.create_inbound_from_link(server, link)
-        # پاکسازی state
+        result = await xui_api.create_inbound_from_link(server, link, port_override=port_override)
         context.user_data.pop("state", None)
         context.user_data.pop("create_inbound_server_id", None)
-        # نمایش نتیجه
+        context.user_data.pop("create_inbound_link", None)
+        context.user_data.pop("create_inbound_parsed_port", None)
+        parsed = xui_api.parse_config_link(link)
         inbound_id = ""
         try:
-            # resp ممکنه شامل id باشد
             if isinstance(result, dict):
                 inbound_id = str(result.get("id") or result.get("obj", {}).get("id") or "")
         except Exception:
             inbound_id = ""
+        final_port = port_override or parsed.get("port")
         await message.reply_text(
             f"✅ اینباند با موفقیت ساخته شد.\n\n"
             f"🔧 پروتکل: {parsed.get('protocol')}\n"
-            f"🔌 پورت: {parsed.get('port')}\n"
+            f"🔌 پورت: {final_port}\n"
             + (f"🆔 ID اینباند: {inbound_id}\n" if inbound_id else "")
-            + f"🌐 دامنه: {parsed.get('host')} → پنل: {server.get('panel_url')}",
+            + f"🌐 دامنه پنل: {server.get('panel_url')}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به سرور", callback_data=f"server:{server_id}")]]),
         )
     except Exception as e:

@@ -31,6 +31,7 @@ EDIT_SERVER_XUI_PASSWORD = "edit_server_xui_password"
 EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
 EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
 XUI_CREATE_INBOUND_FROM_LINK = "xui_create_inbound_from_link"
+XUI_CREATE_INBOUND_FROM_LINK_PORT = "xui_create_inbound_from_link_port"
 
 # ===============================
 #   ویرایش کاربر
