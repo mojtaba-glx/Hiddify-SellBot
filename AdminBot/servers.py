@@ -27,7 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, userbot_db, plans_storage
+from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import (
     admin_main_keyboard,
@@ -401,12 +401,17 @@ ADD_DOMAIN_TITLE = "add_domain_title"
 ADD_DOMAIN_DOMAIN = "add_domain_domain"
 
 # افزودن سرور
+ADD_STATE_TYPE = "add_server_type"
 ADD_STATE_TITLE = "add_server_title"
 ADD_STATE_PANEL_URL = "add_server_panel_url"
 ADD_STATE_ADMIN_PROXY = "add_server_admin_proxy"
 ADD_STATE_ADMIN_UUID = "add_server_admin_uuid"
 ADD_STATE_USER_PROXY = "add_server_user_proxy"
 ADD_STATE_LIMIT = "add_server_limit"
+ADD_STATE_XUI_USERNAME = "add_server_xui_username"
+ADD_STATE_XUI_PASSWORD = "add_server_xui_password"
+ADD_STATE_XUI_SUB_DOMAIN = "add_server_xui_sub_domain"
+ADD_STATE_XUI_INBOUND = "add_server_xui_inbound"
 
 # ویرایش سرور
 EDIT_SERVER_TITLE = "edit_server_title"
@@ -3663,13 +3668,28 @@ async def handle_add_server_flow(
     # شیء موقت سرور جدید
     new_server = context.user_data.get("new_server") or {}
 
+    # انتخاب نوع پنل (از دکمه‌های اینلاین) - اگر متن ارسال شد، دوباره درخواست کن
+    if state == ADD_STATE_TYPE:
+        await message.reply_text(
+            "لطفاً از دکمه‌های زیر نوع پنل سرور را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
+                        InlineKeyboardButton("X-UI", callback_data="servers:add:type:xui"),
+                    ]
+                ]
+            ),
+        )
+        return
+
     # مرحله ۱: عنوان
     if state == ADD_STATE_TITLE:
         new_server["title"] = text
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_PANEL_URL
         await message.reply_text(
-            "🌐 لطفاً آدرس پنل هیدیفای را وارد کنید:\nمثال: https://site.example.com",
+            "🌐 لطفاً آدرس پنل را وارد کنید:\nمثال: https://eu.example.com/E6xNPh2XZF5A6UO",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -3680,17 +3700,91 @@ async def handle_add_server_flow(
         if not (panel_url.startswith("http://") or panel_url.startswith("https://")):
             await message.reply_text(
                 "❌ لطفاً آدرس پنل را به صورت کامل و با http/https ارسال کنید.\n"
-                "مثال: https://site.example.com",
+                "مثال: https://eu.example.com/E6xNPh2XZF5A6UO",
                 reply_markup=cancel_keyboard(),
             )
             return
 
         new_server["panel_url"] = panel_url
         context.user_data["new_server"] = new_server
+
+        if new_server.get("panel_type") == "xui":
+            context.user_data["state"] = ADD_STATE_XUI_USERNAME
+            await message.reply_text(
+                "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
         context.user_data["state"] = ADD_STATE_ADMIN_PROXY
         await message.reply_text(
             "🔑 لطفاً «کد مسیر ادمین پنل» را وارد کنید (Admin Proxy Path):\n"
             "مثال: cNT69A5AAw",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # مرحله X-UI: نام کاربری
+    if state == ADD_STATE_XUI_USERNAME:
+        new_server["xui_username"] = text.strip()
+        context.user_data["new_server"] = new_server
+        context.user_data["state"] = ADD_STATE_XUI_PASSWORD
+        await message.reply_text(
+            "🔑 لطفاً «رمز عبور» پنل X-UI را وارد کنید:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # مرحله X-UI: رمز عبور
+    if state == ADD_STATE_XUI_PASSWORD:
+        new_server["xui_password"] = text
+        context.user_data["new_server"] = new_server
+        context.user_data["state"] = ADD_STATE_XUI_SUB_DOMAIN
+        await message.reply_text(
+            "🌐 دامنه سابسکریپشن (Subscription Domain) را وارد کنید (اختیاری):\n"
+            "اگر خالی گذاشته شود، از آدرس پنل استفاده می‌شود.\n\n"
+            "برای گذشتن از این مرحله، «skip» یا «-» را بفرستید.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # مرحله X-UI: دامنه ساب
+    if state == ADD_STATE_XUI_SUB_DOMAIN:
+        sub_domain = text.strip()
+        if sub_domain not in {"skip", "-", "_", ".", "done", "نه", "خیر"}:
+            sub_domain = sub_domain.rstrip("/")
+            if not sub_domain.startswith(("http://", "https://")):
+                sub_domain = "https://" + sub_domain
+            new_server["xui_sub_domain"] = sub_domain
+        context.user_data["new_server"] = new_server
+        context.user_data["state"] = ADD_STATE_XUI_INBOUND
+        await message.reply_text(
+            "🧩 شناسه اینباند فروش (Inbound ID) را وارد کنید (اختیاری):\n"
+            "اگر خالی باشد، اولین اینباند فعال (vless/trojan/vmess/shadowsocks) انتخاب می‌شود.\n\n"
+            "برای گذشتن از این مرحله، «skip» یا «-» را بفرستید.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # مرحله X-UI: شناسه اینباند
+    if state == ADD_STATE_XUI_INBOUND:
+        raw_inbound = text.strip()
+        if raw_inbound not in {"skip", "-", "_", ".", "done", "نه", "خیر"}:
+            try:
+                inbound_id = int(raw_inbound)
+                if inbound_id <= 0:
+                    raise ValueError
+                new_server["xui_inbound_id"] = inbound_id
+            except ValueError:
+                await message.reply_text(
+                    "❌ شناسه اینباند باید یک عدد صحیح مثبت باشد (یا «skip» برای خودکار).",
+                    reply_markup=cancel_keyboard(),
+                )
+                return
+        context.user_data["new_server"] = new_server
+        context.user_data["state"] = ADD_STATE_LIMIT
+        await message.reply_text(
+            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -3757,7 +3851,10 @@ async def handle_add_server_flow(
 
         # تست اتصال به پنل با اطلاعات وارد شده
         try:
-            await hiddify_api.list_users(new_server)
+            if new_server.get("panel_type") == "xui":
+                await xui_api.test_connect(new_server)
+            else:
+                await hiddify_api.list_users(new_server)
         except Exception as e:
             err_text = str(e or "")
             err_low = err_text.lower()
@@ -3795,6 +3892,7 @@ async def handle_add_server_flow(
             "✅ سرور با موفقیت اضافه شد.\n\n"
             f"🖥️ عنوان: {saved.get('title')}\n"
             f"🌐 آدرس پنل: {saved.get('panel_url')}\n"
+            f"🧩 نوع پنل: {'X-UI' if saved.get('panel_type') == 'xui' else 'هیدیفای'}\n"
             f"👥 محدودیت کاربران: {saved.get('users_limit')}\n"
         )
         await message.reply_text(summary, reply_markup=admin_main_keyboard())
@@ -6057,25 +6155,42 @@ async def handle_server_inline_callback(
         await send_servers_list(chat_id=chat_id, context=context, message=msg)
         return
 
-    if data == "servers:add":
+    if data.startswith("servers:add:type:"):
+        ptype = data.split("servers:add:type:", 1)[1]
+        if ptype not in {"hiddify", "xui"}:
+            await query.answer("نوع پنل نامعتبر است.")
+            return
         context.user_data["state"] = ADD_STATE_TITLE
+        new_server = context.user_data.get("new_server") or {}
+        new_server["panel_type"] = ptype
+        context.user_data["new_server"] = new_server
+        try:
+            await msg.edit_text("نوع پنل: " + ("هیدیفای" if ptype == "hiddify" else "X-UI"))
+        except Exception:
+            pass
+        await msg.reply_text(
+            "لطفاً عنوان سرور را وارد کنید:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if data == "servers:add":
+        context.user_data["state"] = ADD_STATE_TYPE
         context.user_data["new_server"] = {}
         try:
             await msg.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-        prereq_cmd = f'sudo bash -c "$(curl -fsSL {PANEL_PREREQ_SCRIPT_URL})" install'
         await msg.reply_text(
-            "⚠️ قبل از اضافه کردن سرور، حتما اسکریپت پیش‌نیاز را روی همان سرور پنل هیدیفای نصب کنید:\n\n"
-            "```shell\n"
-            f"{prereq_cmd}\n"
-            "```",
-            parse_mode="Markdown",
-            disable_web_page_preview=True,
-        )
-        await msg.reply_text(
-            "لطفاً عنوان سرور را وارد کنید:",
-            reply_markup=cancel_keyboard(),
+            "نوع پنل سرور را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
+                        InlineKeyboardButton("X-UI", callback_data="servers:add:type:xui"),
+                    ]
+                ]
+            ),
         )
         return
 
