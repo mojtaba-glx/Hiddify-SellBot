@@ -825,22 +825,45 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     first_client: Optional[Dict[str, Any]] = None
     first_inbound: Optional[Dict[str, Any]] = None
 
+    created: List[Tuple[int, str]] = []  # (inbound_id, client_email_or_id)
     async with _XuiContext(server) as ctx:
-        for inbound in targets:
-            protocol = (inbound.get("protocol") or "").strip().lower()
-            clients = _settings_clients(inbound.get("settings"))
-            template = clients[0] if clients else {}
-            client = _new_client_dict(protocol, uuid=user_uuid, template=template)
-            client = _apply_payload_to_client(client, protocol, payload)
-            settings_body = json.dumps({"clients": [client]})
-            await ctx.request(
-                "POST",
-                "inbounds/addClient",
-                json_body={"id": _to_int(inbound.get("id"), 0), "settings": settings_body},
-            )
-            if first_client is None:
-                first_client = client
-                first_inbound = inbound
+        try:
+            for inbound in targets:
+                protocol = (inbound.get("protocol") or "").strip().lower()
+                clients = _settings_clients(inbound.get("settings"))
+                template = clients[0] if clients else {}
+                client = _new_client_dict(protocol, uuid=user_uuid, template=template)
+                client = _apply_payload_to_client(client, protocol, payload)
+                # برای جلوگیری از Duplicate email در پنل (ایمیل باید یونیک پنل‌واید باشد)
+                # subId را همان uuid نگه می‌داریم (برای تجمیع سابسکریپشن)، ولی email را یونیک می‌کنیم
+                if len(targets) > 1:
+                    client["email"] = f"{user_uuid}-{_to_int(inbound.get('id'), 0)}"
+                    # subId را دست نمی‌زنیم تا /sub/uuid همه را جمع کند
+                    if "subId" in client:
+                        client["subId"] = user_uuid
+                settings_body = json.dumps({"clients": [client]})
+                await ctx.request(
+                    "POST",
+                    "inbounds/addClient",
+                    json_body={"id": _to_int(inbound.get("id"), 0), "settings": settings_body},
+                )
+                # برای رول‌بک در صورت خطا در اینباند بعدی
+                created.append((_to_int(inbound.get("id"), 0), _client_id_for_url(client, protocol)))
+                if first_client is None:
+                    first_client = client
+                    first_inbound = inbound
+        except Exception:
+            # رول‌بک: هر کلاینتی که تا الان ساخته شد را پاک کن
+            for iid, cid in created:
+                try:
+                    await ctx.request(
+                        "POST",
+                        f"inbounds/{iid}/delClient/{quote(cid, safe='')}",
+                        allow_login_retry=False,
+                    )
+                except Exception:
+                    pass
+            raise
 
     assert first_client is not None and first_inbound is not None
     return _normalize_user(first_client, first_inbound, server)
