@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
-from Shared import database, userbot_db, hiddify_api, marzban_api, multi_panel
+from Shared import database, userbot_db, hiddify_api, marzban_api, multi_panel, xui_api
 
 
 ALLOWED_CONFIG_SCHEMES = (
@@ -563,6 +563,18 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: 
     Also fetches from Marzban if marzban_username is provided.
     """
     lines: List[str] = []
+    # X-UI: native subscription is the most faithful source of config lines
+    if xui_api.is_xui_server(server):
+        try:
+            xui_lines = xui_api.sync_fetch_subscription_lines(server, user_uuid)
+            existing = set(lines)
+            for ln in xui_lines or []:
+                raw = str(ln or "").strip()
+                if raw and "://" in raw and raw not in existing:
+                    lines.append(raw)
+                    existing.add(raw)
+        except Exception:
+            pass
     # Hiddify configs
     try:
         configs = _run_async(hiddify_api.get_user_configs(server, user_uuid))

@@ -10,6 +10,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+def _is_xui_server(server: Dict[str, Any]) -> bool:
+    """True if the server dict is an X-UI panel."""
+    return str((server or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+
+
 SSL_MODE_ENV = "HIDDIFY_SSL_MODE"
 SSL_MODE_AUTO = "auto"
 SSL_MODE_SECURE = "secure"
@@ -459,6 +465,10 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
         "source_url": "..."
       }
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.download_server_backup(server)
+
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
 
@@ -728,6 +738,10 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     GET /{admin_proxy}/api/v2/admin/user/
     لیست کاربران برای ادمین فعلی.
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.list_users(server)
+
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/"
@@ -743,6 +757,10 @@ async def get_user_by_uuid(server: Dict[str, Any], user_uuid: str) -> Dict[str, 
     GET /{admin_proxy}/api/v2/admin/user/{uuid}/
     دریافت اطلاعات یک کاربر با UUID/ID.
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.get_user_by_uuid(server, user_uuid)
+
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/{user_uuid}/"
@@ -762,6 +780,10 @@ async def patch_user(
     PATCH /{admin_proxy}/api/v2/admin/user/{uuid}/
     بروزرسانی اطلاعات یک کاربر (نام، حجم، روز، کامنت، ...).
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.patch_user(server, user_uuid, payload)
+
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/{user_uuid}/"
@@ -848,6 +870,10 @@ async def enable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]:
     """
     فعال‌سازی کاربر به‌صورت سازگار با نسخه‌های مختلف پنل.
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.enable_user(server, user_uuid)
+
     attempts = (
         {"is_active": True},
         {"is_active": 1},
@@ -917,6 +943,10 @@ async def disable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]
     3) هر دو با هم
     سپس verify با GET.
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.disable_user(server, user_uuid)
+
     attempts = (
         {"is_active": False},
         {"is_active": 0},
@@ -1005,6 +1035,10 @@ async def create_user(
         ...
     }
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.create_user(server, payload)
+
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/"
@@ -1110,6 +1144,10 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
     ابتدا تلاش می‌کند DELETE بزند؛
     اگر API پشتیبانی نکند، به صورت fallback فقط is_active=False می‌کند.
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.delete_user(server, user_uuid)
+
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/{user_uuid}/"
@@ -1149,6 +1187,10 @@ async def get_user_configs(
         ...
     }
     """
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.get_user_configs(server, user_uuid)
+
     base = _get_panel_url(server)
     proxy = _get_user_proxy(server)
     url = f"{base}/{proxy}/{user_uuid}/api/v2/user/all-configs/"
@@ -1162,6 +1204,10 @@ async def get_user_configs(
 
 async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     """دریافت آمار سیستم (System Stats) و کاربران"""
+    if _is_xui_server(server):
+        from Shared import xui_api
+        return await xui_api.get_server_stats(server)
+
 
     def _to_int(v: Any, default: int = 0) -> int:
         try:

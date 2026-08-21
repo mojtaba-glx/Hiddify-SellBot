@@ -4,12 +4,17 @@
 # ===============================
 #   افزودن سرور (wizard)
 # ===============================
+ADD_STATE_TYPE = "add_server_type"
 ADD_STATE_TITLE = "add_server_title"
 ADD_STATE_PANEL_URL = "add_server_panel_url"
 ADD_STATE_ADMIN_PROXY = "add_server_admin_proxy"
 ADD_STATE_ADMIN_UUID = "add_server_admin_uuid"
 ADD_STATE_USER_PROXY = "add_server_user_proxy"
 ADD_STATE_LIMIT = "add_server_limit"
+ADD_STATE_XUI_USERNAME = "add_server_xui_username"
+ADD_STATE_XUI_PASSWORD = "add_server_xui_password"
+ADD_STATE_XUI_SUB_DOMAIN = "add_server_xui_sub_domain"
+ADD_STATE_XUI_INBOUND = "add_server_xui_inbound"
 
 # ===============================
 #   ویرایش سرور (wizard)
