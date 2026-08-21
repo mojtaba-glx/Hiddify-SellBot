@@ -499,6 +499,12 @@ def _apply_payload_to_client(
     if enable is not None:
         client["enable"] = bool(enable)
 
+    # نام کاربر اگر در payload آمد، بعداً در patch_user به صورت یونیک ست می‌شود
+    # اینجا فقط tgId را برای نمایش ست می‌کنیم
+    raw_name = str(payload.get("name") or "").strip()
+    if raw_name:
+        client["tgId"] = raw_name
+
     client.setdefault("totalGB", 0)
     client.setdefault("expiryTime", 0)
     client.setdefault("enable", True)
@@ -894,11 +900,18 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
 
     last_norm = None
     async with _XuiContext(server) as ctx:
-        for inbound, client in pairs:
+        for idx, (inbound, client) in enumerate(pairs):
             protocol = (inbound.get("protocol") or "").strip().lower()
             cur_ms = _to_int(client.get("expiryTime"), 0)
             new_client = dict(client)
             new_client = _apply_payload_to_client(new_client, protocol, payload, cur_ms=cur_ms)
+            # اگر نام جدید آمد، ایمیل را هم با الگوی یونیک به‌روز کن
+            raw_name = str(payload.get("name") or "").strip()
+            if raw_name:
+                if len(pairs) == 1:
+                    new_client["email"] = raw_name
+                else:
+                    new_client["email"] = raw_name if idx == 0 else f"{raw_name}-{_to_int(inbound.get('id'), 0)}"
             client_id = _client_id_for_url(client, protocol)
             settings_body = json.dumps({"clients": [new_client]})
             await ctx.request(
