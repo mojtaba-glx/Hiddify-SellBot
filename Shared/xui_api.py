@@ -1696,3 +1696,104 @@ def _stream_settings_for_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
     elif network == "grpc":
         out["grpcSettings"] = {"serviceName": parsed.get("path") or "", "multiMode": False}
     return out
+
+
+async def sync_users_to_inbounds(server: Dict[str, Any]) -> Dict[str, Any]:
+    """همگام‌سازی یوزرها روی همه اینباندهای هدف (برای وقتی اینباند جدید ساخته شد).
+
+    هر کاربری که در حداقل یک اینباند وجود دارد، در همه اینباندهای هدف (0=همه یا لیست مشخص)
+    ساخته می‌شود (با همان UUID/subId، email یونیک per inbound).
+    """
+    inbounds = await _list_inbounds(server)
+    targets = _resolve_target_inbounds(server, inbounds)
+    if not targets:
+        return {"ok": False, "msg": "هیچ اینباند هدف یافت نشد.", "created": 0, "skipped": 0}
+
+    # همه یوزرهای یکتا (بر اساس uuid/subId) از کل پنل
+    all_users = await list_users(server)
+    # dedup by uuid (list_users may return duplicates per inbound for multi-inbound users, but after our fix it still returns per inbound)
+    # بهتر است از خود inbounds همه کلاینت‌ها را جمع کنیم
+    seen_uuid: Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]] = {}  # uuid -> (inbound, client) نمونه
+    for ib in inbounds:
+        for cl in _settings_clients(ib.get("settings")):
+            # uuid را از id/password/email/subId بگیر
+            proto = (ib.get("protocol") or "").lower()
+            uid = _client_key_value(cl, proto) or str(cl.get("subId") or cl.get("email") or "").strip()
+            if not uid:
+                continue
+            low = uid.lower()
+            if low not in seen_uuid:
+                seen_uuid[low] = (ib, cl)
+
+    created = 0
+    skipped = 0
+    errors: List[str] = []
+
+    # برای هر یوزر، چک کن در کدام تارگت‌ها نیست
+    for uuid_key, (sample_ib, sample_client) in seen_uuid.items():
+        # uuid اصلی برای ساب
+        # sample_client را به عنوان تمپلیت برای تنظیمات quota/expiry استفاده کن
+        for target_ib in targets:
+            # آیا این یوزر در این تارگت وجود دارد؟
+            found = False
+            for cl in _settings_clients(target_ib.get("settings")):
+                hay = (
+                    str(cl.get("email") or "").lower(),
+                    str(cl.get("subId") or "").lower(),
+                    str(cl.get("id") or "").lower(),
+                    str(cl.get("password") or "").lower(),
+                )
+                if uuid_key in hay or str(sample_client.get("subId") or "").lower() in hay:
+                    found = True
+                    break
+            if found:
+                skipped += 1
+                continue
+            # نیست → بساز در این تارگت با همان uuid
+            try:
+                proto = (target_ib.get("protocol") or "").lower()
+                # از sample_client به عنوان template برای totalGB/expiry
+                # ولی برای inbound جدید، باید client جدید بسازی با همان uuid
+                # از _new_client_dict با template خالی یا sample
+                # برای حفظ quota/expiry، از sample_client بگیر
+                tgt_clients = _settings_clients(target_ib.get("settings"))
+                template = tgt_clients[0] if tgt_clients else {}
+                # اگر sample_client وجود دارد، مقادیر quota/expiry را از آن بردار
+                new_client = _new_client_dict(proto, uuid=uuid_key, template=template)
+                # کپی quota/expiry/enable از sample
+                for k in ("totalGB", "expiryTime", "enable", "limitIp"):
+                    if k in sample_client:
+                        new_client[k] = sample_client[k]
+                # email یونیک
+                base_email = str(sample_client.get("email") or uuid_key).strip()
+                # اگر قبلاً email یونیک بود (uuid-1), base را از قبل بگیر
+                # ساده: اگر چنداینبانده بود، email را base + -inboundId کن
+                # برای هماهنگی با create_user: اولی base، بقیه base-inboundId
+                # اینجا چون target مشخص است، اگر این یوزر قبلاً در یک inbound با email base وجود داشت، برای inbound جدید باید base-inboundId باشد
+                # تشخیص: اگر uuid_key == base_email (یعنی email==uuid), آنگاه برای target جدید باید base_email-inboundId باشد
+                # ساده‌تر: همیشه برای sync، email = base_email اگر target اولین تارگت بود، وگرنه base_email-inboundId
+                # ولی برای سادگی، اگر target != sample_ib, suffix بزن
+                if target_ib.get("id") != sample_ib.get("id"):
+                    # اگر sample email قبلاً یونیک بود (مثل test-1), base را بدون suffix بگیر
+                    raw_base = base_email
+                    # اگر base_email قبلاً با -عدد تمام می‌شد، آن عدد را حذف کن
+                    m = re.match(r"^(.*)-\d+$", raw_base)
+                    if m:
+                        raw_base = m.group(1)
+                    new_client["email"] = f"{raw_base}-{int(target_ib.get('id') or 0)}"
+                else:
+                    new_client["email"] = base_email
+                new_client["subId"] = sample_client.get("subId") or uuid_key
+                new_client["tgId"] = sample_client.get("tgId") or base_email.split("-")[0]
+                settings_body = json.dumps({"clients": [new_client]})
+                async with _XuiContext(server) as ctx:
+                    await ctx.request(
+                        "POST",
+                        "inbounds/addClient",
+                        json_body={"id": int(target_ib.get("id") or 0), "settings": settings_body},
+                    )
+                created += 1
+            except Exception as e:
+                errors.append(f"{uuid_key}→{target_ib.get('id')}: {e}")
+
+    return {"ok": True, "created": created, "skipped": skipped, "errors": errors, "total_users": len(seen_uuid), "target_inbounds": len(targets)}
