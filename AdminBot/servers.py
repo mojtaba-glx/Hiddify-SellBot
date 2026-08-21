@@ -5244,9 +5244,9 @@ async def handle_xui_create_inbound_from_link(update: Update, context: ContextTy
         port_msg = f"🔌 پورت داخل لینک: `{orig_port}`\n"
         if suggest != orig_port:
             port_msg += f"⚠️ این پورت قبلاً استفاده شده، پیشنهاد: `{suggest}`\n"
-        port_msg += f"\nروی کدام پورت بسازم؟\nعدد را بفرستید (مثلاً `{suggest}`) یا `skip` برای همان `{orig_port}`"
+        port_msg += f"\nروی کدام پورت بسازم؟\nعدد را بفرستید (مثلاً `{suggest}`) یا `0` برای همان `{orig_port}`"
     except Exception:
-        port_msg = f"روی کدام پورت بسازم؟ (پورت لینک: `{parsed.get('port')}`)\nعدد را بفرستید یا `skip`"
+        port_msg = f"روی کدام پورت بسازم؟ (پورت لینک: `{parsed.get('port')}`)\nعدد را بفرستید یا `0`"
     await message.reply_text(
         f"🔍 لینک تشخیص داده شد:\n"
         f"🔧 پروتکل: `{parsed.get('protocol')}`\n"
@@ -5288,7 +5288,7 @@ async def handle_xui_create_inbound_from_link_port(update: Update, context: Cont
                 raise ValueError
         except ValueError:
             await message.reply_text(
-                "❌ پورت نامعتبر است. عدد 1 تا 65535 بفرستید یا `skip` برای همان پورت لینک.",
+                "❌ پورت نامعتبر است. عدد 1 تا 65535 بفرستید یا `0` برای همان پورت لینک.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]),
             )
             return
