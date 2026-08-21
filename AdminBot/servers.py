@@ -3689,7 +3689,8 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_PANEL_URL
         await message.reply_text(
-            "🌐 لطفاً آدرس پنل را وارد کنید:\nمثال: https://eu.example.com/E6xNPh2XZF5A6UO",
+            "🌐 لطفاً آدرس پنل را وارد کنید:\nمثال: https://site.example.com/E6xNPh2XZF5A6UO\n"
+            "اگر پنل روی پورت غیر استاندارد است، پورت را هم وارد کنید (مثال: https://site.example.com:2056/E6xNPh2XZF5A6UO)",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -3700,7 +3701,7 @@ async def handle_add_server_flow(
         if not (panel_url.startswith("http://") or panel_url.startswith("https://")):
             await message.reply_text(
                 "❌ لطفاً آدرس پنل را به صورت کامل و با http/https ارسال کنید.\n"
-                "مثال: https://eu.example.com/E6xNPh2XZF5A6UO",
+                "مثال: https://site.example.com/E6xNPh2XZF5A6UO",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -3761,7 +3762,7 @@ async def handle_add_server_flow(
         await message.reply_text(
             "🧩 شناسه اینباند فروش (Inbound ID) را وارد کنید (اختیاری):\n"
             "اگر خالی باشد، اولین اینباند فعال (vless/trojan/vmess/shadowsocks) انتخاب می‌شود.\n\n"
-            "برای گذشتن از این مرحله، «skip» یا «-» را بفرستید.",
+            "برای گذشتن از این مرحله، «0» یا «skip» یا «-» را بفرستید.",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -3769,7 +3770,7 @@ async def handle_add_server_flow(
     # مرحله X-UI: شناسه اینباند
     if state == ADD_STATE_XUI_INBOUND:
         raw_inbound = text.strip()
-        if raw_inbound not in {"skip", "-", "_", ".", "done", "نه", "خیر"}:
+        if raw_inbound not in {"skip", "-", "_", ".", "done", "نه", "خیر", "0"}:
             try:
                 inbound_id = int(raw_inbound)
                 if inbound_id <= 0:
@@ -3777,7 +3778,7 @@ async def handle_add_server_flow(
                 new_server["xui_inbound_id"] = inbound_id
             except ValueError:
                 await message.reply_text(
-                    "❌ شناسه اینباند باید یک عدد صحیح مثبت باشد (یا «skip» برای خودکار).",
+                    "❌ شناسه اینباند باید یک عدد صحیح مثبت باشد (یا «0»/«skip» برای خودکار).",
                     reply_markup=cancel_keyboard(),
                 )
                 return
