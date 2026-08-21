@@ -4489,8 +4489,12 @@ def _build_full_backup_zip(
     return out_path
 
 
-async def _collect_panel_backups() -> Tuple[List[Dict[str, Any]], List[str]]:
+async def _collect_panel_backups(
+    only_xui: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
     servers = database.get_servers() or []
+    if only_xui:
+        servers = [s for s in servers if str(s.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}]
     panel_backups: List[Dict[str, Any]] = []
     panel_errors: List[str] = []
 
@@ -4514,10 +4518,16 @@ async def _collect_panel_backups() -> Tuple[List[Dict[str, Any]], List[str]]:
     return panel_backups, panel_errors
 
 
-async def _make_full_backup_zip() -> Tuple[Path, int, int, List[str]]:
+async def _collect_xui_panel_backups() -> Tuple[List[Dict[str, Any]], List[str]]:
+    return await _collect_panel_backups(only_xui=True)
+
+
+async def _make_full_backup_zip(
+    only_xui: bool = False,
+) -> Tuple[Path, int, int, List[str]]:
     bot_backup_path = await asyncio.to_thread(_make_bot_backup_zip)
     try:
-        panel_backups, panel_errors = await _collect_panel_backups()
+        panel_backups, panel_errors = await _collect_panel_backups(only_xui=only_xui)
         full_backup_path = await asyncio.to_thread(
             _build_full_backup_zip,
             bot_backup_path,
@@ -4531,6 +4541,10 @@ async def _make_full_backup_zip() -> Tuple[Path, int, int, List[str]]:
             bot_backup_path.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+async def _make_xui_backup_zip() -> Tuple[Path, int, int, List[str]]:
+    return await _make_full_backup_zip(only_xui=True)
 
 
 def _should_report_auto_panel_backup_errors(context: ContextTypes.DEFAULT_TYPE, panel_err_count: int) -> bool:
@@ -4576,17 +4590,18 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     try:
-        backup_path, panel_ok_count, panel_err_count, panel_errors = await _make_full_backup_zip()
+        # فقط بکاپ X-UI هر 6 ساعت
+        backup_path, panel_ok_count, panel_err_count, panel_errors = await _make_xui_backup_zip()
     except Exception as e:
-        logger.warning("Auto full backup creation failed: %s", e)
+        logger.warning("Auto X-UI backup creation failed: %s", e)
         context.bot_data["_userbot_auto_backup_slot"] = slot_key
         return
 
     caption = (
-        "⏰ بکاپ خودکار کامل\n"
+        "⏰ بکاپ خودکار X-UI (هر 6 ساعت)\n"
         f"🕐 زمان: {now_local.strftime('%Y-%m-%d %H:%M:%S')}\n"
         "🤖 بکاپ ربات: ✅\n"
-        f"🖥️ بکاپ سرورها/نودها: {panel_ok_count} مورد\n"
+        f"🖥️ بکاپ سرورهای X-UI: {panel_ok_count} مورد\n"
         f"⚠️ خطاها: {panel_err_count} مورد"
     )
 
