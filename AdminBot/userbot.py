@@ -4590,18 +4590,17 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     try:
-        # فقط بکاپ X-UI هر 6 ساعت
-        backup_path, panel_ok_count, panel_err_count, panel_errors = await _make_xui_backup_zip()
+        backup_path, panel_ok_count, panel_err_count, panel_errors = await _make_full_backup_zip()
     except Exception as e:
-        logger.warning("Auto X-UI backup creation failed: %s", e)
+        logger.warning("Auto full backup creation failed: %s", e)
         context.bot_data["_userbot_auto_backup_slot"] = slot_key
         return
 
     caption = (
-        "⏰ بکاپ خودکار X-UI (هر 6 ساعت)\n"
+        "⏰ بکاپ خودکار کامل\n"
         f"🕐 زمان: {now_local.strftime('%Y-%m-%d %H:%M:%S')}\n"
         "🤖 بکاپ ربات: ✅\n"
-        f"🖥️ بکاپ سرورهای X-UI: {panel_ok_count} مورد\n"
+        f"🖥️ بکاپ سرورها/نودها: {panel_ok_count} مورد\n"
         f"⚠️ خطاها: {panel_err_count} مورد"
     )
 
