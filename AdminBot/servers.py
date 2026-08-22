@@ -6393,6 +6393,26 @@ async def handle_server_inline_callback(
                             server_id,
                             cleanup_err,
                         )
+                    # اگر این سرور یک نود است، از لیست والد هم حذف شود
+                    try:
+                        for parent in (database.get_servers() or []):
+                            try:
+                                parent_id = int(parent.get("id") or 0)
+                            except (TypeError, ValueError):
+                                continue
+                            if parent_id == server_id:
+                                continue
+                            parent_nodes = parent.get("nodes") or []
+                            if not isinstance(parent_nodes, list) or not parent_nodes:
+                                continue
+                            new_parent_nodes = [
+                                n for n in parent_nodes
+                                if int((n or {}).get("target_server_id") or 0) != int(server_id)
+                            ]
+                            if len(new_parent_nodes) != len(parent_nodes):
+                                database.update_server(parent_id, {"nodes": new_parent_nodes})
+                    except Exception as parent_cleanup_err:
+                        logger.warning("Failed cleaning parent nodes for server_id=%s: %s", server_id, parent_cleanup_err)
                     database.delete_server(server_id)
                 except Exception as e:
                     await msg.edit_text(f"❌ خطا در حذف سرور:\n{e}")

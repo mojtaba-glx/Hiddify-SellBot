@@ -1415,6 +1415,19 @@ def _get_location_servers() -> list:
                 sid = 0
             if sid > 0:
                 child_server_ids.add(sid)
+        # پرچم is_node/parent_server_id برای حالتی که nodes ناقص است
+        try:
+            sid_self = int(s.get("id") or 0)
+        except (TypeError, ValueError):
+            sid_self = 0
+        if sid_self > 0 and s.get("is_node"):
+            child_server_ids.add(sid_self)
+        if sid_self > 0 and s.get("parent_server_id"):
+            try:
+                if int(s.get("parent_server_id") or 0) > 0:
+                    child_server_ids.add(sid_self)
+            except (TypeError, ValueError):
+                pass
 
     servers = [s for s in servers if int(s.get("id") or 0) not in child_server_ids]
     settings = _get_subscription_settings()

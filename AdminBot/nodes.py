@@ -1576,6 +1576,14 @@ async def handle_nodes_inline_callback(
             return
 
         nodes = _load_nodes_for_server(server_id)
+        # پیدا کردن نود حذف‌شونده برای حذف سرور فرزند هم
+        deleted_node = next((n for n in nodes if int(n.get("id") or 0) == int(node_id)), None)
+        deleted_target_id = 0
+        if deleted_node is not None:
+            try:
+                deleted_target_id = int(deleted_node.get("target_server_id") or 0)
+            except (TypeError, ValueError):
+                deleted_target_id = 0
         new_nodes = [n for n in nodes if n["id"] != node_id]
 
         if len(new_nodes) == len(nodes):
@@ -1588,6 +1596,17 @@ async def handle_nodes_inline_callback(
 
         try:
             _save_nodes_for_server(server_id, new_nodes)
+            # حذف سرور فرزند هم (اگر وجود داشت) تا به عنوان سرور اصلی ظاهر نشود
+            if deleted_target_id > 0:
+                try:
+                    database.delete_server(deleted_target_id)
+                    # پاکسازی سرویس‌های مرتبط
+                    try:
+                        userbot_db.delete_services_by_server(deleted_target_id)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.warning("Failed deleting child server %s after delnode: %s", deleted_target_id, e)
         except Exception as e:
             logger.exception("Error deleting node: %s", e)
             await msg.edit_text(f"❌ خطا در حذف نود:\n{_short_error(e)}")
