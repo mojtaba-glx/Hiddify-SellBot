@@ -1756,57 +1756,75 @@ async def _run_node_sync(
         result["existing"] += len(existing_uuids)
         result["extra"] += len(extra_uuids)
 
-        if create_missing:
-            for uuid in missing_uuids:
-                source_user = source_by_uuid[uuid]
-                payload = _build_node_sync_payload(source_user, for_create=True)
-                try:
-                    created = await hiddify_api.create_user(target, payload)
-                    created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
-                    target_summary["created"] += 1
-                    result["created"] += 1
-                    mapped = _record_node_sync_mapping(
-                        source_uuid=uuid,
-                        target=target,
-                        target_uuid=created_uuid,
-                        target_user_id=created.get("id"),
-                        is_active=_panel_user_is_active(source_user),
-                    )
-                    if mapped:
-                        target_summary["mapped"] += 1
-                        result["mapped"] += 1
-                except Exception as e:
-                    err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
-                    target_summary["errors"].append(err)
-                    result["errors"].append(err)
+        # بهینه‌سازی: هر دو حلقه قبلاً ترتیبی بود (97 یوزر × 1 نود = ~60-100 درخواست ترتیبی).
+        # با کشِ inbounds و همزمانیِ محدود، زمان از دقیقه به ثانیه می‌آید.
+        _sync_sem = asyncio.Semaphore(int(os.getenv("NODE_SYNC_CONCURRENCY", "6") or "6"))
 
-        if patch_existing:
-            for uuid in existing_uuids:
-                source_user = source_by_uuid[uuid]
-                target_user = target_by_uuid[uuid]
-                payload = _build_node_sync_payload(source_user, for_create=False)
-                try:
-                    patched = await hiddify_api.patch_user(target, uuid, payload)
-                    if _panel_user_is_active(source_user):
-                        await hiddify_api.enable_user(target, uuid)
-                    else:
-                        await hiddify_api.disable_user(target, uuid)
-                    target_summary["patched"] += 1
-                    result["patched"] += 1
-                    mapped = _record_node_sync_mapping(
-                        source_uuid=uuid,
-                        target=target,
-                        target_uuid=str(patched.get("uuid") or uuid).strip(),
-                        target_user_id=patched.get("id") or target_user.get("id"),
-                        is_active=_panel_user_is_active(source_user),
-                    )
-                    if mapped:
-                        target_summary["mapped"] += 1
-                        result["mapped"] += 1
-                except Exception as e:
-                    err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
-                    target_summary["errors"].append(err)
-                    result["errors"].append(err)
+        if create_missing and missing_uuids:
+            async def _create_one(uuid: str):
+                async with _sync_sem:
+                    source_user = source_by_uuid[uuid]
+                    payload = _build_node_sync_payload(source_user, for_create=True)
+                    try:
+                        created = await hiddify_api.create_user(target, payload)
+                        created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
+                        mapped = _record_node_sync_mapping(
+                            source_uuid=uuid,
+                            target=target,
+                            target_uuid=created_uuid,
+                            target_user_id=created.get("id"),
+                            is_active=_panel_user_is_active(source_user),
+                        )
+                        return {"created": 1, "mapped": 1 if mapped else 0, "error": None}
+                    except Exception as e:
+                        err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
+                        return {"created": 0, "mapped": 0, "error": err}
+
+            create_results = await asyncio.gather(*[_create_one(u) for u in missing_uuids])
+            for r in create_results:
+                if r["error"]:
+                    target_summary["errors"].append(r["error"])
+                    result["errors"].append(r["error"])
+                else:
+                    target_summary["created"] += r["created"]
+                    result["created"] += r["created"]
+                    target_summary["mapped"] += r["mapped"]
+                    result["mapped"] += r["mapped"]
+
+        if patch_existing and existing_uuids:
+            async def _patch_one(uuid: str):
+                async with _sync_sem:
+                    source_user = source_by_uuid[uuid]
+                    target_user = target_by_uuid[uuid]
+                    payload = _build_node_sync_payload(source_user, for_create=False)
+                    try:
+                        patched = await hiddify_api.patch_user(target, uuid, payload)
+                        if _panel_user_is_active(source_user):
+                            await hiddify_api.enable_user(target, uuid)
+                        else:
+                            await hiddify_api.disable_user(target, uuid)
+                        mapped = _record_node_sync_mapping(
+                            source_uuid=uuid,
+                            target=target,
+                            target_uuid=str(patched.get("uuid") or uuid).strip(),
+                            target_user_id=patched.get("id") or target_user.get("id"),
+                            is_active=_panel_user_is_active(source_user),
+                        )
+                        return {"patched": 1, "mapped": 1 if mapped else 0, "error": None}
+                    except Exception as e:
+                        err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
+                        return {"patched": 0, "mapped": 0, "error": err}
+
+            patch_results = await asyncio.gather(*[_patch_one(u) for u in existing_uuids])
+            for r in patch_results:
+                if r["error"]:
+                    target_summary["errors"].append(r["error"])
+                    result["errors"].append(r["error"])
+                else:
+                    target_summary["patched"] += r["patched"]
+                    result["patched"] += r["patched"]
+                    target_summary["mapped"] += r["mapped"]
+                    result["mapped"] += r["mapped"]
 
         result["targets"].append(target_summary)
 
