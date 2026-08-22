@@ -3731,11 +3731,17 @@ async def handle_add_server_flow(
         new_server["title"] = text
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_PANEL_URL
-        await message.reply_text(
-            "🌐 لطفاً آدرس پنل را وارد کنید:\nمثال: https://site.example.com/E6xNPh2XZF5A6UO\n"
-            "اگر پنل روی پورت غیر استاندارد است، پورت را هم وارد کنید (مثال: https://site.example.com:2056/E6xNPh2XZF5A6UO)",
-            reply_markup=cancel_keyboard(),
-        )
+        if str(new_server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
+            await message.reply_text(
+                "🌐 لطفاً آدرس پنل را وارد کنید:\nمثال: https://site.example.com/E6xNPh2XZF5A6UO\n"
+                "اگر پنل روی پورت غیر استاندارد است، پورت را هم وارد کنید (مثال: https://site.example.com:2056/E6xNPh2XZF5A6UO)",
+                reply_markup=cancel_keyboard(),
+            )
+        else:
+            await message.reply_text(
+                "🌐 لطفاً آدرس پنل هیدیفای را وارد کنید:\nمثال: https://site.example.com",
+                reply_markup=cancel_keyboard(),
+            )
         return
 
     # مرحله ۲: آدرس پنل
