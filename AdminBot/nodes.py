@@ -206,7 +206,11 @@ def _build_node_edit_text(
             users_count = len((child or {}).get("users") or [])
     plans_count = _get_node_plans_count(server_id)
     priority = int((child or {}).get("priority") or 0)
-    version_text = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,12").strip()
+    is_xui_child = str((child or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    if is_xui_child:
+        version_text = "x-ui"
+    else:
+        version_text = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,12").strip()
 
     def _to_clickable_url(raw: Any) -> str:
         value = str(raw or "").strip()
@@ -666,7 +670,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_PASSWORD
         await message.reply_text(
-            "🔑 رمز پنل X-UI را وارد کنید:",
+            "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -676,7 +680,9 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_SUB_DOMAIN
         await message.reply_text(
-            "🌐 دامنه ساب را وارد کنید (اختیاری):\nبرای خالی گذاشتن `0` یا `skip` بفرستید.",
+            "🌐 دامنه سابسکریپشن (Subscription Domain) را وارد کنید (اختیاری):\n"
+            "اگر خالی گذاشته شود، از آدرس پنل استفاده می‌شود.\n\n"
+            "برای گذشتن از این مرحله، «0» یا «skip» یا «-» را بفرستید.",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -693,7 +699,10 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_INBOUND
         await message.reply_text(
-            "🧩 شناسه اینباند را وارد کنید:\n`0`=همه، `1`=تک، `1,2,3`=چندتا\nبرای خالی `0` بفرستید.",
+            "🧩 شناسه اینباند فروش (Inbound ID) را وارد کنید (اختیاری):\n"
+            "اگر خالی/skip باشد، اولین اینباند فعال انتخاب می‌شود.\n"
+            "`0` = همه اینباندهای فعال، `1` = تک اینباند، `1,2,3` = چند اینباند\n\n"
+            "مثال: `0` یا `1` یا `1,2,3`",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -706,24 +715,31 @@ async def handle_add_node_flow(
             else:
                 normalized = raw.replace("،", ",").replace(" ", ",")
                 parts = [p.strip() for p in normalized.split(",") if p.strip()]
-                try:
-                    ids = []
-                    for p in parts:
-                        n = int(p)
-                        if n <= 0:
-                            raise ValueError
-                        ids.append(str(n))
-                    new_node["xui_inbound_id"] = ",".join(ids)
-                except ValueError:
-                    await message.reply_text(
-                        "❌ شناسه اینباند باید عدد باشد.\nمثال: `0` یا `1` یا `1,2,3`",
-                        reply_markup=cancel_keyboard(),
-                    )
-                    return
+                if not parts:
+                    pass  # خالی = خودکار (اولین اینباند)
+                elif parts == ["0"]:
+                    new_node["xui_inbound_id"] = "0"
+                else:
+                    try:
+                        ids = []
+                        for p in parts:
+                            n = int(p)
+                            if n <= 0:
+                                raise ValueError
+                            ids.append(str(n))
+                        new_node["xui_inbound_id"] = ",".join(ids)
+                    except ValueError:
+                        await message.reply_text(
+                            "❌ شناسه اینباند باید عدد باشد.\n"
+                            "مثال: `1` (تک)، `1,2,3` (چندتا)، `0` (همه)",
+                            reply_markup=cancel_keyboard(),
+                        )
+                        return
         context.user_data["new_node"] = new_node
-        context.user_data["state"] = NODES_STATE_ADD_DOMAIN
+        # X-UI: دقیقا مثل افزودن سرور X-UI، مستقیم به محدودیت برو (دامنه جدا نمی‌پرسیم)
+        context.user_data["state"] = NODES_STATE_ADD_LIMIT
         await message.reply_text(
-            "🌍 دامنه ساب نود را وارد کنید:\nمثال: user.node-example.com",
+            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -785,7 +801,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_LIMIT
         await message.reply_text(
-            "👤 محدودیت کاربران نود را وارد کنید (عدد):",
+            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
             reply_markup=cancel_keyboard(),
         )
         return
