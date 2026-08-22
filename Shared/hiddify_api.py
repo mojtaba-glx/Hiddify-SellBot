@@ -3,7 +3,9 @@ import ssl
 import os
 import logging
 import re
-from typing import Any, Dict, List, Optional
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from urllib.parse import urlparse, urljoin, quote
 import httpx
@@ -187,11 +189,52 @@ def _get_ssl_mode() -> str:
     return mode
 
 
+_INSECURE_CTX: Optional[ssl.SSLContext] = None
+
+
 def _build_insecure_ssl_context() -> ssl.SSLContext:
+    global _INSECURE_CTX
+    if _INSECURE_CTX is not None:
+        return _INSECURE_CTX
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
+    _INSECURE_CTX = ssl_context
     return ssl_context
+
+
+# Reuse httpx clients per Hiddify server to avoid re-creating SSL contexts
+# on every get_user_by_uuid (was ~60 creations per 20s → CPU hotspot in
+# httpx/_config.py:load_ssl_context_verify).
+_HIDDIFY_CLIENT_CACHE: Dict[Any, Tuple[float, httpx.AsyncClient]] = {}
+_HIDDIFY_CLIENT_TTL = float(os.getenv("HIDDIFY_CLIENT_CACHE_SECONDS", "60") or "60")
+_hiddify_cache_lock = threading.Lock()
+
+
+def _hiddify_cache_key(server: Dict[str, Any], verify_key: str) -> Tuple[Any, str]:
+    return (server.get("id"), verify_key)
+
+
+async def _get_hiddify_client(server: Dict[str, Any], verify: Any) -> httpx.AsyncClient:
+    verify_key = "insecure" if isinstance(verify, ssl.SSLContext) else str(verify)
+    key = _hiddify_cache_key(server, verify_key)
+    now = time.monotonic()
+    with _hiddify_cache_lock:
+        cached = _HIDDIFY_CLIENT_CACHE.get(key)
+        if cached is not None and now < cached[0] and not cached[1].is_closed:
+            return cached[1]
+    timeout = _get_api_timeout_seconds()
+    client = httpx.AsyncClient(timeout=timeout, verify=verify)
+    with _hiddify_cache_lock:
+        old = _HIDDIFY_CLIENT_CACHE.get(key)
+        _HIDDIFY_CLIENT_CACHE[key] = (now + _HIDDIFY_CLIENT_TTL, client)
+        superseded = old[1] if (old is not None and old[1] is not client) else None
+    if superseded is not None and not superseded.is_closed:
+        try:
+            await superseded.aclose()
+        except Exception:
+            pass
+    return client
 
 
 def _looks_like_tls_error(exc: Exception) -> bool:
@@ -320,14 +363,14 @@ async def _request(
     allow_retry_post = _get_api_retry_on_post()
 
     async def _send_request(verify: Any) -> httpx.Response:
-        async with httpx.AsyncClient(timeout=timeout_seconds, verify=verify) as client:
-            return await client.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                json=json,
-            )
+        client = await _get_hiddify_client(server, verify)
+        return await client.request(
+            method,
+            url,
+            headers=headers,
+            params=params,
+            json=json,
+        )
 
     # اگر روش POST باشد (مثل ساخت کاربر) تلاش مجدد به‌طور پیش‌فرض غیرفعال است تا
     # از ساخت کاربر تکراری جلوگیری شود، مگر اینکه صریحاً فعال شده باشد.
