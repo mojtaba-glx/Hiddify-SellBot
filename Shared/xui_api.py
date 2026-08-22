@@ -569,6 +569,7 @@ def _normalize_user(
         "protocol": protocol,
         "port": _to_int(inbound.get("port"), 0),
         "server_id": (server or {}).get("id"),
+        "comment": str(client.get("tgId") or client.get("remark") or "").strip(),
         "_source": "xui",
     }
 
@@ -749,18 +750,68 @@ async def test_connect(server: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """All clients across all (supported) inbounds, normalized."""
+    """All clients across all (supported) inbounds, normalized and deduplicated.
+
+    Users created with xui_inbound_id=0 (all inbounds) exist on every inbound
+    with same subId/uuid but different email (base_email vs base_email-2).
+    Without dedup the admin list shows 4× duplicates. We group by subId/uuid
+    and aggregate traffic, like get_user_by_uuid does.
+    """
     inbounds = await _list_inbounds(server)
     onlines = await _online_emails(server)
-    out: List[Dict[str, Any]] = []
+    # Group by stable uuid (subId preferred, fallback to id/password)
+    groups: Dict[str, List[Tuple[Dict[str, Any], Dict[str, Any]]]] = {}
+    order: List[str] = []
     for inbound in inbounds:
-        if (inbound.get("protocol") or "").strip().lower() not in SUPPORTED_PROTOCOLS:
+        proto = (inbound.get("protocol") or "").strip().lower()
+        if proto not in SUPPORTED_PROTOCOLS:
             continue
         for client in _settings_clients(inbound.get("settings")):
             email = str(client.get("email") or "").strip()
             if not email:
                 continue
-            out.append(_normalize_user(client, inbound, server, onlines=onlines))
+            # stable key: subId (always uuid) -> id/password -> email
+            key = str(client.get("subId") or _client_key_value(client, proto) or email).strip()
+            if not key:
+                continue
+            low = key.strip().lower()
+            if low not in groups:
+                groups[low] = []
+                order.append(low)
+            groups[low].append((inbound, client))
+
+    out: List[Dict[str, Any]] = []
+    for low in order:
+        pairs = groups[low]
+        if not pairs:
+            continue
+        # Aggregate traffic across all inbounds for this user
+        total_up = 0
+        total_down = 0
+        for ib, cl in pairs:
+            email = str(cl.get("email") or "").strip()
+            stats = _find_stats_by_email(ib, email)
+            total_up += _to_int(stats.get("up"), 0)
+            total_down += _to_int(stats.get("down"), 0)
+        inbound, client = pairs[0]
+        norm = _normalize_user(client, inbound, server, onlines=onlines)
+        # Override aggregated traffic and online if any inbound is online
+        norm["up"] = total_up
+        norm["down"] = total_down
+        norm["used_traffic"] = total_up + total_down
+        norm["current_usage_GB"] = round(_bytes_to_gb(total_up + total_down), 3)
+        # Online if any email in group is in onlines set
+        if onlines:
+            for _, cl in pairs:
+                em = str(cl.get("email") or "").strip()
+                uid = _client_key_value(cl, (pairs[0][0].get("protocol") or "").strip().lower()) or em
+                if em in onlines or uid in onlines:
+                    # Force online appearance
+                    if not norm.get("last_online"):
+                        from datetime import datetime as _dt
+                        norm["last_online"] = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+                    break
+        out.append(norm)
     return out
 
 

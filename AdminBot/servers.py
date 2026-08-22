@@ -461,6 +461,47 @@ def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
 
 
 def _compute_package_info(user: Dict[str, Any]):
+    # X-UI: already has days_left / remaining_days / expire fields
+    for key in ("days_left", "remaining_days", "remaining_day"):
+        raw = user.get(key)
+        if raw is not None and str(raw).strip() != "":
+            try:
+                dl = int(float(str(raw).strip()))
+                # Try to derive start/end from expire_date if available
+                end_dt = _parse_dt(user.get("expire_date") or user.get("expire") or user.get("end_date"))
+                if end_dt is None and str(user.get("expiryTime") or "").strip():
+                    try:
+                        ms = int(float(user.get("expiryTime")))
+                        if ms > 0:
+                            end_dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+                    except Exception:
+                        end_dt = None
+                start_dt = _parse_dt(user.get("start_date"))
+                return start_dt, end_dt, dl
+            except (TypeError, ValueError):
+                pass
+    # X-UI expire_date fallback
+    for key in ("expire", "expire_date", "end_date", "expiration_date", "expires_at"):
+        end_dt = _parse_dt(user.get(key))
+        if end_dt:
+            try:
+                days_left = (end_dt.date() - datetime.now(timezone.utc).replace(tzinfo=None).date()).days
+                start_dt = _parse_dt(user.get("start_date"))
+                return start_dt, end_dt, days_left
+            except Exception:
+                pass
+    # Also try expiryTime ms direct
+    expiry_ms = user.get("expiryTime")
+    if expiry_ms not in (None, "", 0):
+        try:
+            ms = int(float(expiry_ms))
+            if ms > 0:
+                end_dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+                days_left = (end_dt.date() - datetime.now(timezone.utc).replace(tzinfo=None).date()).days
+                start_dt = _parse_dt(user.get("start_date"))
+                return start_dt, end_dt, days_left
+        except Exception:
+            pass
     start_dt = _parse_dt(user.get("start_date"))
     package_days = user.get("package_days")
     if not start_dt or not package_days:
