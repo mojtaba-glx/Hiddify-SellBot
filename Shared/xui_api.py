@@ -55,7 +55,7 @@ _MS = 1000
 API_PREFIX = "/xui/API"
 
 # These are the protocols we can sell on.
-SUPPORTED_PROTOCOLS = ("vless", "trojan", "vmess", "shadowsocks", "hysteria", "hysteria2")
+SUPPORTED_PROTOCOLS = ("vless", "trojan", "vmess", "shadowsocks", "hysteria", "hysteria2", "wireguard")
 
 # Header used by some Sanai/Sanayi forks (XUI_SECRET) in addition to cookies.
 _XUI_SECRET_HEADER = "XUI-Xray-App-Secret-Key"
