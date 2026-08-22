@@ -85,26 +85,21 @@ _EMOJI_RE = re.compile(
 
 
 def _sanitize_xui_email(raw: str, fallback: str) -> str:
-    """Remove emojis from X-UI email; X-UI panel rejects emoji in email field.
+    """Sanitize X-UI email while preserving emoji (panel now accepts it).
 
-    Keeps Persian/Arabic/English/numbers and -_.@, falls back to uuid if empty.
+    Keeps emoji/Persian/Arabic/English/numbers and -_.@, falls back to uuid if empty.
     """
     text = str(raw or "").strip()
     if not text:
         return str(fallback or "").strip()
-    # Strip emojis
-    try:
-        text = _EMOJI_RE.sub("", text)
-    except Exception:
-        pass
-    # Remove control chars and trim
-    text = "".join(ch for ch in text if ch.isprintable() or ch in (" ", "-", "_", ".", "@"))
+    # Keep emoji as-is (panel now accepts MrAlfa🖤); only remove control chars
+    text = "".join(ch for ch in text if ch.isprintable() or ch in (" ", "-", "_", ".", "@") or ord(ch) > 127)
     text = text.strip()
     # Collapse multiple spaces
     text = re.sub(r"\s+", " ", text)
     if not text:
         return str(fallback or "").strip()
-    # X-UI email must be reasonable length; truncate
+    # X-UI email must be reasonable length; truncate (keep emoji counted as 1)
     if len(text) > 64:
         text = text[:64].strip()
     return text
@@ -123,12 +118,38 @@ def _existing_xui_emails(inbounds: List[Dict[str, Any]]) -> set:
     return out
 
 
+def _bot_has_service_name(name: str) -> bool:
+    """Check if any service in bot DB already uses this name (cross-server dupe)."""
+    try:
+        from Shared import userbot_db as _ub
+        from Shared import agent_db as _ag
+        conn = _ub._get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM userbot_services WHERE lower(name)=lower(?) LIMIT 1", (name,))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return True
+        conn2 = _ag._get_conn()
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT 1 FROM agent_services WHERE lower(name)=lower(?) LIMIT 1", (name,))
+        row2 = cur2.fetchone()
+        conn2.close()
+        if row2:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _unique_xui_email(base: str, existing: set, fallback: str) -> str:
-    """Ensure email is unique on X-UI panel; if duplicate, append random digits.
+    """Ensure email is unique on X-UI panel and in bot DB; if duplicate, append random digits.
 
     Hiddify allows duplicate names, X-UI does not — duplicate causes panel error/crash.
+    Also covers cross-server dupe (e.g. customer creates MrAlfa🖤 on server A then
+    again on server B with same name) which panel check alone would miss.
     """
-    if base not in existing and base.lower() not in existing:
+    if base not in existing and base.lower() not in existing and not _bot_has_service_name(base):
         return base
     # If base is fallback uuid it is already unique, but still handle fallback
     for _ in range(12):
@@ -136,14 +157,14 @@ def _unique_xui_email(base: str, existing: set, fallback: str) -> str:
         max_len = 64 - len(rnd)
         b = base[:max_len] if len(base) > max_len else base
         cand = f"{b}{rnd}"
-        if cand not in existing and cand.lower() not in existing:
+        if cand not in existing and cand.lower() not in existing and not _bot_has_service_name(cand):
             return cand
     # Last resort: uuid suffix
     suffix = str(fallback or uuid4())[:8]
     max_len = 64 - len(suffix) - 1
     b = base[:max_len] if len(base) > max_len else base
     cand = f"{b}-{suffix}"
-    if cand not in existing and cand.lower() not in existing:
+    if cand not in existing and cand.lower() not in existing and not _bot_has_service_name(cand):
         return cand
     return f"{fallback}"
 
