@@ -966,6 +966,11 @@ def _last_online_line(user_data: Dict[str, Any]) -> str:
 
     last_dt = _parse_dt(user_data.get("last_online"))
     if not last_dt:
+        # X-UI: when offline, panel doesn't provide last_online
+        if str((user_data or {}).get("_source") or "").strip().lower() == "xui":
+            # show offline instead of نامشخص for X-UI, more accurate
+            if classify_user_status(user_data) == "offline":
+                return "📶آخرین اتصال: آفلاین"
         return "📶آخرین اتصال: نامشخص"
 
     delta = datetime.now() - last_dt
@@ -1038,7 +1043,21 @@ def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str
     """
     آدرس پایه‌ی کاربر در پنل را می‌سازد.
     اگر برای سرور دامنه‌ی نمایش تعریف شده باشد، به جای panel_url از آن استفاده می‌کنیم.
+    X-UI: آدرس native subscription برمی‌گرداند.
     """
+    if not user_uuid:
+        return None
+    # X-UI native
+    try:
+        if (str((server or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}):
+            from Shared import xui_api
+            if xui_api.is_xui_server(server):
+                origin = xui_api._public_origin(server)
+                sub_path = xui_api._sub_path(server)
+                if origin and sub_path:
+                    return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy:
