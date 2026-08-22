@@ -1236,9 +1236,11 @@ def _get_child_server_ids() -> set[int]:
     """
     سرورهایی که فقط نودِ یک سرور دیگر هستند.
     این‌ها باید از لیست مدیریت سرورها مخفی شوند.
+    شامل is_node/parent_server_id برای حالتی که nodes لیست ناقص است.
     """
     child_ids: set[int] = set()
     for s in (database.get_servers() or []):
+        # حالت قدیم: از nodes.target_server_id
         for n in (s.get("nodes") or []):
             if not isinstance(n, dict):
                 continue
@@ -1248,6 +1250,21 @@ def _get_child_server_ids() -> set[int]:
                 cid = 0
             if cid > 0:
                 child_ids.add(cid)
+        # حالت جدید: پرچم is_node روی خود سرور فرزند
+        try:
+            sid = int(s.get("id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid > 0 and s.get("is_node"):
+            child_ids.add(sid)
+        # parent_server_id هم فرزند محسوب می‌شود
+        if sid > 0 and s.get("parent_server_id"):
+            try:
+                pid = int(s.get("parent_server_id") or 0)
+                if pid > 0:
+                    child_ids.add(sid)
+            except (TypeError, ValueError):
+                pass
     return child_ids
 
 

@@ -840,6 +840,8 @@ async def handle_add_node_flow(
                 "plans": [],
                 "domains": ([{"id": 1, "title": domain, "domain": domain}] if domain else []),
                 "nodes": [],
+                "is_node": True,
+                "parent_server_id": int(server_id),
             }
         else:
             admin_proxy = str(new_node.get("admin_proxy_path") or "").strip("/")
@@ -858,6 +860,8 @@ async def handle_add_node_flow(
                 "plans": [],
                 "domains": ([{"id": 1, "title": domain, "domain": domain}] if domain else []),
                 "nodes": [],
+                "is_node": True,
+                "parent_server_id": int(server_id),
             }
 
         try:

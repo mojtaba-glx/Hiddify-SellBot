@@ -69,7 +69,8 @@ def get_servers() -> List[Dict[str, Any]]:
 
 def get_main_servers() -> List[Dict[str, Any]]:
     """برگرداندن فقط سرورهای اصلی (بدون نودها).
-    نودها سرورهایی هستند که target_server_id یک سرور دیگر به آن‌ها اشاره دارد."""
+    نودها سرورهایی هستند که target_server_id یک سرور دیگر به آن‌ها اشاره دارد
+    یا پرچم is_node/parent_server_id دارند (برای سازگاری با داده‌های ناقص)."""
     servers = get_servers()
     child_ids: set = set()
     for s in servers:
@@ -82,6 +83,18 @@ def get_main_servers() -> List[Dict[str, Any]]:
                 cid = 0
             if cid > 0:
                 child_ids.add(cid)
+        try:
+            sid = int(s.get("id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid > 0 and s.get("is_node"):
+            child_ids.add(sid)
+        if sid > 0 and s.get("parent_server_id"):
+            try:
+                if int(s.get("parent_server_id") or 0) > 0:
+                    child_ids.add(sid)
+            except (TypeError, ValueError):
+                pass
     return [s for s in servers if int(s.get("id") or 0) not in child_ids]
 
 
