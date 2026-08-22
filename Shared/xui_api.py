@@ -33,6 +33,7 @@ import threading
 import time
 import json
 import logging
+import random
 import re
 import uuid as _uuid_mod
 from datetime import datetime, timedelta, timezone
@@ -107,6 +108,44 @@ def _sanitize_xui_email(raw: str, fallback: str) -> str:
     if len(text) > 64:
         text = text[:64].strip()
     return text
+
+
+def _existing_xui_emails(inbounds: List[Dict[str, Any]]) -> set:
+    """Collect all existing X-UI client emails (case-sensitive + lower for dupe check)."""
+    out: set = set()
+    for ib in inbounds or []:
+        for cl in _settings_clients(ib.get("settings")):
+            email = str(cl.get("email") or "").strip()
+            if not email:
+                continue
+            out.add(email)
+            out.add(email.lower())
+    return out
+
+
+def _unique_xui_email(base: str, existing: set, fallback: str) -> str:
+    """Ensure email is unique on X-UI panel; if duplicate, append random digits.
+
+    Hiddify allows duplicate names, X-UI does not — duplicate causes panel error/crash.
+    """
+    if base not in existing and base.lower() not in existing:
+        return base
+    # If base is fallback uuid it is already unique, but still handle fallback
+    for _ in range(12):
+        rnd = str(random.randint(100, 9999))
+        max_len = 64 - len(rnd)
+        b = base[:max_len] if len(base) > max_len else base
+        cand = f"{b}{rnd}"
+        if cand not in existing and cand.lower() not in existing:
+            return cand
+    # Last resort: uuid suffix
+    suffix = str(fallback or uuid4())[:8]
+    max_len = 64 - len(suffix) - 1
+    b = base[:max_len] if len(base) > max_len else base
+    cand = f"{b}-{suffix}"
+    if cand not in existing and cand.lower() not in existing:
+        return cand
+    return f"{fallback}"
 
 
 def uuid4() -> str:
@@ -1074,6 +1113,10 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     # X-UI email نمی‌تواند ایموجی داشته باشد؛ فیلتر کن وگرنه پنل ارور می‌دهد
     # اگر نام ایموجی‌دار بود، به صورت sanitized (بدون ایموجی) نمایش بده تا پنل قبول کند
     base_email = _sanitize_xui_email(raw_name, user_uuid) if raw_name else user_uuid
+    # X-UI email must be unique panel-wide (unlike Hiddify). If duplicate, append random digits.
+    if raw_name:
+        existing = _existing_xui_emails(inbounds)
+        base_email = _unique_xui_email(base_email, existing, user_uuid)
     # برای اطمینان از یونیک بودن پنل‌واید، اگر نام تکراری بود بعداً suffix می‌خورد
     first_client: Optional[Dict[str, Any]] = None
     first_inbound: Optional[Dict[str, Any]] = None
@@ -1141,6 +1184,19 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
     if not pairs:
         raise XuiApiError(f"user not found (uuid={user_uuid})")
 
+    # Prepare unique sanitized name for X-UI (panel rejects duplicate email)
+    raw_name_global = str(payload.get("name") or "").strip()
+    unique_base = ""
+    if raw_name_global:
+        sanitized_base = _sanitize_xui_email(raw_name_global, user_uuid)
+        existing = _existing_xui_emails(inbounds)
+        for _, cl in pairs:
+            e = str(cl.get("email") or "").strip()
+            if e:
+                existing.discard(e)
+                existing.discard(e.lower())
+        unique_base = _unique_xui_email(sanitized_base, existing, user_uuid)
+
     last_norm = None
     async with _XuiContext(server) as ctx:
         for idx, (inbound, client) in enumerate(pairs):
@@ -1149,12 +1205,11 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
             new_client = dict(client)
             new_client = _apply_payload_to_client(new_client, protocol, payload, cur_ms=cur_ms)
             # اگر نام جدید آمد، ایمیل را هم با الگوی یونیک به‌روز کن
-            raw_name = str(payload.get("name") or "").strip()
-            if raw_name:
+            if raw_name_global:
                 if len(pairs) == 1:
-                    new_client["email"] = raw_name
+                    new_client["email"] = unique_base
                 else:
-                    new_client["email"] = raw_name if idx == 0 else f"{raw_name}-{_to_int(inbound.get('id'), 0)}"
+                    new_client["email"] = unique_base if idx == 0 else f"{unique_base}-{_to_int(inbound.get('id'), 0)}"
             client_id = _client_id_for_url(client, protocol)
             settings_body = json.dumps({"clients": [new_client]})
             await ctx.request(
