@@ -56,6 +56,10 @@ async def _disable_on_all_targets(svc: dict, targets: list) -> int:
 async def _process_service(svc: dict) -> Dict[str, str]:
     """بررسی و در صورت نیاز قطع یک سرویس. خلاصه نتیجه برمی‌گرداند."""
     result: Dict[str, str] = {}
+    # Guard: DB may return None or corrupted rows (seen in logs svc=2..30)
+    if not svc or not isinstance(svc, dict):
+        logger.warning("agent enforcer skip: svc is None or not dict: %r", svc)
+        return result
     service_id = _to_int(svc.get("id"), 0)
     if service_id <= 0:
         return result
@@ -147,8 +151,12 @@ async def run_agent_usage_enforcer(*, scan_all: bool = True) -> Dict[str, int]:
         summary["errors"] += 1
         return summary
 
-    summary["services_total"] = len(services)
-    candidates = services if scan_all else services
+    summary["services_total"] = len([s for s in services if s and isinstance(s, dict)])
+    candidates = [s for s in services if s and isinstance(s, dict)] if scan_all else [s for s in services if s and isinstance(s, dict)]
+    # Log and skip any None/corrupted rows that previously caused 'NoneType' errors
+    none_count = len(services) - len(candidates)
+    if none_count > 0:
+        logger.warning("agent enforcer: skipping %s None/corrupted service rows out of %s", none_count, len(services))
     for svc in candidates:
         summary["services_scanned"] += 1
         try:
@@ -159,7 +167,12 @@ async def run_agent_usage_enforcer(*, scan_all: bool = True) -> Dict[str, int]:
             elif res.get("status") == "synced":
                 summary["services_synced"] += 1
         except Exception as e:
-            logger.exception("agent enforcer svc=%s failed: %s", svc.get("id"), e)
+            svc_id = None
+            try:
+                svc_id = (svc or {}).get("id") if isinstance(svc, dict) else None
+            except Exception:
+                svc_id = None
+            logger.exception("agent enforcer svc=%s failed: %s", svc_id, e)
             summary["errors"] += 1
 
     return summary

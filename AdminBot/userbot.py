@@ -4566,9 +4566,11 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     now_local = datetime.now()
-    if now_local.minute != 0 or now_local.hour not in {0, 6, 12, 18}:
+    # Allow 0-2 minute window to be resilient if job was delayed/hung at exact minute 0
+    if now_local.minute not in {0, 1, 2} or now_local.hour not in {0, 6, 12, 18}:
         return
 
+    # Use hour slot (not minute) so 18:00, 18:01, 18:02 all claim same slot
     slot_key = now_local.strftime("%Y-%m-%d %H:00")
     if str(context.bot_data.get("_userbot_auto_backup_slot") or "") == slot_key:
         return
@@ -4592,8 +4594,8 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         backup_path, panel_ok_count, panel_err_count, panel_errors = await _make_full_backup_zip()
     except Exception as e:
-        logger.warning("Auto full backup creation failed: %s", e)
-        context.bot_data["_userbot_auto_backup_slot"] = slot_key
+        logger.warning("Auto full backup creation failed (will retry at next minute): %s", e)
+        # Don't mark slot as done so 18:01/18:02 can retry
         return
 
     caption = (

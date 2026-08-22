@@ -58,6 +58,53 @@ _XUI_SECRET_HEADER = "XUI-Xray-App-Secret-Key"
 
 _ONLINE_EMAIL_RE = re.compile(r"email\s*[:=]\s*['\"]?([^'\",}\]]+)", re.IGNORECASE)
 
+# X-UI email cannot contain emojis (panel rejects). Strip them and keep Persian/ASCII.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map
+    "\U0001F1E0-\U0001F1FF"  # flags
+    "\U00002702-\U000027B0"
+    "\U000024C2-\U0001F251"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA70-\U0001FAFF"
+    "\U0001F700-\U0001F77F"
+    "\U0001F780-\U0001F7FF"
+    "\U0001F800-\U0001F8FF"
+    "\U00002500-\U00002BEF"
+    "\U0001F004"
+    "\U0001F0CF"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _sanitize_xui_email(raw: str, fallback: str) -> str:
+    """Remove emojis from X-UI email; X-UI panel rejects emoji in email field.
+
+    Keeps Persian/Arabic/English/numbers and -_.@, falls back to uuid if empty.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return str(fallback or "").strip()
+    # Strip emojis
+    try:
+        text = _EMOJI_RE.sub("", text)
+    except Exception:
+        pass
+    # Remove control chars and trim
+    text = "".join(ch for ch in text if ch.isprintable() or ch in (" ", "-", "_", ".", "@"))
+    text = text.strip()
+    # Collapse multiple spaces
+    text = re.sub(r"\s+", " ", text)
+    if not text:
+        return str(fallback or "").strip()
+    # X-UI email must be reasonable length; truncate
+    if len(text) > 64:
+        text = text[:64].strip()
+    return text
+
 
 def uuid4() -> str:
     return str(_uuid_mod.uuid4())
@@ -888,8 +935,9 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
         user_uuid = uuid4()
     # نام کاربر برای نمایش در پنل (به جای uuid) - از payload می‌آید مثل "test"
     raw_name = str(payload.get("name") or payload.get("email") or "").strip()
-    # اگر نام فارسی/تست بود همان را بگذار، وگرنه uuid
-    base_email = raw_name if raw_name else user_uuid
+    # X-UI email نمی‌تواند ایموجی داشته باشد؛ فیلتر کن وگرنه پنل ارور می‌دهد
+    # اگر نام ایموجی‌دار بود، به صورت sanitized (بدون ایموجی) نمایش بده تا پنل قبول کند
+    base_email = _sanitize_xui_email(raw_name, user_uuid) if raw_name else user_uuid
     # برای اطمینان از یونیک بودن پنل‌واید، اگر نام تکراری بود بعداً suffix می‌خورد
     first_client: Optional[Dict[str, Any]] = None
     first_inbound: Optional[Dict[str, Any]] = None
