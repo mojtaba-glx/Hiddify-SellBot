@@ -26,6 +26,7 @@ from AdminBot.keyboards import admin_main_keyboard, cancel_keyboard
 logger = logging.getLogger(__name__)
 
 # استیت‌های ویزارد نود
+NODES_STATE_ADD_TYPE = "nodes_add_type"
 NODES_STATE_ADD_TITLE = "nodes_add_title"
 NODES_STATE_ADD_PANEL = "nodes_add_panel"
 NODES_STATE_ADD_ADMIN_PROXY = "nodes_add_admin_proxy"
@@ -33,6 +34,10 @@ NODES_STATE_ADD_ADMIN_UUID = "nodes_add_admin_uuid"
 NODES_STATE_ADD_USER_PROXY = "nodes_add_user_proxy"
 NODES_STATE_ADD_DOMAIN = "nodes_add_domain"
 NODES_STATE_ADD_LIMIT = "nodes_add_limit"
+NODES_STATE_ADD_XUI_USERNAME = "nodes_add_xui_username"
+NODES_STATE_ADD_XUI_PASSWORD = "nodes_add_xui_password"
+NODES_STATE_ADD_XUI_SUB_DOMAIN = "nodes_add_xui_sub_domain"
+NODES_STATE_ADD_XUI_INBOUND = "nodes_add_xui_inbound"
 NODES_STATE_AUTO_TITLE = "nodes_auto_title"
 NODES_STATE_AUTO_PANEL = "nodes_auto_panel"
 NODES_STATE_AUTO_ADMIN_PROXY = "nodes_auto_admin_proxy"
@@ -621,15 +626,90 @@ async def handle_add_node_flow(
         panel_url = text.strip()
         if not (panel_url.startswith("http://") or panel_url.startswith("https://")):
             await message.reply_text(
-                "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com",
+                "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com/E6xNPh2XZF5A6UO",
                 reply_markup=cancel_keyboard(),
             )
             return
         new_node["panel_url"] = panel_url.rstrip("/")
         context.user_data["new_node"] = new_node
-        context.user_data["state"] = NODES_STATE_ADD_ADMIN_PROXY
+        # شاخه X-UI vs هیدیفای
+        if str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
+            context.user_data["state"] = NODES_STATE_ADD_XUI_USERNAME
+            await message.reply_text(
+                "👤 نام کاربری پنل X-UI را وارد کنید:",
+                reply_markup=cancel_keyboard(),
+            )
+        else:
+            context.user_data["state"] = NODES_STATE_ADD_ADMIN_PROXY
+            await message.reply_text(
+                "🔐 Proxy Path ادمین را وارد کنید (بدون /):",
+                reply_markup=cancel_keyboard(),
+            )
+        return
+
+    if state == NODES_STATE_ADD_XUI_USERNAME:
+        new_node["xui_username"] = text.strip()
+        context.user_data["new_node"] = new_node
+        context.user_data["state"] = NODES_STATE_ADD_XUI_PASSWORD
         await message.reply_text(
-            "🔐 Proxy Path ادمین را وارد کنید (بدون /):",
+            "🔑 رمز پنل X-UI را وارد کنید:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == NODES_STATE_ADD_XUI_PASSWORD:
+        new_node["xui_password"] = text.strip()
+        context.user_data["new_node"] = new_node
+        context.user_data["state"] = NODES_STATE_ADD_XUI_SUB_DOMAIN
+        await message.reply_text(
+            "🌐 دامنه ساب را وارد کنید (اختیاری):\nبرای خالی گذاشتن `0` یا `skip` بفرستید.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == NODES_STATE_ADD_XUI_SUB_DOMAIN:
+        sub = text.strip()
+        if sub in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            new_node["xui_sub_domain"] = ""
+        else:
+            sub = sub.rstrip("/")
+            if not sub.startswith(("http://", "https://")):
+                sub = "https://" + sub
+            new_node["xui_sub_domain"] = sub
+        context.user_data["new_node"] = new_node
+        context.user_data["state"] = NODES_STATE_ADD_XUI_INBOUND
+        await message.reply_text(
+            "🧩 شناسه اینباند را وارد کنید:\n`0`=همه، `1`=تک، `1,2,3`=چندتا\nبرای خالی `0` بفرستید.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == NODES_STATE_ADD_XUI_INBOUND:
+        raw = text.strip()
+        if raw not in {"skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            if raw == "0":
+                new_node["xui_inbound_id"] = "0"
+            else:
+                normalized = raw.replace("،", ",").replace(" ", ",")
+                parts = [p.strip() for p in normalized.split(",") if p.strip()]
+                try:
+                    ids = []
+                    for p in parts:
+                        n = int(p)
+                        if n <= 0:
+                            raise ValueError
+                        ids.append(str(n))
+                    new_node["xui_inbound_id"] = ",".join(ids)
+                except ValueError:
+                    await message.reply_text(
+                        "❌ شناسه اینباند باید عدد باشد.\nمثال: `0` یا `1` یا `1,2,3`",
+                        reply_markup=cancel_keyboard(),
+                    )
+                    return
+        context.user_data["new_node"] = new_node
+        context.user_data["state"] = NODES_STATE_ADD_DOMAIN
+        await message.reply_text(
+            "🌍 دامنه ساب نود را وارد کنید:\nمثال: user.node-example.com",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -710,30 +790,54 @@ async def handle_add_node_flow(
 
         panel_url = str(new_node.get("panel_url") or "").rstrip("/")
         title = str(new_node.get("title") or "Node")
-        admin_proxy = str(new_node.get("admin_proxy_path") or "").strip("/")
-        admin_uuid = str(new_node.get("admin_uuid") or "").strip()
-        user_proxy = str(new_node.get("user_proxy_path") or "").strip("/")
         domain = str(new_node.get("domain") or "").strip()
         host = urlparse(panel_url).hostname or panel_url
 
-        new_server_payload = {
-            "title": title,
-            "panel_url": panel_url,
-            "admin_proxy_path": admin_proxy,
-            "admin_uuid": admin_uuid,
-            "user_proxy_path": user_proxy,
-            "users_limit": int(users_limit),
-            "priority": 0,
-            "version": 11,
-            "users": [],
-            "plans": [],
-            "domains": ([{"id": 1, "title": domain, "domain": domain}] if domain else []),
-            "nodes": [],
-        }
+        is_xui_node = str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+        if is_xui_node:
+            new_server_payload = {
+                "title": title,
+                "panel_url": panel_url,
+                "panel_type": "xui",
+                "xui_username": str(new_node.get("xui_username") or "").strip(),
+                "xui_password": str(new_node.get("xui_password") or "").strip(),
+                "xui_sub_domain": str(new_node.get("xui_sub_domain") or "").strip(),
+                "xui_inbound_id": str(new_node.get("xui_inbound_id") or "").strip(),
+                "users_limit": int(users_limit),
+                "priority": 0,
+                "version": 11,
+                "users": [],
+                "plans": [],
+                "domains": ([{"id": 1, "title": domain, "domain": domain}] if domain else []),
+                "nodes": [],
+            }
+        else:
+            admin_proxy = str(new_node.get("admin_proxy_path") or "").strip("/")
+            admin_uuid = str(new_node.get("admin_uuid") or "").strip()
+            user_proxy = str(new_node.get("user_proxy_path") or "").strip("/")
+            new_server_payload = {
+                "title": title,
+                "panel_url": panel_url,
+                "admin_proxy_path": admin_proxy,
+                "admin_uuid": admin_uuid,
+                "user_proxy_path": user_proxy,
+                "users_limit": int(users_limit),
+                "priority": 0,
+                "version": 11,
+                "users": [],
+                "plans": [],
+                "domains": ([{"id": 1, "title": domain, "domain": domain}] if domain else []),
+                "nodes": [],
+            }
 
         try:
             await message.reply_text("⏳ در حال تست اتصال پنل نود...")
-            await hiddify_api.list_users(new_server_payload)
+            if is_xui_node:
+                from Shared import xui_api
+
+                await xui_api.test_connect(new_server_payload)
+            else:
+                await hiddify_api.list_users(new_server_payload)
         except Exception as e:
             await message.reply_text(
                 f"❌ اتصال به پنل نود برقرار نشد:\n{_short_error(e)}",
@@ -1375,18 +1479,43 @@ async def handle_nodes_inline_callback(
             await send_nodes_menu(server_id, chat_id, context, message=msg)
             return
 
-        # افزودن نود
+        # افزودن نود — اول نوع پنل را بپرس
         if action == "add":
-            context.user_data["state"] = NODES_STATE_ADD_TITLE
             context.user_data["nodes_server_id"] = server_id
             context.user_data["new_node"] = {}
-
+            context.user_data["state"] = NODES_STATE_ADD_TYPE
             try:
                 await msg.edit_reply_markup(reply_markup=None)
             except Exception:
                 pass
-
             await msg.reply_text(
+                "نوع پنل نود را انتخاب کنید:",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton("هیدیفای (Hiddify)", callback_data=f"nodes:{server_id}:add_type:hiddify"),
+                            InlineKeyboardButton("X-UI", callback_data=f"nodes:{server_id}:add_type:xui"),
+                        ],
+                        [InlineKeyboardButton("🔙بازگشت", callback_data=f"nodes:{server_id}:back")],
+                    ]
+                ),
+            )
+            return
+
+        if action.startswith("add_type:"):
+            ptype = action.split(":", 1)[1]
+            if ptype not in {"hiddify", "xui"}:
+                await query.answer("نوع پنل نامعتبر است.")
+                return
+            new_node = context.user_data.get("new_node") or {}
+            new_node["panel_type"] = ptype
+            context.user_data["new_node"] = new_node
+            context.user_data["state"] = NODES_STATE_ADD_TITLE
+            try:
+                await msg.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await msg.edit_text(
                 "➕ افزودن دستی نود (با تست اتصال)\n"
                 "برای نود یک عنوان وارد کنید:",
                 reply_markup=cancel_keyboard(),
