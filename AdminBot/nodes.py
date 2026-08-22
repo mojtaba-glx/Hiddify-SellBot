@@ -654,7 +654,7 @@ async def handle_add_node_flow(
         if str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
             context.user_data["state"] = NODES_STATE_ADD_XUI_USERNAME
             await message.reply_text(
-                "👤 نام کاربری پنل X-UI را وارد کنید:",
+                "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
                 reply_markup=cancel_keyboard(),
             )
         else:
@@ -670,7 +670,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_PASSWORD
         await message.reply_text(
-            "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
+            "🔑 لطفاً «رمز عبور» پنل X-UI را وارد کنید:",
             reply_markup=cancel_keyboard(),
         )
         return
