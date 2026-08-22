@@ -2094,13 +2094,11 @@ async def sync_users_to_inbounds(server: Dict[str, Any]) -> Dict[str, Any]:
                 # ساده‌تر: همیشه برای sync، email = base_email اگر target اولین تارگت بود، وگرنه base_email-inboundId
                 # ولی برای سادگی، اگر target != sample_ib, suffix بزن
                 if target_ib.get("id") != sample_ib.get("id"):
-                    # اگر sample email قبلاً یونیک بود (مثل test-1), base را بدون suffix بگیر
-                    raw_base = base_email
-                    # اگر base_email قبلاً با -عدد تمام می‌شد، آن عدد را حذف کن
-                    m = re.match(r"^(.*)-\d+$", raw_base)
-                    if m:
-                        raw_base = m.group(1)
-                    new_client["email"] = f"{raw_base}-{int(target_ib.get('id') or 0)}"
+                    # For multi-inbound sync, keep full base_email unique per user
+                    # (base_email itself is already unique panel-wide, e.g. vpn-773159)
+                    # and suffix with target inbound id to keep inbound-unique.
+                    # Do NOT strip trailing -number (that caused vpn-12 collisions for all users).
+                    new_client["email"] = f"{base_email}-{int(target_ib.get('id') or 0)}"
                 else:
                     new_client["email"] = base_email
                 new_client["subId"] = sample_client.get("subId") or uuid_key
