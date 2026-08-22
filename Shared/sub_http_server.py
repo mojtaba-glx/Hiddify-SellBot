@@ -1081,22 +1081,21 @@ def _resolve_agent_service_by_uuid(token: str, uuid_hint: str) -> Optional[dict]
 def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
     """ساخت بدنه اشتراک برای سرویس نمایندگی/مشتری از همه نودهای آن.
 
-    دقیقاً مثل aggregator ربات کاربران: برای هر نود (نگاشت‌شده در
-    agent_service_nodes + نودهای زیرمجموعه سرور اصلی) از sub-link واقعی
-    (hiddify.txt / all.txt) fetch می‌شود تا همان تنظیمات «شامل در اشتراک»
-    که در پنل هدیفای تعریف شده رعایت شود و کانفیگ‌های غیرفعال/داخلی وارد
-    لینک هوشمند نشوند. fallback به API پنل انجام نمی‌شود چون endpoint API
-    همه کانفیگ‌ها (حتی غیرفعال و داخلی) را برمی‌گرداند.
+    برای هیدیفای: از sub-link واقعی (hiddify.txt / all.txt) fetch می‌شود تا همان
+    تنظیمات «شامل در اشتراک» رعایت شود و fallback به API انجام نمی‌شود.
+    برای X-UI: چون native sub نیاز به fallback API دارد (و شامل در اشتراک معنی ندارد)،
+    اگر fetch خالی بود از API پنل (xui_api) خط‌های کانفیگ جمع می‌شود.
     """
     try:
         from Shared.sub_aggregator import (
             _is_config_line,
             _is_panel_status_config_line,
             _fetch_subscription_lines,
+            _fetch_lines_from_admin_api,
             _build_status_config_line,
             _service_lock_reason,
         )
-        from Shared.sub_links import get_service_user_base_urls
+        from Shared.sub_links import get_service_user_base_urls, get_service_panel_targets
 
         lock_reason = _service_lock_reason(svc)
         if not lock_reason and int((svc or {}).get("is_active") or 0) != 1:
@@ -1120,6 +1119,44 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
                     continue
                 seen.add(raw)
                 lines.append(raw)
+
+        # X-UI fallback: اگر هیچ کانفیگی از sub-link نیامد، از API پنل بخوان
+        if not lines:
+            try:
+                from Shared import xui_api
+                needs_xui_fallback = False
+                # بررسی اینکه سرویس متعلق به پنل X-UI است
+                for srv, _, _ in get_service_panel_targets(svc):
+                    if xui_api.is_xui_server(srv):
+                        needs_xui_fallback = True
+                        break
+                if not needs_xui_fallback:
+                    # fallback check via server_id directly
+                    try:
+                        sid = int(svc.get("server_id") or 0)
+                        srv = database.get_server_by_id(sid) if sid else None
+                        if srv and xui_api.is_xui_server(srv):
+                            needs_xui_fallback = True
+                    except Exception:
+                        pass
+                if needs_xui_fallback:
+                    for srv, uuid, marzban_un in get_service_panel_targets(svc):
+                        if not srv or not uuid:
+                            continue
+                        try:
+                            api_lines = _fetch_lines_from_admin_api(srv, uuid, marzban_username=marzban_un)
+                            for ln in api_lines or []:
+                                raw = str(ln or "").strip()
+                                if not raw or raw in seen:
+                                    continue
+                                if not _is_config_line(raw) or _is_panel_status_config_line(raw):
+                                    continue
+                                seen.add(raw)
+                                lines.append(raw)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
 
         if lock_reason and not lines:
             if is_b64 and locked_status:

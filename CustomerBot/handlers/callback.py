@@ -681,13 +681,45 @@ async def _send_service_direct_configs(msg, svc):
     source_hint = ""
     base_urls = get_service_node_base_urls(svc)
     fallback_base = base_urls[0] if base_urls else ""
+    is_xui_fallback = "/sub/" in str(fallback_base or "")
 
     if not links:
-        msg_text = "❌ کانفیگی از لینک اشتراک استخراج نشد."
-        if fallback_base:
-            msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}/all.txt"
-        await msg.reply_text(msg_text, disable_web_page_preview=True)
-        return
+        # X-UI: try API fallback before showing empty
+        if is_xui_fallback:
+            try:
+                from Shared.sub_links import get_service_panel_targets
+                from Shared.sub_aggregator import _fetch_lines_from_admin_api, _is_config_line, _is_panel_status_config_line
+                seen_api = set()
+                api_links = []
+                for srv, uuid, marzban_un in get_service_panel_targets(svc):
+                    try:
+                        api_lines = await asyncio.to_thread(_fetch_lines_from_admin_api, srv, uuid, marzban_un)
+                    except Exception:
+                        api_lines = []
+                    for ln in api_lines or []:
+                        raw = str(ln or "").strip()
+                        if not raw or raw in seen_api:
+                            continue
+                        if not _is_config_line(raw) or _is_panel_status_config_line(raw):
+                            continue
+                        seen_api.add(raw)
+                        api_links.append(raw)
+                if api_links:
+                    links = api_links
+                    source_hint = "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ کانفیگ‌ها از API پنل خوانده شد.\n\n"
+                else:
+                    pass
+            except Exception:
+                pass
+        if not links:
+            msg_text = "❌ کانفیگی از لینک اشتراک استخراج نشد."
+            if fallback_base:
+                if is_xui_fallback:
+                    msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}"
+                else:
+                    msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}/all.txt"
+            await msg.reply_text(msg_text, disable_web_page_preview=True)
+            return
 
     server_title = _resolve_live_server_title(svc, default="")
     header = "🔗 کانفیگ‌های مستقیم"

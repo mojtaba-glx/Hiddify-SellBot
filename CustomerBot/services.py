@@ -797,10 +797,11 @@ def _fetch_remote_lines(url: str) -> List[str]:
 
 
 def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
-    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها
+    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)
 
     فقط کانفیگ‌های واقعی و فعال گرفته می‌شود؛ کانفیگ‌های وضعیت مصنوعی
     (fake_ip_for_sub_link / status.hiddify-sellbot.invalid) فیلتر می‌شوند.
+    برای X-UI base_url خودش sub کامل است (/sub/{uuid}) و نباید /all.txt اضافه شود.
     """
     def _is_internal_status(raw: str) -> bool:
         low = raw.lower()
@@ -810,8 +811,14 @@ def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
     seen_links: set = set()
     for base_url in get_service_node_base_urls(svc):
         seen_lines: set = set()
-        for suffix in ("all.txt", "all.txt?base64=1"):
-            lines = _fetch_remote_lines(f"{base_url}/{suffix}")
+        is_xui = "/sub/" in str(base_url or "")
+        if is_xui:
+            suffixes = ("", "?base64=1")
+        else:
+            suffixes = ("all.txt", "all.txt?base64=1")
+        for suffix in suffixes:
+            url = base_url if is_xui and not suffix else (f"{base_url}{suffix}" if is_xui else f"{base_url}/{suffix}")
+            lines = _fetch_remote_lines(url)
             for ln in lines:
                 raw = _sanitize_config_text(ln)
                 if not raw or raw in seen_lines:
