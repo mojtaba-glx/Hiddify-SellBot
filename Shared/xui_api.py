@@ -726,6 +726,23 @@ async def _refresh_xui_client(server: Dict[str, Any], *, insecure: bool = False)
     return client
 
 
+# Per-server inbounds/onlines caches (short TTL) to collapse N×M per-cycle
+# HTTP GETs into ~1 GET per server per cycle.
+_XUI_INBOUNDS_CACHE: Dict[Any, Tuple[float, List[Dict[str, Any]]]] = {}
+_XUI_ONLINES_CACHE: Dict[Any, Tuple[float, set]] = {}
+_XUI_INBOUNDS_TTL = float(os.getenv("XUI_INBOUNDS_CACHE_SECONDS", "15") or "15")
+_XUI_ONLINES_TTL = float(os.getenv("XUI_ONLINES_CACHE_SECONDS", "15") or "15")
+_xui_inbounds_locks: Dict[Any, asyncio.Lock] = {}
+_xui_onlines_locks: Dict[Any, asyncio.Lock] = {}
+
+
+def _invalidate_xui_inbounds_cache(server: Dict[str, Any]) -> None:
+    key = _server_cache_key(server)
+    with _xui_cache_lock:
+        _XUI_INBOUNDS_CACHE.pop(key, None)
+        _XUI_ONLINES_CACHE.pop(key, None)
+
+
 class _XuiContext:
     """Bound async HTTP session for one server (login cookie preserved)."""
 
@@ -832,31 +849,79 @@ class _XuiContext:
         return resp
 
 
-async def _list_inbounds(server: Dict[str, Any]) -> List[Dict[str, Any]]:
-    async with _XuiContext(server) as ctx:
-        data = await ctx.request("GET", "inbounds/")
-    if not isinstance(data, list):
-        raise XuiApiError("پاسخ لیست اینباندهای X-UI شکل آرایه ندارد.")
-    return data
-
-
-async def _online_emails(server: Dict[str, Any]) -> set:
-    try:
+async def _list_inbounds(server: Dict[str, Any], *, _force_refresh: bool = False) -> List[Dict[str, Any]]:
+    key = _server_cache_key(server)
+    if not _force_refresh:
+        with _xui_cache_lock:
+            cached = _XUI_INBOUNDS_CACHE.get(key)
+            if cached is not None and time.monotonic() < cached[0]:
+                return cached[1]
+            lock = _xui_inbounds_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                _xui_inbounds_locks[key] = lock
+    else:
+        with _xui_cache_lock:
+            lock = _xui_inbounds_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                _xui_inbounds_locks[key] = lock
+    async with lock:
+        if not _force_refresh:
+            with _xui_cache_lock:
+                cached = _XUI_INBOUNDS_CACHE.get(key)
+                if cached is not None and time.monotonic() < cached[0]:
+                    return cached[1]
         async with _XuiContext(server) as ctx:
-            data = await ctx.request("POST", "inbounds/onlines", allow_login_retry=False)
-    except Exception as exc:
-        logger.debug("onlines fetch failed for xui: %s", exc)
-        return set()
-    out: set = set()
-    if isinstance(data, list):
-        for item in data:
-            if isinstance(item, str):
-                out.add(item.strip())
-            elif isinstance(item, dict):
-                m = _ONLINE_EMAIL_RE.search(str(item))
-                if m:
-                    out.add(m.group(1).strip())
-    return out
+            data = await ctx.request("GET", "inbounds/")
+        if not isinstance(data, list):
+            raise XuiApiError("پاسخ لیست اینباندهای X-UI شکل آرایه ندارد.")
+        with _xui_cache_lock:
+            _XUI_INBOUNDS_CACHE[key] = (time.monotonic() + _XUI_INBOUNDS_TTL, data)
+        return data
+
+
+async def _online_emails(server: Dict[str, Any], *, _force_refresh: bool = False) -> set:
+    key = _server_cache_key(server)
+    if not _force_refresh:
+        with _xui_cache_lock:
+            cached = _XUI_ONLINES_CACHE.get(key)
+            if cached is not None and time.monotonic() < cached[0]:
+                return cached[1]
+            lock = _xui_onlines_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                _xui_onlines_locks[key] = lock
+    else:
+        with _xui_cache_lock:
+            lock = _xui_onlines_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                _xui_onlines_locks[key] = lock
+    async with lock:
+        if not _force_refresh:
+            with _xui_cache_lock:
+                cached = _XUI_ONLINES_CACHE.get(key)
+                if cached is not None and time.monotonic() < cached[0]:
+                    return cached[1]
+        try:
+            async with _XuiContext(server) as ctx:
+                data = await ctx.request("POST", "inbounds/onlines", allow_login_retry=False)
+        except Exception as exc:
+            logger.debug("onlines fetch failed for xui: %s", exc)
+            return set()
+        out: set = set()
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    out.add(item.strip())
+                elif isinstance(item, dict):
+                    m = _ONLINE_EMAIL_RE.search(str(item))
+                    if m:
+                        out.add(m.group(1).strip())
+        with _xui_cache_lock:
+            _XUI_ONLINES_CACHE[key] = (time.monotonic() + _XUI_ONLINES_TTL, out)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -1062,6 +1127,7 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
             raise
 
     assert first_client is not None and first_inbound is not None
+    _invalidate_xui_inbounds_cache(server)
     return _normalize_user(first_client, first_inbound, server)
 
 
@@ -1107,6 +1173,7 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
                     pass
             last_norm = _normalize_user(new_client, inbound, server)
     assert last_norm is not None
+    _invalidate_xui_inbounds_cache(server)
     return last_norm
 
 
@@ -1136,6 +1203,7 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
                 )
             except Exception as exc:
                 logger.warning("xui delete on inbound %s failed: %s", _to_int(inbound.get("id"), 0), exc)
+    _invalidate_xui_inbounds_cache(server)
 
 
 async def get_subscription_url(server: Dict[str, Any], user_uuid: str) -> str:

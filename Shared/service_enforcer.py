@@ -45,7 +45,24 @@ GLOBAL_ENFORCER_HOT_USAGE_RATIO = _parse_float_env(
     max_value=1.0,
 )
 
+# همزمانی واکشی مصرف هر نود — بدون محدودیت، asyncio.gather صدها درخواست
+# همزمان به پنل‌ها می‌فرستاد و CPU/شبکه را میخکوب می‌کرد.
+ENFORCER_FETCH_CONCURRENCY = _parse_int_env(
+    "ENFORCER_FETCH_CONCURRENCY",
+    8,
+    min_value=1,
+    max_value=32,
+)
+
 _ENFORCER_CURSOR = 0
+_ENFORCER_FETCH_SEMAPHORE: Optional[asyncio.Semaphore] = None
+
+
+def _get_fetch_semaphore() -> asyncio.Semaphore:
+    global _ENFORCER_FETCH_SEMAPHORE
+    if _ENFORCER_FETCH_SEMAPHORE is None:
+        _ENFORCER_FETCH_SEMAPHORE = asyncio.Semaphore(ENFORCER_FETCH_CONCURRENCY)
+    return _ENFORCER_FETCH_SEMAPHORE
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -224,6 +241,7 @@ async def _fetch_service_node_usage(
     *,
     service_id: int,
     node: Dict[str, Any],
+    servers_map: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     server_id = int(node.get("server_id") or 0)
     user_uuid = str(node.get("panel_user_uuid") or "").strip()
@@ -238,7 +256,11 @@ async def _fetch_service_node_usage(
             "error": None,
         }
 
-    server = database.get_server_by_id(server_id)
+    server: Optional[Dict[str, Any]] = None
+    if servers_map is not None and server_id in servers_map:
+        server = servers_map[server_id]
+    else:
+        server = database.get_server_by_id(server_id)
     if not server:
         return {
             "server_id": server_id,
@@ -250,27 +272,30 @@ async def _fetch_service_node_usage(
             "error": "server not found",
         }
 
-    try:
-        panel_user = await hiddify_api.get_user_by_uuid(server, user_uuid)
-        return {
-            "server_id": server_id,
-            "user_uuid": user_uuid,
-            "valid": True,
-            "ok": True,
-            "not_found": False,
-            "panel_user": panel_user,
-            "error": None,
-        }
-    except Exception as e:
-        return {
-            "server_id": server_id,
-            "user_uuid": user_uuid,
-            "valid": True,
-            "ok": False,
-            "not_found": _is_user_not_found_error(e),
-            "panel_user": None,
-            "error": e,
-        }
+    # محدود کردن همزمانی درخواست‌ها به پنل‌ها
+    sem = _get_fetch_semaphore()
+    async with sem:
+        try:
+            panel_user = await hiddify_api.get_user_by_uuid(server, user_uuid)
+            return {
+                "server_id": server_id,
+                "user_uuid": user_uuid,
+                "valid": True,
+                "ok": True,
+                "not_found": False,
+                "panel_user": panel_user,
+                "error": None,
+            }
+        except Exception as e:
+            return {
+                "server_id": server_id,
+                "user_uuid": user_uuid,
+                "valid": True,
+                "ok": False,
+                "not_found": _is_user_not_found_error(e),
+                "panel_user": None,
+                "error": e,
+            }
 
 
 async def _disable_service_on_all_nodes(
@@ -346,6 +371,14 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
     services = userbot_db.get_services_for_enforcement()
     summary["services_total"] = len(services)
     selected_services = services if bool(scan_all) else _select_services_for_cycle(services)
+    # کش سرورها برای این چرخه — به‌جای خواندن فایل برای هر نود
+    try:
+        _all_servers = database.get_servers()
+        servers_map: Dict[int, Dict[str, Any]] = {
+            int(s.get("id") or 0): s for s in _all_servers if isinstance(s, dict) and int(s.get("id") or 0) > 0
+        }
+    except Exception:
+        servers_map = {}
     for service in selected_services:
         summary["services_scanned"] += 1
         service_id = int(service.get("id") or 0)
@@ -399,7 +432,7 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
                 primary_server_id = 0
 
             fetch_tasks = [
-                _fetch_service_node_usage(service_id=service_id, node=node)
+                _fetch_service_node_usage(service_id=service_id, node=node, servers_map=servers_map)
                 for node in mappings
             ]
             fetch_results = await asyncio.gather(*fetch_tasks) if fetch_tasks else []
