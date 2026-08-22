@@ -28,6 +28,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
+import threading
+import time
 import json
 import logging
 import re
@@ -624,6 +627,105 @@ def _normalize_user(
 # ---------------------------------------------------------------------------
 # HTTP layer
 # ---------------------------------------------------------------------------
+
+# X-UI login session cache
+# ------------------------
+# Previously every user/node lookup opened a *fresh* X-UI login. The global
+# enforcer fans these out via asyncio.gather across all services x nodes,
+# which produced hundreds of concurrent login POSTs per cycle and pinned the
+# CPU. We cache the authenticated httpx.AsyncClient per server for a short TTL
+# so repeated calls reuse the same session instead of re-logging-in each time.
+_XUI_SESSION_CACHE: Dict[Any, Tuple[float, "httpx.AsyncClient"]] = {}
+_XUI_SESSION_TTL_SECONDS = float(os.getenv("XUI_SESSION_TTL_SECONDS", "60") or "60")
+_xui_cache_lock = threading.Lock()
+
+
+def _server_cache_key(server: Dict[str, Any]) -> Any:
+    return server.get("id")
+
+
+async def _build_xui_client(server: Dict[str, Any], *, insecure: bool = False) -> "httpx.AsyncClient":
+    if insecure or hiddify_api._get_ssl_mode() == hiddify_api.SSL_MODE_INSECURE:
+        return _XuiContext._make_client(hiddify_api._build_insecure_ssl_context())
+    try:
+        return _XuiContext._make_client(True)
+    except Exception:
+        return _XuiContext._make_client(hiddify_api._build_insecure_ssl_context())
+
+
+async def _login_xui_client(client: "httpx.AsyncClient", server: Dict[str, Any]) -> None:
+    base = _get_panel_url(server)
+    username, password = _get_credentials(server)
+    try:
+        resp = await client.post(base + "/login", json={"username": username, "password": password})
+    except httpx.RequestError as exc:
+        raise XuiApiError(f"عدم دسترسی به پنل X-UI ({base}/login): {exc}") from exc
+
+    text = (resp.text or "").strip()
+    if not text:
+        raise XuiApiError("پاسخ لاگین پنل X-UI خالی بود.")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = {}
+    if isinstance(data, dict) and data.get("success") is False:
+        raise XuiApiError("احراز هویت در پنل X-UI ناموفق بود (username/password اشتباه است).")
+    if resp.status_code >= 400:
+        raise XuiApiError(f"خطا در ورود به پنل X-UI: HTTP {resp.status_code} {text[:300]}")
+
+
+async def _acquire_xui_client(server: Dict[str, Any]) -> "httpx.AsyncClient":
+    key = _server_cache_key(server)
+    now = time.monotonic()
+    with _xui_cache_lock:
+        cached = _XUI_SESSION_CACHE.get(key)
+        if cached is not None and now < cached[0] and not cached[1].is_closed:
+            return cached[1]
+    client = await _build_xui_client(server)
+    try:
+        await _login_xui_client(client, server)
+    except Exception:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+        raise
+    with _xui_cache_lock:
+        old = _XUI_SESSION_CACHE.get(key)
+        _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client)
+        superseded = old[1] if (old is not None and old[1] is not client) else None
+    if superseded is not None and not superseded.is_closed:
+        try:
+            await superseded.aclose()
+        except Exception:
+            pass
+    return client
+
+
+async def _refresh_xui_client(server: Dict[str, Any], *, insecure: bool = False) -> "httpx.AsyncClient":
+    """Force a fresh authenticated client, replacing any cached entry."""
+    key = _server_cache_key(server)
+    client = await _build_xui_client(server, insecure=insecure)
+    try:
+        await _login_xui_client(client, server)
+    except Exception:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+        raise
+    with _xui_cache_lock:
+        old = _XUI_SESSION_CACHE.get(key)
+        _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client)
+        superseded = old[1] if (old is not None and old[1] is not client) else None
+    if superseded is not None and not superseded.is_closed:
+        try:
+            await superseded.aclose()
+        except Exception:
+            pass
+    return client
+
+
 class _XuiContext:
     """Bound async HTTP session for one server (login cookie preserved)."""
 
@@ -635,60 +737,31 @@ class _XuiContext:
         self._mode = hiddify_api._get_ssl_mode()
 
     async def __aenter__(self) -> "_XuiContext":
-        await self._open()
-        await self._ensure_login()
+        # Reuse the per-server cached, already-authenticated client instead of
+        # logging in on every call (see _acquire_xui_client).
+        self.client = await _acquire_xui_client(self.server)
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        await self.close()
+        # The client is owned by the session cache and shared; never close it here.
+        self.client = None
 
     async def close(self) -> None:
-        if self.client is not None:
-            try:
-                await self.client.aclose()
-            except Exception:
-                pass
-            self.client = None
+        # Cached clients are managed by the session cache; nothing to close.
+        self.client = None
 
-    def _make_client(self, verify: Any) -> httpx.AsyncClient:
+    @staticmethod
+    def _make_client(verify: Any) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             timeout=hiddify_api._get_api_timeout_seconds(),
             verify=verify,
             follow_redirects=False,
         )
 
-    async def _open(self) -> None:
-        if self.client is not None:
-            return
-        if self._mode == hiddify_api.SSL_MODE_INSECURE:
-            self.client = self._make_client(hiddify_api._build_insecure_ssl_context())
-            return
-        try:
-            self.client = self._make_client(True)
-        except Exception:
-            self.client = self._make_client(hiddify_api._build_insecure_ssl_context())
-
     async def _ensure_login(self) -> None:
-        username, password = _get_credentials(self.server)
+        # (Re)authenticate the shared cached client in place.
         assert self.client is not None
-        try:
-            resp = await self.client.post(
-                self.base + "/login", json={"username": username, "password": password}
-            )
-        except httpx.RequestError as exc:
-            raise XuiApiError(f"عدم دسترسی به پنل X-UI ({self.base}/login): {exc}") from exc
-
-        text = (resp.text or "").strip()
-        if not text:
-            raise XuiApiError("پاسخ لاگین پنل X-UI خالی بود.")
-        try:
-            data = json.loads(text)
-        except ValueError:
-            data = {}
-        if isinstance(data, dict) and data.get("success") is False:
-            raise XuiApiError("احراز هویت در پنل X-UI ناموفق بود (username/password اشتباه است).")
-        if resp.status_code >= 400:
-            raise XuiApiError(f"خطا در ورود به پنل X-UI: HTTP {resp.status_code} {text[:300]}")
+        await _login_xui_client(self.client, self.server)
 
     async def request(self, method: str, path: str, *, json_body: Any = None, allow_login_retry: bool = True) -> Any:
         url = f"{self.api}/{path.lstrip('/')}"
@@ -709,9 +782,7 @@ class _XuiContext:
                     and hiddify_api._looks_like_tls_error(exc)
                     and attempt == 1
                 ):
-                    await self.close()
-                    self.client = self._make_client(hiddify_api._build_insecure_ssl_context())
-                    await self._ensure_login()
+                    self.client = await _refresh_xui_client(self.server, insecure=True)
                     continue
                 raise XuiApiError(f"خطا در ارتباط با پنل X-UI: {msg}") from exc
 
