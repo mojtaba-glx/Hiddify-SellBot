@@ -615,20 +615,34 @@ async def handle_add_node_flow(
         new_node["title"] = text
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_PANEL
-
-        await message.reply_text(
-            "🌐 آدرس پنل نود را وارد کنید:\nمثال: https://node.example.com",
-            reply_markup=cancel_keyboard(),
-        )
+        is_xui = str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+        if is_xui:
+            await message.reply_text(
+                "🌐 آدرس پنل نود را وارد کنید:\nمثال: https://node.example.com/E6xNPh2XZF5A6UO\n"
+                "اگر پورت غیر استاندارد است: https://node.example.com:2056/E6xNPh2XZF5A6UO",
+                reply_markup=cancel_keyboard(),
+            )
+        else:
+            await message.reply_text(
+                "🌐 آدرس پنل نود را وارد کنید:\nمثال: https://node.example.com",
+                reply_markup=cancel_keyboard(),
+            )
         return
 
     if state == NODES_STATE_ADD_PANEL:
         panel_url = text.strip()
+        is_xui_panel = str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
         if not (panel_url.startswith("http://") or panel_url.startswith("https://")):
-            await message.reply_text(
-                "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com/E6xNPh2XZF5A6UO",
-                reply_markup=cancel_keyboard(),
-            )
+            if is_xui_panel:
+                await message.reply_text(
+                    "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com/E6xNPh2XZF5A6UO",
+                    reply_markup=cancel_keyboard(),
+                )
+            else:
+                await message.reply_text(
+                    "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com",
+                    reply_markup=cancel_keyboard(),
+                )
             return
         new_node["panel_url"] = panel_url.rstrip("/")
         context.user_data["new_node"] = new_node
