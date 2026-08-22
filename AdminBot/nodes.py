@@ -255,6 +255,28 @@ def _build_node_edit_text(
 
 
 def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMarkup:
+    # For X-UI child, show X-UI specific buttons (panel is X-UI, not Hiddify)
+    try:
+        _, node, _ = _find_node(server_id, node_id)
+        target_sid = int((node or {}).get("target_server_id") or 0)
+        child = database.get_server_by_id(target_sid) if target_sid else None
+        is_xui = str((child or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    except Exception:
+        is_xui = False
+        target_sid = 0
+    if is_xui:
+        return InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],
+                [InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"nodeedit:{server_id}:{node_id}:title")],
+                [InlineKeyboardButton("🌐 ویرایش آدرس پنل", callback_data=f"seredit:{target_sid}:panel_url")],
+                [InlineKeyboardButton("👤 ویرایش نام کاربری پنل", callback_data=f"seredit:{target_sid}:xui_username")],
+                [InlineKeyboardButton("🔑 ویرایش رمز پنل", callback_data=f"seredit:{target_sid}:xui_password")],
+                [InlineKeyboardButton("🔗 ویرایش دامنه ساب", callback_data=f"seredit:{target_sid}:xui_sub_domain")],
+                [InlineKeyboardButton("🧩 ویرایش اینباند", callback_data=f"seredit:{target_sid}:xui_inbound")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
+            ]
+        )
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],

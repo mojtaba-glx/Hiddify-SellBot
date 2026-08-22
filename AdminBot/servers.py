@@ -4362,9 +4362,7 @@ async def send_server_edit_menu(
                 [InlineKeyboardButton("🔑ویرایش رمز پنل", callback_data=f"seredit:{server_id}:xui_password")],
                 [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xui_sub_domain")],
                 [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xui_inbound")],
-                [InlineKeyboardButton("🗿ویرایش محدودیت کاربر", callback_data=f"seredit:{server_id}:limit")],
                 [InlineKeyboardButton("🔢ویرایش اولویت ترتیب", callback_data=f"seredit:{server_id}:priority")],
-                [InlineKeyboardButton("🔗ویرایش دامنه", callback_data=f"server:{server_id}:domains")],
                 [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
                 [InlineKeyboardButton("🔙بازگشت", callback_data=f"server:{server_id}")],
             ]
