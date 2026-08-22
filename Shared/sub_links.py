@@ -346,6 +346,8 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
         primary_sid = 0
     if primary_sid > 0:
         primary = database.get_server_by_id(primary_sid)
+        if not primary:
+            return targets
         child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
         for node in (primary.get("nodes") or []):
             if not isinstance(node, dict):

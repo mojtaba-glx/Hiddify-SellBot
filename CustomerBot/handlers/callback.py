@@ -649,7 +649,7 @@ async def _show_subscription_status(msg, agent_id, svc_id):
     br = get_buy_renew_settings(agent_id)
     svc = get_service_by_id(svc_id)
     if not svc:
-        await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+        await msg.edit_text("❌ سرویس یافت نشد.")
         return None
     show_detach = bool(svc.get("comment") == "connected")
     svc_text = build_subscription_status_text(svc, subs_settings, br)
@@ -772,41 +772,41 @@ async def _send_subscription_link_with_qr(query, agent_id, svc, data):
 
     base_urls = get_service_node_base_urls(svc)
     if not base_urls:
-        await msg.edit_text("❌ برای این سرویس لینک کانفیگ در دسترس نیست.", reply_markup=main_menu_keyboard())
+        await msg.edit_text("❌ برای این سرویس لینک کانفیگ در دسترس نیست.")
         return
     base_url = base_urls[0]
 
     config_items = []
     if action == "sub_link":
         if not ss.get("show_sub_link", True):
-            await msg.edit_text("❌ نمایش لینک اشتراک خاموش است.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ نمایش لینک اشتراک خاموش است.")
             return
         config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
     elif action == "auto_sub":
         if not ss.get("show_auto_sub_link", False):
-            await msg.edit_text("❌ نمایش اشتراک خودکار خاموش است.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ نمایش اشتراک خودکار خاموش است.")
             return
         config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
     elif action == "sub_b64":
         if not ss.get("show_sub_link_b64", False):
-            await msg.edit_text("❌ نمایش لینک b64 خاموش است.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ نمایش لینک b64 خاموش است.")
             return
         config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
     elif action == "multi":
         if not ss.get("show_multi_server", False):
-            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند خاموش است.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند خاموش است.")
             return
         managed_link, _ = get_or_create_bot_sub_links(svc)
         config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
     elif action == "multi_b64":
         if not ss.get("show_multi_server_b64", False):
-            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند b64 خاموش است.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند b64 خاموش است.")
             return
         _, managed_link_b64 = get_or_create_bot_sub_links(svc)
         config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
 
     if not config_items:
-        await msg.edit_text("❌ در حال حاضر هیچ لینکی برای نمایش فعال نیست.", reply_markup=main_menu_keyboard())
+        await msg.edit_text("❌ در حال حاضر هیچ لینکی برای نمایش فعال نیست.")
         return
 
     primary_link = config_items[0][1]
@@ -862,7 +862,7 @@ async def _handle_status(query, context, agent_id, user, data):
             services = get_services_by_customer(cust["id"])
             visible = [s for s in services if is_customer_service_visible(s)]
             if not visible:
-                await msg.edit_text("❌ سرویس فعالی ندارید.", reply_markup=main_menu_keyboard())
+                await msg.edit_text("❌ سرویس فعالی ندارید.")
                 return
             await msg.edit_text(
                 "👇 یکی از اشتراک‌ها را انتخاب کنید:",
@@ -871,7 +871,7 @@ async def _handle_status(query, context, agent_id, user, data):
             return
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ سرویس یافت نشد.")
             return
         await sync_service_status_from_panels(svc_id)
         await _show_subscription_status(msg, agent_id, svc_id)
@@ -939,7 +939,7 @@ async def _handle_status(query, context, agent_id, user, data):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ سرویس یافت نشد.")
             return
         try:
             await msg.edit_text("� در حال به‌روزرسانی اطلاعات اشتراک...")
@@ -952,7 +952,7 @@ async def _handle_status(query, context, agent_id, user, data):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ سرویس یافت نشد.")
             return
         context.user_data[UD_STATE] = f"rename:{svc_id}"
         try:
@@ -971,7 +971,7 @@ async def _handle_status(query, context, agent_id, user, data):
             svc_id = int(parts[2]) if len(parts) > 2 else 0
             svc = get_service_by_id(svc_id)
             if not svc:
-                await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+                await msg.edit_text("❌ سرویس یافت نشد.")
                 return
             try:
                 await msg.edit_text("⏳ در حال تغییر لینک اشتراک...")
@@ -995,7 +995,7 @@ async def _handle_status(query, context, agent_id, user, data):
         svc = get_service_by_id(svc_id)
         if svc:
             set_service_active(svc_id, False)
-            await msg.edit_text("✅ اشتراک جدا شد.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("✅ اشتراک جدا شد.")
 
     elif data.startswith(CB_STATUS_GUIDE):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
@@ -1017,11 +1017,11 @@ async def _handle_status(query, context, agent_id, user, data):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ سرویس یافت نشد.")
             return
         br = get_buy_renew_settings(agent_id)
         if not br.get("enable_renew", True):
-            await msg.edit_text("🚫 تمدید غیرفعال است.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("🚫 تمدید غیرفعال است.")
             return
         context.user_data["renew_target_service_id"] = int(svc_id)
         server_id = svc.get("server_id", 0)
@@ -1029,7 +1029,7 @@ async def _handle_status(query, context, agent_id, user, data):
         if mode == "fixed":
             plans = get_fixed_plans(agent_id)
             if not plans:
-                await msg.edit_text("❌ هیچ پلنی برای این نماینده تعریف نشده است.", reply_markup=main_menu_keyboard())
+                await msg.edit_text("❌ هیچ پلنی برای این نماینده تعریف نشده است.")
                 return
             await msg.edit_text(
                 "📋 پلن تمدید را انتخاب کنید:",
@@ -1252,15 +1252,15 @@ async def _handle_trial(query, context, agent_id, user, data):
         server_id = int(parts[2]) if len(parts) > 2 else 0
         u_db = get_user(agent_id, user.id)
         if u_db and u_db.get("got_free_trial"):
-            await msg.edit_text("🚫 شما قبلا تست رایگان دریافت کرده‌اید.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("🚫 شما قبلا تست رایگان دریافت کرده‌اید.")
             return
         server = get_server_by_id(server_id)
         if not server:
-            await msg.edit_text("❌ سرور یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ سرور یافت نشد.")
             return
         trial = get_trial_spec_settings(agent_id)
         if not trial.get("enabled", True):
-            await msg.edit_text("🚫 تست رایگان در حال حاضر غیرفعال است.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("🚫 تست رایگان در حال حاضر غیرفعال است.")
             return
         context.user_data[UD_STATE] = STATE_TRIAL_WAITING_NAME
         context.user_data["pending_trial_server_id"] = server_id
@@ -1620,7 +1620,7 @@ async def _handle_buy(query, context, agent_id, user, data):
         # جستجو در پلن‌های نماینده
         p = get_fixed_plan(agent_id, plan_id)
         if not p:
-            await msg.edit_text("❌ پلن یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.edit_text("❌ پلن یافت نشد.")
             return
         price = safe_int(p.get("price", 0))
         gb = safe_float(p.get("gb", 0))
