@@ -371,6 +371,17 @@ def _is_panel_status_config_line(line: str) -> bool:
 
 
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    if not user_uuid:
+        return None
+    # X-UI: build native subscription URL directly
+    try:
+        if xui_api.is_xui_server(server):
+            origin = xui_api._public_origin(server)
+            sub_path = xui_api._sub_path(server)
+            if origin and sub_path:
+                return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
@@ -443,7 +454,15 @@ def _fetch_lines(url: str) -> List[str]:
 def _fetch_subscription_lines(base_url: str) -> List[str]:
     """
     Try common Hiddify subscription endpoints in order and return first non-empty set.
+    X-UI base_url is already full sub URL, so try it directly first.
     """
+    # X-UI heuristic: contains /sub/ (native X-UI sub path)
+    if "/sub/" in str(base_url or ""):
+        # Try the URL itself, then with base64 param
+        for url in [str(base_url).rstrip("/"), f"{str(base_url).rstrip('/')}?base64=1"]:
+            lines = _fetch_lines(url)
+            if lines:
+                return lines
     candidates = [
         f"{base_url}/hiddify.txt",
         f"{base_url}/all.txt",
@@ -453,6 +472,10 @@ def _fetch_subscription_lines(base_url: str) -> List[str]:
         lines = _fetch_lines(url)
         if lines:
             return lines
+    # Last try: base_url itself (covers X-UI when not detected above but still works)
+    lines = _fetch_lines(str(base_url).rstrip("/"))
+    if lines:
+        return lines
     return []
 
 

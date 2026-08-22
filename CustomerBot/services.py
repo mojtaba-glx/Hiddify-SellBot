@@ -530,6 +530,17 @@ def build_subscription_status_text(svc: dict, subs_settings: Optional[dict] = No
 # ---------- ساخت لینک‌های اشتراک (مثل UserBot) ----------
 
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    if not user_uuid:
+        return None
+    try:
+        from Shared import xui_api
+        if xui_api.is_xui_server(server):
+            origin = xui_api._public_origin(server)
+            sub_path = xui_api._sub_path(server)
+            if origin and sub_path:
+                return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
     panel_url = str(server.get("panel_url") or "").rstrip("/")
     user_proxy = str(server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
@@ -573,6 +584,17 @@ def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
 
 
 def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    if not user_uuid:
+        return None
+    try:
+        from Shared import xui_api
+        if xui_api.is_xui_server(server):
+            origin = xui_api._public_origin(server)
+            sub_path = xui_api._sub_path(server)
+            if origin and sub_path:
+                return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
     panel_url = str(server.get("panel_url") or "").rstrip("/")
     user_proxy = str(server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:

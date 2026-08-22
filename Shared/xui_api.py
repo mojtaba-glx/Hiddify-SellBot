@@ -828,7 +828,13 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     if not targets:
         raise XuiApiError("هیچ اینباند قابل‌فروشی برای ساخت کاربر یافت نشد.")
 
-    user_uuid = uuid4()
+    # Use shared UUID from payload if provided (ensures multi-node consistency);
+    # otherwise generate a fresh one. Validate format to avoid junk.
+    requested = str((payload or {}).get("uuid") or "").strip()
+    if requested and len(requested) >= 8 and " " not in requested:
+        user_uuid = requested
+    else:
+        user_uuid = uuid4()
     # نام کاربر برای نمایش در پنل (به جای uuid) - از payload می‌آید مثل "test"
     raw_name = str(payload.get("name") or payload.get("email") or "").strip()
     # اگر نام فارسی/تست بود همان را بگذار، وگرنه uuid

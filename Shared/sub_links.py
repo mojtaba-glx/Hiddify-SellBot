@@ -19,6 +19,18 @@ logger = logging.getLogger(__name__)
 
 
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    if not user_uuid:
+        return None
+    # X-UI: native subscription URL
+    try:
+        from Shared import xui_api
+        if xui_api.is_xui_server(server):
+            origin = xui_api._public_origin(server)
+            sub_path = xui_api._sub_path(server)
+            if origin and sub_path:
+                return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
     panel_url = str(server.get("panel_url") or "").rstrip("/")
     user_proxy = str(server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
@@ -448,13 +460,19 @@ def _fetch_remote_lines(url: str) -> List[str]:
 
 
 def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
-    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها"""
+    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)"""
     out: List[str] = []
     seen_links: set = set()
     for base_url in get_service_node_base_urls(svc):
         seen_lines: set = set()
-        for suffix in ("all.txt", "all.txt?base64=1"):
-            lines = _fetch_remote_lines(f"{base_url}/{suffix}")
+        is_xui = "/sub/" in str(base_url or "")
+        if is_xui:
+            suffixes = ("", "?base64=1")
+        else:
+            suffixes = ("all.txt", "all.txt?base64=1")
+        for suffix in suffixes:
+            url = base_url if is_xui and not suffix else (f"{base_url}{suffix}" if is_xui else f"{base_url}/{suffix}")
+            lines = _fetch_remote_lines(url)
             for ln in lines:
                 raw = _sanitize_config_text(ln)
                 if not raw or raw in seen_lines:

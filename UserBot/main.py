@@ -2679,6 +2679,17 @@ async def _apply_service_renewal_on_targets(
 
 
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    if not user_uuid:
+        return None
+    try:
+        from Shared import xui_api
+        if xui_api.is_xui_server(server):
+            origin = xui_api._public_origin(server)
+            sub_path = xui_api._sub_path(server)
+            if origin and sub_path:
+                return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
@@ -2724,6 +2735,17 @@ def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
 
 
 def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    if not user_uuid:
+        return None
+    try:
+        from Shared import xui_api
+        if xui_api.is_xui_server(server):
+            origin = xui_api._public_origin(server)
+            sub_path = xui_api._sub_path(server)
+            if origin and sub_path:
+                return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
@@ -2981,10 +3003,34 @@ def _collect_all_direct_configs_for_service(service: dict) -> list[str]:
     seen_links: set[str] = set()
 
     # Use only user-facing subscription domains to stay aligned with all.txt shown to user.
+    # X-UI detection for this service
+    _is_xui_service = False
+    try:
+        from Shared import xui_api as _xui_dc
+        sid_tmp = int(service.get("server_id") or 0)
+        srv_tmp = database.get_server_by_id(sid_tmp) if sid_tmp else None
+        if srv_tmp and _xui_dc.is_xui_server(srv_tmp):
+            _is_xui_service = True
+        else:
+            for m in (userbot_db.get_service_nodes(int(service.get("id") or 0)) if service.get("id") else []):
+                s = database.get_server_by_id(int(m.get("server_id") or 0))
+                if s and _xui_dc.is_xui_server(s):
+                    _is_xui_service = True
+                    break
+    except Exception:
+        pass
     for base_url in _get_service_node_base_urls(service):
         seen_lines: set[str] = set()
-        for suffix in ("all.txt", "all.txt?base64=1"):
-            lines = _fetch_remote_lines(f"{base_url}/{suffix}")
+        if _is_xui_service:
+            suffixes = ("", "?base64=1")
+        else:
+            suffixes = ("all.txt", "all.txt?base64=1")
+        for suffix in suffixes:
+            if _is_xui_service:
+                fetch_url = base_url if not suffix else f"{base_url}{suffix}"
+            else:
+                fetch_url = f"{base_url}/{suffix}"
+            lines = _fetch_remote_lines(fetch_url)
             for ln in lines:
                 raw = _sanitize_config_text(ln)
                 if not raw or raw in seen_lines:
@@ -3047,6 +3093,22 @@ async def _send_service_direct_configs_shell(
         "yes",
         "on",
     }
+    # X-UI: subscription fetch via base_url may need special handling; always allow API fallback
+    if not links:
+        try:
+            from Shared import xui_api as _xui_fallback_check
+            sid_tmp = int(service.get("server_id") or 0)
+            srv_tmp = database.get_server_by_id(sid_tmp) if sid_tmp else None
+            if srv_tmp and _xui_fallback_check.is_xui_server(srv_tmp):
+                allow_api_fallback = True
+            else:
+                for m in (userbot_db.get_service_nodes(int(service.get("id") or 0)) if service.get("id") else []):
+                    s = database.get_server_by_id(int(m.get("server_id") or 0))
+                    if s and _xui_fallback_check.is_xui_server(s):
+                        allow_api_fallback = True
+                        break
+        except Exception:
+            pass
     if not links and allow_api_fallback:
         links = await _collect_all_direct_configs_from_api_for_service(service)
         if links:
@@ -4811,12 +4873,38 @@ async def _send_config_and_qr_after_delivery(
     config_items: list[tuple[str, str]] = []
     if base_urls:
         base_url = base_urls[0]
-        if settings.get("show_sub_link", True):
-            config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
-        if settings.get("show_auto_sub_link", False):
-            config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
-        if settings.get("show_sub_link_b64", False):
-            config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+        # Detect X-UI: base_url is already the full sub URL ( .../sub/{uuid} )
+        is_xui = False
+        try:
+            from Shared import xui_api as _xui_check
+            # Find the server for this base_url to detect X-UI
+            # Quick heuristic: if base_url contains /sub/ and service server is X-UI
+            sid_tmp = int(service.get("server_id") or 0)
+            srv_tmp = database.get_server_by_id(sid_tmp) if sid_tmp else None
+            if srv_tmp and _xui_check.is_xui_server(srv_tmp):
+                is_xui = True
+            elif "/sub/" in base_url:
+                # Fallback: if any mapping server is X-UI
+                for m in (userbot_db.get_service_nodes(service_id) if service_id else []):
+                    s = database.get_server_by_id(int(m.get("server_id") or 0))
+                    if s and _xui_check.is_xui_server(s):
+                        is_xui = True
+                        break
+        except Exception:
+            is_xui = False
+        if is_xui:
+            if settings.get("show_sub_link", True):
+                config_items.append(("🔗 لینک اشتراک:", base_url))
+            if settings.get("show_sub_link_b64", False):
+                sep = "&" if "?" in base_url else "?"
+                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}{sep}base64=1"))
+        else:
+            if settings.get("show_sub_link", True):
+                config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+            if settings.get("show_auto_sub_link", False):
+                config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+            if settings.get("show_sub_link_b64", False):
+                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
         if settings.get("show_multi_server", False):
             try:
                 managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
