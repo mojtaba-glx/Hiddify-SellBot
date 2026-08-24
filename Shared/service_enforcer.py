@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from Shared import database, hiddify_api, marzban_api, userbot_db
 
@@ -52,6 +52,16 @@ ENFORCER_FETCH_CONCURRENCY = _parse_int_env(
     8,
     min_value=1,
     max_value=32,
+)
+
+# تعداد خطاهای پیاپی شبکه روی یک نود قبل از اینکه حجمش «یخ‌زده» (فریز) شود.
+# پس از این آستانه، حجم آخرین مقدار خوانده‌شده نگه داشته می‌شود و تا زمان
+# برگشتن نود یا تمدید اشتراک تغییر نمی‌کند (ماشین‌حساب دقیق).
+ENFORCER_NODE_FROZEN_THRESHOLD = _parse_int_env(
+    "ENFORCER_NODE_FROZEN_THRESHOLD",
+    3,
+    min_value=1,
+    max_value=20,
 )
 
 _ENFORCER_CURSOR = 0
@@ -398,7 +408,10 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
                 local_days_left = int(service.get("days_left"))
             except Exception:
                 local_days_left = None
-            had_local_active = any(int(m.get("is_active") or 0) == 1 for m in mappings)
+            had_local_active = any(
+                int(m.get("is_active") or 0) == 1 and int(m.get("deleted") or 0) == 0
+                for m in mappings
+            )
             local_expired_by_usage = local_limit > 0 and local_usage >= local_limit
             local_expired_by_time = local_days_left is not None and local_days_left < 0
             if had_local_active and (local_expired_by_usage or local_expired_by_time):
@@ -426,16 +439,41 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
             fetched_nodes = 0
             total_nodes = 0
             not_found_nodes = 0
+            not_found_keys: set[tuple[int, str]] = set()
             try:
                 primary_server_id = int(service.get("server_id") or 0)
             except (TypeError, ValueError):
                 primary_server_id = 0
 
-            fetch_tasks = [
-                _fetch_service_node_usage(service_id=service_id, node=node, servers_map=servers_map)
-                for node in mappings
-            ]
+            node_down_threshold = ENFORCER_NODE_FROZEN_THRESHOLD
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+            # نودهای حذف‌شده (سرور پاک شده): حجم یخ‌زده را نگه می‌داریم و در جمع کل حساب می‌کنیم.
+            skipped_held: List[Dict[str, Any]] = []
+            fetch_tasks = []
+            for node in mappings:
+                if int(node.get("deleted") or 0) == 1:
+                    skipped_held.append(node)
+                    continue
+                fetch_tasks.append(
+                    _fetch_service_node_usage(service_id=service_id, node=node, servers_map=servers_map)
+                )
+
             fetch_results = await asyncio.gather(*fetch_tasks) if fetch_tasks else []
+
+            # ۱) نودهای حذف‌شده (held): مصرف آخرین مقدار خوانده‌شده را نگه می‌داریم.
+            for node in skipped_held:
+                total_usage += _to_float(node.get("usage_current"), 0.0)
+                dl = node.get("days_left")
+                if dl is not None:
+                    try:
+                        d = int(dl)
+                        min_days_left = d if min_days_left is None else min(min_days_left, d)
+                    except Exception:
+                        pass
+                got_any_panel_data = True
+
+            # ۲) نودهای فچ‌شده از پنل.
             for result in fetch_results:
                 server_id = int(result.get("server_id") or 0)
                 user_uuid = str(result.get("user_uuid") or "").strip()
@@ -443,11 +481,20 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
                     continue
                 total_nodes += 1
 
+                node_rec = next(
+                    (
+                        m for m in mappings
+                        if int(m.get("server_id") or 0) == server_id
+                        and str(m.get("panel_user_uuid") or "").strip() == user_uuid
+                    ),
+                    None,
+                )
+
                 if bool(result.get("ok")):
-                    panel_user = result.get("panel_user") or {}
                     got_any_panel_data = True
-                    fetched_nodes += 1
-                    total_usage += _to_float(panel_user.get("current_usage_GB"), 0.0)
+                    panel_user = result.get("panel_user") or {}
+                    usage = _to_float(panel_user.get("current_usage_GB"), 0.0)
+                    total_usage += usage
 
                     panel_limit = _usage_limit_from_panel_user(panel_user)
                     if panel_limit is not None:
@@ -458,56 +505,67 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
 
                     days_left = _days_left_from_panel_user(panel_user)
                     if days_left is not None:
-                        if min_days_left is None:
-                            min_days_left = days_left
-                        else:
-                            min_days_left = min(min_days_left, days_left)
+                        min_days_left = days_left if min_days_left is None else min(min_days_left, days_left)
 
                     dt = _parse_dt(panel_user.get("last_online"))
                     if dt and (latest_last_online is None or dt > latest_last_online):
                         latest_last_online = dt
+
+                    # بروزرسانی رکورد نود: مقدار زنده، یخ‌زدایی، ریست شمارنده خطا.
+                    userbot_db.update_service_node_runtime(
+                        service_id, server_id, user_uuid,
+                        usage_current=usage,
+                        days_left=days_left,
+                        frozen=0,
+                        fail_count=0,
+                        last_ok_at=now_str,
+                    )
                     continue
 
-                err = result.get("error")
-                if err:
-                    logger.warning(
-                        "Failed reading usage for service_id=%s server_id=%s uuid=%s: %s",
-                        service_id,
-                        server_id,
-                        user_uuid,
-                        err,
-                    )
+                # نود در دسترس نیست → حجم قبلی (یخ‌زده) را در جمع نگه می‌داریم.
+                prev_usage = _to_float(node_rec.get("usage_current") if node_rec else 0.0, 0.0)
+                total_usage += prev_usage
+                prev_days = None
+                if node_rec and node_rec.get("days_left") is not None:
+                    try:
+                        prev_days = int(node_rec.get("days_left"))
+                    except Exception:
+                        prev_days = None
+                if prev_days is not None:
+                    min_days_left = prev_days if min_days_left is None else min(min_days_left, prev_days)
 
                 if bool(result.get("not_found")) and server_id > 0 and user_uuid:
+                    # کاربر از روی پنل پاک شده؛ مصرف قبلی نگه داشته می‌شود و نود غیرفعال می‌گردد.
+                    not_found_nodes += 1
+                    not_found_keys.add((server_id, user_uuid))
                     try:
                         userbot_db.set_service_node_active(service_id, server_id, user_uuid, 0)
-                        not_found_nodes += 1
                     except Exception:
                         pass
+                    continue
 
-            if not got_any_panel_data:
-                # If all mapped nodes return explicit "user not found",
-                # disable local mappings to avoid re-scanning stale services forever.
-                if total_nodes > 0 and not_found_nodes >= total_nodes:
-                    userbot_db.set_service_nodes_active(service_id, 0)
+                # خطای شبکه → افزایش شمارنده؛ پس از آستانه حجم یخ‌زده (فریز) می‌شود.
+                prev_fail = int(node_rec.get("fail_count") or 0) if node_rec else 0
+                new_fail = prev_fail + 1
+                frozen = 1 if new_fail >= node_down_threshold else (int(node_rec.get("frozen") or 0) if node_rec else 0)
+                if node_rec is not None:
+                    try:
+                        userbot_db.update_service_node_runtime(
+                            service_id, server_id, user_uuid,
+                            frozen=frozen,
+                            fail_count=new_fail,
+                        )
+                    except Exception:
+                        pass
+                logger.warning(
+                    "Node unreachable (frozen=%s) service_id=%s server_id=%s uuid=%s fail=%s: %s",
+                    frozen, service_id, server_id, user_uuid, new_fail, result.get("error"),
+                )
+
+            # همه نودها صراحتاً not_found بوده‌اند و نود حذف‌شده‌ای نداریم → غیرفعال‌سازی محلی.
+            if not got_any_panel_data and not_found_nodes > 0 and not skipped_held:
+                userbot_db.set_service_nodes_active(service_id, 0)
                 continue
-
-            # If some nodes failed, keep conservative local runtime values
-            # so partial reads cannot lower usage below already-known total.
-            previous_usage = _to_float(service.get("usage_current"), 0.0)
-            if fetched_nodes < max(total_nodes, 1):
-                total_usage = max(total_usage, previous_usage)
-
-            previous_days_left: Optional[int] = None
-            try:
-                previous_days_left = int(service.get("days_left"))
-            except Exception:
-                previous_days_left = None
-            if fetched_nodes < max(total_nodes, 1) and previous_days_left is not None:
-                if min_days_left is None:
-                    min_days_left = previous_days_left
-                else:
-                    min_days_left = min(min_days_left, previous_days_left)
 
             if synced_usage_limit is None:
                 synced_usage_limit = fallback_usage_limit
@@ -533,7 +591,10 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
             expired_by_usage = limit_gb > 0 and total_usage >= limit_gb
             expired_by_time = min_days_left is not None and min_days_left < 0
 
-            had_local_active = any(int(m.get("is_active") or 0) == 1 for m in mappings)
+            had_local_active = any(
+                int(m.get("is_active") or 0) == 1 and int(m.get("deleted") or 0) == 0
+                for m in mappings
+            )
             if expired_by_usage or expired_by_time:
                 reason = []
                 if expired_by_usage:
@@ -549,13 +610,37 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
                 summary["nodes_disable_failed"] += failed
                 if had_local_active or changed > 0:
                     summary["services_disabled"] += 1
-            else:
-                # Re-enable local node mappings only on successful full read cycle.
-                if fetched_nodes >= max(total_nodes, 1) and any(
-                    int(m.get("is_active") or 0) == 0 for m in mappings
-                ):
-                    userbot_db.set_service_nodes_active(service_id, 1)
-                    summary["services_reenabled"] += 1
+            elif got_any_panel_data:
+                # فقط نودهای غیرِحذف‌شده و غیرِ not_found را فعال کن تا فلیپ رخ ندهد.
+                needs_reenable = any(
+                    int(m.get("is_active") or 0) == 0
+                    and int(m.get("deleted") or 0) == 0
+                    and (int(m.get("server_id") or 0), str(m.get("panel_user_uuid") or "").strip())
+                    not in not_found_keys
+                    for m in mappings
+                )
+                if needs_reenable:
+                    # فعال‌سازی انتخابی (نه bulk) تا نودهای not_found دوباره فعال نشوند
+                    reenabled = 0
+                    for m in mappings:
+                        if int(m.get("deleted") or 0) == 1:
+                            continue
+                        sid = int(m.get("server_id") or 0)
+                        uuid = str(m.get("panel_user_uuid") or "").strip()
+                        if (sid, uuid) in not_found_keys:
+                            continue
+                        if int(m.get("is_active") or 0) == 0:
+                            try:
+                                userbot_db.set_service_node_active(service_id, sid, uuid, 1)
+                                reenabled += 1
+                            except Exception:
+                                pass
+                    # اگر هیچ نودی نیاز به فعال‌سازی نداشت (همه not_found بودند) چیزی نشمار
+                    if reenabled > 0:
+                        summary["services_reenabled"] += 1
+                    else:
+                        # fallback: اگر bulk قدیمی همه را فعال می‌کرد ولی الان چیزی نماند، لاگ نکن
+                        pass
 
         except Exception as e:
             summary["errors"] += 1

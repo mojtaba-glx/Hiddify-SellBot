@@ -698,6 +698,7 @@ def _normalize_user(
 _XUI_SESSION_CACHE: Dict[Any, Tuple[float, "httpx.AsyncClient"]] = {}
 _XUI_SESSION_TTL_SECONDS = float(os.getenv("XUI_SESSION_TTL_SECONDS", "60") or "60")
 _xui_cache_lock = threading.Lock()
+_xui_client_async_locks: Dict[Any, asyncio.Lock] = {}
 
 
 def _server_cache_key(server: Dict[str, Any]) -> Any:
@@ -736,30 +737,45 @@ async def _login_xui_client(client: "httpx.AsyncClient", server: Dict[str, Any])
 
 async def _acquire_xui_client(server: Dict[str, Any]) -> "httpx.AsyncClient":
     key = _server_cache_key(server)
-    now = time.monotonic()
-    with _xui_cache_lock:
-        cached = _XUI_SESSION_CACHE.get(key)
-        if cached is not None and now < cached[0] and not cached[1].is_closed:
-            return cached[1]
-    client = await _build_xui_client(server)
-    try:
-        await _login_xui_client(client, server)
-    except Exception:
+    # async per-server lock to avoid race where two coroutines both create a client and one closes the other's
+    async_lock = _xui_client_async_locks.get(key)
+    if async_lock is None:
+        async_lock = asyncio.Lock()
+        _xui_client_async_locks[key] = async_lock
+    async with async_lock:
+        now = time.monotonic()
+        with _xui_cache_lock:
+            cached = _XUI_SESSION_CACHE.get(key)
+            if cached is not None and now < cached[0] and not cached[1].is_closed:
+                return cached[1]
+        client = await _build_xui_client(server)
         try:
-            await client.aclose()
+            await _login_xui_client(client, server)
         except Exception:
-            pass
-        raise
-    with _xui_cache_lock:
-        old = _XUI_SESSION_CACHE.get(key)
-        _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client)
-        superseded = old[1] if (old is not None and old[1] is not client) else None
-    if superseded is not None and not superseded.is_closed:
-        try:
-            await superseded.aclose()
-        except Exception:
-            pass
-    return client
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+            raise
+        with _xui_cache_lock:
+            # re-check: another waiter may have already inserted a fresh client while we were logging in
+            existing = _XUI_SESSION_CACHE.get(key)
+            if existing is not None and time.monotonic() < existing[0] and not existing[1].is_closed and existing[1] is not client:
+                # keep the existing one, close the one we just created
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+                return existing[1]
+            old = existing
+            _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client)
+            superseded = old[1] if (old is not None and old[1] is not client) else None
+        if superseded is not None and not superseded.is_closed:
+            try:
+                await superseded.aclose()
+            except Exception:
+                pass
+        return client
 
 
 async def _refresh_xui_client(server: Dict[str, Any], *, insecure: bool = False) -> "httpx.AsyncClient":
@@ -847,9 +863,21 @@ class _XuiContext:
         if secret:
             headers[_XUI_SECRET_HEADER] = secret
         assert self.client is not None
-        for attempt in (1, 2):
+        for attempt in (1, 3):
             try:
+                # اگر کلاینت در فاصله بین _acquire و اینجا بسته شد، تازه‌سازی کن
+                if self.client.is_closed:
+                    self.client = await _acquire_xui_client(self.server)
                 resp = await self.client.request(method, url, headers=headers, json=json_body)
+            except RuntimeError as exc:
+                # httpx raises RuntimeError: Cannot send a request, as the client has been closed.
+                if "has been closed" in str(exc).lower() and attempt == 1:
+                    try:
+                        self.client = await _refresh_xui_client(self.server)
+                    except Exception:
+                        self.client = await _acquire_xui_client(self.server)
+                    continue
+                raise XuiApiError(f"خطا در ارتباط با پنل X-UI: {exc}") from exc
             except httpx.RequestError as exc:
                 msg = str(exc).strip() or exc.__class__.__name__
                 if hiddify_api._is_transient_network_error(exc):
@@ -896,8 +924,19 @@ class _XuiContext:
             headers[_XUI_SECRET_HEADER] = secret
         assert self.client is not None
         resp: Optional[httpx.Response] = None
-        for attempt in (1, 2):
-            resp = await self.client.request(method, url, headers=headers)
+        for attempt in (1, 3):
+            try:
+                if self.client.is_closed:
+                    self.client = await _acquire_xui_client(self.server)
+                resp = await self.client.request(method, url, headers=headers)
+            except RuntimeError as exc:
+                if "has been closed" in str(exc).lower() and attempt == 1:
+                    try:
+                        self.client = await _refresh_xui_client(self.server)
+                    except Exception:
+                        self.client = await _acquire_xui_client(self.server)
+                    continue
+                raise XuiApiError(f"خطا در ارتباط با پنل X-UI: {exc}") from exc
             if resp.status_code == 401 and allow_login_retry and attempt == 1:
                 await self._ensure_login()
                 continue

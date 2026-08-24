@@ -47,6 +47,7 @@ from AdminBot.keyboards import admin_main_keyboard  # noqa: E402
 from AdminBot.userbot import handle_ticket_screenshot_start, run_userbot_auto_backup_job  # noqa: E402
 from Shared import service_enforcer  # noqa: E402
 from Shared import node_ops  # noqa: E402
+from Shared import server_health  # noqa: E402
 from Shared import userbot_db  # noqa: E402
 from Shared import database  # noqa: E402
 from Shared import agent_enforcer  # noqa: E402
@@ -63,6 +64,8 @@ GLOBAL_ENFORCER_ENABLED = (os.getenv("GLOBAL_ENFORCER_ENABLED", "1") or "1").str
 GLOBAL_ENFORCER_INTERVAL = max(10, int(os.getenv("GLOBAL_ENFORCER_INTERVAL_SECONDS", "20") or "20"))
 NODE_MONITOR_ENABLED = (os.getenv("NODE_MONITOR_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 NODE_MONITOR_INTERVAL = int(os.getenv("NODE_MONITOR_INTERVAL_SECONDS", "180") or "180")
+SERVER_HEALTH_ENABLED = (os.getenv("SERVER_HEALTH_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+SERVER_HEALTH_INTERVAL = max(60, int(os.getenv("SERVER_HEALTH_INTERVAL_SECONDS", "300") or "300"))
 SUB_REMINDER_INTERVAL = max(60, int(os.getenv("SUB_REMINDER_INTERVAL_SECONDS", "300") or "300"))
 AGENT_ENFORCER_ENABLED = (os.getenv("AGENT_ENFORCER_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 AGENT_ENFORCER_INTERVAL = max(60, int(os.getenv("AGENT_ENFORCER_INTERVAL_SECONDS", "180") or "180"))
@@ -767,6 +770,22 @@ async def _node_monitor_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def _server_health_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """مانیتورینگ سلامت همهٔ سرورها و هشدار به ادمین هنگام قطع/برگشت."""
+    try:
+        summary = await server_health.run_server_health_check()
+        logger.info(
+            "Server health cycle done: scanned=%s up=%s down=%s alerts=%s errors=%s",
+            summary["servers_scanned"],
+            summary["servers_up"],
+            summary["servers_down"],
+            summary["alerts"],
+            summary["errors"],
+        )
+    except Exception as e:
+        logger.warning("Server health job error: %s", e)
+
+
 async def _userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await run_userbot_auto_backup_job(context)
 
@@ -860,6 +879,21 @@ async def _post_init(application) -> None:
             )
         )
         logger.info("✅ Node monitor fallback scheduler enabled")
+
+    if SERVER_HEALTH_ENABLED:
+        fallback_tasks.append(
+            application.create_task(
+                _run_fallback_loop(
+                    application,
+                    name="server-health-fallback",
+                    worker=_server_health_job,
+                    interval=SERVER_HEALTH_INTERVAL,
+                    first=60,
+                ),
+                name="server-health-fallback",
+            )
+        )
+        logger.info("✅ Server health fallback scheduler enabled")
 
     fallback_tasks.append(
         application.create_task(
@@ -975,6 +1009,20 @@ def main() -> None:
         logger.warning("⚠️ Node monitor requested but job_queue is unavailable.")
     else:
         logger.info("ℹ️ Node monitor disabled by env")
+
+    if SERVER_HEALTH_ENABLED and application.job_queue is not None:
+        application.job_queue.run_repeating(
+            _server_health_job,
+            interval=SERVER_HEALTH_INTERVAL,
+            first=60,
+            name="server-health",
+            job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 120},
+        )
+        logger.info("✅ Server health monitor enabled (interval=%ss)", SERVER_HEALTH_INTERVAL)
+    elif SERVER_HEALTH_ENABLED:
+        logger.warning("⚠️ Server health monitor requested but job_queue is unavailable.")
+    else:
+        logger.info("ℹ️ Server health monitor disabled by env")
 
     if application.job_queue is not None:
         application.job_queue.run_repeating(

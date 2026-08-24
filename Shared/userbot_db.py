@@ -553,6 +553,29 @@ def _migrate_db():
         except sqlite3.OperationalError:
             pass
 
+    # Per-node runtime tracking for frozen-node accounting (node down / server deleted).
+    # PRAGMA table_info is safer than SELECT ... LIMIT 1 on empty table.
+    try:
+        cur.execute("PRAGMA table_info(userbot_service_nodes)")
+        existing_cols = {str(r[1]) for r in cur.fetchall()}
+    except Exception:
+        existing_cols = set()
+    for _col, _ddl in (
+        ("usage_current", "REAL DEFAULT 0"),
+        ("days_left", "INTEGER"),
+        ("frozen", "INTEGER DEFAULT 0"),
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("last_ok_at", "TEXT"),
+        ("deleted", "INTEGER DEFAULT 0"),
+    ):
+        if _col not in existing_cols:
+            try:
+                cur.execute(f"ALTER TABLE userbot_service_nodes ADD COLUMN {_col} {_ddl}")
+                print(f"Migrated: {_col} column added to userbot_service_nodes.")
+            except sqlite3.OperationalError as e:
+                # race or already exists – log but don't fail
+                print(f"Migrate skip {_col}: {e}")
+
     # Referral system: ensure referral helpers are present on old databases
     try:
         cur.execute("SELECT invited_by_user_id FROM userbot_users LIMIT 1")
@@ -2711,7 +2734,6 @@ def get_services_for_enforcement() -> List[Dict[str, Any]]:
                     SELECT 1
                     FROM userbot_service_nodes n
                     WHERE n.service_id = s.id
-                      AND COALESCE(n.is_active, 1) = 1
                 )
                 OR (
                     COALESCE(s.usage_limit, 0) > 0
@@ -3073,6 +3095,166 @@ def set_service_node_active(
             (int(bool(is_active)), now, sid, srv, uuid, uuid),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def update_service_node_runtime(
+    service_id: int,
+    server_id: int,
+    panel_user_uuid: str,
+    *,
+    usage_current: Optional[float] = None,
+    days_left: Optional[int] = None,
+    frozen: Optional[int] = None,
+    fail_count: Optional[int] = None,
+    last_ok_at: Optional[str] = None,
+) -> None:
+    """بروزرسانی وضعیت زمان‌بندی‌شدهٔ یک نود (مصرف/روز/یخ‌زدگی/خطا).
+    فقط فیلدهایی که مقدار دارند آپدیت می‌شوند."""
+    sid = int(service_id or 0)
+    srv = int(server_id or 0)
+    uuid = str(panel_user_uuid or "").strip()
+    if sid <= 0 or srv <= 0 or not uuid:
+        return
+    parts: List[str] = []
+    params: List[Any] = []
+    if usage_current is not None:
+        parts.append("usage_current = ?")
+        params.append(float(usage_current))
+    if days_left is not None:
+        parts.append("days_left = ?")
+        params.append(int(days_left))
+    if frozen is not None:
+        parts.append("frozen = ?")
+        params.append(int(bool(frozen)))
+    if fail_count is not None:
+        parts.append("fail_count = ?")
+        params.append(int(fail_count))
+    if last_ok_at is not None:
+        parts.append("last_ok_at = ?")
+        params.append(str(last_ok_at))
+    if not parts:
+        return
+    params.extend([sid, srv, uuid])
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"UPDATE userbot_service_nodes SET {', '.join(parts)} "
+            f"WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_service_nodes_active_except_deleted(service_id: int, is_active: int) -> None:
+    """مثل set_service_nodes_active ولی نودهای حذف‌شده (deleted=1) را دست‌نخورده می‌گذارد."""
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE userbot_service_nodes
+            SET is_active = ?, updated_at = ?
+            WHERE service_id = ? AND COALESCE(deleted, 0) = 0
+            """,
+            (int(bool(is_active)), now, sid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def hold_deleted_server_nodes(server_id: int) -> List[int]:
+    """هنگام حذف یک سرور نود: حجم مصرف کاربران روی آن نود را فریز می‌کند
+    (deleted=1, frozen=1, is_active=0) و تا زمان تمدید نگه می‌دارد.
+    خروجی: لیست service_idهایی که روی این سرور نود داشتند."""
+    srv = int(server_id or 0)
+    if srv <= 0:
+        return []
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE userbot_service_nodes
+            SET deleted = 1, frozen = 1, is_active = 0, updated_at = ?
+            WHERE server_id = ? AND COALESCE(deleted, 0) = 0
+            """,
+            (now, srv),
+        )
+        cur.execute(
+            "SELECT DISTINCT service_id FROM userbot_service_nodes WHERE server_id = ? AND deleted = 1",
+            (srv,),
+        )
+        rows = cur.fetchall()
+        conn.commit()
+        return [int(r["service_id"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def reset_service_nodes_on_renew(service_id: int) -> None:
+    """در زمان تمدید/ریست اشتراک: رکوردهای نود حذف‌شده (شبح) پاک می‌شوند
+    و حجم بقیه نودها صفر و یخ‌زدایی می‌شود (شروع دورهٔ جدید)."""
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM userbot_service_nodes WHERE service_id = ? AND COALESCE(deleted, 0) = 1",
+            (sid,),
+        )
+        cur.execute(
+            """
+            UPDATE userbot_service_nodes
+            SET usage_current = 0, days_left = NULL, frozen = 0, fail_count = 0,
+                last_ok_at = NULL, is_active = 1, updated_at = ?
+            WHERE service_id = ?
+            """,
+            (now, sid),
+        )
+        # ریست کامل حجم سرویس (حتی اگر همه نودها حذف‌شده بودند و انفورسر دیگر
+        # نمی‌توانست آن را بازخوانی کند). days_left هم NULL تا انفورسر از پنل سینک کند.
+        cur.execute(
+            "UPDATE userbot_services SET usage_current = 0, days_left = NULL WHERE id = ?",
+            (sid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_frozen_nodes_summary() -> Dict[str, int]:
+    """خلاصه تعداد نودهای یخ‌زده/حذف‌شده برای داشبورد ادمین."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT COUNT(*) FROM userbot_service_nodes WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0"
+        )
+        frozen = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM userbot_service_nodes WHERE COALESCE(deleted,0)=1")
+        deleted = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            "SELECT COUNT(DISTINCT service_id) FROM userbot_service_nodes WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0"
+        )
+        frozen_services = int((cur.fetchone() or [0])[0] or 0)
+        return {"frozen_nodes": frozen, "deleted_nodes": deleted, "frozen_services": frozen_services}
+    except Exception:
+        return {"frozen_nodes": 0, "deleted_nodes": 0, "frozen_services": 0}
     finally:
         conn.close()
 

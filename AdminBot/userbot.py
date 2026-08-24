@@ -1699,6 +1699,46 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
     sep_line = "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"
     server_line = f"⬖ سرور:  {server_title}"
 
+    # بخش نودها: نمایش وضعیت یخ‌زده / حذف‌شده به‌تفکیک هر نود
+    node_lines: List[str] = []
+    frozen_count = 0
+    deleted_count = 0
+    try:
+        _svc_id = service.get("id")
+        _nodes = userbot_db.get_service_nodes(_svc_id) if _svc_id is not None else None
+    except Exception:
+        _nodes = None
+    if _nodes:
+        for _nd in _nodes:
+            _sid = _nd.get("server_id")
+            _srv = None
+            try:
+                if _sid is not None:
+                    _srv = database.get_server_by_id(int(_sid))
+            except Exception:
+                _srv = None
+            # fallback به server_title ذخیره‌شده در خود نود اگر سرور از servers.json حذف شده باشد
+            _stored_title = str(_nd.get("server_title") or "").strip()
+            if _srv and (_srv.get("name") or _srv.get("title")):
+                _title = str(_srv.get("name") or _srv.get("title"))
+            elif _stored_title:
+                _title = _stored_title
+            else:
+                _title = f"سرور #{_sid}" if _sid is not None else "ناشناخته"
+            _is_deleted = bool(_nd.get("deleted"))
+            _is_frozen = bool(_nd.get("frozen"))
+            if _is_deleted:
+                deleted_count += 1
+                _status = "🗑 حذف‌شده"
+            elif _is_frozen:
+                frozen_count += 1
+                _status = "🧊 یخ‌زده"
+            else:
+                _status = "✅ فعال"
+            _nu = _to_float(_nd.get("usage_current"))
+            _nu_s = f"{_nu:.2f}GB" if _nu is not None else "—"
+            node_lines.append(f"  • {_title}: {_status} ({_nu_s})")
+
     lines = [
         header_line,
         sep_line,
@@ -1708,6 +1748,14 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
         last_online_line,
         f"📝یادداشت: {comment if str(comment).strip() else '—'}",
     ]
+    if node_lines:
+        lines.append("❄️ نودها:")
+        lines.extend(node_lines)
+    if frozen_count or deleted_count:
+        lines.append(
+            f"⚠️ {frozen_count} نود یخ‌زده، {deleted_count} نود حذف‌شده "
+            f"(حجم مصرف‌شده تا زمان تمدید فریز شد)"
+        )
     return "\n".join(lines)
 
 

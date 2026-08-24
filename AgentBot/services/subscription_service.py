@@ -450,12 +450,32 @@ async def change_subscription_link(agent_id: int, service_id: int) -> Optional[D
 
 
 async def get_configs(agent_id: int, service_id: int) -> list:
+    """Aggregated configs from all nodes (Hiddify + X-UI) — fixes X-UI node missing."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return []
-    sid = int(svc.get("server_id") or 0)
-    marzban_un = _lookup_marzban_username(service_id, sid)
-    return await get_user_configs(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+    from Shared.sub_links import get_service_panel_targets
+    targets = get_service_panel_targets(svc)
+    if not targets:
+        sid = int(svc.get("server_id") or 0)
+        marzban_un = _lookup_marzban_username(service_id, sid)
+        return await get_user_configs(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+
+    aggregated: list = []
+    seen: set = set()
+    for srv, uuid, marzban_un in targets:
+        try:
+            cfgs = await get_user_configs(uuid, int(srv.get("id") or 0), marzban_username=marzban_un)
+            for item in cfgs or []:
+                link = item if isinstance(item, str) else str((item or {}).get("link") or "").strip()
+                if not link or link in seen:
+                    continue
+                seen.add(link)
+                aggregated.append(item if isinstance(item, dict) else {"link": link})
+        except Exception as e:
+            logger.warning("Agent get_configs node failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
+            continue
+    return aggregated
 
 
 def get_managed_sub_link(agent_id: int, service_id: int) -> str:

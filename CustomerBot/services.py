@@ -294,37 +294,59 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
 
 
 async def get_configs(service_id: int) -> Dict[str, Any]:
-    """Get subscription configs from Hiddify panel."""
+    """Get subscription configs from all panels (main + X-UI nodes) — aggregated."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc:
         return {"ok": False, "error": "service_not_found"}
 
     panel_uuid = str(svc.get("panel_user_uuid", "")).strip()
-    server_id = int(svc["server_id"])
     if not panel_uuid:
         return {"ok": False, "error": "no_uuid"}
 
-    server = database.get_server_by_id(server_id)
-    if not server:
-        return {"ok": False, "error": "server_not_found"}
+    targets = get_service_panel_targets(svc)
+    if not targets:
+        server_id = int(svc.get("server_id") or 0)
+        server = database.get_server_by_id(server_id) if server_id else None
+        if not server:
+            return {"ok": False, "error": "server_not_found"}
+        targets = [(server, panel_uuid, "")]
 
-    try:
-        # Find marzban_username from service_nodes
-        marzban_un = ""
+    aggregated: List[Dict[str, Any]] = []
+    seen_links: set = set()
+    last_error: str = ""
+    for srv, uuid, marzban_un in targets:
         try:
-            from Shared import userbot_db
-            for node in userbot_db.get_service_nodes(service_id):
-                if int(node.get("server_id") or 0) == server_id:
-                    marzban_un = str(node.get("marzban_username") or "").strip()
-                    break
-        except Exception:
-            pass
-        configs = await multi_panel.get_user_configs(
-            server, panel_uuid, marzban_username=marzban_un,
-        )
-        return {"ok": True, "configs": configs}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:100]}
+            # برای نود X-UI که uuid mapping ندارد، از uuid سرویس اصلی استفاده کن
+            fetch_uuid = str(uuid or panel_uuid).strip()
+            if not fetch_uuid:
+                continue
+            configs = await multi_panel.get_user_configs(
+                srv, fetch_uuid, marzban_username=marzban_un,
+            )
+            for item in configs or []:
+                if isinstance(item, dict):
+                    link = str(item.get("link") or "").strip()
+                    if not link:
+                        continue
+                    if link in seen_links:
+                        continue
+                    seen_links.add(link)
+                    aggregated.append(item)
+                elif isinstance(item, str) and "://" in item:
+                    if item.strip() in seen_links:
+                        continue
+                    seen_links.add(item.strip())
+                    aggregated.append({"link": item.strip()})
+        except Exception as e:
+            last_error = str(e)[:120]
+            logger.warning("get_configs node fetch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
+            continue
+
+    if aggregated:
+        return {"ok": True, "configs": aggregated}
+    if last_error:
+        return {"ok": False, "error": last_error[:100]}
+    return {"ok": False, "error": "no_configs"}
 
 
 async def sync_service_usage(service_id: int) -> Dict[str, Any]:

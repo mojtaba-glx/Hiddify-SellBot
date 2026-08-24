@@ -209,19 +209,59 @@ def get_service_user_base_urls(svc: dict) -> List[str]:
     # نودهای زیرمجموعه سرور اصلی (server.nodes[] با target_server_id)
     if primary_server_id > 0:
         primary = database.get_server_by_id(primary_server_id)
-        child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
-        for node in (primary.get("nodes") or []):
-            if not isinstance(node, dict):
+        if primary:
+            child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+            for node in (primary.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                try:
+                    child_sid = int(node.get("target_server_id") or 0)
+                except (TypeError, ValueError):
+                    child_sid = 0
+                if child_sid <= 0:
+                    continue
+                child_map = child_mappings.get(child_sid) or {}
+                child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+                _add_server(child_sid, child_uuid)
+        # reverse: اگر سرویس روی نود است، parent + sibling nodes را هم اضافه کن
+        for parent in database.get_servers() or []:
+            is_parent = False
+            for node in (parent.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                try:
+                    cid = int(node.get("target_server_id") or 0)
+                except (TypeError, ValueError):
+                    cid = 0
+                if cid == primary_server_id:
+                    is_parent = True
+                    break
+            if not is_parent:
                 continue
             try:
-                child_sid = int(node.get("target_server_id") or 0)
+                pid = int(parent.get("id") or 0)
             except (TypeError, ValueError):
-                child_sid = 0
-            if child_sid <= 0:
+                pid = 0
+            if pid <= 0:
                 continue
-            child_map = child_mappings.get(child_sid) or {}
-            child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
-            _add_server(child_sid, child_uuid)
+            # parent itself
+            parent_map = next((m for m in mappings if int((m or {}).get("server_id") or 0) == pid), None)
+            parent_uuid = str((parent_map or {}).get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+            _add_server(pid, parent_uuid)
+            # sibling nodes
+            child_mappings2 = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+            for node in (parent.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                try:
+                    child_sid = int(node.get("target_server_id") or 0)
+                except (TypeError, ValueError):
+                    child_sid = 0
+                if child_sid <= 0 or child_sid == primary_server_id:
+                    continue
+                child_map = child_mappings2.get(child_sid) or {}
+                child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+                _add_server(child_sid, child_uuid)
     return out
 
 
@@ -346,29 +386,84 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
         primary_sid = 0
     if primary_sid > 0:
         primary = database.get_server_by_id(primary_sid)
-        if not primary:
-            return targets
-        child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
-        for node in (primary.get("nodes") or []):
-            if not isinstance(node, dict):
+        if primary:
+            child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+            for node in (primary.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                try:
+                    child_sid = int(node.get("target_server_id") or 0)
+                except (TypeError, ValueError):
+                    child_sid = 0
+                if child_sid <= 0:
+                    continue
+                child_map = child_mappings.get(child_sid) or {}
+                child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+                child_un = str(child_map.get("marzban_username") or "").strip()
+                child_srv = database.get_server_by_id(child_sid)
+                if not child_srv or not child_uuid:
+                    continue
+                key = (child_sid, child_uuid)
+                if key in seen:
+                    continue
+                seen.add(key)
+                targets.append((child_srv, child_uuid, child_un))
+        # اگر سرویس روی نود است، خوشه کامل (parent + sibling nodes) را هم برگردان
+        # این حالت برای سرویس‌های قدیمی که server_id آنها خودِ نود است پیش می‌آید
+        parent_ids: List[int] = []
+        for srv in database.get_servers() or []:
+            for node in (srv.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                try:
+                    cid = int(node.get("target_server_id") or 0)
+                except (TypeError, ValueError):
+                    cid = 0
+                if cid == primary_sid:
+                    try:
+                        pid = int(srv.get("id") or 0)
+                    except (TypeError, ValueError):
+                        pid = 0
+                    if pid > 0 and pid not in parent_ids:
+                        parent_ids.append(pid)
+        for pid in parent_ids:
+            parent_srv = database.get_server_by_id(pid)
+            if not parent_srv:
                 continue
-            try:
-                child_sid = int(node.get("target_server_id") or 0)
-            except (TypeError, ValueError):
-                child_sid = 0
-            if child_sid <= 0:
-                continue
-            child_map = child_mappings.get(child_sid) or {}
-            child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
-            child_un = str(child_map.get("marzban_username") or "").strip()
-            child_srv = database.get_server_by_id(child_sid)
-            if not child_srv or not child_uuid:
-                continue
-            key = (child_sid, child_uuid)
-            if key in seen:
-                continue
-            seen.add(key)
-            targets.append((child_srv, child_uuid, child_un))
+            parent_uuid = str(svc.get("panel_user_uuid") or "").strip()
+            # mapping برای parent اگر وجود داشت
+            parent_map = next((m for m in mappings if int((m or {}).get("server_id") or 0) == pid), None)
+            if parent_map:
+                parent_uuid = str(parent_map.get("panel_user_uuid") or "").strip() or parent_uuid
+                parent_un = str(parent_map.get("marzban_username") or "").strip()
+            else:
+                parent_un = ""
+            key = (pid, parent_uuid)
+            if parent_uuid and key not in seen:
+                seen.add(key)
+                targets.append((parent_srv, parent_uuid, parent_un))
+            # sibling nodes of this parent
+            child_mappings2 = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+            for node in (parent_srv.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                try:
+                    child_sid = int(node.get("target_server_id") or 0)
+                except (TypeError, ValueError):
+                    child_sid = 0
+                if child_sid <= 0 or child_sid == primary_sid:
+                    continue
+                child_map = child_mappings2.get(child_sid) or {}
+                child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+                child_un = str(child_map.get("marzban_username") or "").strip()
+                child_srv = database.get_server_by_id(child_sid)
+                if not child_srv or not child_uuid:
+                    continue
+                key = (child_sid, child_uuid)
+                if key in seen:
+                    continue
+                seen.add(key)
+                targets.append((child_srv, child_uuid, child_un))
     return targets
 
 

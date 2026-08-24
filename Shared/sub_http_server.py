@@ -404,6 +404,43 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
             continue
         seen_ids.add(target_sid)
         target_servers.append(child)
+    # اگر سرورِ توکن خودش نود است، parent و sibling نودها را هم اضافه کن
+    for parent in database.get_servers() or []:
+        is_parent = False
+        for node in (parent.get("nodes") or []):
+            if not isinstance(node, dict):
+                continue
+            try:
+                cid = int(node.get("target_server_id") or 0)
+            except (TypeError, ValueError):
+                cid = 0
+            if cid == server_id:
+                is_parent = True
+                break
+        if not is_parent:
+            continue
+        try:
+            pid = int(parent.get("id") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid <= 0 or pid in seen_ids:
+            continue
+        seen_ids.add(pid)
+        target_servers.insert(0, parent)  # parent را اول قرار بده تا primary_name از آن بیاید
+        for node in (parent.get("nodes") or []):
+            if not isinstance(node, dict):
+                continue
+            try:
+                child_sid = int(node.get("target_server_id") or 0)
+            except (TypeError, ValueError):
+                child_sid = 0
+            if child_sid <= 0 or child_sid in seen_ids:
+                continue
+            child = database.get_server_by_id(child_sid)
+            if not child:
+                continue
+            seen_ids.add(child_sid)
+            target_servers.append(child)
 
     # ---- جمع‌آوری اطلاعات و کانفیگ‌ها از همه سرورها ----
     total_usage = 0.0

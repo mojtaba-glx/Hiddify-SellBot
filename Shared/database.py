@@ -153,6 +153,27 @@ def delete_server(server_id: int) -> bool:
     if len(new_servers) == len(servers):
         return False
     _save_servers(new_servers)
+    # فریز کردن حجم کاربران روی این نود تا زمان تمدید (به‌جای پاک‌کردن سرویس‌ها).
+    # به‌صورت lazy برای جلوگیری از واردات دوری (userbot_db خودش database را import می‌کند).
+    try:
+        from Shared import userbot_db
+        held = userbot_db.hold_deleted_server_nodes(server_id)
+        try:
+            import logging
+            if held:
+                logging.getLogger(__name__).info(
+                    "hold_deleted_server_nodes: server_id=%s held %s services", server_id, len(held)
+                )
+        except Exception:
+            pass
+    except Exception as e:  # noqa: BLE001
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "hold_deleted_server_nodes failed for server_id=%s: %s", server_id, e, exc_info=True
+            )
+        except Exception:
+            pass
     return True
 
 
@@ -721,85 +742,7 @@ def delete_plan(server_id: int, plan_id: int) -> bool:
     _save_plans_data(data)
     return len(server["plans"]) != before
 
-def get_payment_stats(status: str = None, method: str = None) -> Dict[str, Any]:
-    """
-    محاسبه آمار تراکنش‌ها برای هدر لیست (تعداد و مبلغ کل، ۳۰ روزه، ماه جاری)
-    """
-    init_db()
-    conn = _get_conn()
-    cur = conn.cursor()
 
-    # شرط‌های پایه
-    base_where = "WHERE 1=1"
-    params = []
-    if status:
-        base_where += " AND status = ?"
-        params.append(status)
-    if method:
-        base_where += " AND method = ?"
-        params.append(method)
-
-    # 1. آمار کل
-    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount), 0) as total FROM userbot_payments {base_where}", params)
-    total_row = cur.fetchone()
-
-    # 2. آمار 30 روز گذشته
-    # (تاریخ در دیتابیس به صورت String ذخیره شده، با تابع date مقایسه می‌کنیم)
-    # فرمت تاریخ باید YYYY-MM-DD ... باشد
-    where_30 = base_where + " AND date(created_at) >= date('now', '-30 days')"
-    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount), 0) as total FROM userbot_payments {where_30}", params)
-    last30_row = cur.fetchone()
-
-    # 3. آمار ماه جاری (میلادی)
-    where_month = base_where + " AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
-    cur.execute(f"SELECT COUNT(*) as cnt, COALESCE(SUM(amount), 0) as total FROM userbot_payments {where_month}", params)
-    month_row = cur.fetchone()
-
-    conn.close()
-
-    return {
-        "total_count": total_row['cnt'],
-        "total_amount": total_row['total'],
-        "last30_count": last30_row['cnt'],
-        "last30_amount": last30_row['total'],
-        "month_count": month_row['cnt'],
-        "month_amount": month_row['total'],
-    }
-
-def get_payments_list_paginated(status: str = None, method: str = None, page: int = 1, page_size: int = 21) -> List[Dict[str, Any]]:
-    """
-    گرفتن لیست تراکنش‌ها فقط برای نمایش دکمه‌ها (شناسه و ...)
-    """
-    init_db()
-    if page < 1: page = 1
-    offset = (page - 1) * page_size
-    
-    conn = _get_conn()
-    cur = conn.cursor()
-
-    query = "SELECT id, amount, user_id FROM userbot_payments WHERE 1=1"
-    params = []
-
-    if status:
-        query += " AND status = ?"
-        params.append(status)
-    
-    if method:
-        query += " AND method = ?"
-        params.append(method)
-
-    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-    params.extend([page_size, offset])
-    
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-    
-    return [dict(r) for r in rows]
-
-# ... (ادامه فایل Shared/database.py) ...
-
-import random
 
 # ===============================
 #   تنظیمات و کارت‌های بانکی

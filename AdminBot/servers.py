@@ -2026,9 +2026,23 @@ async def send_servers_list(
     servers = database.get_servers()
     child_ids = _get_child_server_ids()
     count = sum(1 for s in servers if int((s or {}).get("id") or 0) not in child_ids)
+    # خلاصه یخ‌زدگی برای داشبورد
+    try:
+        from Shared import userbot_db as _ub
+        _fr = _ub.get_frozen_nodes_summary()
+        _frozen = int(_fr.get("frozen_nodes") or 0)
+        _deleted = int(_fr.get("deleted_nodes") or 0)
+        _fserv = int(_fr.get("frozen_services") or 0)
+        if _frozen or _deleted:
+            _frozen_line = f"\n❄️ یخ‌زده: {_frozen} نود ({_fserv} سرویس) | 🗑 حذف‌شده: {_deleted} نود"
+        else:
+            _frozen_line = "\n✅ همه نودها فعال"
+    except Exception:
+        _frozen_line = ""
     text = (
         "‏🖥 مدیریت سرورها\n"
         "⬇️ لیست سرور های شما"
+        f"{_frozen_line}"
     )
     kb = build_servers_inline_keyboard()
 
@@ -2444,6 +2458,18 @@ async def send_user_list(
         users = database.get_users(server_id)
         source = "local"
 
+    # شناسایی کاربرانی که نودشان روی این سرور یخ‌زده (قطع) است
+    frozen_uuids: set = set()
+    try:
+        _stats = userbot_db.get_service_node_stats_for_server(server_id)
+        for _st in (_stats or []):
+            if int(_st.get("frozen") or 0) > 0:
+                _fu = _st.get("panel_user_uuid")
+                if _fu:
+                    frozen_uuids.add(str(_fu).strip())
+    except Exception:
+        frozen_uuids = set()
+
     total_users = len(users)
     online_users = offline_users = expired_users = 0
     items: List[tuple[str, str, str]] = []
@@ -2508,6 +2534,8 @@ async def send_user_list(
         else:
             emoji = "🟡"
         label = f"{emoji}{name}"
+        if str(user_uuid).strip() in frozen_uuids:
+            label = f"❄️{label}"
         page_buttons.append(
             InlineKeyboardButton(
                 label,
@@ -2548,6 +2576,7 @@ async def send_user_list(
     if source == "local":
         extra = "\n\n⚠️ اتصال به Hiddify API انجام نشد، لیست از دیتابیس محلی خوانده شد."
 
+    frozen_users = sum(1 for _, _, uid in items if str(uid).strip() in frozen_uuids)
     text = (
         "[📋 لیست کاربران]\n"
         "❕ شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید.\n"
@@ -2555,7 +2584,8 @@ async def send_user_list(
         f"👥 تعداد کاربران: {total_users}\n"
         f"🔵 آنلاین: {online_users}\n"
         f"🟡 آفلاین: {offline_users}\n"
-        f"🔴 منقضی شده: {expired_users}"
+        f"🔴 منقضی شده: {expired_users}\n"
+        f"❄️ یخ‌زده (نود قطع): {frozen_users}"
         f"{extra}"
     )
     kb = InlineKeyboardMarkup(keyboard_rows)
@@ -6380,17 +6410,7 @@ async def handle_server_inline_callback(
 
             if choice == "yes":
                 try:
-                    removed_services = 0
-                    try:
-                        removed_services = int(
-                            userbot_db.delete_services_by_server(server_id) or 0
-                        )
-                    except Exception as cleanup_err:
-                        logger.warning(
-                            "Failed deleting userbot services for server_id=%s during server delete: %s",
-                            server_id,
-                            cleanup_err,
-                        )
+                    frozen_service_ids: List[int] = []
                     # اگر این سرور یک نود است، از لیست والد هم حذف شود
                     try:
                         for parent in (database.get_servers() or []):
@@ -6411,13 +6431,29 @@ async def handle_server_inline_callback(
                                 database.update_server(parent_id, {"nodes": new_parent_nodes})
                     except Exception as parent_cleanup_err:
                         logger.warning("Failed cleaning parent nodes for server_id=%s: %s", server_id, parent_cleanup_err)
+                    # حذف سرور: حجم کاربران روی این نود «فریز» می‌شود (نه پاک‌شدن سرویس‌ها).
+                    # database.delete_server خودش hold_deleted_server_nodes را صدا می‌زند.
                     database.delete_server(server_id)
+                    try:
+                        frozen_service_ids = userbot_db.hold_deleted_server_nodes(server_id) or []
+                    except Exception as hold_err:
+                        logger.warning("hold_deleted_server_nodes failed: %s", hold_err)
+                    try:
+                        from Shared.admin_notify import notify_admin
+                        if frozen_service_ids:
+                            await notify_admin(
+                                f"🗑️ سرور حذف شد و حجم {len(frozen_service_ids)} سرویس روی آن "
+                                f"فریز شد (تا زمان تمدید نگه داشته می‌شود)."
+                            )
+                    except Exception as notify_err:
+                        logger.warning("notify admin on server delete failed: %s", notify_err)
                 except Exception as e:
                     await msg.edit_text(f"❌ خطا در حذف سرور:\n{e}")
                     return
 
                 await msg.edit_text(
-                    f"✅ سرور با موفقیت حذف شد.\n🧹 سرویس‌های پاک‌شده از دیتابیس ربات: {removed_services}"
+                    f"✅ سرور حذف شد.\n🧊 حجم {len(frozen_service_ids)} سرویس روی این نود فریز شد "
+                    f"(تا تمدید نگه داشته می‌شود)."
                 )
                 await send_servers_list(chat_id, context)
                 return

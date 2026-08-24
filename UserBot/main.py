@@ -2686,8 +2686,11 @@ async def _apply_service_renewal_on_targets(
     if service_id > 0:
         try:
             userbot_db.set_service_nodes_active(service_id, 1)
+            # ریست کامل حسابداری نودها: حذف رکوردهای نودِ حذف‌شده (شبح) و صفر/یخ‌زدایی
+            # بقیه نودها (شروع دورهٔ جدید اشتراک).
+            userbot_db.reset_service_nodes_on_renew(service_id)
         except Exception as e:
-            logger.warning("Failed to re-enable service_nodes after renewal (service_id=%s): %s", service_id, e)
+            logger.warning("Failed to re-enable/reset service_nodes after renewal (service_id=%s): %s", service_id, e)
     return final_limit, final_days, last_online, failed_servers
 
 
