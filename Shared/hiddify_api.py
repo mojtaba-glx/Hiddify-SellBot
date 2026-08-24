@@ -206,7 +206,8 @@ def _build_insecure_ssl_context() -> ssl.SSLContext:
 # Reuse httpx clients per Hiddify server to avoid re-creating SSL contexts
 # on every get_user_by_uuid (was ~60 creations per 20s → CPU hotspot in
 # httpx/_config.py:load_ssl_context_verify).
-_HIDDIFY_CLIENT_CACHE: Dict[Any, Tuple[float, httpx.AsyncClient]] = {}
+# NOTE: AsyncClient is loop-bound; cache stores loop/thread to avoid "Event loop is closed" when reused across asyncio.run calls.
+_HIDDIFY_CLIENT_CACHE: Dict[Any, Tuple[float, httpx.AsyncClient, Any, int]] = {}
 _HIDDIFY_CLIENT_TTL = float(os.getenv("HIDDIFY_CLIENT_CACHE_SECONDS", "60") or "60")
 _hiddify_cache_lock = threading.Lock()
 
@@ -219,16 +220,50 @@ async def _get_hiddify_client(server: Dict[str, Any], verify: Any) -> httpx.Asyn
     verify_key = "insecure" if isinstance(verify, ssl.SSLContext) else str(verify)
     key = _hiddify_cache_key(server, verify_key)
     now = time.monotonic()
+    try:
+        cur_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        cur_loop = None
+    cur_thread = threading.get_ident()
     with _hiddify_cache_lock:
         cached = _HIDDIFY_CLIENT_CACHE.get(key)
-        if cached is not None and now < cached[0] and not cached[1].is_closed:
-            return cached[1]
+        if cached is not None:
+            try:
+                exp, c_cli, c_loop, c_thread = cached  # type: ignore
+            except ValueError:
+                exp, c_cli = cached  # type: ignore
+                c_loop, c_thread = None, None
+            if now < exp and not c_cli.is_closed and c_loop is cur_loop and c_thread == cur_thread:
+                return c_cli
     timeout = _get_api_timeout_seconds()
     client = httpx.AsyncClient(timeout=timeout, verify=verify)
     with _hiddify_cache_lock:
         old = _HIDDIFY_CLIENT_CACHE.get(key)
-        _HIDDIFY_CLIENT_CACHE[key] = (now + _HIDDIFY_CLIENT_TTL, client)
-        superseded = old[1] if (old is not None and old[1] is not client) else None
+        # check if another waiter already inserted
+        if old is not None:
+            try:
+                exp2, e_cli, e_loop, e_thread = old  # type: ignore
+            except ValueError:
+                exp2, e_cli = old  # type: ignore
+                e_loop, e_thread = None, None
+            if time.monotonic() < exp2 and not e_cli.is_closed and e_loop is cur_loop and e_thread == cur_thread and e_cli is not client:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+                return e_cli
+        _HIDDIFY_CLIENT_CACHE[key] = (now + _HIDDIFY_CLIENT_TTL, client, cur_loop, cur_thread)
+        superseded = None
+        if old is not None:
+            try:
+                _, old_cli, _, _ = old  # type: ignore
+                superseded = old_cli if old_cli is not client else None
+            except ValueError:
+                try:
+                    _, old_cli = old  # type: ignore
+                    superseded = old_cli if old_cli is not client else None
+                except Exception:
+                    superseded = None
     if superseded is not None and not superseded.is_closed:
         try:
             await superseded.aclose()

@@ -695,7 +695,9 @@ def _normalize_user(
 # which produced hundreds of concurrent login POSTs per cycle and pinned the
 # CPU. We cache the authenticated httpx.AsyncClient per server for a short TTL
 # so repeated calls reuse the same session instead of re-logging-in each time.
-_XUI_SESSION_CACHE: Dict[Any, Tuple[float, "httpx.AsyncClient"]] = {}
+# NOTE: httpx.AsyncClient is bound to the event loop that created it; reuse
+# across ThreadingHTTPServer threads (sub_http_server) causes "Event loop is closed".
+_XUI_SESSION_CACHE: Dict[Any, Tuple[float, "httpx.AsyncClient", Any, int]] = {}
 _XUI_SESSION_TTL_SECONDS = float(os.getenv("XUI_SESSION_TTL_SECONDS", "60") or "60")
 _xui_cache_lock = threading.Lock()
 _xui_client_async_locks: Dict[Any, asyncio.Lock] = {}
@@ -744,10 +746,22 @@ async def _acquire_xui_client(server: Dict[str, Any]) -> "httpx.AsyncClient":
         _xui_client_async_locks[key] = async_lock
     async with async_lock:
         now = time.monotonic()
+        try:
+            cur_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            cur_loop = None
+        cur_thread = threading.get_ident()
         with _xui_cache_lock:
             cached = _XUI_SESSION_CACHE.get(key)
-            if cached is not None and now < cached[0] and not cached[1].is_closed:
-                return cached[1]
+            if cached is not None:
+                # unpack with compat for old 2-tuple
+                try:
+                    exp, c_cli, c_loop, c_thread = cached  # type: ignore
+                except ValueError:
+                    exp, c_cli = cached  # type: ignore
+                    c_loop, c_thread = None, None
+                if now < exp and not c_cli.is_closed and c_loop is cur_loop and c_thread == cur_thread:
+                    return c_cli
         client = await _build_xui_client(server)
         try:
             await _login_xui_client(client, server)
@@ -760,16 +774,36 @@ async def _acquire_xui_client(server: Dict[str, Any]) -> "httpx.AsyncClient":
         with _xui_cache_lock:
             # re-check: another waiter may have already inserted a fresh client while we were logging in
             existing = _XUI_SESSION_CACHE.get(key)
-            if existing is not None and time.monotonic() < existing[0] and not existing[1].is_closed and existing[1] is not client:
-                # keep the existing one, close the one we just created
+            if existing is not None:
                 try:
-                    await client.aclose()
-                except Exception:
-                    pass
-                return existing[1]
+                    exp2, e_cli, e_loop, e_thread = existing  # type: ignore
+                except ValueError:
+                    exp2, e_cli = existing  # type: ignore
+                    e_loop, e_thread = None, None
+                if time.monotonic() < exp2 and not e_cli.is_closed and e_loop is cur_loop and e_thread == cur_thread and e_cli is not client:
+                    # keep the existing one, close the one we just created
+                    try:
+                        await client.aclose()
+                    except Exception:
+                        pass
+                    return e_cli
             old = existing
-            _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client)
-            superseded = old[1] if (old is not None and old[1] is not client) else None
+            _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client, cur_loop, cur_thread)
+            try:
+                superseded = old[1] if (old is not None and old[1] is not client) else None  # type: ignore
+            except Exception:
+                superseded = None
+            # old may be 2-tuple
+            if old is not None:
+                try:
+                    _, old_cli, _, _ = old  # type: ignore
+                    superseded = old_cli if old_cli is not client else None
+                except ValueError:
+                    try:
+                        _, old_cli = old  # type: ignore
+                        superseded = old_cli if old_cli is not client else None
+                    except Exception:
+                        superseded = None
         if superseded is not None and not superseded.is_closed:
             try:
                 await superseded.aclose()
@@ -790,10 +824,25 @@ async def _refresh_xui_client(server: Dict[str, Any], *, insecure: bool = False)
         except Exception:
             pass
         raise
+    try:
+        cur_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        cur_loop = None
+    cur_thread = threading.get_ident()
     with _xui_cache_lock:
         old = _XUI_SESSION_CACHE.get(key)
-        _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client)
-        superseded = old[1] if (old is not None and old[1] is not client) else None
+        _XUI_SESSION_CACHE[key] = (time.monotonic() + _XUI_SESSION_TTL_SECONDS, client, cur_loop, cur_thread)
+        superseded = None
+        if old is not None:
+            try:
+                _, old_cli, _, _ = old  # type: ignore
+                superseded = old_cli if old_cli is not client else None
+            except ValueError:
+                try:
+                    _, old_cli = old  # type: ignore
+                    superseded = old_cli if old_cli is not client else None
+                except Exception:
+                    superseded = None
     if superseded is not None and not superseded.is_closed:
         try:
             await superseded.aclose()
