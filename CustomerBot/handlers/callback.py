@@ -683,34 +683,75 @@ async def _send_service_direct_configs(msg, svc):
     fallback_base = base_urls[0] if base_urls else ""
     is_xui_fallback = "/sub/" in str(fallback_base or "")
 
-    if not links:
-        # X-UI: try API fallback before showing empty
-        if is_xui_fallback:
-            try:
-                from Shared.sub_links import get_service_panel_targets
-                from Shared.sub_aggregator import _fetch_lines_from_admin_api, _is_config_line, _is_panel_status_config_line
-                seen_api = set()
-                api_links = []
-                for srv, uuid, marzban_un in get_service_panel_targets(svc):
-                    try:
-                        api_lines = await asyncio.to_thread(_fetch_lines_from_admin_api, srv, uuid, marzban_un)
-                    except Exception:
-                        api_lines = []
-                    for ln in api_lines or []:
-                        raw = str(ln or "").strip()
-                        if not raw or raw in seen_api:
-                            continue
-                        if not _is_config_line(raw) or _is_panel_status_config_line(raw):
-                            continue
-                        seen_api.add(raw)
-                        api_links.append(raw)
-                if api_links:
-                    links = api_links
-                    source_hint = "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ کانفیگ‌ها از API پنل خوانده شد.\n\n"
-                else:
-                    pass
-            except Exception:
-                pass
+    # X-UI standalone HTTP اغلب خالی است؛ حتی اگر links (هیدیفای) پر باشد، X-UI را از API تکمیل کن
+    needs_xui_supplement = any("/sub/" in str(b or "") for b in (get_service_node_base_urls(svc) or []))
+    if needs_xui_supplement:
+        try:
+            from Shared.sub_links import get_service_panel_targets
+            from Shared.sub_aggregator import _fetch_lines_from_admin_api, _is_config_line, _is_panel_status_config_line
+            from Shared import xui_api
+            seen_api = set(str(l).strip() for l in links or [])
+            api_links = list(links or [])
+            supplemented = False
+            for srv, uuid, marzban_un in get_service_panel_targets(svc):
+                if not srv or not uuid:
+                    continue
+                # فقط نودهای X-UI که HTTP شان خالی مانده را از API بگیر
+                try:
+                    is_xui_node = xui_api.is_xui_server(srv)
+                except Exception:
+                    is_xui_node = False
+                if not is_xui_node:
+                    continue
+                try:
+                    # مستقیم در لوپ اصلی صدا بزن تا xui_api کش لوپ اصلی را reuse کند (to_thread باعث Event loop is closed می‌شد)
+                    api_lines = _fetch_lines_from_admin_api(srv, uuid, marzban_un)
+                except Exception:
+                    api_lines = []
+                added_here = 0
+                for ln in api_lines or []:
+                    raw = str(ln or "").strip()
+                    if not raw or raw in seen_api:
+                        continue
+                    if not _is_config_line(raw) or _is_panel_status_config_line(raw):
+                        continue
+                    seen_api.add(raw)
+                    api_links.append(raw)
+                    added_here += 1
+                if added_here:
+                    supplemented = True
+            if supplemented:
+                links = api_links
+                if not source_hint:
+                    source_hint = "⚠️ برخی کانفیگ‌ها از API پنل تکمیل شد (لینک مستقیم X-UI در دسترس نبود).\n\n"
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug("X-UI supplement failed: %s", e)
+    if not links and is_xui_fallback:
+        # قدیمی: اگر هنوز خالی بود، همان فال‌بک کلی
+        try:
+            from Shared.sub_links import get_service_panel_targets as _g2
+            from Shared.sub_aggregator import _fetch_lines_from_admin_api as _f2, _is_config_line as _ic2, _is_panel_status_config_line as _ipc2
+            seen_api = set()
+            api_links = []
+            for srv, uuid, marzban_un in _g2(svc):
+                try:
+                    api_lines = _f2(srv, uuid, marzban_un)
+                except Exception:
+                    api_lines = []
+                for ln in api_lines or []:
+                    raw = str(ln or "").strip()
+                    if not raw or raw in seen_api:
+                        continue
+                    if not _ic2(raw) or _ipc2(raw):
+                        continue
+                    seen_api.add(raw)
+                    api_links.append(raw)
+            if api_links:
+                links = api_links
+                source_hint = "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ کانفیگ‌ها از API پنل خوانده شد.\n\n"
+        except Exception:
+            pass
         if not links:
             msg_text = "❌ کانفیگی از لینک اشتراک استخراج نشد."
             if fallback_base:
