@@ -880,7 +880,15 @@ class _XuiContext:
                 raise XuiApiError(f"خطا در ارتباط با پنل X-UI: {exc}") from exc
             except httpx.RequestError as exc:
                 msg = str(exc).strip() or exc.__class__.__name__
-                if hiddify_api._is_transient_network_error(exc):
+                # transient (timeout/read/connect) → یک بار رفرش + ریتری
+                if hiddify_api._is_transient_network_error(exc) or isinstance(exc, (httpx.ReadError, httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout)):
+                    if attempt == 1:
+                        await asyncio.sleep(0.6)
+                        try:
+                            self.client = await _acquire_xui_client(self.server)
+                        except Exception:
+                            pass
+                        continue
                     raise XuiApiError(f"خطای شبکه در ارتباط با پنل X-UI: {msg}") from exc
                 if (
                     self._mode == hiddify_api.SSL_MODE_AUTO
@@ -937,6 +945,18 @@ class _XuiContext:
                         self.client = await _acquire_xui_client(self.server)
                     continue
                 raise XuiApiError(f"خطا در ارتباط با پنل X-UI: {exc}") from exc
+            except httpx.RequestError as exc:
+                msg = str(exc).strip() or exc.__class__.__name__
+                if hiddify_api._is_transient_network_error(exc) or isinstance(exc, (httpx.ReadError, httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout)):
+                    if attempt == 1:
+                        await asyncio.sleep(0.6)
+                        try:
+                            self.client = await _acquire_xui_client(self.server)
+                        except Exception:
+                            pass
+                        continue
+                    raise XuiApiError(f"خطای شبکه در ارتباط با پنل X-UI: {msg}") from exc
+                raise XuiApiError(f"خطا در ارتباط با پنل X-UI: {msg}") from exc
             if resp.status_code == 401 and allow_login_retry and attempt == 1:
                 await self._ensure_login()
                 continue
