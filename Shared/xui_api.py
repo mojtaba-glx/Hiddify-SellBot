@@ -1278,36 +1278,46 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
         unique_base = _unique_xui_email(sanitized_base, existing, user_uuid)
 
     last_norm = None
+    errors: List[str] = []
     async with _XuiContext(server) as ctx:
         for idx, (inbound, client) in enumerate(pairs):
-            protocol = (inbound.get("protocol") or "").strip().lower()
-            cur_ms = _to_int(client.get("expiryTime"), 0)
-            new_client = dict(client)
-            new_client = _apply_payload_to_client(new_client, protocol, payload, cur_ms=cur_ms)
-            # اگر نام جدید آمد، ایمیل را هم با الگوی یونیک به‌روز کن
-            if raw_name_global:
-                if len(pairs) == 1:
-                    new_client["email"] = unique_base
-                else:
-                    new_client["email"] = unique_base if idx == 0 else f"{unique_base}-{_to_int(inbound.get('id'), 0)}"
-            client_id = _client_id_for_url(client, protocol)
-            settings_body = json.dumps({"clients": [new_client]})
-            await ctx.request(
-                "POST",
-                f"inbounds/updateClient/{quote(client_id, safe='')}",
-                json_body={"id": _to_int(inbound.get("id"), 0), "settings": settings_body},
-            )
-            if _should_reset_traffic(payload):
-                try:
-                    await ctx.request(
-                        "POST",
-                        f"inbounds/{_to_int(inbound.get('id'), 0)}/resetClientTraffic/{quote(client_id, safe='')}",
-                        allow_login_retry=False,
-                    )
-                except Exception:
-                    pass
-            last_norm = _normalize_user(new_client, inbound, server)
-    assert last_norm is not None
+            try:
+                protocol = (inbound.get("protocol") or "").strip().lower()
+                cur_ms = _to_int(client.get("expiryTime"), 0)
+                new_client = dict(client)
+                new_client = _apply_payload_to_client(new_client, protocol, payload, cur_ms=cur_ms)
+                # اگر نام جدید آمد، ایمیل را هم با الگوی یونیک به‌روز کن
+                if raw_name_global:
+                    if len(pairs) == 1:
+                        new_client["email"] = unique_base
+                    else:
+                        new_client["email"] = unique_base if idx == 0 else f"{unique_base}-{_to_int(inbound.get('id'), 0)}"
+                client_id = _client_id_for_url(client, protocol)
+                settings_body = json.dumps({"clients": [new_client]})
+                await ctx.request(
+                    "POST",
+                    f"inbounds/updateClient/{quote(client_id, safe='')}",
+                    json_body={"id": _to_int(inbound.get("id"), 0), "settings": settings_body},
+                )
+                if _should_reset_traffic(payload):
+                    try:
+                        await ctx.request(
+                            "POST",
+                            f"inbounds/{_to_int(inbound.get('id'), 0)}/resetClientTraffic/{quote(client_id, safe='')}",
+                            allow_login_retry=False,
+                        )
+                    except Exception:
+                        pass
+                last_norm = _normalize_user(new_client, inbound, server)
+            except Exception as e:
+                err = f"inbound { _to_int(inbound.get('id'),0) }/{client.get('email')}: {e}"
+                logger.warning("X-UI patch inbound failed user=%s %s", user_uuid[:8], err)
+                errors.append(err)
+                continue
+    if last_norm is None:
+        raise XuiApiError(f"patch failed on all inbounds for {user_uuid[:8]}: {'; '.join(errors[:2])}")
+    if errors:
+        logger.warning("X-UI patch partial success user=%s errors=%s", user_uuid[:8], "; ".join(errors[:2]))
     _invalidate_xui_inbounds_cache(server)
     return last_norm
 
