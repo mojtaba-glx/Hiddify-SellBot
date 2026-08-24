@@ -35,19 +35,6 @@ from collections import defaultdict
 # قفل (lock) برای جلوگیری از race condition در ویزارد خرید
 _USER_WIZARD_LOCKS: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-# قفل برای ارسال گزارش رسید به ادمین (جلوگیری از دوبار ارسال همزمان برای یک payment_id)
-_ADMIN_PENDING_LOCKS: Dict[int, asyncio.Lock] = {}
-_ADMIN_PENDING_LOCKS_GUARD = threading.Lock()
-
-def _get_admin_pending_lock(payment_id: int) -> asyncio.Lock:
-    pid = int(payment_id or 0)
-    with _ADMIN_PENDING_LOCKS_GUARD:
-        lock = _ADMIN_PENDING_LOCKS.get(pid)
-        if lock is None:
-            lock = asyncio.Lock()
-            _ADMIN_PENDING_LOCKS[pid] = lock
-        return lock
-
 # Version compatibility matrix
 REQUIRED_VERSIONS = {
     'python-telegram-bot': '>=20.0'
@@ -4095,111 +4082,110 @@ async def _send_admin_pending_card_payment_report(
             },
         )
         return False
-    async with _get_admin_pending_lock(int(payment_id)):
-        try:
-            payment = userbot_db.get_payment_by_id(int(payment_id)) or {}
-            if str(payment.get("status") or "").strip().lower() != "pending":
-                return False
-            meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
-            if _has_active_pending_admin_report(meta):
-                if not force_recreate:
-                    return False
-                await _clear_pending_admin_payment_keyboard(payment)
-                payment = userbot_db.get_payment_by_id(int(payment_id)) or payment
-                meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
-
-            caption = _build_payment_report_caption(
-                tx_code or str(payment.get("tx_code") or ""),
-                int(amount or payment.get("amount") or 0),
-                payer_last4,
-            )
-            kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("رد ❌", callback_data=f"userbot:pay:act:reject:{payment_id}"),
-                    InlineKeyboardButton("تایید ✅", callback_data=f"userbot:pay:act:approve:{payment_id}"),
-                ],
-                [InlineKeyboardButton("📩 ارسال پیام", callback_data=f"userbot:pay:msg:{payment_id}")],
-                [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")],
-            ])
-
-            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
-            receipt_admin_fid = str(meta.get("admin_fid") or "").strip()
-            receipt_local_path = str(meta.get("local_path") or "").strip()
-            user_receipt_file_id = str(photo_file_id or meta.get("user_fid") or "").strip()
-            sent = None
-
-            try:
-                if receipt_admin_fid:
-                    sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_admin_fid, caption=caption, reply_markup=kb)
-            except Exception as e:
-                logger.warning("Failed to reuse admin receipt file_id for payment %s: %s", payment_id, e)
-
-            if sent is None and user_receipt_file_id:
-                try:
-                    f = await context.bot.get_file(user_receipt_file_id)
-                    data = await f.download_as_bytearray()
-                    bio = io.BytesIO(data)
-                    bio.name = "receipt.jpg"
-                    sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=caption, reply_markup=kb)
-                except Exception as e:
-                    logger.warning("Failed to forward user receipt to admin for payment %s: %s", payment_id, e)
-
-            if sent is None and receipt_local_path and os.path.exists(receipt_local_path):
-                try:
-                    with open(receipt_local_path, "rb") as receipt_file:
-                        sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_file, caption=caption, reply_markup=kb)
-                except Exception as e:
-                    logger.warning("Failed to send local receipt to admin for payment %s: %s", payment_id, e)
-
-            if sent is None:
-                sent = await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
-
-            try:
-                admin_file_id = (sent.photo[-1].file_id if sent and getattr(sent, "photo", None) else None)
-            except Exception:
-                admin_file_id = None
-            if admin_file_id:
-                _save_admin_receipt_file_id(int(payment_id), admin_file_id)
-
-            _update_payment_receipt_meta(
-                int(payment_id),
-                {
-                    "admin_notified_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-                    "admin_chat_id": str(getattr(getattr(sent, "chat", None), "id", ADMIN_ID) or ADMIN_ID),
-                    "admin_message_id": str(getattr(sent, "message_id", "") or ""),
-                    "admin_notify_flow": str(flow or "").strip(),
-                    "admin_notify_error": None,
-                    "admin_notify_error_at": None,
-                    "admin_message_deleted_at": None,
-                    "admin_keyboard_cleared_at": None,
-                },
-            )
-            return True
-        except Exception as e:
-            error_text = str(e)[:120]
-            _update_payment_receipt_meta(
-                int(payment_id),
-                {
-                    "admin_notify_error": error_text,
-                    "admin_notify_error_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-                },
-            )
-            logger.warning("Failed to notify admin (AdminBot) for payment %s: %s", payment_id, e)
-            try:
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=(
-                        "⚠️ گزارش پرداخت به AdminBot ارسال نشد.\n"
-                        f"🆔 شناسه پرداخت: {payment_id}\n"
-                        f"💰 مبلغ: {int(amount or 0):,} تومان\n"
-                        f"🔑 کد تراکنش: {tx_code or '-'}\n"
-                        f"خطا: {error_text}\n\n"
-                        "لطفاً ADMIN_BOT_TOKEN و ADMIN_ID را بررسی کن."
-                    ),
-                )
-            except Exception:
-                pass
+    try:
+        payment = userbot_db.get_payment_by_id(int(payment_id)) or {}
+        if str(payment.get("status") or "").strip().lower() != "pending":
             return False
+        meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
+        if _has_active_pending_admin_report(meta):
+            if not force_recreate:
+                return False
+            await _clear_pending_admin_payment_keyboard(payment)
+            payment = userbot_db.get_payment_by_id(int(payment_id)) or payment
+            meta = _parse_receipt_meta(str(payment.get("receipt_image") or ""))
+
+        caption = _build_payment_report_caption(
+            tx_code or str(payment.get("tx_code") or ""),
+            int(amount or payment.get("amount") or 0),
+            payer_last4,
+        )
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("رد ❌", callback_data=f"userbot:pay:act:reject:{payment_id}"),
+                InlineKeyboardButton("تایید ✅", callback_data=f"userbot:pay:act:approve:{payment_id}"),
+            ],
+            [InlineKeyboardButton("📩 ارسال پیام", callback_data=f"userbot:pay:msg:{payment_id}")],
+            [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")],
+        ])
+
+        admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        receipt_admin_fid = str(meta.get("admin_fid") or "").strip()
+        receipt_local_path = str(meta.get("local_path") or "").strip()
+        user_receipt_file_id = str(photo_file_id or meta.get("user_fid") or "").strip()
+        sent = None
+
+        try:
+            if receipt_admin_fid:
+                sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_admin_fid, caption=caption, reply_markup=kb)
+        except Exception as e:
+            logger.warning("Failed to reuse admin receipt file_id for payment %s: %s", payment_id, e)
+
+        if sent is None and user_receipt_file_id:
+            try:
+                f = await context.bot.get_file(user_receipt_file_id)
+                data = await f.download_as_bytearray()
+                bio = io.BytesIO(data)
+                bio.name = "receipt.jpg"
+                sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=bio, caption=caption, reply_markup=kb)
+            except Exception as e:
+                logger.warning("Failed to forward user receipt to admin for payment %s: %s", payment_id, e)
+
+        if sent is None and receipt_local_path and os.path.exists(receipt_local_path):
+            try:
+                with open(receipt_local_path, "rb") as receipt_file:
+                    sent = await admin_bot.send_photo(chat_id=ADMIN_ID, photo=receipt_file, caption=caption, reply_markup=kb)
+            except Exception as e:
+                logger.warning("Failed to send local receipt to admin for payment %s: %s", payment_id, e)
+
+        if sent is None:
+            sent = await admin_bot.send_message(chat_id=ADMIN_ID, text=caption, reply_markup=kb)
+
+        try:
+            admin_file_id = (sent.photo[-1].file_id if sent and getattr(sent, "photo", None) else None)
+        except Exception:
+            admin_file_id = None
+        if admin_file_id:
+            _save_admin_receipt_file_id(int(payment_id), admin_file_id)
+
+        _update_payment_receipt_meta(
+            int(payment_id),
+            {
+                "admin_notified_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                "admin_chat_id": str(getattr(getattr(sent, "chat", None), "id", ADMIN_ID) or ADMIN_ID),
+                "admin_message_id": str(getattr(sent, "message_id", "") or ""),
+                "admin_notify_flow": str(flow or "").strip(),
+                "admin_notify_error": None,
+                "admin_notify_error_at": None,
+                "admin_message_deleted_at": None,
+                "admin_keyboard_cleared_at": None,
+            },
+        )
+        return True
+    except Exception as e:
+        error_text = str(e)[:120]
+        _update_payment_receipt_meta(
+            int(payment_id),
+            {
+                "admin_notify_error": error_text,
+                "admin_notify_error_at": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        logger.warning("Failed to notify admin (AdminBot) for payment %s: %s", payment_id, e)
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "⚠️ گزارش پرداخت به AdminBot ارسال نشد.\n"
+                    f"🆔 شناسه پرداخت: {payment_id}\n"
+                    f"💰 مبلغ: {int(amount or 0):,} تومان\n"
+                    f"🔑 کد تراکنش: {tx_code or '-'}\n"
+                    f"خطا: {error_text}\n\n"
+                    "لطفاً ADMIN_BOT_TOKEN و ADMIN_ID را بررسی کن."
+                ),
+            )
+        except Exception:
+            pass
+        return False
 
 
 async def _notify_unreported_pending_card_payments(context: ContextTypes.DEFAULT_TYPE, *, limit: int = 30) -> int:
