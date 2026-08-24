@@ -55,8 +55,10 @@ async def run_server_health_check() -> Dict[str, int]:
             return sid, title, False, "invalid id"
         async with sem:
             try:
+                # hiddify_api.test_connect وجود ندارد؛ برای هر دو نوع پنل list_users کافیست
+                # (برای X-UI داخل hiddify_api به xui_api واگذار می‌شود)
                 await asyncio.wait_for(
-                    hiddify_api.test_connect(srv), timeout=max(3.0, SERVER_HEALTH_TIMEOUT)
+                    hiddify_api.list_users(srv), timeout=max(3.0, SERVER_HEALTH_TIMEOUT)
                 )
                 return sid, title, True, ""
             except Exception as e:
