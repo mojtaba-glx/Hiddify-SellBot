@@ -870,8 +870,9 @@ class _XuiContext:
                     self.client = await _acquire_xui_client(self.server)
                 resp = await self.client.request(method, url, headers=headers, json=json_body)
             except RuntimeError as exc:
-                # httpx raises RuntimeError: Cannot send a request, as the client has been closed.
-                if "has been closed" in str(exc).lower() and attempt == 1:
+                # httpx raises RuntimeError: Cannot send a request, as the client has been closed / Event loop is closed
+                low = str(exc).lower()
+                if ("has been closed" in low or "event loop is closed" in low or "closed" in low) and attempt == 1:
                     try:
                         self.client = await _refresh_xui_client(self.server)
                     except Exception:
@@ -938,7 +939,8 @@ class _XuiContext:
                     self.client = await _acquire_xui_client(self.server)
                 resp = await self.client.request(method, url, headers=headers)
             except RuntimeError as exc:
-                if "has been closed" in str(exc).lower() and attempt == 1:
+                low = str(exc).lower()
+                if ("has been closed" in low or "event loop is closed" in low or "closed" in low) and attempt == 1:
                     try:
                         self.client = await _refresh_xui_client(self.server)
                     except Exception:
@@ -948,7 +950,6 @@ class _XuiContext:
             except httpx.RequestError as exc:
                 msg = str(exc).strip() or exc.__class__.__name__
                 if hiddify_api._is_transient_network_error(exc) or isinstance(exc, (httpx.ReadError, httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout)):
-                    if attempt == 1:
                         await asyncio.sleep(0.6)
                         try:
                             self.client = await _acquire_xui_client(self.server)
