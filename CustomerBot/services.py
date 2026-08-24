@@ -2,6 +2,7 @@
 # Business logic: buy service, renew, get configs
 # All actions go through agent_db + Hiddify API
 
+import asyncio
 import base64
 import logging
 import os
@@ -143,12 +144,29 @@ async def buy_service(
         panel_user = None
         primary_marzban = ""
         for idx, tgt in enumerate(targets):
-            try:
-                created = await multi_panel.create_user(tgt, payload)
-            except Exception as e:
-                if idx == 0:
-                    raise
-                logger.warning("Cluster node create_user failed server=%s: %s", tgt.get("id"), e)
+            created = None
+            last_exc = None
+            for attempt in (1, 2):
+                try:
+                    created = await multi_panel.create_user(tgt, payload)
+                    last_exc = None
+                    break
+                except Exception as e:
+                    last_exc = e
+                    msg = str(e).lower()
+                    is_transient = any(k in msg for k in ("readerror", "connecterror", "timeout", "timed out", "connection", "temporarily"))
+                    if idx == 0:
+                        if is_transient and attempt == 1:
+                            await asyncio.sleep(0.7)
+                            continue
+                        raise
+                    if is_transient and attempt == 1:
+                        logger.warning("Cluster node create_user transient retry server=%s attempt=%s: %s", tgt.get("id"), attempt, e)
+                        await asyncio.sleep(0.7)
+                        continue
+                    logger.warning("Cluster node create_user failed server=%s: %s", tgt.get("id"), e)
+                    break
+            if last_exc is not None and created is None:
                 continue
             created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if not created_uuid:

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -54,12 +55,29 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
     created_nodes: List[dict] = []
     primary_created: Optional[Dict[str, Any]] = None
     for idx, srv in enumerate(targets):
-        try:
-            created = await multi_panel.create_user(srv, payload_base)
-        except Exception as e:
-            if idx == 0:
-                raise
-            logger.warning("Cluster node create_user failed server=%s: %s", srv.get("id"), e)
+        created = None
+        last_exc = None
+        for attempt in (1, 2):
+            try:
+                created = await multi_panel.create_user(srv, payload_base)
+                last_exc = None
+                break
+            except Exception as e:
+                last_exc = e
+                msg = str(e).lower()
+                is_transient = any(k in msg for k in ("readerror", "connecterror", "timeout", "timed out", "connection", "temporarily", "read error"))
+                if idx == 0:
+                    if is_transient and attempt == 1:
+                        await asyncio.sleep(0.7)
+                        continue
+                    raise
+                if is_transient and attempt == 1:
+                    logger.warning("Cluster node create_user transient retry server=%s attempt=%s: %s", srv.get("id"), attempt, e)
+                    await asyncio.sleep(0.7)
+                    continue
+                logger.warning("Cluster node create_user failed server=%s: %s", srv.get("id"), e)
+                break
+        if last_exc is not None and created is None:
             continue
         user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
         if not user_uuid:
