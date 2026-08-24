@@ -837,41 +837,40 @@ def _fetch_remote_lines(url: str) -> List[str]:
 
 
 def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
-    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)
-
-    فقط کانفیگ‌های واقعی و فعال گرفته می‌شود؛ کانفیگ‌های وضعیت مصنوعی
-    (fake_ip_for_sub_link / status.hiddify-sellbot.invalid) فیلتر می‌شوند.
-    برای X-UI base_url خودش sub کامل است (/sub/{uuid}) و نباید /all.txt اضافه شود.
-    """
-    def _is_internal_status(raw: str) -> bool:
-        low = raw.lower()
-        return ("fake_ip_for_sub_link" in low) or ("status.hiddify-sellbot.invalid" in low) or ("hiddify-sellbot.invalid" in low and "fake_ip" in low)
-
-    out: List[str] = []
-    seen_links: set = set()
-    for base_url in get_service_node_base_urls(svc):
-        seen_lines: set = set()
-        is_xui = "/sub/" in str(base_url or "")
-        if is_xui:
-            suffixes = ("", "?base64=1")
-        else:
-            suffixes = ("all.txt", "all.txt?base64=1")
-        for suffix in suffixes:
-            url = base_url if is_xui and not suffix else (f"{base_url}{suffix}" if is_xui else f"{base_url}/{suffix}")
-            lines = _fetch_remote_lines(url)
-            for ln in lines:
-                raw = _sanitize_config_text(ln)
-                if not raw or raw in seen_lines:
-                    continue
-                seen_lines.add(raw)
-                link = _extract_config_link_from_line(raw)
-                if not link or link in seen_links:
-                    continue
-                if _is_internal_status(link):
-                    continue
-                seen_links.add(link)
-                out.append(link)
-    return out
+    """جمع‌آوری کانفیگ‌های مستقیم — اکنون directly به Shared واگذار می‌شود تا per-node fallback (HTTP→API) برای X-UI اعمال شود."""
+    try:
+        from Shared.sub_links import collect_all_direct_configs_for_service as _shared_collect
+        return _shared_collect(svc)
+    except Exception as e:
+        logger.warning("CustomerBot collect fallback to local impl: %s", e)
+        def _is_internal_status(raw: str) -> bool:
+            low = raw.lower()
+            return ("fake_ip_for_sub_link" in low) or ("status.hiddify-sellbot.invalid" in low) or ("hiddify-sellbot.invalid" in low and "fake_ip" in low)
+        out: List[str] = []
+        seen_links: set = set()
+        for base_url in get_service_node_base_urls(svc):
+            seen_lines: set = set()
+            is_xui = "/sub/" in str(base_url or "")
+            if is_xui:
+                suffixes = ("", "?base64=1")
+            else:
+                suffixes = ("all.txt", "all.txt?base64=1")
+            for suffix in suffixes:
+                url = base_url if is_xui and not suffix else (f"{base_url}{suffix}" if is_xui else f"{base_url}/{suffix}")
+                lines = _fetch_remote_lines(url)
+                for ln in lines:
+                    raw = _sanitize_config_text(ln)
+                    if not raw or raw in seen_lines:
+                        continue
+                    seen_lines.add(raw)
+                    link = _extract_config_link_from_line(raw)
+                    if not link or link in seen_links:
+                        continue
+                    if _is_internal_status(link):
+                        continue
+                    seen_links.add(link)
+                    out.append(link)
+        return out
 
 
 async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:

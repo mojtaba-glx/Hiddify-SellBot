@@ -557,29 +557,60 @@ def _fetch_remote_lines(url: str) -> List[str]:
 
 
 def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
-    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)"""
+    """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)
+
+    برای هر نود اول HTTP (all.txt / sub) و اگر خالی بود، fallback به API پنل
+    (مثل sub_aggregator) انجام می‌شود تا X-UI standalone که HTTP اش مسدود است
+    هم کانفیگ بدهد. این دقیقاً دلیلی بود که Agent/Customer فقط هیدیفای را نشان می‌داد.
+    """
     out: List[str] = []
     seen_links: set = set()
-    for base_url in get_service_node_base_urls(svc):
+    # per-node تا fallback دقیق باشد
+    try:
+        from Shared.sub_aggregator import _fetch_lines_from_admin_api, _is_config_line, _is_panel_status_config_line
+        has_api_fallback = True
+    except Exception:
+        has_api_fallback = False
+        _fetch_lines_from_admin_api = None  # type: ignore
+
+    for srv, uuid, marzban_un in get_service_panel_targets(svc):
+        base_url = _build_user_base_url(srv, uuid)
+        node_lines: List[str] = []
         seen_lines: set = set()
-        is_xui = "/sub/" in str(base_url or "")
-        if is_xui:
-            suffixes = ("", "?base64=1")
-        else:
-            suffixes = ("all.txt", "all.txt?base64=1")
-        for suffix in suffixes:
-            url = base_url if is_xui and not suffix else (f"{base_url}{suffix}" if is_xui else f"{base_url}/{suffix}")
-            lines = _fetch_remote_lines(url)
-            for ln in lines:
-                raw = _sanitize_config_text(ln)
-                if not raw or raw in seen_lines:
-                    continue
-                seen_lines.add(raw)
-                link = _extract_config_link_from_line(raw)
-                if not link or link in seen_links:
-                    continue
-                seen_links.add(link)
-                out.append(link)
+        if base_url:
+            is_xui = "/sub/" in str(base_url or "")
+            if is_xui:
+                suffixes = ("", "?base64=1")
+            else:
+                suffixes = ("all.txt", "all.txt?base64=1")
+            for suffix in suffixes:
+                url = base_url if is_xui and not suffix else (f"{base_url}{suffix}" if is_xui else f"{base_url}/{suffix}")
+                lines = _fetch_remote_lines(url)
+                if lines:
+                    node_lines = lines
+                    break
+        # fallback به API برای همین نود اگر HTTP خالی بود
+        if not node_lines and has_api_fallback:
+            try:
+                api_lines = _fetch_lines_from_admin_api(srv, uuid, marzban_username=marzban_un)  # type: ignore
+                if api_lines:
+                    node_lines = api_lines
+            except Exception as e:
+                logger.debug("collect: API fallback failed for %s uuid=%s: %s", srv.get("id"), uuid[:8], e)
+        for ln in node_lines:
+            raw = _sanitize_config_text(ln)
+            if not raw or raw in seen_lines:
+                continue
+            seen_lines.add(raw)
+            link = _extract_config_link_from_line(raw)
+            if not link or link in seen_links:
+                continue
+            # فیلتر وضعیت داخلی
+            low = link.lower()
+            if "fake_ip_for_sub_link" in low or "status.hiddify-sellbot.invalid" in low:
+                continue
+            seen_links.add(link)
+            out.append(link)
     return out
 
 
