@@ -1143,11 +1143,27 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
 
         lines: list[str] = []
         seen: set = set()
-        for base_url in get_service_user_base_urls(svc):
-            base = str(base_url or "").strip().rstrip("/")
-            if not base:
-                continue
-            fetched = _fetch_subscription_lines(base)
+        # per-node: هر نود جداگانه HTTP و اگر X-UI و خالی بود API
+        for srv, uuid, marzban_un in get_service_panel_targets(svc):
+            try:
+                from Shared.sub_links import _build_user_base_url as _build_ub
+                base = _build_ub(srv, uuid)
+            except Exception:
+                base = None
+            base = str(base or "").strip().rstrip("/")
+            fetched: list[str] = []
+            if base:
+                fetched = _fetch_subscription_lines(base)
+            # اگر X-UI و HTTP خالی بود، از API همان نود بگیر
+            if not fetched:
+                try:
+                    from Shared import xui_api
+                    if xui_api.is_xui_server(srv):
+                        api_lines = _fetch_lines_from_admin_api(srv, uuid, marzban_username=marzban_un)
+                        if api_lines:
+                            fetched = api_lines
+                except Exception:
+                    pass
             for ln in fetched:
                 raw = str(ln or "").strip()
                 if not raw or raw in seen:
@@ -1157,7 +1173,7 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
                 seen.add(raw)
                 lines.append(raw)
 
-        # X-UI fallback: اگر هیچ کانفیگی از sub-link نیامد، از API پنل بخوان
+        # X-UI fallback کلی: اگر هنوز هیچی نبود و سرویس X-UI دارد، همه نودها از API (برای سازگاری قدیم)
         if not lines:
             try:
                 from Shared import xui_api
