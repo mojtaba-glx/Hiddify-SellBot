@@ -1,0 +1,19 @@
+{
+  "welcome": "Hello {full_name} 👋\n\nWelcome to the bot.\nPlease use the menu below 👇",
+  "menu_status": "📊 Service Status",
+  "menu_buy": "💳 Buy Subscription",
+  "menu_renew": "♻️ Renew Subscription",
+  "menu_support": "🎧 Support",
+  "menu_guide": "📚 Guide",
+  "buy_choose_location": "📡 Please choose your desired location:",
+  "renew_choose": "👇 Please choose a subscription to renew:",
+  "no_active_service": "❌ You have no active service.\n💡 To buy a new service, tap \"💳 Buy Subscription\".",
+  "status_title": "📄 Your Subscription Info",
+  "config_direct": "Direct Config",
+  "config_sub_link": "Subscription Link",
+  "config_smart": "🌐 Smart Subscription Link",
+  "trial_already": "🚫 You have already received a free trial!",
+  "trial_disabled": "🚫 Free trial is currently disabled.",
+  "lang_changed": "✅ Language changed to {lang_name}.",
+  "lang_choose": "🌐 Please choose your language:"
+}
