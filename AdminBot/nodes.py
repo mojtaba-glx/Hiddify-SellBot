@@ -36,6 +36,7 @@ NODES_STATE_ADD_DOMAIN = "nodes_add_domain"
 NODES_STATE_ADD_LIMIT = "nodes_add_limit"
 NODES_STATE_ADD_XUI_USERNAME = "nodes_add_xui_username"
 NODES_STATE_ADD_XUI_PASSWORD = "nodes_add_xui_password"
+NODES_STATE_ADD_XUI_TOKEN = "nodes_add_xui_token"
 NODES_STATE_ADD_XUI_SUB_DOMAIN = "nodes_add_xui_sub_domain"
 NODES_STATE_ADD_XUI_INBOUND = "nodes_add_xui_inbound"
 NODES_STATE_AUTO_TITLE = "nodes_auto_title"
@@ -702,6 +703,22 @@ async def handle_add_node_flow(
     if state == NODES_STATE_ADD_XUI_PASSWORD:
         new_node["xui_password"] = text.strip()
         context.user_data["new_node"] = new_node
+        context.user_data["state"] = NODES_STATE_ADD_XUI_TOKEN
+        await message.reply_text(
+            "🔑 توکن API پنل X-UI (اختیاری - برای 3x-ui سنایی):\n"
+            "از مسیر Settings → Security → API Token بسازید.\n"
+            "اگر پنل علیرضا دارید یا نمی‌خواهید استفاده کنید، «0» یا «skip» بفرستید.\n\n"
+            "برای گذشتن: «0» یا «skip» یا «-»",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == NODES_STATE_ADD_XUI_TOKEN:
+        token = text.strip()
+        if token not in {"skip", "-", "_", ".", "done", "نه", "خیر", "0", ""}:
+            new_node["xui_api_token"] = token
+            new_node["xui_token"] = token
+        context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_SUB_DOMAIN
         await message.reply_text(
             "🌐 دامنه سابسکریپشن (Subscription Domain) را وارد کنید (اختیاری):\n"
@@ -855,6 +872,8 @@ async def handle_add_node_flow(
                 "panel_type": "xui",
                 "xui_username": str(new_node.get("xui_username") or "").strip(),
                 "xui_password": str(new_node.get("xui_password") or "").strip(),
+                "xui_api_token": str(new_node.get("xui_api_token") or new_node.get("xui_token") or "").strip(),
+                "xui_token": str(new_node.get("xui_api_token") or new_node.get("xui_token") or "").strip(),
                 "xui_sub_domain": str(new_node.get("xui_sub_domain") or "").strip(),
                 "xui_inbound_id": str(new_node.get("xui_inbound_id") or "").strip(),
                 "users_limit": int(users_limit),
