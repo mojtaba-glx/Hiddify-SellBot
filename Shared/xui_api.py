@@ -204,8 +204,25 @@ def _get_credentials(server: Dict[str, Any]) -> Tuple[str, str]:
     return username, password
 
 
+def _get_api_token(server: Dict[str, Any]) -> str:
+    """Return API token for 3x-ui (Sanaei) if present. For Alireza, returns empty."""
+    for key in ("xui_api_token", "xui_token", "api_token", "xui_secret"):
+        val = str((server or {}).get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
 def _api_base(server: Dict[str, Any]) -> str:
+    # For Sanaei (3x-ui) with Bearer token, use new API prefix /panel/api
+    if _is_sanaei_token_auth(server):
+        return f"{_get_panel_url(server)}/panel/api"
     return f"{_get_panel_url(server)}{API_PREFIX}"
+
+
+def _is_sanaei_token_auth(server: Dict[str, Any]) -> bool:
+    """True if server has a Bearer token (3x-ui Sanaei) -> use /panel/api with token."""
+    return bool(_get_api_token(server))
 
 
 def _inbound_id(server: Dict[str, Any]) -> Optional[int]:
@@ -717,6 +734,34 @@ async def _build_xui_client(server: Dict[str, Any], *, insecure: bool = False) -
 
 
 async def _login_xui_client(client: "httpx.AsyncClient", server: Dict[str, Any]) -> None:
+    # For Sanaei (3x-ui) with Bearer token, no login needed - just set header
+    token = _get_api_token(server)
+    if token:
+        # Use Bearer token for all subsequent requests (3x-ui Sanaei)
+        client.headers["Authorization"] = f"Bearer {token}"
+        # Verify token with a lightweight API call (list inbounds)
+        base = _get_panel_url(server)
+        # Try new API first (Sanaei), fallback to old
+        for api_path in ["/panel/api/inbounds/list", "/xui/API/inbounds/list", "/panel/api/server/status"]:
+            try:
+                resp = await client.get(base + api_path)
+                if resp.status_code == 200:
+                    try:
+                        data = json.loads(resp.text or "{}")
+                        if isinstance(data, dict) and data.get("success") is True:
+                            return
+                    except: pass
+                    # Even if not success, token was accepted (200)
+                    return
+                elif resp.status_code == 401:
+                    raise XuiApiError("API Token نامعتبر است (Bearer).")
+            except XuiApiError:
+                raise
+            except Exception:
+                continue
+        # If all checks passed, assume token is OK (panel may return empty list)
+        return
+
     base = _get_panel_url(server)
     username, password = _get_credentials(server)
     try:
@@ -1050,7 +1095,17 @@ async def _list_inbounds(server: Dict[str, Any], *, _force_refresh: bool = False
                 if cached is not None and time.monotonic() < cached[0]:
                     return cached[1]
         async with _XuiContext(server) as ctx:
-            data = await ctx.request("GET", "inbounds/")
+            # For Sanaei (Bearer token), try new API first
+            if _is_sanaei_token_auth(server):
+                try:
+                    data = await ctx.request("GET", "inbounds/list")
+                except XuiApiError as e:
+                    if "404" in str(e):
+                        data = await ctx.request("GET", "inbounds/")
+                    else:
+                        raise
+            else:
+                data = await ctx.request("GET", "inbounds/")
         if not isinstance(data, list):
             raise XuiApiError("پاسخ لیست اینباندهای X-UI شکل آرایه ندارد.")
         with _xui_cache_lock:

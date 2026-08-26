@@ -410,6 +410,7 @@ ADD_STATE_USER_PROXY = "add_server_user_proxy"
 ADD_STATE_LIMIT = "add_server_limit"
 ADD_STATE_XUI_USERNAME = "add_server_xui_username"
 ADD_STATE_XUI_PASSWORD = "add_server_xui_password"
+ADD_STATE_XUI_TOKEN = "add_server_xui_token"
 ADD_STATE_XUI_SUB_DOMAIN = "add_server_xui_sub_domain"
 ADD_STATE_XUI_INBOUND = "add_server_xui_inbound"
 
@@ -423,6 +424,7 @@ EDIT_SERVER_LIMIT = "edit_server_limit"
 EDIT_SERVER_PRIORITY = "edit_server_priority"
 EDIT_SERVER_XUI_USERNAME = "edit_server_xui_username"
 EDIT_SERVER_XUI_PASSWORD = "edit_server_xui_password"
+EDIT_SERVER_XUI_TOKEN = "edit_server_xui_token"
 EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
 EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
 
@@ -3825,7 +3827,10 @@ async def handle_add_server_flow(
                 [
                     [
                         InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
-                        InlineKeyboardButton("X-UI", callback_data="servers:add:type:xui"),
+                    ],
+                    [
+                        InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data="servers:add:type:xui_alireza"),
+                        InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data="servers:add:type:xui_sanaei"),
                     ],
                     [InlineKeyboardButton("🔙بازگشت", callback_data="servers:list_back")],
                 ]
@@ -3895,6 +3900,23 @@ async def handle_add_server_flow(
     # مرحله X-UI: رمز عبور
     if state == ADD_STATE_XUI_PASSWORD:
         new_server["xui_password"] = text
+        context.user_data["new_server"] = new_server
+        context.user_data["state"] = ADD_STATE_XUI_TOKEN
+        await message.reply_text(
+            "🔑 توکن API پنل X-UI (اختیاری - برای 3x-ui سنایی):\n"
+            "از مسیر Settings → Security → API Token بسازید.\n"
+            "اگر پنل علیرضا دارید یا نمی‌خواهید استفاده کنید، «0» یا «skip» بفرستید.\n\n"
+            "برای گذشتن: «0» یا «skip» یا «-»",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # مرحله X-UI: توکن API (سنایی)
+    if state == ADD_STATE_XUI_TOKEN:
+        token = text.strip()
+        if token not in {"skip", "-", "_", ".", "done", "نه", "خیر", "0"}:
+            new_server["xui_api_token"] = token
+            new_server["xui_token"] = token  # alias for compat
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_XUI_SUB_DOMAIN
         await message.reply_text(
@@ -6609,15 +6631,28 @@ async def handle_server_inline_callback(
 
     if data.startswith("servers:add:type:"):
         ptype = data.split("servers:add:type:", 1)[1]
+        # Support both old "xui" and new "xui_alireza" / "xui_sanaei"
+        if ptype in {"xui_alireza", "xui_sanaei"}:
+            ptype = "xui"
+            # Store hint for UI (optional)
+            context.user_data["xui_variant"] = ptype
         if ptype not in {"hiddify", "xui"}:
             await query.answer("نوع پنل نامعتبر است.")
             return
         context.user_data["state"] = ADD_STATE_TITLE
         new_server = context.user_data.get("new_server") or {}
         new_server["panel_type"] = ptype
+        # Remember variant for later (e.g., to show token hint)
+        if "xui_variant" in context.user_data:
+            new_server["_xui_variant"] = context.user_data["xui_variant"]
         context.user_data["new_server"] = new_server
+        variant_text = ""
+        if context.user_data.get("xui_variant") == "xui_sanaei":
+            variant_text = " (سنایی 3x-ui - با Token)"
+        elif context.user_data.get("xui_variant") == "xui_alireza":
+            variant_text = " (علیرضا)"
         try:
-            await msg.edit_text("نوع پنل: " + ("هیدیفای" if ptype == "hiddify" else "X-UI"))
+            await msg.edit_text("نوع پنل: " + ("هیدیفای" if ptype == "hiddify" else "X-UI" + variant_text))
         except Exception:
             pass
         await msg.reply_text(
@@ -6639,7 +6674,10 @@ async def handle_server_inline_callback(
                 [
                     [
                         InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
-                        InlineKeyboardButton("X-UI", callback_data="servers:add:type:xui"),
+                    ],
+                    [
+                        InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data="servers:add:type:xui_alireza"),
+                        InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data="servers:add:type:xui_sanaei"),
                     ],
                     [InlineKeyboardButton("🔙بازگشت", callback_data="servers:list_back")],
                 ]
