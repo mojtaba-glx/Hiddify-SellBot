@@ -1571,7 +1571,10 @@ async def handle_nodes_inline_callback(
                     [
                         [
                             InlineKeyboardButton("هیدیفای (Hiddify)", callback_data=f"nodes:{server_id}:add_type:hiddify"),
-                            InlineKeyboardButton("X-UI", callback_data=f"nodes:{server_id}:add_type:xui"),
+                        ],
+                        [
+                            InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data=f"nodes:{server_id}:add_type:xui_alireza"),
+                            InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data=f"nodes:{server_id}:add_type:xui_sanaei"),
                         ],
                         [InlineKeyboardButton("🔙بازگشت", callback_data=f"nodes:{server_id}:back")],
                     ]
@@ -1581,6 +1584,8 @@ async def handle_nodes_inline_callback(
 
         if action.startswith("add_type:"):
             ptype = action.split(":", 1)[1]
+            if ptype in {"xui_alireza", "xui_sanaei"}:
+                ptype = "xui"
             if ptype not in {"hiddify", "xui"}:
                 await query.answer("نوع پنل نامعتبر است.")
                 return
