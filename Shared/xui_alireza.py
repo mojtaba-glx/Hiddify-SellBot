@@ -663,7 +663,33 @@ def _normalize_user(
     expire_dt = _ms_to_datetime(expiry_ms)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     days_left = (expire_dt.date() - now.date()).days if expire_dt else None
-    online = bool(onlines) and (email in onlines or uuid in onlines)
+    # check online with email/uuid/subId case-insensitive
+    online = False
+    if onlines:
+        candidates = {email, email.lower(), uuid, uuid.lower(), str(client.get("subId") or "").strip(), str(client.get("subId") or "").strip().lower()}
+        # also check lower set
+        onlines_lower = {str(x).lower() for x in onlines}
+        if any(str(c).lower() in onlines_lower for c in candidates if c):
+            online = True
+
+    # Track last seen for Alireza to show "X دقیقه پیش" instead of just آفلاین
+    last_online_str = None
+    if online:
+        last_online_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        with _ALIREZA_LAST_SEEN_LOCK:
+            _ALIREZA_LAST_SEEN[email.lower()] = last_online_str
+            _ALIREZA_LAST_SEEN[uuid.lower()] = last_online_str
+            sub = str(client.get("subId") or "").strip().lower()
+            if sub:
+                _ALIREZA_LAST_SEEN[sub] = last_online_str
+    else:
+        # Use cached last seen if available (for relative time)
+        with _ALIREZA_LAST_SEEN_LOCK:
+            last_online_str = _ALIREZA_LAST_SEEN.get(email.lower()) or _ALIREZA_LAST_SEEN.get(uuid.lower())
+            if not last_online_str:
+                sub = str(client.get("subId") or "").strip().lower()
+                if sub:
+                    last_online_str = _ALIREZA_LAST_SEEN.get(sub)
 
     return {
         "uuid": uuid,
@@ -690,13 +716,14 @@ def _normalize_user(
         "remaining_days": days_left,
         "package_days": None,
         "start_date": None,
-        "last_online": now.strftime("%Y-%m-%d %H:%M:%S") if online else None,
+        "last_online": last_online_str,
+        "_user_list_status": "online" if online else "offline",
         "subId": str(client.get("subId") or "").strip() or uuid,
         "inbound_id": _to_int(inbound.get("id"), 0),
         "protocol": protocol,
         "port": _to_int(inbound.get("port"), 0),
         "server_id": (server or {}).get("id"),
-        "comment": str(client.get("tgId") or client.get("remark") or "").strip(),
+        "comment": str(client.get("comment") or client.get("tgId") or client.get("remark") or "").strip(),
         "_source": "xui",
     }
 
@@ -704,6 +731,10 @@ def _normalize_user(
 # ---------------------------------------------------------------------------
 # HTTP layer
 # ---------------------------------------------------------------------------
+
+# X-UI last seen tracker for Alireza (to show "X دقیقه پیش" instead of just آفلاین)
+_ALIREZA_LAST_SEEN: Dict[str, str] = {}
+_ALIREZA_LAST_SEEN_LOCK = threading.Lock()
 
 # X-UI login session cache
 # ------------------------
@@ -1136,11 +1167,19 @@ async def _online_emails(server: Dict[str, Any], *, _force_refresh: bool = False
                 cached = _XUI_ONLINES_CACHE.get(key)
                 if cached is not None and time.monotonic() < cached[0]:
                     return cached[1]
-        try:
-            async with _XuiContext(server) as ctx:
-                data = await ctx.request("POST", "inbounds/onlines", allow_login_retry=False)
-        except Exception as exc:
-            logger.debug("onlines fetch failed for xui: %s", exc)
+        # Try modern Sanaei endpoint as fallback, then legacy Alireza
+        data = None
+        last_exc = None
+        for path in ("clients/onlines", "inbounds/onlines"):
+            try:
+                async with _XuiContext(server) as ctx:
+                    data = await ctx.request("POST", path, allow_login_retry=False)
+                break
+            except Exception as exc:
+                last_exc = exc
+                continue
+        if data is None:
+            logger.debug("onlines fetch failed for xui (both paths): %s", last_exc)
             return set()
         out: set = set()
         if isinstance(data, list):
