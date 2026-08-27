@@ -886,9 +886,8 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     if enable is None:
         enable = True
 
-    # tgId must be int64 (Sanaei) - store display name in comment/email, not tgId
+    # tgId must be int64 (Sanaei) - store display name in email, note in comment
     tg_id_val = 0
-    # try to extract numeric tgId if payload has telegram_id
     for k in ("tgId", "telegram_id", "tg_id"):
         if k in payload:
             try:
@@ -896,6 +895,10 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
                 break
             except Exception:
                 tg_id_val = 0
+    # comment from payload (HiddifyBot:telegram_id) must be used, not raw_name
+    comment_val = str(payload.get("comment") or "").strip()
+    if not comment_val:
+        comment_val = raw_name or base_email
     client_payload: Dict[str, Any] = {
         "email": base_email,
         "id": user_uuid,
@@ -905,7 +908,7 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
         "enable": bool(enable),
         "tgId": int(tg_id_val),
         "limitIp": 0,
-        "comment": raw_name or base_email,
+        "comment": comment_val,
     }
     # Optional: flow, limitIp from payload?
     if "limitIp" in payload:
