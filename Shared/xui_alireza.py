@@ -2184,20 +2184,36 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
         "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
     }
-    # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل دستی (alpn, sni, obfs)
+    # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل دستی (alpn, sni, obfs) با سرتیفیکت درست
     if protocol in ("hysteria", "hysteria2"):
         base["settings"] = json.dumps({
             "clients": [],
             "obfs": {"type": parsed.get("obfs") or "salamander", "salamander": {"password": parsed.get("obfs_password") or ""}},
         })
-        # streamSettings برای hysteria معمولاً با tls و alpn=h3
+        # streamSettings برای hysteria معمولاً با tls و alpn=h3 + cert درست
         alpn_val = (parsed.get("alpn") or "h3").strip() or "h3"
-        # alpn ممکنه comma-separated باشد
         alpn_list = [a.strip() for a in alpn_val.split(",") if a.strip()] or ["h3"]
+        sni_val = (parsed.get("sni") or parsed.get("host") or "").strip()
+        cert_domain = sni_val.split(":")[0].strip() if sni_val else ""
+        if not cert_domain:
+            cert_domain = "panel.example.com"
         base["streamSettings"] = json.dumps({
             "network": "udp",
             "security": "tls",
-            "tlsSettings": {"serverName": parsed.get("sni") or parsed.get("host") or "", "alpn": alpn_list, "certificates": [{"ocspStapling": 3600}]},
+            "tlsSettings": {
+                "serverName": sni_val or cert_domain,
+                "alpn": alpn_list,
+                "certificates": [
+                    {
+                        "certificateFile": f"/root/cert/{cert_domain}/fullchain.pem",
+                        "keyFile": f"/root/cert/{cert_domain}/privkey.pem",
+                        "ocspStapling": 3600,
+                        "oneTimeLoading": False,
+                        "usage": "encipherment",
+                        "buildChain": False,
+                    }
+                ],
+            },
         })
     return base
 
@@ -2207,11 +2223,32 @@ def _stream_settings_for_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
     security = (parsed.get("security") or "none").lower()
     out: Dict[str, Any] = {"network": network, "security": security}
     if security == "tls":
+        sni_val = (parsed.get("sni") or parsed.get("host") or "").strip()
+        cert_domain = sni_val.split(":")[0].strip() if sni_val else ""
+        # fallback to panel domain if sni empty
+        if not cert_domain:
+            try:
+                from Shared.xui_common import _public_origin
+                # try to get panel domain from parsed host
+                cert_domain = (parsed.get("host") or "").strip()
+            except Exception:
+                cert_domain = ""
+        if not cert_domain:
+            cert_domain = "panel.example.com"
         tls: Dict[str, Any] = {
-            "serverName": parsed.get("sni") or parsed.get("host") or "",
+            "serverName": sni_val or cert_domain,
             "alpn": [a.strip() for a in (parsed.get("alpn") or "h2,http/1.1").split(",") if a.strip()] or ["h2", "http/1.1"],
             "fingerprint": parsed.get("fp") or "chrome",
-            "certificates": [{"ocspStapling": 3600}],
+            "certificates": [
+                {
+                    "certificateFile": f"/root/cert/{cert_domain}/fullchain.pem",
+                    "keyFile": f"/root/cert/{cert_domain}/privkey.pem",
+                    "ocspStapling": 3600,
+                    "oneTimeLoading": False,
+                    "usage": "encipherment",
+                    "buildChain": False,
+                }
+            ],
         }
         out["tlsSettings"] = tls
     elif security == "reality":
