@@ -2207,13 +2207,7 @@ def _stream_settings_for_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
             "serverName": parsed.get("sni") or parsed.get("host") or "",
             "alpn": [a.strip() for a in (parsed.get("alpn") or "h2,http/1.1").split(",") if a.strip()] or ["h2", "http/1.1"],
             "fingerprint": parsed.get("fp") or "chrome",
-            "certificates": [
-                {
-                    "certificateFile": "/root/cert/eu.example.com/fullchain.pem",
-                    "keyFile": "/root/cert/eu.example.com/privkey.pem",
-                    "ocspStapling": 3600,
-                }
-            ],
+            "certificates": [{"ocspStapling": 3600}],
         }
         out["tlsSettings"] = tls
     elif security == "reality":
