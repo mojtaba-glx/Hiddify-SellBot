@@ -684,7 +684,7 @@ def _sanaei_normalize(client: Dict[str, Any], server: Dict[str, Any], *, onlines
     return {
         "uuid": uuid,
         "id": uuid,
-        "name": str(client.get("comment") or client.get("tgId") or email or uuid).strip(),
+        "name": str(email or client.get("comment") or client.get("tgId") or uuid).strip(),
         "email": email,
         "is_active": enable,
         "enable": enable,
