@@ -1167,25 +1167,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         context.user_data[UD_STATE] = STATE_RENAME_SERVICE
         context.user_data[UD_SELECTED_SERVICE] = svc_id
-        try:
-            await query.edit_message_text(
-                f"✏️ <b>تغییر نام اشتراک</b>\n\n"
-                f"📦 نام فعلی: <b>{_escape(svc.get('name') or '—')}</b>\n\n"
-                "نام جدید را ارسال کنید:\n"
-                "• حداقل 3 و حداکثر 64 کاراکتر\n"
-                "• برای انصراف «🔙 بازگشت» در کیبورد پایین یا «❌ لغو» را بزنید.",
-                reply_markup=back_keyboard(f"agbot:subs:rename_cancel:{svc_id}"),
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
-        # نمایش دکمه بازگشت در کیبورد اصلی پایین (ReplyKeyboard)
+        await _safe_answer(query, "")
+        # فقط یک پیام با کیبورد پایین — بدون دکمه وسط و بدون متن دوم
         try:
             chat_id = query.message.chat_id if query and query.message else update.effective_chat.id
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="👇 برای انصراف از تغییر نام، دکمه «🔙 بازگشت» در پایین را بزنید.",
+                text=(
+                    f"✏️ <b>تغییر نام اشتراک</b>\n\n"
+                    f"📦 نام فعلی: <b>{_escape(svc.get('name') or '—')}</b>\n\n"
+                    "نام جدید را ارسال کنید:\n"
+                    "• حداقل 3 و حداکثر 64 کاراکتر\n"
+                    "• برای انصراف «🔙 بازگشت» در کیبورد پایین را بزنید."
+                ),
                 reply_markup=rename_cancel_keyboard(),
+                parse_mode="HTML",
             )
         except Exception:
             pass
