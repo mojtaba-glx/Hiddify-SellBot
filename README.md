@@ -223,6 +223,38 @@ SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES=360
 ./install.sh ssl DOMAIN EMAIL
 ```
 
+## توقف و حذف ربات (بدون آسیب به سرور)
+
+برای توقف موقت یا حذف کامل ربات بدون آسیب به پنل Hiddify یا خود سرور:
+
+```bash
+# 1) توقف موقت (بدون حذف فایل)
+cd ~/Hiddify-SellBot
+sudo ./install.sh stop              # توقف همه ربات‌ها
+sudo ./install.sh autostart-rm      # حذف autostart از systemd
+./install.sh status                 # بررسی: باید همه STOPPED باشند
+
+# 2) حذف کامل runtime (venv, لاگ، دیتابیس، .env) — سورس‌کد می‌ماند
+cd ~/Hiddify-SellBot
+sudo ./install.sh uninstall
+# از شما می‌پرسد: Type DELETE to confirm → بنویسید DELETE
+
+# 3) حذف فیزیکی پوشه (اختیاری، بعد از مرحله 2)
+cd ~
+rm -rf ~/Hiddify-SellBot
+
+# توقف/شروع تکی (بدون systemd)
+./install.sh stop                   # توقف
+./install.sh start                  # شروع
+./install.sh restart                # ریستارت
+```
+
+> نکته: دستور `uninstall` فقط همین پوشه `Hiddify-SellBot` را پاک می‌کند و به `hiddify-panel` یا `nginx` خود پنل دست نمی‌زند. قبل از حذف حتما بکاپ بگیرید:
+> ```bash
+> cp Shared/hiddify_sellbot.db ~/backup.db
+> cp .env ~/env.backup
+> ```
+
 ## Hiddify User Stabilizer
 
 برای بعضی نسخه‌های پنل Hiddify ممکن است کاربر تازه‌ساخته‌شده بعد از چند دقیقه قطع شود. این بخش یک فیکس موقت قابل خاموش/روشن دارد:
