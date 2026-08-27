@@ -2256,17 +2256,14 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
         "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
     }
-    # برای shadowsocks — مخصوص 2022-blake3 و معمولی (دقیقا مثل DB دستی)
+    # برای shadowsocks — مخصوص 2022-blake3 و معمولی (دقیقا مثل DB دستی 8888)
     if protocol == "shadowsocks":
         method = (parsed.get("method") or "aes-256-gcm").strip() or "aes-256-gcm"
-        # برای 2022، پسورد لینک به شکل server_key:client_key است — برای اینباند فقط server_key لازم است
         raw_pwd = (parsed.get("password") or "").strip()
-        # اگر 2022 و پسورد حاوی : باشد، فقط بخش اول (server password) را برای اینباند بردار
         if method.lower().startswith("2022-") and ":" in raw_pwd:
             server_pwd = raw_pwd.split(":", 1)[0].strip()
         else:
             server_pwd = raw_pwd
-        # اگر باز هم خالی بود، از DB دستی 8888 الگو بگیر
         if not server_pwd:
             server_pwd = "wC1yYMFGpwbCK/1NeBJE8slhAyBD1XS1kY+1l85tBrg="
         base["settings"] = json.dumps({
@@ -2276,7 +2273,11 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
             "network": "tcp,udp",
             "ivCheck": False,
         })
-        base["streamSettings"] = json.dumps({"network": "tcp,udp", "security": "none"})
+        base["streamSettings"] = json.dumps({
+            "network": "tcp",
+            "tcpSettings": {"acceptProxyProtocol": False, "header": {"type": "none"}},
+            "security": "none",
+        })
         base["sniffing"] = json.dumps({"enabled": True, "destOverride": ["http", "tls"], "routeOnly": False})
         return base
     # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل واقعی (DB: network=hysteria, hysteriaSettings, finalmask)
