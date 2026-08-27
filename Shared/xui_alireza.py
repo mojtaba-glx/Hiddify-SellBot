@@ -2035,10 +2035,11 @@ def _parse_hysteria2_link(link: str) -> Dict[str, Any]:
             "password": uuid,  # hysteria2 uses auth as uuid
             "host": host,
             "port": int(port),
-            "obfs": qs.get("obfs") or "none",
+            "obfs": qs.get("obfs") or "salamander",
             "obfs_password": qs.get("obfs-password") or qs.get("obfs_password") or "",
             "sni": qs.get("sni") or host,
-            "insecure": qs.get("insecure") or qs.get("allowInsecure") or "1",
+            "alpn": qs.get("alpn") or "h3",
+            "insecure": qs.get("insecure") or qs.get("allowInsecure") or "0",
             "raw_qs": qs,
         }
     except Exception as e:
@@ -2183,17 +2184,20 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
         "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
     }
-    # برای hysteria2 تنظیمات فرق دارد
+    # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل دستی (alpn, sni, obfs)
     if protocol in ("hysteria", "hysteria2"):
         base["settings"] = json.dumps({
             "clients": [],
             "obfs": {"type": parsed.get("obfs") or "salamander", "salamander": {"password": parsed.get("obfs_password") or ""}},
         })
-        # streamSettings برای hysteria معمولاً خالی یا با tls
+        # streamSettings برای hysteria معمولاً با tls و alpn=h3
+        alpn_val = (parsed.get("alpn") or "h3").strip() or "h3"
+        # alpn ممکنه comma-separated باشد
+        alpn_list = [a.strip() for a in alpn_val.split(",") if a.strip()] or ["h3"]
         base["streamSettings"] = json.dumps({
             "network": "udp",
             "security": "tls",
-            "tlsSettings": {"serverName": parsed.get("sni") or "", "alpn": ["h3"], "certificates": [{"ocspStapling": 3600}]},
+            "tlsSettings": {"serverName": parsed.get("sni") or parsed.get("host") or "", "alpn": alpn_list, "certificates": [{"ocspStapling": 3600}]},
         })
     return base
 
