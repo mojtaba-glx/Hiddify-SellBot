@@ -2184,44 +2184,56 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
         "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
     }
-    # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل دستی (alpn, sni, obfs) با سرتیفیکت درست
+    # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل واقعی (DB: network=hysteria, hysteriaSettings, finalmask)
     if protocol in ("hysteria", "hysteria2"):
-        # Hysteria2 در Sanaei نیاز به masquerade و up/down دارد وگرنه validation می‌خورد
-        base["settings"] = json.dumps({
-            "clients": [],
-            "obfs": {"type": parsed.get("obfs") or "salamander", "salamander": {"password": parsed.get("obfs_password") or ""}},
-            "masquerade": {"type": "proxy", "proxy": {"url": "https://www.bing.com", "rewriteHost": True}, "file": "", "extension": ""},
-            "up_mbps": 100,
-            "down_mbps": 100,
-            "recv_window_conn": 0,
-            "recv_window": 0,
-            "disable_mtu_discovery": False,
-        })
-        # streamSettings برای hysteria معمولاً با tls و alpn=h3
-        alpn_val = (parsed.get("alpn") or "h3").strip() or "h3"
-        alpn_list = [a.strip() for a in alpn_val.split(",") if a.strip()] or ["h3"]
+        # در 3x-ui (Alireza/Sanaei) hysteria2 با protocol=hysteria و version=2 ذخیره می‌شود
+        # settings فقط clients دارد، obfs در finalmask است
+        base["protocol"] = "hysteria"
+        base["settings"] = json.dumps({"clients": []})
+        obfs_pwd = (parsed.get("obfs_password") or "").strip()
+        # اگر obfs نداشته باشد، از لینک بخوان وگرنه salamander با پسورد لینک
+        obfs_type = (parsed.get("obfs") or "salamander").strip() or "salamander"
+        if obfs_type.lower() == "none" or not obfs_pwd:
+            # اگر لینک obfs نداشت، همون salamander با پسورد لینک یا خالی
+            finalmask = {}
+        else:
+            finalmask = {"udp": [{"type": obfs_type, "settings": {"password": obfs_pwd}}]}
         sni_val = (parsed.get("sni") or parsed.get("host") or "").strip()
         cert_domain = sni_val.split(":")[0].strip() if sni_val else ""
         if not cert_domain:
             cert_domain = "panel.example.com"
-        base["streamSettings"] = json.dumps({
-            "network": "udp",
+        alpn_val = (parsed.get("alpn") or "h3").strip() or "h3"
+        alpn_list = [a.strip() for a in alpn_val.split(",") if a.strip()] or ["h3"]
+        stream = {
+            "network": "hysteria",
+            "hysteriaSettings": {"version": 2, "udpIdleTimeout": 60},
             "security": "tls",
             "tlsSettings": {
                 "serverName": sni_val or cert_domain,
-                "alpn": alpn_list,
+                "minVersion": "1.2",
+                "maxVersion": "1.3",
+                "cipherSuites": "",
+                "rejectUnknownSni": False,
+                "disableSystemRoot": False,
+                "enableSessionResumption": False,
                 "certificates": [
                     {
                         "certificateFile": f"/root/cert/{cert_domain}/fullchain.pem",
                         "keyFile": f"/root/cert/{cert_domain}/privkey.pem",
-                        "ocspStapling": 3600,
+                        "ocspStapling": 0,
                         "oneTimeLoading": False,
                         "usage": "encipherment",
                         "buildChain": False,
                     }
                 ],
+                "alpn": alpn_list,
+                "echServerKeys": "",
+                "settings": {"fingerprint": "chrome", "echConfigList": "", "pinnedPeerCertSha256": [], "verifyPeerCertByName": ""},
             },
-        })
+        }
+        if finalmask:
+            stream["finalmask"] = finalmask
+        base["streamSettings"] = json.dumps(stream)
         base["sniffing"] = json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False})
     return base
 
