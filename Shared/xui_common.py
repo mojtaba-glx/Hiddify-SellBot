@@ -335,8 +335,8 @@ def _client_id_key(protocol: str) -> str:
         return "password"
     if protocol == "shadowsocks":
         return "email"
-    if protocol == "hysteria":
-        return "auth"
+    if protocol in ("hysteria", "hysteria2"):
+        return "password"
     return "id"
 
 
@@ -412,7 +412,8 @@ def _new_client_dict(protocol: str, *, uuid: str, template: Dict[str, Any]) -> D
         client["password"] = uuid
     elif protocol == "shadowsocks":
         client["email"] = uuid
-    elif protocol == "hysteria":
+    elif protocol in ("hysteria", "hysteria2"):
+        client["password"] = uuid
         client["auth"] = uuid
     else:
         client["id"] = uuid
