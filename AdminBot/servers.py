@@ -949,9 +949,13 @@ def classify_user_status(user: Dict[str, Any]) -> str:
             delta = now - last_online_dt
             seconds = delta.total_seconds()
 
+            # برای X-UI (Sanaei/Alireza) آنلاین فقط لحظه‌ای است (90 ثانیه) تا
+            # بعد 5 دقیقه "5 دقیقه پیش" نشان دهد، نه "آنلاین"
+            is_xui = str((user or {}).get("_source") or "").strip().lower() == "xui"
+            window = 90 if is_xui else ONLINE_WINDOW_SECONDS
             # اگر زمان last_online کمی جلوتر از now باشد (تا ۲ دقیقه)
-            # یا تا ۱۵ دقیقه قبل باشد → آنلاین حسابش می‌کنیم
-            if -CLOCK_SKEW_TOLERANCE <= seconds <= ONLINE_WINDOW_SECONDS:
+            # یا تا window قبل باشد → آنلاین حسابش می‌کنیم
+            if -CLOCK_SKEW_TOLERANCE <= seconds <= window:
                 return "online"
         except Exception:
             # اگر فرمت تاریخ مشکل داشت، می‌افتد روی offline
@@ -977,7 +981,9 @@ def _last_online_line(user_data: Dict[str, Any]) -> str:
 
     delta = datetime.now() - last_dt
     seconds_total = delta.total_seconds()
-    if -CLOCK_SKEW_TOLERANCE <= seconds_total <= ONLINE_WINDOW_SECONDS:
+    is_xui = str((user_data or {}).get("_source") or "").strip().lower() == "xui"
+    window = 90 if is_xui else ONLINE_WINDOW_SECONDS
+    if -CLOCK_SKEW_TOLERANCE <= seconds_total <= window:
         return "📶آخرین اتصال: آنلاین"
 
     if seconds_total < 0:
