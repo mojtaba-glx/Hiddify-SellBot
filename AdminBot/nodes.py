@@ -273,10 +273,10 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
                 [InlineKeyboardButton("🌐 ویرایش آدرس پنل", callback_data=f"seredit:{target_sid}:panel_url")],
                 [InlineKeyboardButton("👤 ویرایش نام کاربری پنل", callback_data=f"seredit:{target_sid}:xui_username")],
                 [InlineKeyboardButton("🔑 ویرایش رمز پنل", callback_data=f"seredit:{target_sid}:xui_password")],
+                [InlineKeyboardButton("🔑 ویرایش توکن", callback_data=f"seredit:{target_sid}:xui_token")],
                 [InlineKeyboardButton("🔗 ویرایش دامنه ساب", callback_data=f"seredit:{target_sid}:xui_sub_domain")],
                 [InlineKeyboardButton("🧩 ویرایش اینباند", callback_data=f"seredit:{target_sid}:xui_inbound")],
                 [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{target_sid}:create_inbound_from_link")],
-                [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{target_sid}:sync_inbounds")],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
             ]
         )

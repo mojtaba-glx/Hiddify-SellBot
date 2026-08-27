@@ -4337,6 +4337,16 @@ async def handle_edit_server_flow(
     elif state == EDIT_SERVER_XUI_PASSWORD:
         updates["xui_password"] = text.strip()
         msg_ok = "✅ رمز پنل X-UI بروزرسانی شد."
+    elif state == EDIT_SERVER_XUI_TOKEN:
+        tok = text.strip()
+        if tok in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            updates["xui_api_token"] = ""
+            updates["xui_token"] = ""
+            msg_ok = "✅ توکن X-UI پاک شد."
+        else:
+            updates["xui_api_token"] = tok
+            updates["xui_token"] = tok
+            msg_ok = "✅ توکن X-UI بروزرسانی شد."
     elif state == EDIT_SERVER_XUI_SUB_DOMAIN:
         sub = text.strip()
         if sub in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
@@ -4429,6 +4439,7 @@ async def send_server_edit_menu(
                 [InlineKeyboardButton("🌐ویرایش آدرس پنل", callback_data=f"seredit:{server_id}:panel_url")],
                 [InlineKeyboardButton("👤ویرایش نام کاربری پنل", callback_data=f"seredit:{server_id}:xui_username")],
                 [InlineKeyboardButton("🔑ویرایش رمز پنل", callback_data=f"seredit:{server_id}:xui_password")],
+                [InlineKeyboardButton("🔑ویرایش توکن", callback_data=f"seredit:{server_id}:xui_token")],
                 [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xui_sub_domain")],
                 [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xui_inbound")],
                 [InlineKeyboardButton("🔢ویرایش اولویت ترتیب", callback_data=f"seredit:{server_id}:priority")],
@@ -6593,6 +6604,16 @@ async def handle_server_inline_callback(
             set_server_state(EDIT_SERVER_XUI_INBOUND)
             await msg.edit_text(
                 "🧩 لطفاً شناسه اینباند جدید را وارد کنید:\n`0`=همه، `1`=تک، `1,2,3`=چندتا\nمثال: 0 یا 1 یا 1,2",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xui_token":
+            set_server_state(EDIT_SERVER_XUI_TOKEN)
+            await msg.edit_text(
+                "🔑 لطفاً توکن جدید پنل X-UI را وارد کنید:\n"
+                "از مسیر Settings → Security → API Token بسازید.\n"
+                "برای خالی گذاشتن «0» یا «skip» بفرستید.",
                 reply_markup=cancel_kb,
             )
             return
