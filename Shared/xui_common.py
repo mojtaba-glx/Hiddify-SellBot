@@ -34,16 +34,79 @@ def uuid4() -> str:
 # ---------------------------------------------------------------------------
 
 def _sanitize_xui_email(raw: str, fallback: str) -> str:
+    """ساخت email ایمن برای X-UI Sanaei/Alireza — فقط a-zA-Z0-9._- مجاز است.
+    فارسی/عربی به لاتین تبدیل و ایموجی/فاصله/کاراکتر نامعتبر به '-' تبدیل می‌شود.
+    Sanaei خطا می‌دهد اگر email حاوی فارسی/ایموجی/فاصله باشد (نمونه: '🖥 pc5100')."""
     text = str(raw or "").strip()
+    fallback = str(fallback or "").strip()
     if not text:
-        return str(fallback or "").strip()
-    text = "".join(ch for ch in text if ch.isprintable() or ch in (" ", "-", "_", ".", "@") or ord(ch) > 127)
-    text = text.strip()
-    text = re.sub(r"\s+", " ", text)
-    if not text:
-        return str(fallback or "").strip()
+        return fallback
+
+    # نگاشت فارسی/عربی به لاتین برای حفظ یکتایی و خوانایی
+    _fa_map = {
+        'ا': 'a', 'آ': 'a', 'أ': 'a', 'إ': 'e', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ث': 's',
+        'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'z', 'ر': 'r', 'ز': 'z',
+        'ژ': 'zh', 'س': 's', 'ش': 'sh', 'ص': 's', 'ض': 'z', 'ط': 't', 'ظ': 'z',
+        'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'gh', 'ک': 'k', 'ك': 'k', 'گ': 'g',
+        'ل': 'l', 'م': 'm', 'ن': 'n', 'و': 'v', 'ه': 'h', 'ة': 'h', 'ی': 'y', 'ي': 'y',
+        'ى': 'y', 'ئ': 'e', 'ؤ': 'o', 'ء': '', '‌': '-', 'ـ': '', ' ': '-', '\t': '-',
+        '\n': '-', '\r': '-',
+    }
+
+    # مرحله ۱: تبدیل هر کاراکتر
+    tmp_chars = []
+    for ch in text:
+        if ch in _fa_map:
+            tmp_chars.append(_fa_map[ch])
+        elif '0' <= ch <= '9' or 'a' <= ch <= 'z' or 'A' <= ch <= 'Z' or ch in ('-', '_', '.', '@'):
+            tmp_chars.append(ch)
+        elif ord(ch) < 128:
+            # سایر ascii قابل چاپ (مثل فاصله، ایموجی ascii) -> به '-' تبدیل
+            if ch.isspace():
+                tmp_chars.append('-')
+            elif ch.isprintable():
+                tmp_chars.append('-')
+            else:
+                tmp_chars.append('-')
+        else:
+            # فارسی/عربی که در map نبود یا ایموجی/سایر unicode -> حذف یا '-'
+            # اگر قبلا چیزی اضافه کردیم و آخرین کاراکتر '-' نیست، یک '-' اضافه کن تا جداسازی حفظ شود
+            if tmp_chars and tmp_chars[-1] != '-':
+                tmp_chars.append('-')
+            # در غیر این صورت حذف
+            continue
+
+    text = ''.join(tmp_chars)
+
+    # مرحله ۲: پاکسازی regex
+    # فقط a-zA-Z0-9._- و @ نگه دار، بقیه به '-'
+    text = re.sub(r'[^a-zA-Z0-9._@-]', '-', text)
+    # ادغام '-' و '_' و '.' تکراری
+    text = re.sub(r'[-_]{2,}', '-', text)
+    text = re.sub(r'\.{2,}', '.', text)
+    # حذف '-' و '.' و '_' از ابتدا و انتها
+    text = text.strip('-._@')
+    # اگر @ دارد، فقط بخش قبل @ را نگه دار (X-UI email نیازی به دامنه ندارد)
+    if '@' in text:
+        text = text.split('@')[0]
+
+    if not text or len(text) < 2:
+        return fallback
+
+    # طول مجاز 64
     if len(text) > 64:
-        text = text[:64].strip()
+        text = text[:64].strip('-._')
+
+    # نباید با عدد خالی یا '-' شروع شود؛ اگر با '-' یا '.' شروع شد، پیشوند اضافه کن
+    if text and not re.match(r'^[a-zA-Z0-9]', text):
+        text = f"u-{text}"
+        if len(text) > 64:
+            text = text[:64].strip('-._')
+
+    # اگر بعد از همه هنوز نامعتبر یا خالی است، fallback
+    if not text or not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$', text):
+        return fallback
+
     return text
 
 
