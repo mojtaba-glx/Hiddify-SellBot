@@ -1152,11 +1152,44 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "dodelete":
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        # نام را قبل از حذف ذخیره کن برای پیام
+        svc_before = agent_db.get_service_by_id(svc_id) if svc_id else None
+        svc_name = str((svc_before or {}).get("name") or f"#{svc_id}").strip()
+        # نمایش حالت لودینگ
+        try:
+            await query.edit_message_text("⏳ در حال حذف اشتراک... لطفاً صبر کنید.", parse_mode="HTML")
+        except Exception:
+            pass
         ok = await delete_subscription(agent_id, svc_id)
-        await _safe_answer(query, "حذف شد ✅" if ok else "خطا!", alert=not ok)
+        await _safe_answer(query, "حذف شد ✅" if ok else "خطا در حذف!", alert=not ok)
         if ok:
             await _notify_customer_deleted(context, agent_id, svc_id)
-            await show_menu(update, context)
+            try:
+                await query.edit_message_text(
+                    f"✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «{_escape(svc_name)}» با موفقیت حذف شد.",
+                    reply_markup=subs_menu_keyboard(),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                try:
+                    chat_id = query.message.chat_id if query and query.message else update.effective_chat.id
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «{_escape(svc_name)}» با موفقیت حذف شد.",
+                        reply_markup=subs_menu_keyboard(),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+        else:
+            try:
+                await query.edit_message_text(
+                    "❌ خطا در حذف اشتراک. لطفاً دوباره تلاش کنید.",
+                    reply_markup=subs_menu_keyboard(),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
         return
 
     if action == "rename":
