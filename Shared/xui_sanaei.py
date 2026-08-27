@@ -679,16 +679,26 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     if enable is None:
         enable = True
 
+    # tgId must be int64 (Sanaei) - store display name in comment/email, not tgId
+    tg_id_val = 0
+    # try to extract numeric tgId if payload has telegram_id
+    for k in ("tgId", "telegram_id", "tg_id"):
+        if k in payload:
+            try:
+                tg_id_val = int(str(payload.get(k) or 0).strip() or 0)
+                break
+            except Exception:
+                tg_id_val = 0
     client_payload: Dict[str, Any] = {
         "email": base_email,
         "id": user_uuid,
         "subId": user_uuid,
-        "totalGB": total_bytes,
-        "expiryTime": expiry_ms,
+        "totalGB": int(total_bytes),
+        "expiryTime": int(expiry_ms),
         "enable": bool(enable),
-        "tgId": raw_name or base_email,
+        "tgId": int(tg_id_val),
         "limitIp": 0,
-        "comment": raw_name or "",
+        "comment": raw_name or base_email,
     }
     # Optional: flow, limitIp from payload?
     if "limitIp" in payload:
@@ -794,8 +804,16 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
         updated["enable"] = bool(enable)
     if raw_name_global:
         updated["email"] = new_email
-        updated["tgId"] = raw_name_global
+        # tgId must stay int - keep original, store name in comment
         updated["comment"] = raw_name_global
+        # do not touch tgId unless payload provides numeric telegram id
+        for k in ("tgId", "telegram_id", "tg_id"):
+            if k in payload:
+                try:
+                    updated["tgId"] = int(str(payload.get(k) or updated.get("tgId") or 0).strip() or 0)
+                    break
+                except Exception:
+                    pass
     # Ensure required fields
     updated.setdefault("email", new_email)
     updated.setdefault("id", str(target.get("id") or target.get("uuid") or user_uuid))
