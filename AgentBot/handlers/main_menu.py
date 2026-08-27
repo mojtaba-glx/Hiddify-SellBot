@@ -198,6 +198,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "st:send_user_msg": settings_users.handle_text,
             "fj:set_username": settings_forcejoin.handle_text,
             "st:createsvc_name": subscriptions.handle_text,
+            "st:rename_service": subscriptions.handle_text,
             "st:renew_days": subscriptions.handle_text,
             "st:renew_gb": subscriptions.handle_text,
             "st:wallet_create": wallet.handle_text,

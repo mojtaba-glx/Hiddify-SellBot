@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -13,7 +14,7 @@ from AgentBot.constants import (
     SUBS_BACK, MENU_MAIN, UD_STATE, UD_SELECTED_SERVER, UD_SELECTED_PLAN,
     UD_SELECTED_SERVICE, UD_PAGE,
     STATE_CREATE_SERVICE_NAME, STATE_RENEW_DAYS, STATE_RENEW_GB, STATE_SEARCH_SERVICE,
-    STATE_SEARCH_NAME,
+    STATE_SEARCH_NAME, STATE_RENAME_SERVICE,
 )
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
@@ -25,6 +26,7 @@ from AgentBot.services.subscription_service import (
     create_subscription, renew_subscription,
     disable_subscription, enable_subscription, delete_subscription,
     change_subscription_link, get_subs_link_settings, get_sub_link_for_type,
+    rename_service_on_panels,
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
 from Shared.qr_utils import make_qr_image
@@ -1156,6 +1158,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await show_menu(update, context)
         return
 
+    if action == "rename":
+        svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        svc = agent_db.get_service_by_id(svc_id)
+        if not svc or int(svc.get("agent_id", 0)) != agent_id:
+            await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
+            return
+        context.user_data[UD_STATE] = STATE_RENAME_SERVICE
+        context.user_data[UD_SELECTED_SERVICE] = svc_id
+        try:
+            await query.edit_message_text(
+                f"✏️ <b>تغییر نام اشتراک</b>\n\n"
+                f"📦 نام فعلی: <b>{_escape(svc.get('name') or '—')}</b>\n\n"
+                "نام جدید را ارسال کنید:\n"
+                "• حداقل 3 و حداکثر 64 کاراکتر\n"
+                "• برای انصراف /cancel یا «❌ لغو» را بفرستید.",
+                reply_markup=back_keyboard(f"agbot:subs:detail:{svc_id}"),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        return
+
     if action == "newlink":
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         svc = agent_db.get_service_by_id(svc_id)
@@ -1238,6 +1262,58 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         name = text
         context.user_data["subs_search_term"] = name
         await _send_name_search_results(update, context, page=1, use_callback=False)
+        return True
+
+    if state == STATE_RENAME_SERVICE:
+        svc_id = int(context.user_data.get(UD_SELECTED_SERVICE) or 0)
+        new_name = re.sub(r"\s+", " ", (text or "").strip())
+        if len(new_name) < 3:
+            await update.message.reply_text(
+                "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
+        if len(new_name) > 64:
+            await update.message.reply_text(
+                "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
+        svc = agent_db.get_service_by_id(svc_id) if svc_id else None
+        if not svc or int(svc.get("agent_id", 0)) != agent_id:
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop(UD_SELECTED_SERVICE, None)
+            await update.message.reply_text("❌ اشتراک موردنظر یافت نشد.", reply_markup=subs_menu_keyboard())
+            return True
+        old_name = str(svc.get("name") or "").strip()
+        if new_name == old_name:
+            await update.message.reply_text(
+                "ℹ️ نام جدید با نام فعلی یکسان است. نام دیگری وارد کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
+        await update.message.reply_text("⏳ در حال بروزرسانی نام اشتراک... لطفاً صبر کنید.")
+        ok, result_text = await rename_service_on_panels(agent_id, svc_id, new_name)
+        if not ok:
+            await update.message.reply_text(result_text, reply_markup=cancel_keyboard())
+            return True
+        context.user_data.pop(UD_STATE, None)
+        context.user_data.pop(UD_SELECTED_SERVICE, None)
+        await update.message.reply_text(result_text)
+        # نمایش مجدد پروفایل با نام جدید
+        refreshed = agent_db.get_service_by_id(svc_id)
+        if refreshed:
+            try:
+                from AgentBot.services.subscription_service import get_service_last_online
+                last_online = await get_service_last_online(refreshed)
+            except Exception:
+                last_online = "هرگز"
+            is_active = bool(int(refreshed.get("is_active", 0) or 0))
+            await update.message.reply_text(
+                _service_detail_text(refreshed, last_online),
+                reply_markup=service_detail_keyboard(svc_id, is_active),
+                parse_mode="HTML",
+            )
         return True
 
     if state == STATE_CREATE_SERVICE_NAME:

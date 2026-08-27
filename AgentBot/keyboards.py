@@ -81,9 +81,11 @@ def service_detail_keyboard(service_id: int, is_active: bool):
     rows = [[IButton("\U0001f4e1 \u062f\u0631\u06cc\u0627\u0641\u062a \u06a9\u0627\u0646\u0641\u06cc\u06af", callback_data=f"agbot:subs:cfg:{service_id}")]]
     if is_active:
         rows.append([IButton("\u23f3 \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data=f"agbot:subs:renew:{service_id}")])
+        rows.append([IButton("\u270f\ufe0f \u062a\u063a\u06cc\u06cc\u0631 \u0646\u0627\u0645 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data=f"agbot:subs:rename:{service_id}")])
         rows.append([IButton("\u274c \u063a\u06cc\u0631\u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:disable:{service_id}")])
     else:
         rows.append([IButton("\u2705 \u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:enable:{service_id}")])
+        rows.append([IButton("\u270f\ufe0f \u062a\u063a\u06cc\u06cc\u0631 \u0646\u0627\u0645 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data=f"agbot:subs:rename:{service_id}")])
     rows.append([IButton("\U0001f504 \u0644\u06cc\u0646\u06a9 \u062c\u062f\u06cc\u062f", callback_data=f"agbot:subs:newlink:{service_id}")])
     rows.append([IButton("\U0001f5d1 \u062d\u0630\u0641", callback_data=f"agbot:subs:delete:{service_id}")])
     rows.append([IButton(BTN_BACK, callback_data="agbot:subs:back")])

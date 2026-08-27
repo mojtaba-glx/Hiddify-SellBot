@@ -467,6 +467,55 @@ async def change_subscription_link(agent_id: int, service_id: int) -> Optional[D
     return agent_db.get_service_by_id(service_id)
 
 
+async def rename_service_on_panels(agent_id: int, service_id: int, new_name: str) -> Tuple[bool, str]:
+    """تغییر نام اشتراک روی همه پنل‌ها (اصلی + نودها) و سپس در DB نماینده."""
+    svc = agent_db.get_service_by_id(service_id)
+    if not svc or int(svc.get("agent_id", 0)) != agent_id:
+        return False, "❌ سرویس پیدا نشد."
+    old_name = str(svc.get("name") or "").strip()
+    if new_name == old_name:
+        return False, "ℹ️ نام جدید با نام فعلی یکسان است."
+    # اعتبارسنجی طول
+    if len(new_name) < 3:
+        return False, "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید."
+    if len(new_name) > 64:
+        return False, "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید."
+
+    from Shared.sub_links import get_service_panel_targets
+    targets = get_service_panel_targets(svc)
+    if not targets:
+        return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
+
+    errors: List[str] = []
+    ok_count = 0
+    for srv, uuid, marzban_un in targets:
+        try:
+            await multi_panel.patch_user(srv, uuid, {"name": new_name}, marzban_username=marzban_un)
+            ok_count += 1
+        except Exception as e:
+            title = str(srv.get("title") or f"سرور #{srv.get('id')}")
+            errors.append(f"{title}: {str(e)[:80]}")
+
+    if ok_count == 0:
+        preview = "\n".join(errors[:3])
+        extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
+        return False, "❌ تغییر نام روی همه سرورها انجام نشد.\n" + preview + extra
+
+    ok_db = agent_db.update_service(service_id, {"name": new_name})
+    if not ok_db:
+        return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
+
+    margin = ""
+    if errors:
+        margin = (
+            "\n\n⚠️ نام روی همه نودها اعمال شد اما "
+            + str(len(errors))
+            + " نود در دسترس نبود (تا برگشتنشان بعداً همگام می‌شود):\n- "
+            + "\n- ".join(errors[:3])
+        )
+    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد." + margin
+
+
 async def get_configs(agent_id: int, service_id: int) -> list:
     """Aggregated configs from all nodes (Hiddify + X-UI) — fixes X-UI node missing."""
     svc = agent_db.get_service_by_id(service_id)
