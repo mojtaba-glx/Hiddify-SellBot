@@ -455,13 +455,20 @@ def _sanaei_find_client(clients: List[Dict[str, Any]], user_uuid: str) -> Option
     for c in clients:
         if not isinstance(c, dict):
             continue
+        # Prioritize uuid/subId/email over numeric DB id
         hay = (
             str(c.get("email") or "").strip().lower(),
             str(c.get("subId") or "").strip().lower(),
-            str(c.get("id") or "").strip().lower(),
             str(c.get("uuid") or "").strip().lower(),
             str(c.get("password") or "").strip().lower(),
         )
+        # Only include numeric id if it looks like uuid (not pure int)
+        id_val = c.get("id")
+        if id_val is not None:
+            id_str = str(id_val).strip()
+            # if id contains '-' it's uuid-like, include; if pure digits it's DB pk, skip for uuid lookup
+            if "-" in id_str or len(id_str) > 20:
+                hay = hay + (id_str.lower(),)
         if needle in hay:
             return c
     return None
@@ -470,8 +477,26 @@ def _sanaei_find_client(clients: List[Dict[str, Any]], user_uuid: str) -> Option
 def _sanaei_normalize(client: Dict[str, Any], server: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize Sanaei client record to bot's user shape"""
     email = str(client.get("email") or "").strip()
-    # Sanaei: id is Xray UUID, subId is subscription id, email is key
-    uuid = str(client.get("id") or client.get("uuid") or client.get("subId") or email).strip()
+    # Sanaei: numeric id is DB pk, uuid is Xray UUID, subId is subscription UUID
+    # Priority: uuid (Xray) -> subId (sub) -> id if uuid-like -> email
+    # For our bot, subId == uuid (generated), so use subId first for sub link
+    sub_id = str(client.get("subId") or "").strip()
+    uuid_field = str(client.get("uuid") or "").strip()
+    id_val = client.get("id")
+    id_str = str(id_val).strip() if id_val is not None else ""
+    # Prefer uuid/subId that look like uuid
+    if uuid_field and "-" in uuid_field:
+        uuid = uuid_field
+    elif sub_id and "-" in sub_id:
+        uuid = sub_id
+    elif id_str and "-" in id_str:
+        uuid = id_str
+    elif sub_id:
+        uuid = sub_id
+    elif uuid_field:
+        uuid = uuid_field
+    else:
+        uuid = email or id_str
     # traffic
     traffic = client.get("traffic") or {}
     up = _to_int(traffic.get("up"), 0) if isinstance(traffic, dict) else 0
