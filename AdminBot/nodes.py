@@ -277,6 +277,7 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
                 [InlineKeyboardButton("🔗 ویرایش دامنه ساب", callback_data=f"seredit:{target_sid}:xui_sub_domain")],
                 [InlineKeyboardButton("🧩 ویرایش اینباند", callback_data=f"seredit:{target_sid}:xui_inbound")],
                 [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{target_sid}:create_inbound_from_link")],
+                [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{target_sid}:sync_inbounds")],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
             ]
         )
