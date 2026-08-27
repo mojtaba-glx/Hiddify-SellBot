@@ -158,6 +158,12 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     state = context.user_data.get(UD_STATE)
 
+    # اگر در حالت تغییر نام هستیم، دکمه بازگشت پایین باید مستقیم به هندلر rename برود
+    if state == "st:rename_service" and text in (BTN_BACK, "🔙 بازگشت", "❌ لغو", "/cancel", "لغو"):
+        consumed = await subscriptions.handle_text(update, context)
+        if consumed:
+            return
+
     menu_map = {
         BTN_SUBSCRIPTIONS: subscriptions,
         BTN_WALLET: wallet,

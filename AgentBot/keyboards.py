@@ -39,6 +39,14 @@ def cancel_keyboard():
     )
 
 
+def rename_cancel_keyboard():
+    """کیبورد پایین برای حالت تغییر نام — دکمه بازگشت در کیبورد اصلی"""
+    return ReplyKeyboardMarkup(
+        [[KButton(BTN_BACK)], [KButton("\u274c \u0644\u063a\u0648")]],
+        resize_keyboard=True, one_time_keyboard=True,
+    )
+
+
 def send_msg_keyboard():
     return ReplyKeyboardMarkup(
         [[KButton("\u25c0\ufe0f \u0628\u0627\u0632\u06af\u0634\u062a", style="danger")]],
