@@ -2071,7 +2071,79 @@ def _parse_trojan_link(link: str) -> Dict[str, Any]:
 
 
 def _parse_ss_link(link: str) -> Dict[str, Any]:
-    raise XuiApiError("shadowsocks از لینک فعلاً پشتیبانی نمی‌شود - دستی بسازید.")
+    try:
+        # ss://base64(method:password)@host:port#name  or  ss://base64(method:password@host:port)
+        # Also handles 2022-blake3 methods where password contains colon
+        raw = link.strip()
+        # Extract fragment (remark)
+        remark = ""
+        if "#" in raw:
+            raw, frag = raw.split("#", 1)
+            remark = urllib.parse.unquote(frag).strip()
+        # Handle ss://base64@host:port
+        if "@" in raw:
+            b64part, hostpart = raw.split("ss://", 1)[1].split("@", 1)
+            # hostpart is host:port
+            u_host = "ss://" + hostpart  # reuse urlparse for host/port
+            # Need to handle hostpart may contain :port without //
+            # Add dummy scheme for parsing
+            tmp = urlparse("ss://" + hostpart)
+            host = tmp.hostname or ""
+            port = tmp.port or 8388
+            # b64part is base64(method:password)
+            try:
+                # Pad base64
+                b64padded = b64part + "=" * (-len(b64part) % 4)
+                decoded = base64.b64decode(b64padded).decode()
+            except Exception:
+                decoded = ""
+            # For 2022, decoded is "2022-blake3-aes-256-gcm:password" where password may contain colon
+            if ":" in decoded:
+                # Split only on first colon: method is before first colon, password is rest
+                method, password = decoded.split(":", 1)
+            else:
+                method, password = decoded, ""
+            return {
+                "protocol": "shadowsocks",
+                "method": method.strip() or "aes-256-gcm",
+                "password": password.strip(),
+                "host": host,
+                "port": int(port),
+                "remark": remark,
+                "raw_qs": {},
+            }
+        else:
+            # Fallback: ss://base64(method:password:host:port) without @
+            b64part = raw.split("ss://", 1)[1].split("#")[0]
+            b64padded = b64part + "=" * (-len(b64part) % 4)
+            decoded = base64.b64decode(b64padded).decode()
+            # decoded may be "method:password@host:port"
+            # Try to parse
+            if "@" in decoded:
+                cred, hostport = decoded.rsplit("@", 1)
+                if ":" in cred:
+                    method, password = cred.split(":", 1)
+                else:
+                    method, password = cred, ""
+                # hostport is host:port
+                tmp = urlparse("ss://" + hostport)
+                host = tmp.hostname or ""
+                port = tmp.port or 8388
+            else:
+                # Unexpected
+                method, password = "aes-256-gcm", ""
+                host, port = "", 8388
+            return {
+                "protocol": "shadowsocks",
+                "method": method.strip() or "aes-256-gcm",
+                "password": password.strip(),
+                "host": host,
+                "port": int(port),
+                "remark": remark,
+                "raw_qs": {},
+            }
+    except Exception as e:
+        raise XuiApiError(f"پارس shadowsocks ناموفق: {e}")
 
 
 async def create_inbound_from_link(
@@ -2184,6 +2256,19 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
         "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
     }
+    # برای shadowsocks — مخصوص 2022-blake3 و معمولی
+    if protocol == "shadowsocks":
+        method = (parsed.get("method") or "aes-256-gcm").strip() or "aes-256-gcm"
+        password = (parsed.get("password") or "").strip()
+        base["settings"] = json.dumps({
+            "clients": [],
+            "method": method,
+            "password": password,
+            "network": "tcp,udp",
+        })
+        base["streamSettings"] = json.dumps({"network": "tcp,udp", "security": "none"})
+        base["sniffing"] = json.dumps({"enabled": True, "destOverride": ["http", "tls"], "routeOnly": False})
+        return base
     # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل واقعی (DB: network=hysteria, hysteriaSettings, finalmask)
     if protocol in ("hysteria", "hysteria2"):
         # در 3x-ui (Alireza/Sanaei) hysteria2 با protocol=hysteria و version=2 ذخیره می‌شود
