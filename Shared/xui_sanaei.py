@@ -813,39 +813,101 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
             existing_set.discard(email.lower())
         new_email = _unique_xui_email(sanitized_base, existing_set, user_uuid)
 
-    # Build updated client payload - Sanaei expects full client object
-    # Start from existing target
-    updated = dict(target)
-    # Map payload fields
+    # Build clean payload for Sanaei - only fields expected by Go struct
+    # Do NOT copy full target (contains traffic/inboundIds/numeric id which cause unmarshal errors)
     gb = _gb_limit_from_payload(payload)
+    cur_ms = _to_int(target.get("expiryTime"), 0)
+    new_expiry = _compute_expiry_ms(payload, current_ms=cur_ms)
+    enable_val = _enable_from_payload(payload)
+    # Determine Xray UUID - prefer uuid/subId with dashes, fallback to user_uuid
+    orig_uuid = str(target.get("uuid") or "").strip()
+    orig_subId = str(target.get("subId") or "").strip()
+    # orig id may be numeric DB pk - ignore if no dashes
+    orig_id_str = str(target.get("id") or "").strip()
+    xray_uuid = ""
+    if orig_uuid and "-" in orig_uuid:
+        xray_uuid = orig_uuid
+    elif orig_subId and "-" in orig_subId:
+        xray_uuid = orig_subId
+    elif orig_id_str and "-" in orig_id_str:
+        xray_uuid = orig_id_str
+    else:
+        xray_uuid = orig_uuid or orig_subId or orig_id_str or user_uuid
+    # Ensure xray_uuid is uuid-like, fallback to user_uuid
+    if not xray_uuid or "-" not in xray_uuid:
+        xray_uuid = user_uuid
+
+    # tgId must be int
+    try:
+        orig_tg = int(str(target.get("tgId") or 0).strip() or 0)
+    except Exception:
+        orig_tg = 0
+    # limitIp
+    try:
+        orig_limitIp = int(str(target.get("limitIp") or 0).strip() or 0)
+    except Exception:
+        orig_limitIp = 0
+
+    # Determine final values
     if gb is not None:
         from Shared.xui_common import _gb_to_bytes
-        updated["totalGB"] = _gb_to_bytes(gb)
-    # expiry
-    cur_ms = _to_int(target.get("expiryTime"), 0)
-    updated["expiryTime"] = _compute_expiry_ms(payload, current_ms=cur_ms)
-    enable = _enable_from_payload(payload)
-    if enable is not None:
-        updated["enable"] = bool(enable)
+        final_total = int(_gb_to_bytes(gb))
+    else:
+        try:
+            final_total = int(str(target.get("totalGB") or 0).strip() or 0)
+        except Exception:
+            final_total = 0
+
+    if enable_val is not None:
+        final_enable = bool(enable_val)
+    else:
+        final_enable = bool(target.get("enable", True))
+
+    # comment
     if raw_name_global:
-        updated["email"] = new_email
-        # tgId must stay int - keep original, store name in comment
-        updated["comment"] = raw_name_global
-        # do not touch tgId unless payload provides numeric telegram id
-        for k in ("tgId", "telegram_id", "tg_id"):
-            if k in payload:
-                try:
-                    updated["tgId"] = int(str(payload.get(k) or updated.get("tgId") or 0).strip() or 0)
-                    break
-                except Exception:
-                    pass
-    # Ensure required fields
-    updated.setdefault("email", new_email)
-    updated.setdefault("id", str(target.get("id") or target.get("uuid") or user_uuid))
-    updated.setdefault("subId", str(target.get("subId") or user_uuid))
-    updated.setdefault("enable", True)
-    updated.setdefault("totalGB", 0)
-    updated.setdefault("expiryTime", 0)
+        final_comment = raw_name_global
+        final_email = new_email
+    else:
+        final_comment = str(target.get("comment") or "").strip()
+        final_email = email
+        # also check if target has tgId string as comment fallback
+        if not final_comment and isinstance(target.get("tgId"), str) and target.get("tgId"):
+            # old data may have name in tgId string, migrate to comment
+            pass
+
+    # Allow numeric tgId override from payload
+    final_tg = orig_tg
+    for k in ("tgId", "telegram_id", "tg_id"):
+        if k in payload:
+            try:
+                final_tg = int(str(payload.get(k) or orig_tg).strip() or 0)
+                break
+            except Exception:
+                pass
+
+    # Build minimal clean body - Sanaei update expects email as key, plus other fields
+    # Do not include numeric DB id, traffic, inboundIds
+    updated = {
+        "email": final_email,
+        "subId": orig_subId or xray_uuid,
+        "uuid": xray_uuid,
+        "id": xray_uuid,  # for VLESS/VMess, id is Xray UUID string (not numeric)
+        "totalGB": int(final_total),
+        "expiryTime": int(new_expiry),
+        "enable": bool(final_enable),
+        "tgId": int(final_tg),
+        "limitIp": int(orig_limitIp),
+        "comment": str(final_comment or ""),
+    }
+    # Preserve limitHwid if present
+    if "limitHwid" in target:
+        try:
+            updated["limitHwid"] = int(str(target.get("limitHwid") or 0).strip() or 0)
+        except Exception:
+            pass
+    # Preserve flow if present (VLESS flow)
+    if target.get("flow"):
+        updated["flow"] = str(target.get("flow") or "").strip()
 
     async with _XuiContext(server) as ctx:
         await ctx.request("POST", f"clients/update/{quote(email, safe='')}", json_body=updated)
