@@ -54,7 +54,9 @@ sudo ./install.sh panel
 6) autostart manager
 7) ssl setup wizard
 8) hiddify user stabilizer
-9) help
+9) stop bots (توقف ربات‌ها)
+10) uninstall (پاک کردن ربات)
+11) help
 0) exit
 ```
 

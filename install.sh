@@ -1698,7 +1698,9 @@ interactive_menu() {
     echo "6) autostart manager"
     echo "7) ssl setup wizard"
     echo "8) hiddify user stabilizer"
-    echo "9) help"
+    echo "9) stop bots (توقف ربات‌ها)"
+    echo "10) uninstall (پاک کردن ربات)"
+    echo "11) help"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -1711,7 +1713,9 @@ interactive_menu() {
       6) autostart_menu ;;
       7) _run_ssl_wizard ;;
       8) stabilizer_menu ;;
-      9) _run_menu_cmd help ;;
+      9) _run_menu_cmd stop ;;
+      10) _run_menu_cmd uninstall ;;
+      11) _run_menu_cmd help ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
