@@ -227,10 +227,13 @@ async def _refresh_xui_client(server: Dict[str, Any], *, insecure: bool = False)
 # ---------------------------------------------------------------------------
 _XUI_INBOUNDS_CACHE: Dict[Any, Tuple[float, List[Dict[str, Any]]]] = {}
 _XUI_CLIENTS_CACHE: Dict[Any, Tuple[float, List[Dict[str, Any]]]] = {}
+_XUI_ONLINES_CACHE: Dict[Any, Tuple[float, set]] = {}
 _XUI_INBOUNDS_TTL = float(os.getenv("XUI_INBOUNDS_CACHE_SECONDS", "15") or "15")
 _XUI_CLIENTS_TTL = float(os.getenv("XUI_CLIENTS_CACHE_SECONDS", "15") or "15")
+_XUI_ONLINES_TTL = float(os.getenv("XUI_ONLINES_CACHE_SECONDS", "15") or "15")
 _xui_inbounds_locks: Dict[Any, asyncio.Lock] = {}
 _xui_clients_locks: Dict[Any, asyncio.Lock] = {}
+_xui_onlines_locks: Dict[Any, asyncio.Lock] = {}
 
 
 def _invalidate_caches(server: Dict[str, Any]) -> None:
@@ -238,6 +241,67 @@ def _invalidate_caches(server: Dict[str, Any]) -> None:
     with _xui_cache_lock:
         _XUI_INBOUNDS_CACHE.pop(key, None)
         _XUI_CLIENTS_CACHE.pop(key, None)
+        _XUI_ONLINES_CACHE.pop(key, None)
+
+
+async def _online_emails(server: Dict[str, Any], *, _force_refresh: bool = False) -> set:
+    """Fetch online emails via Sanaei POST /panel/api/clients/onlines"""
+    key = _server_cache_key(server)
+    if not _force_refresh:
+        with _xui_cache_lock:
+            cached = _XUI_ONLINES_CACHE.get(key)
+            if cached is not None and time.monotonic() < cached[0]:
+                return cached[1]
+            lock = _xui_onlines_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                _xui_onlines_locks[key] = lock
+    else:
+        with _xui_cache_lock:
+            lock = _xui_onlines_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                _xui_onlines_locks[key] = lock
+    async with lock:
+        if not _force_refresh:
+            with _xui_cache_lock:
+                cached = _XUI_ONLINES_CACHE.get(key)
+                if cached is not None and time.monotonic() < cached[0]:
+                    return cached[1]
+        try:
+            async with _XuiContext(server) as ctx:
+                data = await ctx.request("POST", "clients/onlines", allow_login_retry=False)
+        except Exception as exc:
+            # Fallback to old inbounds/onlines for compat
+            try:
+                async with _XuiContext(server) as ctx2:
+                    data = await ctx2.request("POST", "inbounds/onlines", allow_login_retry=False)
+            except Exception as exc2:
+                logger.debug("sanaei onlines fetch failed: %s / %s", exc, exc2)
+                return set()
+        out: set = set()
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    out.add(item.strip())
+                    out.add(item.strip().lower())
+                elif isinstance(item, dict):
+                    # sometimes returns dict with email
+                    for v in item.values():
+                        if isinstance(v, str) and "@" in v:
+                            out.add(v.strip())
+                            out.add(v.strip().lower())
+        elif isinstance(data, dict):
+            # onlinesByNode style: { "0": ["a"], "1": ["b"] }
+            for v in data.values():
+                if isinstance(v, list):
+                    for em in v:
+                        if isinstance(em, str):
+                            out.add(em.strip())
+                            out.add(em.strip().lower())
+        with _xui_cache_lock:
+            _XUI_ONLINES_CACHE[key] = (time.monotonic() + _XUI_ONLINES_TTL, out)
+        return out
 
 
 class _XuiContext:
@@ -474,7 +538,7 @@ def _sanaei_find_client(clients: List[Dict[str, Any]], user_uuid: str) -> Option
     return None
 
 
-def _sanaei_normalize(client: Dict[str, Any], server: Dict[str, Any]) -> Dict[str, Any]:
+def _sanaei_normalize(client: Dict[str, Any], server: Dict[str, Any], *, onlines: Optional[set] = None) -> Dict[str, Any]:
     """Normalize Sanaei client record to bot's user shape"""
     email = str(client.get("email") or "").strip()
     # Sanaei: numeric id is DB pk, uuid is Xray UUID, subId is subscription UUID
@@ -517,6 +581,37 @@ def _sanaei_normalize(client: Dict[str, Any], server: Dict[str, Any]) -> Dict[st
     # inboundIds
     inbound_ids = client.get("inboundIds") or []
     first_inbound = int(inbound_ids[0]) if isinstance(inbound_ids, list) and inbound_ids else 0
+    # online detection via POST /panel/api/clients/onlines
+    online = False
+    last_online_str = None
+    if onlines:
+        # check email, uuid, subId in onlines (case-insensitive)
+        candidates = {email.lower(), uuid.lower(), sub_id.lower(), str(client.get("uuid") or "").strip().lower()}
+        # also add email without lower for direct match
+        candidates |= {email, uuid, sub_id}
+        if any(c and c.lower() in {x.lower() for x in onlines} for c in candidates if c):
+            online = True
+        elif any(c in onlines for c in candidates if c):
+            online = True
+    if online:
+        last_online_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        # Try to use client's lastOnline if provided (some Sanaei versions)
+        lo = client.get("lastOnline") or client.get("last_online") or client.get("onlineAt")
+        if lo:
+            try:
+                # lo may be ms timestamp
+                lo_int = int(lo)
+                if lo_int > 1000000000:
+                    # ms -> convert
+                    if lo_int > 1000000000000:
+                        lo_dt = datetime.fromtimestamp(lo_int / 1000, tz=timezone.utc).replace(tzinfo=None)
+                    else:
+                        lo_dt = datetime.fromtimestamp(lo_int, tz=timezone.utc).replace(tzinfo=None)
+                    last_online_str = lo_dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+
     return {
         "uuid": uuid,
         "id": uuid,
@@ -542,7 +637,7 @@ def _sanaei_normalize(client: Dict[str, Any], server: Dict[str, Any]) -> Dict[st
         "remaining_days": days_left,
         "package_days": None,
         "start_date": None,
-        "last_online": None,
+        "last_online": last_online_str,
         "subId": str(client.get("subId") or "").strip() or uuid,
         "inbound_id": first_inbound,
         "inboundIds": inbound_ids if isinstance(inbound_ids, list) else [],
@@ -572,6 +667,11 @@ async def test_connect(server: Dict[str, Any]) -> List[Dict[str, Any]]:
 async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     """All clients via Sanaei clients/list, normalized"""
     clients = await _list_clients(server)
+    # fetch onlines once for all users
+    try:
+        onlines = await _online_emails(server)
+    except Exception:
+        onlines = set()
     if clients:
         out = []
         for c in clients:
@@ -580,7 +680,7 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
             email = str(c.get("email") or "").strip()
             if not email:
                 continue
-            out.append(_sanaei_normalize(c, server))
+            out.append(_sanaei_normalize(c, server, onlines=onlines))
         return out
     # Fallback: aggregate from inbounds (for older Sanaei without clients/list)
     inbounds = await _list_inbounds(server)
@@ -634,7 +734,11 @@ async def get_user_by_uuid(server: Dict[str, Any], user_uuid: str) -> Dict[str, 
     if clients:
         found = _sanaei_find_client(clients, user_uuid)
         if found:
-            return _sanaei_normalize(found, server)
+            try:
+                onlines = await _online_emails(server)
+            except Exception:
+                onlines = set()
+            return _sanaei_normalize(found, server, onlines=onlines)
         raise XuiApiError(f"user not found (uuid={user_uuid})")
     # Fallback to inbounds search
     inbounds = await _list_inbounds(server)
