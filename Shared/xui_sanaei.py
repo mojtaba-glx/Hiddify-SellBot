@@ -1537,11 +1537,21 @@ async def create_inbound_from_link(
                 inbound_json[k] = json.loads(inbound_json[k])
             except Exception:
                 pass
+    # لاگ payload برای دیباگ validation
+    try:
+        logger.debug("Sanaei create inbound payload port=%s proto=%s remark=%s json=%s", port, protocol, remark, json.dumps(inbound_json, ensure_ascii=False)[:3000])
+    except Exception:
+        pass
     async with _XuiContext(server) as ctx:
         try:
             resp = await ctx.request("POST", "inbounds/add", json_body=inbound_json)
         except XuiApiError as e:
             msg = str(e).lower()
+            # لاگ کامل validation برای دیباگ
+            try:
+                logger.warning("Sanaei inbound add failed port=%s proto=%s err=%s payload=%s", port, protocol, e, json.dumps(inbound_json, ensure_ascii=False)[:4000])
+            except Exception:
+                pass
             if "timed out" in msg or "timeout" in msg:
                 await asyncio.sleep(2)
                 try:

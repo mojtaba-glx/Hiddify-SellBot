@@ -2186,11 +2186,18 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
     }
     # برای hysteria2 تنظیمات فرق دارد — دقیقا مثل پنل دستی (alpn, sni, obfs) با سرتیفیکت درست
     if protocol in ("hysteria", "hysteria2"):
+        # Hysteria2 در Sanaei نیاز به masquerade و up/down دارد وگرنه validation می‌خورد
         base["settings"] = json.dumps({
             "clients": [],
             "obfs": {"type": parsed.get("obfs") or "salamander", "salamander": {"password": parsed.get("obfs_password") or ""}},
+            "masquerade": {"type": "proxy", "proxy": {"url": "https://www.bing.com", "rewriteHost": True}, "file": "", "extension": ""},
+            "up_mbps": 100,
+            "down_mbps": 100,
+            "recv_window_conn": 0,
+            "recv_window": 0,
+            "disable_mtu_discovery": False,
         })
-        # streamSettings برای hysteria معمولاً با tls و alpn=h3 + cert درست
+        # streamSettings برای hysteria معمولاً با tls و alpn=h3
         alpn_val = (parsed.get("alpn") or "h3").strip() or "h3"
         alpn_list = [a.strip() for a in alpn_val.split(",") if a.strip()] or ["h3"]
         sni_val = (parsed.get("sni") or parsed.get("host") or "").strip()
@@ -2215,6 +2222,7 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
                 ],
             },
         })
+        base["sniffing"] = json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False})
     return base
 
 
