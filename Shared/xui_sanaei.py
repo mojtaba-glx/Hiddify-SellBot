@@ -707,12 +707,13 @@ def _sanaei_normalize(client: Dict[str, Any], server: Dict[str, Any], *, onlines
         "package_days": None,
         "start_date": None,
         "last_online": last_online_str,
+        "_user_list_status": "online" if online else "offline",
         "subId": str(client.get("subId") or "").strip() or uuid,
         "inbound_id": first_inbound,
         "inboundIds": inbound_ids if isinstance(inbound_ids, list) else [],
         "protocol": "",
         "server_id": (server or {}).get("id"),
-        "comment": str(client.get("comment") or client.get("tgId") or "").strip(),
+        "comment": str(client.get("comment") or "").strip() or str(client.get("tgId") or "").strip(),
         "_source": "xui",
         "_sanaei_raw": client,
     }
@@ -1044,17 +1045,23 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
     else:
         final_enable = bool(target.get("enable", True))
 
-    # comment
-    if raw_name_global:
-        final_comment = raw_name_global
+    # comment - handle separately from name (do not overwrite note when name changes)
+    if "comment" in payload:
+        final_comment = str(payload.get("comment") or "").strip()
+        final_email = email  # changing note should not change email
+        # if name also changed, use new_email
+        if raw_name_global:
+            final_email = new_email
+            # keep comment as provided comment, not name
+            final_comment = str(payload.get("comment") or "").strip()
+    elif raw_name_global:
+        # name change without explicit comment -> keep old comment, only email changes
+        final_comment = str(target.get("comment") or "").strip()
         final_email = new_email
+        # fallback: if old comment was same as old email/name, update to new name? No, keep old
     else:
         final_comment = str(target.get("comment") or "").strip()
         final_email = email
-        # also check if target has tgId string as comment fallback
-        if not final_comment and isinstance(target.get("tgId"), str) and target.get("tgId"):
-            # old data may have name in tgId string, migrate to comment
-            pass
 
     # Allow numeric tgId override from payload
     final_tg = orig_tg

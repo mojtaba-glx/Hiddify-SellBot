@@ -374,11 +374,15 @@ def _apply_payload_to_client(
     raw_name = str(payload.get("name") or "").strip()
     if raw_name:
         client["tgId"] = raw_name
+    # Handle comment separately (do not overwrite tgId when only comment changes)
+    if "comment" in payload:
+        client["comment"] = str(payload.get("comment") or "").strip()
     client.setdefault("totalGB", 0)
     client.setdefault("expiryTime", 0)
     client.setdefault("enable", True)
     client.setdefault("subId", client.get("subId") or client.get("email") or "")
     client.setdefault("tgId", client.get("tgId") or "")
+    client.setdefault("comment", client.get("comment") or "")
     client.setdefault("reset", client.get("reset") or 0)
     client.setdefault("limitIp", 0)
     return client
@@ -436,7 +440,7 @@ def _normalize_user(
         "protocol": protocol,
         "port": _to_int(inbound.get("port"), 0),
         "server_id": (server or {}).get("id"),
-        "comment": str(client.get("tgId") or client.get("remark") or "").strip(),
+        "comment": str(client.get("comment") or client.get("tgId") or client.get("remark") or "").strip(),
         "_source": "xui",
     }
 
