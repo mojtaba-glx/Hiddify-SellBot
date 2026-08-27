@@ -2256,15 +2256,25 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
         "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
     }
-    # برای shadowsocks — مخصوص 2022-blake3 و معمولی
+    # برای shadowsocks — مخصوص 2022-blake3 و معمولی (دقیقا مثل DB دستی)
     if protocol == "shadowsocks":
         method = (parsed.get("method") or "aes-256-gcm").strip() or "aes-256-gcm"
-        password = (parsed.get("password") or "").strip()
+        # برای 2022، پسورد لینک به شکل server_key:client_key است — برای اینباند فقط server_key لازم است
+        raw_pwd = (parsed.get("password") or "").strip()
+        # اگر 2022 و پسورد حاوی : باشد، فقط بخش اول (server password) را برای اینباند بردار
+        if method.lower().startswith("2022-") and ":" in raw_pwd:
+            server_pwd = raw_pwd.split(":", 1)[0].strip()
+        else:
+            server_pwd = raw_pwd
+        # اگر باز هم خالی بود، از DB دستی 8888 الگو بگیر
+        if not server_pwd:
+            server_pwd = "wC1yYMFGpwbCK/1NeBJE8slhAyBD1XS1kY+1l85tBrg="
         base["settings"] = json.dumps({
             "clients": [],
             "method": method,
-            "password": password,
+            "password": server_pwd,
             "network": "tcp,udp",
+            "ivCheck": False,
         })
         base["streamSettings"] = json.dumps({"network": "tcp,udp", "security": "none"})
         base["sniffing"] = json.dumps({"enabled": True, "destOverride": ["http", "tls"], "routeOnly": False})
