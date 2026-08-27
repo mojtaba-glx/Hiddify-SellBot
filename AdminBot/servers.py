@@ -910,13 +910,24 @@ def classify_user_status(user: Dict[str, Any]) -> str:
     """
     تعیین وضعیت کاربر:
     - expired اگر تاریخ پکیج گذشته باشد
-    - online اگر last_online در بازه زمانی آنلاین باشد
+    - online اگر last_online در بازه زمانی آنلاین باشد یا _user_list_status == online (برای X-UI)
     - offline در غیر این صورت
     """
     # 1) اگر کاربر غیرفعال باشد، منقضی در نظر گرفته می‌شود.
     is_active = _to_bool(user.get("is_active"))
     if is_active is False:
         return "expired"
+
+    # 1.5) برای X-UI، اگر پنل مستقیماً آنلاین بودن را گزارش کرده، همان را بپذیر
+    # این فیلد توسط Shared/xui_sanaei._sanaei_normalize از POST /panel/api/clients/onlines پر می‌شود
+    # و _last_online_line هم همین را اولویت می‌دهد؛ باید لیست هم هماهنگ باشد
+    try:
+        forced = str(user.get("_user_list_status") or "").strip().lower()
+        if forced == "online":
+            # حتی اگر last_online کمی قدیمی باشد، پنل گفته آنلاین است
+            return "online"
+    except Exception:
+        pass
 
     # 2) اگر انقضای زمانی در فیلدهای متداول وجود داشته باشد.
     for key in ("expire", "expire_date", "end_date", "expiration_date", "expires_at"):
