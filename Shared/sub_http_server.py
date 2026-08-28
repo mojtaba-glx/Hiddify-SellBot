@@ -737,6 +737,13 @@ class _SubHandler(BaseHTTPRequestHandler):
                         return
                 self._write(404, "subscription token not found")
                 return
+            # برای s1_... که مستقیم sub_token هست، کش نکن و همیشه تازه بساز
+            # تا بعد پاکسازی دستی DB (DELETE FROM clients) گیر نکنه
+            try:
+                from Shared.xui_sanaei import _invalidate_caches as _inv_xui
+                _inv_xui(database.get_server_by_id(3))
+            except Exception:
+                pass
             service = (
                 sub_aggregator.sync_service_runtime_from_panels(int(sid))
                 or userbot_db.get_service_by_id(int(sid))
@@ -747,6 +754,14 @@ class _SubHandler(BaseHTTPRequestHandler):
                 body = sub_aggregator.build_subscription_b64_for_service(sid)
             else:
                 body = sub_aggregator.build_subscription_text_for_service(sid)
+            # اگر body خالی بود ولی direct build 5 میده، یعنی sync فراموش کرده - یک بار دیگر بدون sync بساز
+            if not body or body.count("fr.sellbot") == 0:
+                try:
+                    alt_body = sub_aggregator.build_subscription_text_for_service(int(sid))
+                    if alt_body and alt_body.count("fr.sellbot") > body.count("fr.sellbot"):
+                        body = alt_body
+                except Exception:
+                    pass
             if not body:
                 self._write(404, "subscription is empty")
                 return
