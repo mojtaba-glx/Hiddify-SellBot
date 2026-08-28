@@ -246,6 +246,19 @@ def _invalidate_caches(server: Dict[str, Any]) -> None:
         _XUI_CLIENTS_CACHE.pop(key, None)
         _XUI_ONLINES_CACHE.pop(key, None)
         _XUI_LASTONLINE_CACHE.pop(key, None)
+    # همچنین کش hiddify_api برای همین سرور را پاک کن
+    try:
+        from Shared.hiddify_api import _hiddify_cache_lock, _HIDDIFY_CACHE
+        with _hiddify_cache_lock:
+            # پاک کردن هر کشی که مربوط به این سرور است
+            for k in list(_HIDDIFY_CACHE.keys()):
+                try:
+                    if k[0] == key:
+                        _HIDDIFY_CACHE.pop(k, None)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 async def _last_online_map(server: Dict[str, Any], *, _force_refresh: bool = False) -> Dict[str, str]:
