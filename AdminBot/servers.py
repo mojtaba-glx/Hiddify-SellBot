@@ -7213,7 +7213,8 @@ async def handle_server_inline_callback(
                             except Exception:
                                 u = None
                             name = str((u or {}).get("name") or (u or {}).get("email") or uuid[:8]).strip() if u else uuid[:8]
-                            extra_details.append(f"• {title}: {name} ({uuid[:8]}...)")
+                            # برای کپی راحت روی موبایل — <code> تک‌لمس کپی میشه
+                            extra_details.append(f"• {title}: <code>{name}</code> (<code>{uuid[:8]}</code>)")
                         if len(extra_uuids) > 10:
                             extra_details.append(f"... و {len(extra_uuids)-10} تای دیگر")
                     except Exception as e:
