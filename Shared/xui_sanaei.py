@@ -537,8 +537,9 @@ async def _list_inbounds(server: Dict[str, Any], *, _force_refresh: bool = False
             data = await ctx.request("GET", "inbounds/list")
         if not isinstance(data, list):
             raise XuiApiError("پاسخ لیست اینباندهای Sanaei شکل آرایه ندارد.")
+        ttl = 2 if len(data) == 0 else _XUI_INBOUNDS_TTL
         with _xui_cache_lock:
-            _XUI_INBOUNDS_CACHE[key] = (time.monotonic() + _XUI_INBOUNDS_TTL, data)
+            _XUI_INBOUNDS_CACHE[key] = (time.monotonic() + ttl, data)
         return data
 
 
@@ -577,8 +578,10 @@ async def _list_clients(server: Dict[str, Any], *, _force_refresh: bool = False)
                 raise
         if not isinstance(data, list):
             raise XuiApiError("پاسخ لیست کلاینت‌های Sanaei شکل آرایه ندارد.")
+        # اگر پنل خالیه (بعد DELETE دستی)، کش را کوتاه نگه دار تا سریع درست شود
+        ttl = 2 if len(data) == 0 else _XUI_CLIENTS_TTL
         with _xui_cache_lock:
-            _XUI_CLIENTS_CACHE[key] = (time.monotonic() + _XUI_CLIENTS_TTL, data)
+            _XUI_CLIENTS_CACHE[key] = (time.monotonic() + ttl, data)
         return data
 
 
