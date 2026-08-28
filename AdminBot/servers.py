@@ -1596,6 +1596,7 @@ def build_node_sync_menu_keyboard(server_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🧩 ساخت کاربران جاافتاده", callback_data=f"server:{server_id}:sync_nodes_missing")],
             [InlineKeyboardButton("🔁 همسان‌سازی مشخصات موجودها", callback_data=f"server:{server_id}:sync_nodes_details")],
             [InlineKeyboardButton("✅ اجرای کامل امن", callback_data=f"server:{server_id}:sync_nodes_full")],
+            [InlineKeyboardButton("👁 نمایش کاربران اضافی", callback_data=f"server:{server_id}:sync_nodes_extra")],
             [InlineKeyboardButton("🔄 ثبت سرویس کاربران قدیمی ادمین", callback_data=f"server:{server_id}:sync_nodes_migrate_users")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")],
         ]
@@ -1771,6 +1772,7 @@ async def _run_node_sync(
         target_summary["missing"] = len(missing_uuids)
         target_summary["existing"] = len(existing_uuids)
         target_summary["extra"] = len(extra_uuids)
+        target_summary["extra_uuids"] = extra_uuids[:20]
         result["missing"] += len(missing_uuids)
         result["existing"] += len(existing_uuids)
         result["extra"] += len(extra_uuids)
@@ -7159,6 +7161,74 @@ async def handle_server_inline_callback(
                 _format_node_sync_report(summary),
                 reply_markup=build_node_sync_menu_keyboard(server_id),
             )
+            return
+
+        if action == "sync_nodes_extra":
+            await msg.edit_text("👁 در حال استخراج کاربران اضافی روی نودها...")
+            try:
+                summary = await _run_node_sync(server_id, create_missing=False, patch_existing=False)
+                targets = summary.get("targets") or []
+                # جمع‌آوری extra ها
+                extra_details = []
+                for tgt in targets:
+                    title = tgt.get("title") or "نود"
+                    extra = int(tgt.get("extra") or 0)
+                    if extra <= 0:
+                        continue
+                    # برای هر تارگت، uuid های اضافی را بگیر
+                    # دوباره از _run_node_sync بخواهیم extra_uuids را بدهد — فعلا از summary نداریم، پس دوباره حساب کن
+                    # ساده: از hiddify_api بگیر
+                    try:
+                        target_id = None
+                        # پیدا کن target_id از روی title
+                        for node in (database.get_server_by_id(server_id) or {}).get("nodes") or []:
+                            if str(node.get("title") or "") == str(title):
+                                target_id = int(node.get("target_server_id") or 0)
+                                break
+                        if not target_id:
+                            continue
+                        target_srv = database.get_server_by_id(target_id)
+                        if not target_srv:
+                            continue
+                        # لیست uuid های اضافی را از خود summary بساز — اگر در summary.extra_uuids بود
+                        # فعلا از خود target_summary.extra_uuids اگر موجود باشد
+                        extra_uuids = tgt.get("extra_uuids") or []
+                        if not extra_uuids:
+                            # fallback: دوباره حساب کن
+                            src_users = await hiddify_api.list_users(database.get_server_by_id(server_id))
+                            tgt_users = await hiddify_api.list_users(target_srv)
+                            from collections import Counter
+                            s_by = {str((u or {}).get("uuid") or (u or {}).get("id") or "").strip(): u for u in s_users if isinstance(u, dict)}
+                            t_by = {str((u or {}).get("uuid") or (u or {}).get("id") or "").strip(): u for u in tgt_users if isinstance(u, dict)}
+                            extra_uuids = [uuid for uuid in t_by if uuid not in s_by]
+                        for uuid in extra_uuids[:10]:
+                            u = None
+                            # پیدا کن اطلاعات یوزر اضافی از تارگت
+                            try:
+                                # سعی کن از t_by بگیر
+                                for tmp in await hiddify_api.list_users(target_srv):
+                                    if str(tmp.get("uuid") or tmp.get("id") or "").strip() == uuid:
+                                        u = tmp
+                                        break
+                            except Exception:
+                                u = None
+                            name = str((u or {}).get("name") or (u or {}).get("email") or uuid[:8]).strip() if u else uuid[:8]
+                            extra_details.append(f"• {title}: {name} ({uuid[:8]}...)")
+                        if len(extra_uuids) > 10:
+                            extra_details.append(f"... و {len(extra_uuids)-10} تای دیگر")
+                    except Exception as e:
+                        extra_details.append(f"• {title}: خطا {e}")
+
+                if not extra_details:
+                    text = "✅ هیچ کاربر اضافی روی نودها پیدا نشد.\n\n" + _format_node_sync_report(summary)
+                else:
+                    text = "👁 کاربران اضافی روی نودها (روی نود هست ولی روی سرور اصلی نیست):\n\n" + "\n".join(extra_details[:30])
+                    if len(extra_details) > 30:
+                        text += f"\n... و {len(extra_details)-30} تای دیگر"
+                    text += "\n\n" + _format_node_sync_report(summary)
+                await msg.edit_text(text, reply_markup=build_node_sync_menu_keyboard(server_id))
+            except Exception as e:
+                await msg.edit_text(f"❌ خطا در استخراج کاربران اضافی:\n{e}", reply_markup=build_node_sync_menu_keyboard(server_id))
             return
 
         if action == "sync_nodes_migrate_users":
