@@ -46,6 +46,7 @@ from Shared.xui_common import (
     _client_key_value,
     _should_reset_traffic,
     sync_run,
+    get_loop_lock,
     uuid4,
 )
 
@@ -60,7 +61,7 @@ class XuiApiError(Exception):
 _XUI_SESSION_CACHE: Dict[Any, Tuple[float, "httpx.AsyncClient", Any, int]] = {}
 _XUI_SESSION_TTL_SECONDS = float(os.getenv("XUI_SESSION_TTL_SECONDS", "60") or "60")
 _xui_cache_lock = threading.Lock()
-_xui_client_async_locks: Dict[Any, asyncio.Lock] = {}
+_xui_client_async_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 
 
 def _server_cache_key(server: Dict[str, Any]) -> Any:
@@ -120,10 +121,7 @@ async def _login_xui_client(client: "httpx.AsyncClient", server: Dict[str, Any])
 
 async def _acquire_xui_client(server: Dict[str, Any]) -> "httpx.AsyncClient":
     key = _server_cache_key(server)
-    async_lock = _xui_client_async_locks.get(key)
-    if async_lock is None:
-        async_lock = asyncio.Lock()
-        _xui_client_async_locks[key] = async_lock
+    async_lock = get_loop_lock(_xui_client_async_locks, key)
     async with async_lock:
         now = time.monotonic()
         try:
@@ -234,10 +232,10 @@ _XUI_INBOUNDS_TTL = float(os.getenv("XUI_INBOUNDS_CACHE_SECONDS", "15") or "15")
 _XUI_CLIENTS_TTL = float(os.getenv("XUI_CLIENTS_CACHE_SECONDS", "15") or "15")
 _XUI_ONLINES_TTL = float(os.getenv("XUI_ONLINES_CACHE_SECONDS", "15") or "15")
 _XUI_LASTONLINE_TTL = float(os.getenv("XUI_LASTONLINE_CACHE_SECONDS", "30") or "30")
-_xui_inbounds_locks: Dict[Any, asyncio.Lock] = {}
-_xui_clients_locks: Dict[Any, asyncio.Lock] = {}
-_xui_onlines_locks: Dict[Any, asyncio.Lock] = {}
-_xui_lastonline_locks: Dict[Any, asyncio.Lock] = {}
+_xui_inbounds_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
+_xui_clients_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
+_xui_onlines_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
+_xui_lastonline_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 
 
 def _invalidate_caches(server: Dict[str, Any]) -> None:
@@ -270,16 +268,10 @@ async def _last_online_map(server: Dict[str, Any], *, _force_refresh: bool = Fal
             cached = _XUI_LASTONLINE_CACHE.get(key)
             if cached is not None and time.monotonic() < cached[0]:
                 return cached[1]
-            lock = _xui_lastonline_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_lastonline_locks[key] = lock
+            lock = get_loop_lock(_xui_lastonline_locks, key)
     else:
         with _xui_cache_lock:
-            lock = _xui_lastonline_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_lastonline_locks[key] = lock
+            lock = get_loop_lock(_xui_lastonline_locks, key)
     async with lock:
         if not _force_refresh:
             with _xui_cache_lock:
@@ -327,16 +319,10 @@ async def _online_emails(server: Dict[str, Any], *, _force_refresh: bool = False
             cached = _XUI_ONLINES_CACHE.get(key)
             if cached is not None and time.monotonic() < cached[0]:
                 return cached[1]
-            lock = _xui_onlines_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_onlines_locks[key] = lock
+            lock = get_loop_lock(_xui_onlines_locks, key)
     else:
         with _xui_cache_lock:
-            lock = _xui_onlines_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_onlines_locks[key] = lock
+            lock = get_loop_lock(_xui_onlines_locks, key)
     async with lock:
         if not _force_refresh:
             with _xui_cache_lock:
@@ -518,16 +504,10 @@ async def _list_inbounds(server: Dict[str, Any], *, _force_refresh: bool = False
             cached = _XUI_INBOUNDS_CACHE.get(key)
             if cached is not None and time.monotonic() < cached[0]:
                 return cached[1]
-            lock = _xui_inbounds_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_inbounds_locks[key] = lock
+            lock = get_loop_lock(_xui_inbounds_locks, key)
     else:
         with _xui_cache_lock:
-            lock = _xui_inbounds_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_inbounds_locks[key] = lock
+            lock = get_loop_lock(_xui_inbounds_locks, key)
     async with lock:
         if not _force_refresh:
             with _xui_cache_lock:
@@ -552,16 +532,10 @@ async def _list_clients(server: Dict[str, Any], *, _force_refresh: bool = False)
             cached = _XUI_CLIENTS_CACHE.get(key)
             if cached is not None and time.monotonic() < cached[0]:
                 return cached[1]
-            lock = _xui_clients_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_clients_locks[key] = lock
+            lock = get_loop_lock(_xui_clients_locks, key)
     else:
         with _xui_cache_lock:
-            lock = _xui_clients_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                _xui_clients_locks[key] = lock
+            lock = get_loop_lock(_xui_clients_locks, key)
     async with lock:
         if not _force_refresh:
             with _xui_cache_lock:

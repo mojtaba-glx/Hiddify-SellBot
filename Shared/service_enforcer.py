@@ -363,7 +363,24 @@ async def _disable_service_on_all_nodes(
     return changed, failed
 
 
+
+# گارد ضد اجرای همزمان (job زمان‌بندی‌شده + اجرای دستی نباید روی هم بیفتند)
+_enforcer_running = False
+
+
 async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]:
+    global _enforcer_running
+    if _enforcer_running:
+        logger.warning("usage enforcer: اجرای همزمان شناسایی شد — این دور برای جلوگیری از تداخل رد شد")
+        return {"skipped": 1, "reason": "already_running"}
+    _enforcer_running = True
+    try:
+        return await _run_global_usage_enforcer_impl(scan_all=scan_all)
+    finally:
+        _enforcer_running = False
+
+
+async def _run_global_usage_enforcer_impl(*, scan_all: False) -> Dict[str, int]:
     """
     جمع مصرف سراسری سرویس‌ها روی همه نودها و قطع خودکار روی سقف.
     """

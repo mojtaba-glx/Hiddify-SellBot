@@ -3134,7 +3134,8 @@ async def _send_service_direct_configs_shell(
         )
         return
 
-    links = _collect_all_direct_configs_for_service(service)
+    # جمع‌کردن کانفیگ‌ها (شامل urlopen بلاک‌کننده) در thread جدا — event loop فریز نشود
+    links = await asyncio.to_thread(_collect_all_direct_configs_for_service, service)
     source_hint = ""
     allow_api_fallback = str(os.getenv("DIRECT_CONFIG_API_FALLBACK", "0")).strip().lower() in {
         "1",

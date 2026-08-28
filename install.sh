@@ -90,6 +90,11 @@ USAGE
 ensure_dirs() {
   mkdir -p "$LOG_DIR" "$BACKUP_DIR" "$RECEIPT_DIR"
   touch "$ADMIN_LOG_FILE" "$USER_LOG_FILE" "$AGENT_LOG_FILE" "$CUSTOMER_LOG_FILE"
+  # دسترسی سخت‌گیرانه روی داده‌های حساس (توکن‌ها، دیتابیس، بکاپ‌ها)
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  chmod 600 "$BASE_DIR"/Shared/*.db "$BASE_DIR"/Shared/*.db-wal "$BASE_DIR"/Shared/*.db-shm 2>/dev/null || true
+  chmod 700 "$BASE_DIR/backups" 2>/dev/null || true
+  chmod 600 "$BASE_DIR"/backups/* 2>/dev/null || true
 }
 
 load_env_file() {
@@ -152,6 +157,7 @@ prompt_required() {
 configure_env() {
   ensure_dirs
   touch "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
   load_env_file "$ENV_FILE" || true
 
   if [ ! -t 0 ]; then
@@ -966,6 +972,7 @@ set_stabilizer_mode() {
 
   ensure_dirs
   touch "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
   set_env_var "$HIDDIFY_STABILIZER_ENV_KEY" "$mode" "$ENV_FILE"
   _green "OK: Hiddify user stabilizer set to: $mode"
   _yellow "Restart is required to apply this setting."
@@ -1534,6 +1541,9 @@ EOF
   "${certbot_cmd[@]}"
 
   touch "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  # پورت خام HTTP دیگر روی همه کارت‌های شبکه باز نباشد — فقط nginx محلی
+  set_env_var "SUB_SERVER_HOST" "127.0.0.1" "$ENV_FILE"
   set_env_var "SUB_SERVER_PUBLIC_HOST" "$domain" "$ENV_FILE"
   set_env_var "SUB_SERVER_PUBLIC_SCHEME" "https" "$ENV_FILE"
   set_env_var "SUB_SERVER_PUBLIC_PORT" "443" "$ENV_FILE"

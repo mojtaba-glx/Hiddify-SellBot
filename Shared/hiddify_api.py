@@ -237,6 +237,9 @@ async def _get_hiddify_client(server: Dict[str, Any], verify: Any) -> httpx.Asyn
                 return c_cli
     timeout = _get_api_timeout_seconds()
     client = httpx.AsyncClient(timeout=timeout, verify=verify)
+    discard_client = False
+    cached_client = None
+    superseded = None
     with _hiddify_cache_lock:
         old = _HIDDIFY_CLIENT_CACHE.get(key)
         # check if another waiter already inserted
@@ -247,23 +250,31 @@ async def _get_hiddify_client(server: Dict[str, Any], verify: Any) -> httpx.Asyn
                 exp2, e_cli = old  # type: ignore
                 e_loop, e_thread = None, None
             if time.monotonic() < exp2 and not e_cli.is_closed and e_loop is cur_loop and e_thread == cur_thread and e_cli is not client:
+                # هیچ awaitی داخل قفل thread انجام نمی‌شود؛ کلاینت اضافی
+                # بعد از خروج از قفل بسته می‌شود (جلوگیری از بلاک شدن loop)
+                discard_client = True
+                cached_client = e_cli
+        if not discard_client:
+            _HIDDIFY_CLIENT_CACHE[key] = (now + _HIDDIFY_CLIENT_TTL, client, cur_loop, cur_thread)
+            superseded = None
+            if old is not None:
                 try:
-                    await client.aclose()
-                except Exception:
-                    pass
-                return e_cli
-        _HIDDIFY_CLIENT_CACHE[key] = (now + _HIDDIFY_CLIENT_TTL, client, cur_loop, cur_thread)
-        superseded = None
-        if old is not None:
-            try:
-                _, old_cli, _, _ = old  # type: ignore
-                superseded = old_cli if old_cli is not client else None
-            except ValueError:
-                try:
-                    _, old_cli = old  # type: ignore
+                    _, old_cli, _, _ = old  # type: ignore
                     superseded = old_cli if old_cli is not client else None
+                except ValueError:
+                    try:
+                        _, old_cli = old  # type: ignore
+                        superseded = old_cli if old_cli is not client else None
+                    except Exception:
+                        superseded = None
                 except Exception:
                     superseded = None
+    if discard_client:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+        return cached_client
     if superseded is not None and not superseded.is_closed:
         try:
             await superseded.aclose()

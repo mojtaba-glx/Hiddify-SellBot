@@ -704,8 +704,9 @@ async def _send_service_direct_configs(msg, svc):
                 if not is_xui_node:
                     continue
                 try:
-                    # مستقیم در لوپ اصلی صدا بزن تا xui_api کش لوپ اصلی را reuse کند (to_thread باعث Event loop is closed می‌شد)
-                    api_lines = _fetch_lines_from_admin_api(srv, uuid, marzban_un)
+                    # در thread جدا اجرا می‌شود (event loop بلاک نشود)؛ قفل‌های
+                    # xui حالا loop-scoped هستند پس خطای cross-loop رخ نمی‌دهد
+                    api_lines = await asyncio.to_thread(_fetch_lines_from_admin_api, srv, uuid, marzban_un)
                 except Exception:
                     api_lines = []
                 added_here = 0

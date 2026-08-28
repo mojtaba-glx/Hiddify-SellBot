@@ -133,7 +133,24 @@ async def _process_service(svc: dict) -> Dict[str, str]:
     return result
 
 
+
+# گارد ضد اجرای همزمان (job زمان‌بندی‌شده + اجرای دستی نباید روی هم بیفتند)
+_enforcer_running = False
+
+
 async def run_agent_usage_enforcer(*, scan_all: bool = True) -> Dict[str, int]:
+    global _enforcer_running
+    if _enforcer_running:
+        logger.warning("agent enforcer: اجرای همزمان شناسایی شد — این دور برای جلوگیری از تداخل رد شد")
+        return {"skipped": 1, "reason": "already_running"}
+    _enforcer_running = True
+    try:
+        return await _run_agent_usage_enforcer_impl(scan_all=scan_all)
+    finally:
+        _enforcer_running = False
+
+
+async def _run_agent_usage_enforcer_impl(*, scan_all: True) -> Dict[str, int]:
     """اجرای دورهای/دستی چک مصرف سرویس‌های فعال نمایندگی."""
     summary = {
         "services_total": 0,

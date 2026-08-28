@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sqlite3
 import threading
 import urllib.request
@@ -236,8 +237,16 @@ DEFAULT_TEXT_SETTINGS = {
 }
 
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
+    try:
+        # چند پروسه/ترد روی یک فایل: WAL + busy_timeout از
+        # «database is locked» در عملیات همزمان جلوگیری می‌کند
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=20000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
     return conn
 
 def init_db() -> None:
@@ -3267,7 +3276,8 @@ def ensure_service_sub_token(service_id: int) -> str:
     init_db()
     sid = int(service_id)
     now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-    token = f"s{sid}_{random.randint(100000, 999999)}_{random.randint(100000, 999999)}"
+    # توکن با CSPRNG و entropy بالا — قابل حدس/brute-force نباشد
+    token = f"s{sid}_{secrets.token_hex(10)}"
 
     conn = _get_conn()
     cur = conn.cursor()

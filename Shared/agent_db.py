@@ -22,8 +22,16 @@ _init_db_path = ""
 
 
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
+    try:
+        # چند پروسه/ترد روی یک فایل: WAL + busy_timeout از
+        # «database is locked» در عملیات همزمان جلوگیری می‌کند
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=20000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
     return conn
 
 
@@ -2364,11 +2372,15 @@ def get_agent_stats(agent_id: int) -> Dict[str, Any]:
     )
     total_wholesale = int(cur.fetchone()["total"] or 0)
 
-    # موجودی کیف پول
+    # اتصال اول قبل از فراخوانی get_wallet بسته شود — get_wallet خودش
+    # connection جدا باز می‌کند و می‌نویسد (INSERT OR IGNORE)؛ باز ماندن
+    # اتصال خواندن اینجا باعث SQLITE_BUSY خود-قفل‌شدگی می‌شد
+    conn.close()
+    conn = None
+
     wallet = get_wallet(agent_id)
     wallet_balance = int(wallet.get("balance", 0))
 
-    conn.close()
     return {
         "agent_id": agent_id,
         "customers_count": customers_count,

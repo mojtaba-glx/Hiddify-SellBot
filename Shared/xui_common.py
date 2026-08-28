@@ -778,6 +778,27 @@ def sync_run(coro):
     return outcome.get("value")
 
 
+def get_loop_lock(registry: Dict[Tuple[Any, int], asyncio.Lock], key: Any) -> asyncio.Lock:
+    """قفل asyncio مخصوص هر جفت (کلید، event loop).
+
+    قفل asyncio در پایتون ۳.۱۲ به loop اولی که از آن استفاده کرده قفل می‌شود؛
+    استفاده از همان قفل در loop دیگر (مثلاً asyncio.run تردهای HTTP سرور
+    اشتراک) RuntimeError می‌دهد. این helper برای هر loop یک قفل جدا می‌سازد.
+    """
+    try:
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        loop_id = 0
+    lock_key = (key, loop_id)
+    lock = registry.get(lock_key)
+    if lock is None:
+        # جلوگیری از رشد بی‌رویه ثبت‌ها با loopهای گذرا
+        if len(registry) > 1024:
+            registry.clear()
+        lock = registry[lock_key] = asyncio.Lock()
+    return lock
+
+
 def default_cert_domain(server: Optional[Dict[str, Any]] = None) -> str:
     """دامنه پیش‌فرض گواهی را از panel_url خود سرور بیرون بکش (بدون هاردکد)."""
     if not server:
