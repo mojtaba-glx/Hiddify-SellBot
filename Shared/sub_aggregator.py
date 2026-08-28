@@ -680,14 +680,80 @@ def build_subscription_text_for_service(service_id: int) -> str:
                 continue
             if _is_panel_status_config_line(ln):
                 continue
-            if ln in seen:
+            # برای جلوگیری از تکراری فر (vless fr:444 هم از Hiddify آلمان هم از X-UI مستقیم میاد با ech متفاوت)
+            # dedup را با uuid+host+port+type انجام بده نه کل لینک
+            try:
+                dedup_key = _dedup_key_for_line(ln)
+            except Exception:
+                dedup_key = ln
+            if dedup_key in seen:
                 continue
-            seen.add(ln)
+            seen.add(dedup_key)
             lines.append(ln)
     status_line = _build_status_config_line(service)
     if status_line and lines:
         lines.insert(0, status_line)
     return "\n".join(lines)
+
+
+def _dedup_key_for_line(line: str) -> str:
+    """کلید یکتا برای جلوگیری از تکراری: uuid@host:port:type"""
+    try:
+        # vless://uuid@host:port? sni=... type=...
+        # vmess base64, trojan, hysteria, ss
+        if line.startswith("vmess://"):
+            # vmess base64 json
+            import base64, json as _json
+            b64 = line.split("vmess://", 1)[1].split("#")[0].strip()
+            # pad
+            b64 += "=" * (-len(b64) % 4)
+            data = _json.loads(base64.b64decode(b64).decode())
+            return f"{data.get('id') or ''}@{data.get('add') or ''}:{data.get('port') or ''}:{data.get('net') or data.get('type') or ''}".lower()
+        # برای بقیه: vless, trojan, hysteria2, ss, tuic
+        # uuid/host/port/type را بیرون بکش
+        # vless://uuid@host:port?....
+        # trojan://pass@host:port#...
+        # hysteria2://uuid@host:port?...
+        # ss://base64@host:port#...
+        import urllib.parse as _up
+        # جدا کن scheme
+        scheme = line.split("://", 1)[0].lower() if "://" in line else ""
+        # برای ss، host/port بعد @ است
+        if "://" in line:
+            rest = line.split("://", 1)[1]
+            # برای ss://base64@host:port
+            if "@" in rest:
+                # برای vless/trojan/hysteria
+                # vless://uuid@host:port? -> uuid is before @
+                # ss://base64@host:port -> base64 is before @, delegate to ss host
+                before_at = rest.split("@", 1)[0]
+                after_at = rest.split("@", 1)[1]
+                # host:port تا ? یا # یا /
+                hostport = after_at.split("?")[0].split("#")[0].split("/")[0]
+                # uuid برای vless/trojan/hysteria
+                uuid = before_at.split("?")[0].split("#")[0].split("/")[0]
+                # برای ss، before_at base64 است، uuid واقعی داخلش است
+                if scheme == "ss":
+                    try:
+                        import base64 as _b64
+                        b64p = before_at + "=" * (-len(before_at) % 4)
+                        decoded = _b64.b64decode(b64p).decode(errors="ignore")
+                        # decoded is method:password or method:password@host:port
+                        if ":" in decoded:
+                            # method:password
+                            uuid = decoded.split(":")[-1][:36]  # تقریبی
+                    except Exception:
+                        uuid = before_at[:36]
+                # type را از query بگیر
+                q = ""
+                if "?" in rest:
+                    q = rest.split("?", 1)[1].split("#")[0]
+                qs = dict(_up.parse_qsl(q))
+                typ = qs.get("type") or qs.get("net") or scheme
+                return f"{uuid}@{hostport}:{typ}".lower()
+        return line.lower()
+    except Exception:
+        return line.lower()
 
 
 def build_subscription_b64_for_service(service_id: int) -> str:
