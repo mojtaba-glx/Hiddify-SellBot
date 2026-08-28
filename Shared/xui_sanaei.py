@@ -1603,9 +1603,57 @@ async def sync_users_to_inbounds(server: Dict[str, Any]) -> Dict[str, Any]:
             skipped += 1
             continue
         email = str(client.get("email") or "").strip()
+        # برای اینکه inbounds.settings هم آپدیت شود، بعد از attach یک بار هم inbounds را مستقیم چک کن
+        # و اگر باز هم در inbounds.settings نبود، fallback به addClient
         try:
             async with _XuiContext(server) as ctx:
                 await ctx.request("POST", f"clients/{quote(email, safe='')}/attach", json_body={"inboundIds": missing})
+            # بعد از attach، کش را پاک کن و دوباره چک کن که واقعا در inbounds.settings هم آمده
+            _invalidate_caches(server)
+            # یک بار inbounds را دوباره بخوان و ببین کدام inbound هنوز ندارد
+            try:
+                inbounds_fresh = await _list_inbounds(server)
+                for tid in missing[:]:
+                    # پیدا کن inbound با این id
+                    ib = next((x for x in inbounds_fresh if int(x.get("id") or 0) == tid), None)
+                    if not ib:
+                        continue
+                    found_in_settings = False
+                    for cl in _settings_clients(ib.get("settings")):
+                        if str(cl.get("email") or "").strip().lower() == email_low:
+                            found_in_settings = True
+                            break
+                        # همچنین subId را چک کن
+                        if str(cl.get("subId") or "").strip().lower() == str(client.get("subId") or "").strip().lower():
+                            found_in_settings = True
+                            break
+                    if not found_in_settings:
+                        # fallback: مستقیم به inbounds/addClient
+                        try:
+                            # برای X-UI Sanaei، addClient via inbounds/addClient
+                            # از client اصلی به عنوان template استفاده کن
+                            from Shared.xui_common import _new_client_dict
+                            proto = str(ib.get("protocol") or "").strip().lower() or "vless"
+                            # پیدا کن uuid اصلی
+                            uuid = str(client.get("subId") or client.get("id") or client.get("email") or "").strip()
+                            if not uuid:
+                                uuid = str(client.get("uuid") or "").strip()
+                            if uuid:
+                                new_cl = _new_client_dict(proto, uuid=uuid, template=client)
+                                # کپی quota/expiry
+                                for k in ("totalGB", "expiryTime", "enable", "limitIp"):
+                                    if k in client:
+                                        new_cl[k] = client[k]
+                                # برای inbounds/addClient
+                                async with _XuiContext(server) as ctx2:
+                                    await ctx2.request("POST", f"inbounds/{tid}/addClient", json_body={"client": new_cl})
+                                created += 1
+                                # از missing کم کن چون با fallback ساخته شد
+                                # (attach قبلا 1 شمرده، پس اینجا دوباره نشمار)
+                        except Exception as e2:
+                            errors.append(f"{email}->{tid} fallback addClient: {e2}")
+            except Exception:
+                pass
             created += len(missing)
         except Exception as e:
             errors.append(f"{email}->{missing}: {e}")
