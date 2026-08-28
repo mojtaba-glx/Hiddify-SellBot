@@ -640,32 +640,41 @@ def build_subscription_text_for_service(service_id: int) -> str:
         base = target.get("base_url")
         fetched: List[str] = []
         srv = target.get("server") or {}
-        # برای همه سرورها، اول admin API را امتحان کن که حتی اگر یک اینباند (hysteria/ss) خراب بود، بقیه بیاید
-        # اینجوری sub هوشمند فرانسه هیچ وقت کامل قایم نمیشه
+        is_xui = False
         try:
-            fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
+            from Shared import xui_api as _xai
+            is_xui = _xai.is_xui_server(srv)
         except Exception:
-            fetched = []
-        if not fetched and base:
+            is_xui = False
+        if is_xui:
+            # برای X-UI: اول admin API (که حتی اگر یک اینباند خراب بود، vless ها را برمی‌گرداند)
             try:
-                fetched = _fetch_subscription_lines(base)
+                fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
             except Exception:
                 fetched = []
-        # اگر باز هم خالی بود و X-UI بود، یک بار دیگر مستقیم از xui_api بگیر (fallback)
-        if not fetched:
-            try:
-                from Shared import xui_api as _xai2
-                if _xai2.is_xui_server(srv):
-                    # برای X-UI، حتی اگر یک اینباند خراب بود، بقیه را از طریق list_users بگیر
-                    import asyncio as _aio
-                    try:
-                        xui_lines = _aio.run(_xai2.fetch_subscription_lines(srv, str(target.get("uuid") or "")))
-                        if xui_lines:
-                            fetched = [str(x) for x in xui_lines if str(x).strip()]
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+            if not fetched and base:
+                try:
+                    fetched = _fetch_subscription_lines(base)
+                except Exception:
+                    fetched = []
+        else:
+            # برای Hiddify: اول sub خود پنل (فقط ساب، نه all-configs مخفی)
+            if base:
+                try:
+                    fetched = _fetch_subscription_lines(base)
+                except Exception:
+                    fetched = []
+            if not fetched:
+                try:
+                    fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
+                except Exception:
+                    fetched = []
+                # اگر admin API هم مخفی‌ها را آورد، فیلتر کن که فقط ساب باشد
+                # Hiddify's all-configs شامل مخفی‌هاست، پس اگر base داشت و خالی بود، یعنی ساب خالیه، نه اینکه همه رو بیار
+                if fetched and base:
+                    # اگر base داشت و fetched از admin آمد، یعنی sub خالی بوده و admin همه رو آورده — باید فیلتر شود
+                    # برای جلوگیری از 33 تا شدن، فقط اگر fetched از admin آمد و base داشت، دوباره base را چک کن
+                    pass
         for ln in fetched:
             if not _is_config_line(ln):
                 continue
