@@ -633,7 +633,7 @@ def _make_qr_image(data: str, *, filename: str = "gift-deeplink-qr.png") -> Byte
 
 
 def _build_gift_campaign_copy(code: str, deep_link: str, amount_toman: int, *, title: str = "") -> str:
-    campaign_title = str(title or "هدیه ویژه SELLBOT").strip()
+    campaign_title = str(title or "هدیه ویژه فروشگاه").strip()
     link_line = str(deep_link or "").strip() or f"کد هدیه: {code}"
     return (
         f"🎁 {campaign_title}\n\n"
