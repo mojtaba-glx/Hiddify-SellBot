@@ -658,23 +658,14 @@ def build_subscription_text_for_service(service_id: int) -> str:
                 except Exception:
                     fetched = []
         else:
-            # برای Hiddify: اول sub خود پنل (فقط ساب، نه all-configs مخفی)
+            # برای Hiddify: فقط sub خود پنل، نه all-configs (مخفی‌ها نباید بیاد)
             if base:
                 try:
                     fetched = _fetch_subscription_lines(base)
                 except Exception:
                     fetched = []
-            if not fetched:
-                try:
-                    fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
-                except Exception:
-                    fetched = []
-                # اگر admin API هم مخفی‌ها را آورد، فیلتر کن که فقط ساب باشد
-                # Hiddify's all-configs شامل مخفی‌هاست، پس اگر base داشت و خالی بود، یعنی ساب خالیه، نه اینکه همه رو بیار
-                if fetched and base:
-                    # اگر base داشت و fetched از admin آمد، یعنی sub خالی بوده و admin همه رو آورده — باید فیلتر شود
-                    # برای جلوگیری از 33 تا شدن، فقط اگر fetched از admin آمد و base داشت، دوباره base را چک کن
-                    pass
+            # اگر sub خالی بود، دیگر به all-configs نرو — چون 33 تا مخفی میاره
+            # بگذار خالی بماند تا کاربر تو خود Hiddify Save بزند
         for ln in fetched:
             if not _is_config_line(ln):
                 continue
