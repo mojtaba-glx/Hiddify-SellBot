@@ -7220,13 +7220,26 @@ async def handle_server_inline_callback(
                         extra_details.append(f"• {title}: خطا {e}")
 
                 if not extra_details:
-                    text = "✅ هیچ کاربر اضافی روی نودها پیدا نشد.\n\n" + _format_node_sync_report(summary)
+                    text = (
+                        "✅ <b>کاربران اضافی</b> — هیچ موردی پیدا نشد\n"
+                        "❖⬩──────────────⬩❖\n"
+                        "همه کاربران روی نودها با سرور اصلی هماهنگ هستند."
+                    )
                 else:
-                    text = "👁 کاربران اضافی روی نودها (روی نود هست ولی روی سرور اصلی نیست):\n\n" + "\n".join(extra_details[:30])
-                    if len(extra_details) > 30:
-                        text += f"\n... و {len(extra_details)-30} تای دیگر"
-                    text += "\n\n" + _format_node_sync_report(summary)
-                await msg.edit_text(text, reply_markup=build_node_sync_menu_keyboard(server_id))
+                    header = (
+                        "👁 <b>کاربران اضافی روی نودها</b>\n"
+                        "❖⬩──────────────⬩❖\n"
+                        "این کاربران روی نود وجود دارند ولی روی سرور اصلی نیستند:\n"
+                    )
+                    # نمایش حرفه‌ای: هر نود جدا با شماره و جزئیات
+                    body_lines = []
+                    for idx, line in enumerate(extra_details[:15], start=1):
+                        # line is like "• ترکیه🇹🇷: vpn-266356 (1faaae8e...)"
+                        body_lines.append(f"{idx}. {line[2:] if line.startswith('• ') else line}")
+                    if len(extra_details) > 15:
+                        body_lines.append(f"\n<i>و {len(extra_details)-15} مورد دیگر...</i>")
+                    text = header + "\n" + "\n".join(body_lines)
+                await msg.edit_text(text, reply_markup=build_node_sync_menu_keyboard(server_id), parse_mode="HTML")
             except Exception as e:
                 await msg.edit_text(f"❌ خطا در استخراج کاربران اضافی:\n{e}", reply_markup=build_node_sync_menu_keyboard(server_id))
             return
