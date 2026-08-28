@@ -639,14 +639,30 @@ def build_subscription_text_for_service(service_id: int) -> str:
     for target in _service_targets(service):
         base = target.get("base_url")
         fetched: List[str] = []
-        if base:
-            fetched = _fetch_subscription_lines(base)
-        if not fetched:
-            fetched = _fetch_lines_from_admin_api(
-                target.get("server") or {},
-                str(target.get("uuid") or ""),
-                marzban_username=str(target.get("marzban_username") or ""),
-            )
+        # برای X-UI، اول از admin API بگیر که حتی اگر یک اینباند (hysteria/ss) خراب بود، vless ها باز بیاد
+        # وگرنه sub هوشمند کل فرانسه قایم میشه تا ریستارت
+        srv = target.get("server") or {}
+        is_xui = False
+        try:
+            from Shared import xui_api as _xai
+            is_xui = _xai.is_xui_server(srv)
+        except Exception:
+            is_xui = False
+        if is_xui:
+            try:
+                fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
+            except Exception:
+                fetched = []
+            if not fetched and base:
+                try:
+                    fetched = _fetch_subscription_lines(base)
+                except Exception:
+                    fetched = []
+        else:
+            if base:
+                fetched = _fetch_subscription_lines(base)
+            if not fetched:
+                fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
         for ln in fetched:
             if not _is_config_line(ln):
                 continue
