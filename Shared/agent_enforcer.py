@@ -150,7 +150,7 @@ async def run_agent_usage_enforcer(*, scan_all: bool = True) -> Dict[str, int]:
         _enforcer_running = False
 
 
-async def _run_agent_usage_enforcer_impl(*, scan_all: True) -> Dict[str, int]:
+async def _run_agent_usage_enforcer_impl(*, scan_all: bool = True) -> Dict[str, int]:
     """اجرای دورهای/دستی چک مصرف سرویس‌های فعال نمایندگی."""
     summary = {
         "services_total": 0,

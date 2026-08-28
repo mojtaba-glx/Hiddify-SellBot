@@ -380,7 +380,7 @@ async def run_global_usage_enforcer(*, scan_all: bool = False) -> Dict[str, int]
         _enforcer_running = False
 
 
-async def _run_global_usage_enforcer_impl(*, scan_all: False) -> Dict[str, int]:
+async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str, int]:
     """
     جمع مصرف سراسری سرویس‌ها روی همه نودها و قطع خودکار روی سقف.
     """
