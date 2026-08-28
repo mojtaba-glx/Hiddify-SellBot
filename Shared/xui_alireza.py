@@ -44,6 +44,7 @@ from urllib.parse import quote, urlparse, parse_qsl, unquote
 import httpx
 
 from Shared import hiddify_api
+from Shared.xui_common import default_cert_domain, sync_run
 
 logger = logging.getLogger(__name__)
 
@@ -1712,8 +1713,8 @@ async def fetch_subscription_lines(server: Dict[str, Any], user_uuid: str) -> Li
 
 
 def sync_fetch_subscription_lines(server: Dict[str, Any], user_uuid: str) -> List[str]:
-    """Blocking wrapper for threads (sub_http_server workers)."""
-    return asyncio.run(_fetch_subscription_lines(server, user_uuid))
+    """Blocking wrapper (امن با یا بدون event loop فعال)."""
+    return sync_run(_fetch_subscription_lines(server, user_uuid))
 
 
 # ---------------------------------------------------------------------------
@@ -2221,7 +2222,7 @@ async def create_inbound_from_link(
             remark = f"{protocol}-{port}"
 
     # ساخت JSON اینباند بر اساس پروتکل
-    inbound_json = _build_inbound_json(protocol, port, parsed, remark)
+    inbound_json = _build_inbound_json(protocol, port, parsed, remark, server=server)
     async with _XuiContext(server) as ctx:
         try:
             resp = await ctx.request("POST", "inbounds/add", json_body=inbound_json)
@@ -2243,7 +2244,7 @@ async def create_inbound_from_link(
     return resp if isinstance(resp, dict) else {"raw": resp}
 
 
-def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark: str) -> Dict[str, Any]:
+def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark: str, server: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     # پایه مشترک
     base: Dict[str, Any] = {
         "port": port,
@@ -2253,7 +2254,7 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         "enable": True,
         "expiryTime": 0,
         "settings": json.dumps({"clients": [], "decryption": "none", "fallbacks": []} if protocol in ("vless", "vmess") else {"clients": [], "password": ""}),
-        "streamSettings": json.dumps(_stream_settings_for_parsed(parsed)),
+        "streamSettings": json.dumps(_stream_settings_for_parsed(parsed, server=server)),
         "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False}),
     }
     # برای shadowsocks — مخصوص 2022-blake3 و معمولی (دقیقا مثل DB دستی 8888)
@@ -2297,9 +2298,24 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
         sni_val = (parsed.get("sni") or parsed.get("host") or "").strip()
         cert_domain = sni_val.split(":")[0].strip() if sni_val else ""
         if not cert_domain:
-            cert_domain = "panel.example.com"
+            # دامنه گواهی از panel_url خود سرور — بدون هاردکد
+            cert_domain = default_cert_domain(server)
         alpn_val = (parsed.get("alpn") or "h3").strip() or "h3"
         alpn_list = [a.strip() for a in alpn_val.split(",") if a.strip()] or ["h3"]
+        cert_entries = (
+            [
+                {
+                    "certificateFile": f"/root/cert/{cert_domain}/fullchain.pem",
+                    "keyFile": f"/root/cert/{cert_domain}/privkey.pem",
+                    "ocspStapling": 0,
+                    "oneTimeLoading": False,
+                    "usage": "encipherment",
+                    "buildChain": False,
+                }
+            ]
+            if cert_domain
+            else []
+        )
         stream = {
             "network": "hysteria",
             "hysteriaSettings": {"version": 2, "udpIdleTimeout": 60},
@@ -2312,16 +2328,7 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
                 "rejectUnknownSni": False,
                 "disableSystemRoot": False,
                 "enableSessionResumption": False,
-                "certificates": [
-                    {
-                        "certificateFile": f"/root/cert/{cert_domain}/fullchain.pem",
-                        "keyFile": f"/root/cert/{cert_domain}/privkey.pem",
-                        "ocspStapling": 0,
-                        "oneTimeLoading": False,
-                        "usage": "encipherment",
-                        "buildChain": False,
-                    }
-                ],
+                "certificates": cert_entries,
                 "alpn": alpn_list,
                 "echServerKeys": "",
                 "settings": {"fingerprint": "chrome", "echConfigList": "", "pinnedPeerCertSha256": [], "verifyPeerCertByName": ""},
@@ -2334,28 +2341,18 @@ def _build_inbound_json(protocol: str, port: int, parsed: Dict[str, Any], remark
     return base
 
 
-def _stream_settings_for_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
+def _stream_settings_for_parsed(parsed: Dict[str, Any], server: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     network = (parsed.get("network") or "tcp").lower()
     security = (parsed.get("security") or "none").lower()
     out: Dict[str, Any] = {"network": network, "security": security}
     if security == "tls":
         sni_val = (parsed.get("sni") or parsed.get("host") or "").strip()
         cert_domain = sni_val.split(":")[0].strip() if sni_val else ""
-        # fallback to panel domain if sni empty
+        # اگر sni خالی بود، دامنه گواهی از panel_url خود سرور — بدون هاردکد
         if not cert_domain:
-            try:
-                from Shared.xui_common import _public_origin
-                # try to get panel domain from parsed host
-                cert_domain = (parsed.get("host") or "").strip()
-            except Exception:
-                cert_domain = ""
-        if not cert_domain:
-            cert_domain = "panel.example.com"
-        tls: Dict[str, Any] = {
-            "serverName": sni_val or cert_domain,
-            "alpn": [a.strip() for a in (parsed.get("alpn") or "h2,http/1.1").split(",") if a.strip()] or ["h2", "http/1.1"],
-            "fingerprint": parsed.get("fp") or "chrome",
-            "certificates": [
+            cert_domain = default_cert_domain(server)
+        cert_entries = (
+            [
                 {
                     "certificateFile": f"/root/cert/{cert_domain}/fullchain.pem",
                     "keyFile": f"/root/cert/{cert_domain}/privkey.pem",
@@ -2364,7 +2361,15 @@ def _stream_settings_for_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
                     "usage": "encipherment",
                     "buildChain": False,
                 }
-            ],
+            ]
+            if cert_domain
+            else []
+        )
+        tls: Dict[str, Any] = {
+            "serverName": sni_val or cert_domain,
+            "alpn": [a.strip() for a in (parsed.get("alpn") or "h2,http/1.1").split(",") if a.strip()] or ["h2", "http/1.1"],
+            "fingerprint": parsed.get("fp") or "chrome",
+            "certificates": cert_entries,
         }
         out["tlsSettings"] = tls
     elif security == "reality":

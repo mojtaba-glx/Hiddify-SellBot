@@ -7,10 +7,12 @@ No HTTP calls here - only pure data helpers, parsing and building.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import random
 import re
+import threading
 import uuid as _uuid_mod
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -745,3 +747,62 @@ def _find_all_clients_for_uuid(
                 out.append((inbound, client))
                 break
     return out
+
+
+def sync_run(coro):
+    """اجرای coroutine از کد sync حتی وقتی در ترد جاری event loop فعال وجود دارد.
+
+    - بدون loop فعال: مثل asyncio.run عمل می‌کند.
+    - با loop فعال در همین ترد: coroutine را در یک ترد کمکی با loop اختصاصی
+      اجرا می‌کند تا loop اصلی بلاک یا ددلاک نشود (asyncio.run اینجا
+      RuntimeError می‌داد).
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    outcome: Dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            outcome["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True, name="xui-sync-run")
+    thread.start()
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("value")
+
+
+def default_cert_domain(server: Optional[Dict[str, Any]] = None) -> str:
+    """دامنه پیش‌فرض گواهی را از panel_url خود سرور بیرون بکش (بدون هاردکد)."""
+    if not server:
+        return ""
+    raws: List[str] = []
+    try:
+        raws.append(_public_origin(server) or "")
+    except Exception:
+        pass
+    for key in ("panel_url", "panel_host", "host", "domain"):
+        try:
+            raws.append(str(server.get(key) or ""))
+        except Exception:
+            pass
+    for raw in raws:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = urlparse(value)
+            host = (parsed.hostname or "").strip()
+        except Exception:
+            host = ""
+        if not host:
+            host = value.split("/")[0].split(":")[0].strip()
+        if host:
+            return host
+    return ""

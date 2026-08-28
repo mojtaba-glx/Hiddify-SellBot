@@ -45,6 +45,7 @@ from Shared.xui_common import (
     _settings_clients,
     _client_key_value,
     _should_reset_traffic,
+    sync_run,
     uuid4,
 )
 
@@ -1484,7 +1485,7 @@ async def fetch_subscription_lines(server: Dict[str, Any], user_uuid: str) -> Li
 
 
 def sync_fetch_subscription_lines(server: Dict[str, Any], user_uuid: str) -> List[str]:
-    return asyncio.run(_fetch_subscription_lines(server, user_uuid))
+    return sync_run(_fetch_subscription_lines(server, user_uuid))
 
 
 # ---------------------------------------------------------------------------
@@ -1544,7 +1545,7 @@ async def create_inbound_from_link(
             remark = ""
         if not remark:
             remark = f"{protocol}-{port}"
-    inbound_json = _build_inbound_json(protocol, port, parsed, remark)
+    inbound_json = _build_inbound_json(protocol, port, parsed, remark, server=server)
     # For Sanaei, settings/streamSettings may be sent as objects, not strings
     # Convert back if needed: try to json.loads if string
     for k in ("settings", "streamSettings", "sniffing"):

@@ -659,19 +659,6 @@ def build_subscription_text_for_service(service_id: int) -> str:
                     fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
                 except Exception:
                     fetched = []
-            # اگر باز هم خالی بود، یک بار دیگر مستقیم xui sub را امتحان کن (force)
-            if not fetched and base:
-                try:
-                    # برای x-ui، حتی اگر یک اینباند خراب بود، vless ها را از sub بگیر
-                    from Shared.xui_sanaei import _fetch_subscription_lines as _xui_fetch
-                    import asyncio as _aio2
-                    try:
-                        fetched = _aio2.run(_xui_fetch(srv, str(target.get("uuid") or "")))
-                        fetched = [str(x) for x in fetched if str(x).strip()]
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
         else:
             # برای Hiddify: فقط sub خود پنل، نه all-configs (مخفی‌ها نباید بیاد)
             if base:

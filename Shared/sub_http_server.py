@@ -60,6 +60,91 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return bool(default)
 
 
+_FR_TOKEN_RE = re.compile(r"(?:^|[^a-z])fr(?:[^a-z]|$)")
+
+
+def _service_server_ids(service_id: int) -> list:
+    """server_idهای متصل به یک سرویس (از mappings، با fallback به سرور اصلی)."""
+    ids: list = []
+    try:
+        for m in (userbot_db.get_service_nodes(int(service_id)) or []):
+            try:
+                msid = int((m or {}).get("server_id") or 0)
+            except (TypeError, ValueError):
+                msid = 0
+            if msid > 0 and msid not in ids:
+                ids.append(msid)
+    except Exception:
+        pass
+    if not ids:
+        try:
+            svc = userbot_db.get_service_by_id(int(service_id)) or {}
+            psid = int(svc.get("server_id") or 0)
+            if psid > 0:
+                ids.append(psid)
+        except (TypeError, ValueError):
+            pass
+    return ids
+
+
+def _invalidate_xui_caches_for_service(service_id: int) -> None:
+    """کش X-UI را فقط برای سرورهای همین سرویس باطل کن (بدون هاردکد server_id)."""
+    try:
+        from Shared import xui_api
+    except Exception:
+        return
+    for sid in _service_server_ids(service_id):
+        srv = database.get_server_by_id(sid)
+        if not srv:
+            continue
+        try:
+            if not xui_api.is_xui_server(srv):
+                continue
+        except Exception:
+            continue
+        try:
+            from Shared.xui_sanaei import _invalidate_caches as _inv_sanaei
+            _inv_sanaei(srv)
+        except Exception:
+            pass
+        try:
+            from Shared.xui_alireza import _invalidate_xui_inbounds_cache as _inv_alireza
+            _inv_alireza(srv)
+        except Exception:
+            pass
+
+
+def _service_has_france_targets(service_id: int) -> bool:
+    """سرویس به سروری وصل است که نشانه فرانسه دارد؟ (توکن fr در نام سرور یا host پنل)"""
+    for sid in _service_server_ids(service_id):
+        srv = database.get_server_by_id(sid)
+        if not srv:
+            continue
+        candidates = [str((srv or {}).get("name") or "")]
+        try:
+            candidates.append(urlparse(str((srv or {}).get("panel_url") or "")).hostname or "")
+        except Exception:
+            pass
+        for raw in candidates:
+            hay = str(raw or "").strip().lower()
+            if hay and _FR_TOKEN_RE.search(hay):
+                return True
+    return False
+
+
+def _sub_body_config_count(body: str, is_b64: bool) -> int:
+    """تعداد خطوط کانفیگ واقعی در body (اگر b64 بود اول decode می‌کند)."""
+    try:
+        text = str(body or "")
+        if not text:
+            return 0
+        if is_b64:
+            text = base64.b64decode(text + "=" * (-len(text) % 4)).decode("utf-8", "ignore")
+        return sum(1 for ln in text.splitlines() if "://" in ln)
+    except Exception:
+        return 0
+
+
 def _to_int(value, default: int = 0) -> int:
     try:
         return int(float(str(value or "").replace(",", "").strip()))
@@ -737,11 +822,10 @@ class _SubHandler(BaseHTTPRequestHandler):
                         return
                 self._write(404, "subscription token not found")
                 return
-            # برای s1_... که مستقیم sub_token هست، کش نکن و همیشه تازه بساز
-            # تا بعد پاکسازی دستی DB (DELETE FROM clients) گیر نکنه
+            # کش پنل X-UI را برای سرورهای همین سرویس باطل کن تا بعد از
+            # پاکسازی دستی DB (DELETE FROM clients) داده کهنه نماند
             try:
-                from Shared.xui_sanaei import _invalidate_caches as _inv_xui
-                _inv_xui(database.get_server_by_id(3))
+                _invalidate_xui_caches_for_service(int(sid))
             except Exception:
                 pass
             service = (
@@ -754,11 +838,12 @@ class _SubHandler(BaseHTTPRequestHandler):
                 body = sub_aggregator.build_subscription_b64_for_service(sid)
             else:
                 body = sub_aggregator.build_subscription_text_for_service(sid)
-            # اگر body خالی بود ولی direct build 5 میده، یعنی sync فراموش کرده - یک بار دیگر بدون sync بساز
-            if not body or body.count("fr.sellbot") == 0:
+            # اگر body کانفیگ واقعی نداشت و سرویس target فرانسه دارد، یک بار
+            # دیگر بساز (فیکس sync-فراموش-کرده) — برای بقیه سرویس‌ها دو بار build نشود
+            if _service_has_france_targets(int(sid)) and _sub_body_config_count(body, is_b64) == 0:
                 try:
                     alt_body = sub_aggregator.build_subscription_text_for_service(int(sid))
-                    if alt_body and alt_body.count("fr.sellbot") > body.count("fr.sellbot"):
+                    if alt_body and _sub_body_config_count(alt_body, False) > _sub_body_config_count(body, is_b64):
                         body = alt_body
                 except Exception:
                     pass
