@@ -201,10 +201,10 @@ def confirm_buy_keyboard(server_id, plan_id):
     ])
 
 
-def selected_plan_keyboard(server_id: int, gb: int, days: int, price: int):
+def selected_plan_keyboard(server_id: int, gb: int, days: int, price: int, plan_id: int = 0):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 پرداخت مستقیم", callback_data=f"buy:pay_direct:{server_id}:{gb}:{days}:{price}")],
-        [InlineKeyboardButton("💰 پرداخت از کیف پول", callback_data=f"buy:pay_wallet:{server_id}:{gb}:{days}:{price}")],
+        [InlineKeyboardButton("💳 پرداخت مستقیم", callback_data=f"buy:pay_direct:{server_id}:{gb}:{days}:{price}:{int(plan_id or 0)}")],
+        [InlineKeyboardButton("💰 پرداخت از کیف پول", callback_data=f"buy:pay_wallet:{server_id}:{gb}:{days}:{price}:{int(plan_id or 0)}")],
         [InlineKeyboardButton("بازگشت", callback_data=f"buy:loc:{server_id}")],
     ])
 

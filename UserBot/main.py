@@ -1505,6 +1505,39 @@ def _calc_dynamic_price(gb: int, months: int, dyn_settings: Optional[Dict[str, A
     final_price = max(0, final_price)
     return final_price, off_percent
 
+def _expected_server_price(sid: int, gb: int, days: int, plan_id: int) -> Optional[int]:
+    """قیمت واقعی سمت سرور برای یک خرید — ضد دستکاری callback data.
+
+    ترتیب تشخیص: پلن ثابت با plan_id → پلن ثابت با تطبیق gb/days (دکمه‌های قدیمی)
+    → قیمت پویا. اگر هیچ‌کدام قابل تشخیص نبود None برمی‌گردد (درخواست باید رد شود).
+    """
+    try:
+        server_block = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {})
+        if plan_id > 0:
+            plan = next(
+                (p for p in server_block.get("plans", []) if int(p.get("id") or 0) == int(plan_id)),
+                None,
+            )
+            if not plan:
+                return None
+            return max(0, int(plan.get("price") or 0))
+        matches = [
+            p for p in server_block.get("plans", [])
+            if int(float(p.get("gb") or 0)) == int(gb) and int(p.get("days") or 0) == int(days)
+        ]
+        if matches:
+            prices = {max(0, int(p.get("price") or 0)) for p in matches}
+            if len(prices) == 1:
+                return prices.pop()
+            return None
+        if int(gb) > 0 and int(days) > 0 and int(days) % 30 == 0:
+            dyn_settings = server_block.get("dynamic_settings", {})
+            price, _off = _calc_dynamic_price(int(gb), int(days) // 30, dyn_settings)
+            return max(0, int(price or 0))
+        return None
+    except Exception:
+        return None
+
 def _generate_order_id() -> int:
     """Generate unique order_id for userbot_orders table."""
     conn = userbot_db._get_conn()
@@ -5032,6 +5065,19 @@ async def _process_wallet_purchase(
             )
             return False
 
+    # کسر اتمیک موجودی قبل از هر عملیات پنل — اگر هر جایی بعد از این خطا داد،
+    # مبلغ در مسیرهای خطا برگردانده می‌شود (anti double-spend)
+    wallet_charged = False
+    if not skip_wallet_charge:
+        if not userbot_db.decrease_user_wallet(internal_user_id, amount):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ موجودی کیف پول شما کافی نیست. لطفاً ابتدا کیف پول را شارژ کنید.",
+                reply_markup=_main_menu_keyboard(),
+            )
+            return False
+        wallet_charged = True
+
     server = database.get_server_by_id(sid)
     if not server:
         await context.bot.send_message(
@@ -5092,6 +5138,11 @@ async def _process_wallet_purchase(
             sid = int(renew_service.get("server_id") or sid)
         except Exception as e:
             logger.exception("Failed renewing Hiddify user(s) for telegram_id=%s", user_id)
+            if wallet_charged:
+                try:
+                    userbot_db.increase_user_wallet(internal_user_id, amount)
+                except Exception:
+                    logger.exception("Refund after failed renewal also failed (user=%s)", internal_user_id)
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"❌ تمدید سرویس روی سرور/نودها انجام نشد.\nجزئیات خطا: {e}",
@@ -5118,6 +5169,11 @@ async def _process_wallet_purchase(
             logger.exception("Failed creating Hiddify user(s) for telegram_id=%s", user_id)
             if created_nodes:
                 await _deactivate_created_users(created_nodes)
+            if wallet_charged:
+                try:
+                    userbot_db.increase_user_wallet(internal_user_id, amount)
+                except Exception:
+                    logger.exception("Refund after failed purchase also failed (user=%s)", internal_user_id)
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=f"❌ ساخت سرویس روی سرور/نودها انجام نشد.\nجزئیات خطا: {e}\n\nدوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
@@ -5260,7 +5316,6 @@ async def _process_wallet_purchase(
                 )
                 wallet_purchase_payment_id = int(cur.lastrowid or 0)
         if not skip_wallet_charge:
-            userbot_db.decrease_user_wallet(internal_user_id, amount)
             if wallet_purchase_payment_id > 0:
                 try:
                     userbot_db.try_grant_referral_purchase_reward(internal_user_id, wallet_purchase_payment_id)
@@ -5274,7 +5329,7 @@ async def _process_wallet_purchase(
         logger.exception("Failed to persist wallet purchase for telegram_id=%s", user_id)
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"⚠️ سرویس روی سرور ساخته شد اما ثبت نهایی خرید خطا داد: {e}\nلطفاً به پشتیبانی پیام دهید.",
+            text=f"⚠️ سرویس روی سرور ساخته شد اما ثبت نهایی خرید خطا داد: {e}\nمبلغ از کیف پول شما کسر شده و تا رفع مشکل نزد پشتیبانی نگاهداری می‌شود. لطفاً به پشتیبانی پیام دهید.",
             reply_markup=_main_menu_keyboard(),
         )
         return False
@@ -7493,7 +7548,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _safe_edit_message_text(
             query,
             text,
-            reply_markup=selected_plan_keyboard(sid, int(plan['gb']), int(plan['days']), int(plan['price']))
+            reply_markup=selected_plan_keyboard(sid, int(plan['gb']), int(plan['days']), int(plan['price']), plan_id=int(plan.get('id') or 0))
         )
 
     # ویزارد پویا (دکمه‌های مثبت و منفی)
@@ -7629,6 +7684,17 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gb = int(parts[3])
         days = int(parts[4])
         price = int(parts[5])
+        plan_id = int(parts[6]) if len(parts) > 6 else 0
+        # قیمت همیشه سمت سرور دوباره محاسبه می‌شود — ضد دستکاری callback data
+        expected_price = _expected_server_price(sid, gb, days, plan_id)
+        if expected_price is None:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً خرید را از نو انجام دهید.",
+                reply_markup=_main_menu_keyboard(),
+            )
+            return
+        price = expected_price
 
         u_db = userbot_db.get_user_by_telegram_id(user_id)
         balance = int((u_db or {}).get('wallet_balance') or 0)
@@ -7733,6 +7799,17 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gb = int(parts[3])
         days = int(parts[4])
         price = int(parts[5])
+        plan_id = int(parts[6]) if len(parts) > 6 else 0
+        # قیمت همیشه سمت سرور دوباره محاسبه می‌شود — ضد دستکاری callback data
+        expected_price = _expected_server_price(sid, gb, days, plan_id)
+        if expected_price is None:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً خرید را از نو انجام دهید.",
+                reply_markup=_main_menu_keyboard(),
+            )
+            return
+        price = expected_price
 
         pay_settings = _get_payment_settings()
         if not bool(pay_settings.get("enable_card_to_card", True)):

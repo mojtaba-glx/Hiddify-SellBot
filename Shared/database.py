@@ -27,6 +27,15 @@ def _load_db() -> Dict[str, Any]:
                     data["servers"] = []
                 return data
         except (json.JSONDecodeError, OSError):
+            # فایل خراب شده — نسخه خراب را برای بازیابی نگه دار؛ بعد از این
+            # نکن نوشتن بعدی بازنویسیِ بی‌صدا کل دیتا را پاک کند
+            try:
+                import time as _t
+                backup = f"{DB_PATH}.corrupt-{_t.strftime('%Y%m%d-%H%M%S')}"
+                with open(DB_PATH, "rb") as src, open(backup, "wb") as dst:
+                    dst.write(src.read())
+            except Exception:
+                pass
             return {"servers": []}
 
 
@@ -51,11 +60,16 @@ def _update_db(updater):
 
 
 def _save_db(data: Dict[str, Any]) -> None:
-    """ذخیره دیتابیس در فایل JSON"""
+    """ذخیره اتمیک: فایل موقت + جایگزینی اتمی — کرش وسط نوشتن هرگز
+    فایل اصلی را truncate نمی‌کند."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    tmp_path = DB_PATH + ".tmp"
     with _lock:
-        with open(DB_PATH, "w", encoding="utf-8") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, DB_PATH)
 
 
 # =========================

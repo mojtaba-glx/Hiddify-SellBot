@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import json
+import os
 import time
 from typing import Dict, Any, List, Optional
 
@@ -58,9 +59,15 @@ def _load_all_plans() -> Dict[str, Any]:
 
 
 def _save_all_plans(data: Dict[str, Any]) -> None:
+    """ذخیره اتمیک: ابتدا در فایل موقت، سپس جایگزینی اتمی — وسط نوشتن هرگز
+    فایل اصلی را خراب نمی‌کند (کرش/قطع برق = دیتای قبلی سالم می‌ماند)."""
     _PLANS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with _PLANS_FILE.open("w", encoding="utf-8") as f:
+    tmp_path = _PLANS_FILE.with_name(_PLANS_FILE.name + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, _PLANS_FILE)
 
 
 def _get_server_block(

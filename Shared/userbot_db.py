@@ -2079,16 +2079,20 @@ def increase_user_wallet(user_id: int, amount: int) -> None:
     conn.close()
 
 
-def decrease_user_wallet(user_id: int, amount: int) -> None:
+def decrease_user_wallet(user_id: int, amount: int) -> bool:
+    """کسر اتمیک از کیف پول — اگر موجودی کافی نبود چیزی کم نمی‌شود و False برمی‌گردد."""
     init_db()
     conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE userbot_users SET wallet_balance = CASE WHEN wallet_balance >= ? THEN wallet_balance - ? ELSE wallet_balance END WHERE id = ?",
-        (amount, amount, user_id)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE userbot_users SET wallet_balance = wallet_balance - ? WHERE id = ? AND wallet_balance >= ?",
+            (amount, user_id, amount)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
 
 
 def get_full_user_stats(user_id: int) -> Dict[str, Any]:
@@ -3571,6 +3575,9 @@ def change_payment_status_with_wallet(payment_id: int, new_status: str) -> Tuple
     conn = _get_conn()
     cur = conn.cursor()
     try:
+        # تراکنش اتمیک: از خواندن وضعیت تا آپدیت کیف پول/وضعیت، هیچ نویسنده
+        # دیگری (وب‌هوک SMS، ادمین دیگر) نمی‌تواند بین این‌ها دخالت کند — ضد شارژ دوباره
+        cur.execute("BEGIN IMMEDIATE")
         cur.execute(
             """
             SELECT p.*, u.wallet_balance, u.username, u.full_name, u.telegram_id
@@ -3583,6 +3590,7 @@ def change_payment_status_with_wallet(payment_id: int, new_status: str) -> Tuple
         )
         row = cur.fetchone()
         if not row:
+            conn.rollback()
             return False, "تراکنش یافت نشد.", None
 
         pay = dict(row)
@@ -3609,33 +3617,61 @@ def change_payment_status_with_wallet(payment_id: int, new_status: str) -> Tuple
                 is_direct_buy = False
 
         if old_status == target:
+            conn.rollback()
             return True, "وضعیت تراکنش تغییری نکرد.", pay
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
         # Wallet delta rules:
         # - non-approved -> approved: +amount
         # - approved -> non-approved: -amount (must have enough balance)
+        # آپدیت وضعیت همیشه با گارد `AND status = old_status` — اگر فراخوانی
+        # موازی قبلاً وضعیت را عوض کرده باشد، rowcount صفر است و rollback می‌شود
         if is_direct_buy:
-            pass
+            cur.execute(
+                "UPDATE userbot_payments SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (target, now, payment_id, old_status),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False, "وضعیت تراکنش همزمان تغییر کرد؛ دوباره تلاش کنید.", None
         elif old_status != "approved" and target == "approved":
             if user_id and amount > 0:
                 cur.execute(
                     "UPDATE userbot_users SET wallet_balance = wallet_balance + ? WHERE id = ?",
                     (amount, user_id),
                 )
+            cur.execute(
+                "UPDATE userbot_payments SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (target, now, payment_id, old_status),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False, "وضعیت تراکنش همزمان تغییر کرد؛ دوباره تلاش کنید.", None
         elif old_status == "approved" and target != "approved":
             if user_id and amount > 0:
-                if wallet_balance < amount:
-                    return False, "موجودی کیف پول کاربر کمتر از مبلغ تراکنش است؛ ابتدا موجودی را اصلاح کنید.", None
                 cur.execute(
-                    "UPDATE userbot_users SET wallet_balance = wallet_balance - ? WHERE id = ?",
-                    (amount, user_id),
+                    "UPDATE userbot_users SET wallet_balance = wallet_balance - ? WHERE id = ? AND wallet_balance >= ?",
+                    (amount, user_id, amount),
                 )
-
-        now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-        cur.execute(
-            "UPDATE userbot_payments SET status = ?, updated_at = ? WHERE id = ?",
-            (target, now, payment_id),
-        )
+                if cur.rowcount == 0:
+                    conn.rollback()
+                    return False, "موجودی کیف پول کاربر کمتر از مبلغ تراکنش است؛ ابتدا موجودی را اصلاح کنید.", None
+            cur.execute(
+                "UPDATE userbot_payments SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (target, now, payment_id, old_status),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False, "وضعیت تراکنش همزمان تغییر کرد؛ دوباره تلاش کنید.", None
+        else:
+            cur.execute(
+                "UPDATE userbot_payments SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (target, now, payment_id, old_status),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False, "وضعیت تراکنش همزمان تغییر کرد؛ دوباره تلاش کنید.", None
         conn.commit()
 
         # Referral funnel: every transition into/out of "approved"
