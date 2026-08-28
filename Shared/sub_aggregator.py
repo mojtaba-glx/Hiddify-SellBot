@@ -693,13 +693,12 @@ def _dedup_key_for_line(line: str) -> str:
         # vless://uuid@host:port? sni=... type=...
         # vmess base64, trojan, hysteria, ss
         if line.startswith("vmess://"):
-            # vmess base64 json
+            # vmess base64 json — حتما vmess را جدا از vless حساب کن
             import base64, json as _json
             b64 = line.split("vmess://", 1)[1].split("#")[0].strip()
-            # pad
             b64 += "=" * (-len(b64) % 4)
             data = _json.loads(base64.b64decode(b64).decode())
-            return f"{data.get('id') or ''}@{data.get('add') or ''}:{data.get('port') or ''}:{data.get('net') or data.get('type') or ''}".lower()
+            return f"vmess:{data.get('id') or ''}@{data.get('add') or ''}:{data.get('port') or ''}:{data.get('net') or data.get('type') or ''}".lower()
         # برای بقیه: vless, trojan, hysteria2, ss, tuic
         # uuid/host/port/type را بیرون بکش
         # vless://uuid@host:port?....
@@ -741,7 +740,7 @@ def _dedup_key_for_line(line: str) -> str:
                     q = rest.split("?", 1)[1].split("#")[0]
                 qs = dict(_up.parse_qsl(q))
                 typ = qs.get("type") or qs.get("net") or scheme
-                return f"{uuid}@{hostport}:{typ}".lower()
+                return f"{scheme}:{uuid}@{hostport}:{typ}".lower()
         return line.lower()
     except Exception:
         return line.lower()
