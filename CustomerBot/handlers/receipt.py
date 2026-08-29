@@ -309,6 +309,7 @@ async def _notify_agent_new_payment(
         ])
         bot = Bot(token=token)
         file_id = str(meta.get("file_id") or "")
+        sent_message = None
         if file_id:
             try:
                 tg_file = await context.bot.get_file(file_id)
@@ -316,17 +317,44 @@ async def _notify_agent_new_payment(
                 await tg_file.download_to_memory(out=bio)
                 bio.seek(0)
                 bio.name = f"payment_{pay['id']}.jpg"
-                await bot.send_photo(chat_id=agent_tg_id, photo=bio, caption=caption[:1024], reply_markup=kb, parse_mode="HTML")
-                return
+                sent_message = await bot.send_photo(chat_id=agent_tg_id, photo=bio, caption=caption[:1024], reply_markup=kb, parse_mode="HTML")
             except Exception:
-                pass
-        await bot.send_message(chat_id=agent_tg_id, text=caption, reply_markup=kb, parse_mode="HTML")
+                sent_message = None
+        if sent_message is None:
+            try:
+                sent_message = await bot.send_message(chat_id=agent_tg_id, text=caption, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                sent_message = None
+        if sent_message is not None:
+            await _store_agent_pending_message_marker(agent_id, int(pay["id"]), int(sent_message.message_id))
     except Exception:
         return
 
 
 def _receipt_meta_has_agent_notified_marker(receipt_meta: str) -> bool:
     return "|agent_notified:1" in str(receipt_meta or "")
+
+
+async def _store_agent_pending_message_marker(agent_id: int, pay_id: int, message_id: int) -> None:
+    """message_id پیام رسید در چت نماینده را در متادیتا ذخیره می‌کند تا بعد از
+    تایید خودکار (SMS بانکی) بتوان همان پیام را از چت نماینده پاک کرد."""
+    try:
+        from CustomerBot.database import get_payment, update_payment_status
+        pay = get_payment(agent_id, pay_id)
+        if not pay:
+            return
+        meta_raw = str(pay.get("receipt_image") or "")
+        if f"agent_pending_message_id:{message_id}" in meta_raw:
+            return
+        updated_meta = _append_receipt_meta_marker(meta_raw, f"agent_pending_message_id:{message_id}")
+        update_payment_status(
+            agent_id=agent_id,
+            payment_id=pay_id,
+            status=str(pay.get("status") or "pending"),
+            receipt_image=updated_meta,
+        )
+    except Exception as e:
+        logger.warning("store agent pending message marker failed (pay=%s): %s", pay_id, e)
 
 
 def _append_receipt_meta_marker(receipt_meta: str, marker: str) -> str:

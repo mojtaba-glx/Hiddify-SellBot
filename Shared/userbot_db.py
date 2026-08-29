@@ -3873,6 +3873,21 @@ def _patch_payment_receipt_meta(payment_id: int, patch: Dict[str, Any]) -> None:
         conn.close()
 
 
+def get_sms_webhook_event(event_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    eid = str(event_id or "").strip()
+    if not eid:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM userbot_sms_webhook_events WHERE event_id = ? LIMIT 1", (eid,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def record_sms_webhook_event(event: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
     init_db()
     event_id = str(event.get("event_id") or "").strip()

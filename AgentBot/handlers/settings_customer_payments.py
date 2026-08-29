@@ -2,6 +2,7 @@ import json
 import logging
 import asyncio
 import re
+from typing import Optional
 
 from telegram import Bot, Update
 from telegram.error import NetworkError, TimedOut
@@ -548,7 +549,7 @@ async def process_sms_webhook_queue(context: ContextTypes.DEFAULT_TYPE, limit: i
         agent_id = int(row.get("agent_id") or 0)
         pay_id = int(row.get("pay_id") or 0)
         try:
-            ok, note = await _auto_approve_from_sms_webhook(context, agent_id, pay_id)
+            ok, note = await _auto_approve_from_sms_webhook(context, agent_id, pay_id, row)
         except Exception as e:
             ok, note = False, f"{type(e).__name__}: {e}"
             logger.exception("sms auto approve failed (agent=%s pay=%s)", agent_id, pay_id)
@@ -560,20 +561,24 @@ async def process_sms_webhook_queue(context: ContextTypes.DEFAULT_TYPE, limit: i
     return processed
 
 
-async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> tuple[bool, str]:
+async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, queue_row: dict = None) -> tuple[bool, str]:
     """تایید خودکار پرداخت مشتری از طریق SMS — بدون تعامل با پیام‌های ادمین."""
+    queue_row = queue_row or {}
     payments = get_customer_pending_card_payments(agent_id)
     pay = next((p for p in payments if int(p.get("id") or 0) == pay_id), None)
     if not pay:
         return True, "payment is not pending anymore (probably approved manually)"
 
     user_tg_id = int(pay.get("user_id") or 0)
+    svc = None
+    is_renew = False
 
     if pay.get("_pay_type") == "buy" and pay.get("_order"):
         order = dict(pay["_order"])
         if not int(order.get("server_id") or 0):
             order["server_id"] = int(pay.get("_server_id") or 0)
         renew_service_id = int(order.get("renew_service_id") or 0)
+        is_renew = bool(renew_service_id)
         if renew_service_id and str(order.get("status") or "").strip().lower() == "approved":
             return True, "order already renewed"
 
@@ -620,6 +625,22 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
         if not update_customer_payment_status(agent_id, pay_id, "approved"):
             return False, "status update failed (no-order payment)"
 
+    # پیام‌های «در انتظار تایید» (چت مشتری و چت نماینده) پاک می‌شوند
+    try:
+        await _delete_pending_customer_message(context, agent_id, pay)
+    except Exception as e:
+        logger.warning("sms auto: delete customer pending message failed (pay=%s): %s", pay_id, e)
+    try:
+        await _delete_agent_pending_message(context, agent_id, pay)
+    except Exception as e:
+        logger.warning("sms auto: delete agent pending message failed (pay=%s): %s", pay_id, e)
+
+    # گزارش تایید خودکار در چت نماینده: عکس رسید بالا + متن گزارش SMS + گزارش اشتراک
+    try:
+        await _send_sms_auto_approval_report(context, agent_id, pay_id, pay, svc, is_renew, queue_row)
+    except Exception as e:
+        logger.warning("sms auto approval report failed (agent=%s pay=%s): %s", agent_id, pay_id, e)
+
     try:
         await _notify_customer(
             context,
@@ -632,6 +653,111 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
 
     logger.info("sms webhook auto-approved agency payment (agent=%s pay=%s)", agent_id, pay_id)
     return True, "approved"
+
+
+async def _delete_agent_pending_message(context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay: dict) -> None:
+    """پیام «رسید پرداخت مشتری» با دکمه‌های تایید/رد را از چت نماینده پاک می‌کند."""
+    try:
+        raw_receipt = str(pay.get("receipt_image") or "")
+        match = re.search(r"agent_pending_message_id:(\d+)", raw_receipt)
+        if not match:
+            return
+        agent = agent_db.get_agent_by_id(agent_id)
+        agent_tg_id = int((agent or {}).get("telegram_id") or 0)
+        if not agent_tg_id:
+            return
+        await context.bot.delete_message(chat_id=agent_tg_id, message_id=int(match.group(1)))
+    except Exception as e:
+        logger.warning("Failed to delete agent pending message for payment %s: %s", pay.get("id"), e)
+
+
+async def _send_sms_auto_approval_report(
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    pay_id: int,
+    pay: dict,
+    svc: Optional[dict],
+    is_renew: bool,
+    queue_row: dict,
+) -> None:
+    """گزارش تایید خودکار SMS برای چت نماینده (عکس رسید بالا، متن زیر آن)."""
+    from Shared.agent_db import get_agent_by_id
+
+    agent = get_agent_by_id(agent_id)
+    agent_tg_id = int((agent or {}).get("telegram_id") or 0)
+    if not agent_tg_id:
+        return
+
+    sender = "-"
+    amount_raw = 0
+    currency_raw = "-"
+    reference = "-"
+    try:
+        from Shared import userbot_db
+        event = userbot_db.get_sms_webhook_event(str(queue_row.get("event_id") or ""))
+        if event:
+            sender = str(event.get("sender") or "-")
+            amount_raw = int(event.get("amount_raw") or 0)
+            currency_raw = str(event.get("currency_raw") or "-") or "-"
+            reference = str(event.get("reference") or "-") or "-"
+    except Exception as e:
+        logger.warning("sms auto report: fetch event failed: %s", e)
+
+    amount = int(pay.get("amount") or 0)
+    tx_code = str(pay.get("tx_code") or "-")
+    customer_display = str(pay.get("full_name") or pay.get("username") or user_tg_id_of(pay))
+    caption = (
+        "✅ <b>پرداخت با SMS بانک تایید شد</b>\n\n"
+        f"🔖 نوع: {'♻️ تمدید اشتراک' if is_renew else '🛍 خرید مستقیم'}\n"
+        f"👤 کاربر: {customer_display}\n"
+        f"💰 مبلغ: <b>{amount:,}</b> تومان\n"
+        f"🧾 کد تراکنش: <code>{tx_code}</code>\n"
+        f"🆔 شناسه پرداخت: {pay_id}\n"
+        f"📨 سرشماره SMS: <code>{sender}</code>\n"
+        f"🏦 مبلغ خام SMS: {amount_raw} {currency_raw}\n"
+        f"🔖 پیگیری SMS: <code>{reference}</code>"
+    )
+
+    file_id = ""
+    try:
+        import json as _json
+        meta_obj = _json.loads(str(pay.get("receipt_image") or "{}"))
+        if isinstance(meta_obj, dict):
+            file_id = str(meta_obj.get("file_id") or "")
+    except Exception:
+        file_id = ""
+
+    sent = False
+    if file_id:
+        try:
+            await context.bot.send_photo(chat_id=agent_tg_id, photo=file_id, caption=caption[:1024], parse_mode="HTML")
+            sent = True
+        except Exception as e:
+            logger.warning("sms auto report photo send failed (pay=%s): %s", pay_id, e)
+    if not sent:
+        await context.bot.send_message(chat_id=agent_tg_id, text=caption, parse_mode="HTML")
+
+    if svc:
+        try:
+            from Shared.subscription_reports import send_subscription_report
+            await send_subscription_report(
+                context.bot,
+                agent_tg_id,
+                agent_id,
+                int(pay.get("user_id") or 0),
+                svc,
+                "renew" if is_renew else "create",
+                amount,
+            )
+        except Exception as e:
+            logger.warning("sms auto report: subscription report failed (pay=%s): %s", pay_id, e)
+
+
+def user_tg_id_of(pay: dict) -> int:
+    try:
+        return int(pay.get("user_id") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:
