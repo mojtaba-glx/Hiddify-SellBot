@@ -84,7 +84,7 @@ from CustomerBot.services import (
     get_service_panel_targets, collect_all_direct_configs_for_service,
     get_or_create_bot_sub_links,
     sync_service_status_from_panels, regenerate_service_uuid,
-    service_is_renewable, renew_not_allowed_text,
+    service_is_renewable, renew_not_allowed_text, service_is_renewable_live,
     _resolve_live_server_title,
 )
 from Shared.qr_utils import make_qr_image
@@ -1078,7 +1078,7 @@ async def _handle_status(query, context, agent_id, user, data):
         if not br.get("enable_renew", True):
             await msg.edit_text("🚫 تمدید غیرفعال است.")
             return
-        if not service_is_renewable(svc, agent_id):
+        if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             await _edit_or_reply(msg, renew_not_allowed_text(agent_id))
             return
         context.user_data["renew_target_service_id"] = int(svc_id)
@@ -1127,7 +1127,7 @@ async def _handle_renew(query, context, agent_id, user, data):
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
         # قوانین تمدید (حالت پیشرفته): حجم/زمان باقی‌مانده باید کمتر از حد مجاز باشد
-        if not service_is_renewable(svc, agent_id):
+        if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
             return
         context.user_data["renew_target_service_id"] = int(svc_id)
@@ -1230,7 +1230,7 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not svc:
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
-        if not service_is_renewable(svc, agent_id):
+        if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
             return
         if _wizard_expired(context):
@@ -1273,7 +1273,7 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not svc:
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
-        if not service_is_renewable(svc, agent_id):
+        if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
             return
         plan = get_fixed_plan(agent_id, plan_id)
@@ -1317,7 +1317,7 @@ async def _handle_renew(query, context, agent_id, user, data):
             await msg.reply_text("❌ این سرویس متعلق به شما نیست.", reply_markup=main_menu_keyboard())
             return
         # قوانین تمدید — گیت نهایی سمت سرور (ضد پرش مراحل)
-        if not service_is_renewable(svc, agent_id):
+        if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             try:
                 await query.answer("🛑 این سرویس هنوز شرایط تمدید ندارد.", show_alert=True)
             except Exception:

@@ -1807,8 +1807,13 @@ def _service_is_renewable(service: dict) -> bool:
     if policy in {"default", "fair"}:
         return True
 
-    days_left = int(service.get("days_left") or 0)
-    days_ok = days_left < max_days
+    # days_left نامشخص (NULL/غیرعددی) → اجازه تمدید داده نمی‌شود (fail-closed)
+    raw_days = service.get("days_left")
+    try:
+        days_left = int(float(raw_days)) if raw_days is not None else None
+    except (TypeError, ValueError):
+        days_left = None
+    days_ok = days_left is not None and days_left < max_days
 
     usage_limit = _to_float(service.get("usage_limit"), 0.0)
     usage_current = _to_float(service.get("usage_current"), 0.0)
@@ -1819,6 +1824,19 @@ def _service_is_renewable(service: dict) -> bool:
 
     # advanced
     return days_ok or usage_ok
+
+
+async def _service_is_renewable_live(service: dict) -> bool:
+    """بررسی مجاز بودن تمدید با داده لحظه‌ای پنل (سینک مصرف/روز قبل از چک)."""
+    if not isinstance(service, dict):
+        return False
+    try:
+        refreshed = await _sync_service_runtime_from_panels(service)
+        if isinstance(refreshed, dict) and refreshed:
+            service = refreshed
+    except Exception:
+        logger.warning("renew policy: live sync failed svc=%s; using DB values", service.get("id"))
+    return _service_is_renewable(service)
 
 
 def _renew_not_allowed_text() -> str:
@@ -4836,7 +4854,7 @@ async def _send_buy_flow_for_server(
                 reply_markup=_main_menu_keyboard(),
             )
             return
-        if not _service_is_renewable(renew_svc_gate):
+        if not await _service_is_renewable_live(renew_svc_gate):
             context.user_data.pop(f"renew_target_{user_id}", None)
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -5085,7 +5103,7 @@ async def _process_wallet_purchase(
                 reply_markup=_main_menu_keyboard(),
             )
             return False
-        if not _service_is_renewable(renew_service_pre):
+        if not await _service_is_renewable_live(renew_service_pre):
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=_renew_not_allowed_text(),
@@ -5147,7 +5165,7 @@ async def _process_wallet_purchase(
                 reply_markup=_main_menu_keyboard(),
             )
             return False
-        if not _service_is_renewable(renew_service):
+        if not await _service_is_renewable_live(renew_service):
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=_renew_not_allowed_text(),
@@ -6038,7 +6056,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # قوانین تمدید (حالت پیشرفته): فقط سرویس‌های نزدیک به اتمام حجم/زمان
-        renewable_services = [s for s in visible_services if _service_is_renewable(s)]
+        renewable_services = []
+        for _s in visible_services:
+            if await _service_is_renewable_live(_s):
+                renewable_services.append(_s)
         if not renewable_services:
             await update.message.reply_text(_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
             return
@@ -7195,7 +7216,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=_main_menu_keyboard(),
                 )
                 return
-            if not _service_is_renewable(service):
+            if not await _service_is_renewable_live(service):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=_renew_not_allowed_text(),
@@ -7255,7 +7276,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not service:
                 await context.bot.send_message(chat_id=user_id, text="❌ اشتراک انتخاب‌شده یافت نشد.", reply_markup=_main_menu_keyboard())
                 return
-            if not _service_is_renewable(service):
+            if not await _service_is_renewable_live(service):
                 await context.bot.send_message(chat_id=user_id, text=_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
                 return
             try:

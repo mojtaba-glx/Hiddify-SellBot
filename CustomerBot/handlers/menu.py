@@ -160,7 +160,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         from Shared.agent_db import get_services_by_customer
-        from CustomerBot.services import is_customer_service_visible, service_is_renewable, renew_not_allowed_text
+        from CustomerBot.services import is_customer_service_visible, service_is_renewable, renew_not_allowed_text, service_is_renewable_live
         services = get_services_by_customer(cust["id"])
         visible = [s for s in services if is_customer_service_visible(s)]
         if not visible:
@@ -170,7 +170,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         # قوانین تمدید (حالت پیشرفته): فقط سرویس‌های نزدیک به اتمام حجم/زمان
-        renewable = [s for s in visible if service_is_renewable(s, agent_id)]
+        renewable = [s for s in visible if await service_is_renewable_live(int(s.get("id") or 0), agent_id)]
         if not renewable:
             await update.message.reply_text(
                 renew_not_allowed_text(agent_id),

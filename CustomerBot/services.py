@@ -542,8 +542,13 @@ def service_is_renewable(svc: Optional[Dict[str, Any]], agent_id: int) -> bool:
     except (TypeError, ValueError):
         max_remaining_gb = 3
 
-    days_left = int(float(svc.get("days_left") or 0) or 0)
-    days_ok = days_left < max_days
+    # days_left نامشخص (NULL/غیرعددی) → اجازه تمدید داده نمی‌شود (fail-closed)
+    raw_days = svc.get("days_left")
+    try:
+        days_left = int(float(raw_days)) if raw_days is not None else None
+    except (TypeError, ValueError):
+        days_left = None
+    days_ok = days_left is not None and days_left < max_days
 
     usage_limit = float(svc.get("usage_limit") or 0)
     usage_current = float(svc.get("usage_current") or 0)
@@ -552,6 +557,19 @@ def service_is_renewable(svc: Optional[Dict[str, Any]], agent_id: int) -> bool:
         usage_ok = (usage_limit - usage_current) < max_remaining_gb
 
     return days_ok or usage_ok
+
+
+async def service_is_renewable_live(service_id: int, agent_id: int) -> bool:
+    """بررسی مجاز بودن تمدید با داده لحظه‌ای پنل (سینک مصرف/روز قبل از چک).
+
+    اگر سینک پنل ممکن نشود، با همان مقادیر دیتابیس و به‌صورت fail-closed تصمیم گرفته می‌شود.
+    """
+    try:
+        await sync_service_status_from_panels(int(service_id))
+    except Exception:
+        pass
+    svc = agent_db.get_service_by_id(int(service_id))
+    return service_is_renewable(svc, agent_id)
 
 
 def renew_not_allowed_text(agent_id: int) -> str:
