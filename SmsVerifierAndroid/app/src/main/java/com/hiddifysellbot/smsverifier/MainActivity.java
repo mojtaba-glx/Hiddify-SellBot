@@ -16,6 +16,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.provider.Telephony;
@@ -96,6 +98,15 @@ public class MainActivity extends Activity {
     private LinearLayout bankSmsListView;
     private TextView historyView;
     private TextView smsDefaultStatusView;
+    private TextView clockView;
+    private final Handler clockHandler = new Handler(Looper.getMainLooper());
+    private final Runnable clockTicker = new Runnable() {
+        @Override
+        public void run() {
+            updateClockView();
+            clockHandler.postDelayed(this, 1000L);
+        }
+    };
 
     private int bgColor;
     private int cardColor;
@@ -144,6 +155,17 @@ public class MainActivity extends Activity {
         super.onResume();
         maybeAskAppPassword();
         refreshHistory();
+        updateClockView();
+        clockHandler.removeCallbacks(clockTicker);
+        clockHandler.postDelayed(clockTicker, 1000L);
+    }
+
+    private void updateClockView() {
+        if (clockView == null) {
+            return;
+        }
+        String time = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+        clockView.setText("🕐 " + time);
     }
 
     @Override
@@ -156,6 +178,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        clockHandler.removeCallbacksAndMessages(null);
         if (historyPreferences != null && historyChangeListener != null) {
             historyPreferences.unregisterOnSharedPreferenceChangeListener(historyChangeListener);
         }
@@ -509,6 +532,22 @@ public class MainActivity extends Activity {
         title.setTextColor(textColor);
         title.setGravity(Gravity.CENTER_VERTICAL);
         topRow.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        // ساعت زنده — گوشه بالای منوی اصلی، کنار بج LIVE
+        clockView = new TextView(this);
+        clockView.setText("--:--:--");
+        clockView.setTextSize(13);
+        clockView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        clockView.setTextColor(Color.parseColor("#07111F"));
+        clockView.setGravity(Gravity.CENTER);
+        clockView.setPadding(dp(10), dp(5), dp(10), dp(5));
+        clockView.setElevation(dp(2));
+        styleRounded(clockView, goldColor, goldColor, dp(999));
+        LinearLayout.LayoutParams clockLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        clockLp.setMargins(0, 0, dp(8), 0);
+        topRow.addView(clockView, clockLp);
+        updateClockView();
 
         TextView liveBadge = new TextView(this);
         liveBadge.setText("LIVE ✅");
