@@ -217,6 +217,23 @@ def init_db() -> None:
         ON customer_payments(agent_id, idempotency_key)
     """)
 
+    # صف تایید خودکار وب‌هوک SMS بانکی: وب‌هوک (پروسه UserBot) پرداخت تطبیق‌یافته را
+    # اینجا صف می‌کند و پروسه AgentBot با رویداد لوپ خودش سرویس را می‌سازد و تحویل می‌دهد
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS customer_payment_sms_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            pay_id INTEGER NOT NULL,
+            event_id TEXT NOT NULL UNIQUE,
+            amount_toman INTEGER DEFAULT 0,
+            card_last4 TEXT DEFAULT '',
+            created_at TEXT,
+            processed INTEGER DEFAULT 0,
+            note TEXT DEFAULT '',
+            processed_at TEXT DEFAULT ''
+        )
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS customer_tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1013,6 +1030,98 @@ def get_pending_payments(agent_id: int) -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ---- SMS webhook auto-approval queue ----
+
+def enqueue_sms_auto_approval(agent_id: int, pay_id: int, event_id: str, amount_toman: int = 0, card_last4: str = "") -> bool:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT OR IGNORE INTO customer_payment_sms_queue (agent_id, pay_id, event_id, amount_toman, card_last4, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (int(agent_id or 0), int(pay_id or 0), str(event_id or ""), int(amount_toman or 0), str(card_last4 or ""), _now()),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def fetch_pending_sms_auto_queue(limit: int = 10) -> List[Dict[str, Any]]:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT * FROM customer_payment_sms_queue WHERE processed = 0 ORDER BY id LIMIT ?",
+            (max(1, min(50, int(limit or 10))),),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def mark_sms_auto_queue_processed(queue_id: int, note: str = "") -> None:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE customer_payment_sms_queue SET processed = 1, note = ?, processed_at = ? WHERE id = ?",
+            (str(note or "")[:500], _now(), int(queue_id or 0)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def find_pending_card_payments_by_amount(
+    amount_toman: int,
+    max_age_minutes: int = 360,
+    sms_time_ms: int = 0,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """پرداخت‌های کارت‌به‌کارت pending همه نمایندگی‌ها با مبلغ مشخص (وب‌هوک SMS بانکی).
+
+    پنجره زمانی مثل منطق ربات اصلی: SMS ممکن است کمی قبل از ثبت تراکنش بیاید
+    (مشتری اول واریز می‌کند بعد سفارش می‌سازد — تا ۳۰ دقیقه) یا کمی بعد (۵ دقیقه).
+    """
+    init_db()
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        return []
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = now - timedelta(minutes=max(5, int(max_age_minutes or 360)))
+    params: List[Any] = [amount, cutoff.strftime("%Y-%m-%d %H:%M:%S")]
+    sms_window_sql = ""
+    if sms_time_ms and int(sms_time_ms) > 0:
+        try:
+            sms_dt = datetime.fromtimestamp(int(sms_time_ms) / 1000, tz=timezone.utc).replace(tzinfo=None)
+        except Exception:
+            sms_dt = None
+        if sms_dt is not None:
+            not_before = (sms_dt - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+            not_after = (sms_dt + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+            sms_window_sql = " AND cp.created_at >= ? AND cp.created_at <= ? "
+            params += [not_before, not_after]
+    params.append(max(1, min(50, int(limit or 20))))
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT cp.* FROM customer_payments cp "
+            "WHERE cp.status = 'pending' AND cp.method IN ('card', 'card_to_card') AND cp.amount = ? "
+            "AND COALESCE(cp.created_at, '') >= ? "
+            + sms_window_sql +
+            "ORDER BY cp.created_at DESC LIMIT ?",
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 # ---- Tickets ----

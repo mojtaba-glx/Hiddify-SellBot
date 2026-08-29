@@ -1163,6 +1163,84 @@ class _SubHandler(BaseHTTPRequestHandler):
                 break
 
         if not matches:
+            # تطبیق با پرداخت‌های مشتریانِ نمایندگی‌ها (دیتابیس CustomerBot) —
+            # پرداخت صف می‌شود تا پروسه AgentBot سرویس را بسازد و تحویل دهد
+            agency_matches: list = []
+            agency_matched_amount = 0
+            try:
+                from CustomerBot.database import find_pending_card_payments_by_amount as _find_agency_pending
+                for amount_toman in candidates:
+                    agency_matches = _find_agency_pending(
+                        int(amount_toman),
+                        max_age_minutes=_sms_webhook_max_pending_age_minutes(),
+                        sms_time_ms=sms_time_ms,
+                    )
+                    if agency_matches:
+                        agency_matched_amount = int(amount_toman)
+                        break
+            except Exception as exc:
+                logger.warning("agency sms match failed: %s", exc)
+
+            if agency_matches:
+                if len(agency_matches) > 1:
+                    userbot_db.update_sms_webhook_event(
+                        event_id,
+                        status="ambiguous",
+                        message=f"multiple agency pending card payments matched amount={agency_matched_amount}",
+                        amount_toman=agency_matched_amount,
+                    )
+                    return 409, {
+                        "ok": False,
+                        "matched": False,
+                        "error": "ambiguous_pending_payments",
+                        "scope": "agency",
+                        "amount_toman": agency_matched_amount,
+                        "count": len(agency_matches),
+                    }
+                agency_pay = agency_matches[0]
+                agency_id = int(agency_pay.get("agent_id") or 0)
+                agency_pay_id = int(agency_pay.get("id") or 0)
+                try:
+                    from CustomerBot.database import enqueue_sms_auto_approval as _enqueue_agency
+                    queued = _enqueue_agency(
+                        agency_id,
+                        agency_pay_id,
+                        event_id,
+                        agency_matched_amount,
+                        card_last4=card_last4,
+                    )
+                except Exception as exc:
+                    queued = False
+                    logger.warning("agency sms enqueue failed: %s", exc)
+                userbot_db.update_sms_webhook_event(
+                    event_id,
+                    status="agency_queued" if queued else "approve_failed",
+                    matched_payment_id=agency_pay_id if queued else 0,
+                    message=(
+                        f"agency payment queued for auto approval (agent_id={agency_id})"
+                        if queued
+                        else "agency match found but enqueue failed"
+                    ),
+                    amount_toman=agency_matched_amount,
+                )
+                if queued:
+                    return 200, {
+                        "ok": True,
+                        "matched": True,
+                        "status": "agency_queued",
+                        "payment_id": agency_pay_id,
+                        "agent_id": agency_id,
+                        "amount_toman": agency_matched_amount,
+                        "message": "agency payment queued for automatic approval",
+                    }
+                return 500, {
+                    "ok": False,
+                    "matched": True,
+                    "status": "agency_queue_failed",
+                    "payment_id": agency_pay_id,
+                    "agent_id": agency_id,
+                }
+
             userbot_db.update_sms_webhook_event(
                 event_id,
                 status="no_pending_match",

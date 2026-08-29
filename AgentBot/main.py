@@ -29,6 +29,22 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
+async def _sms_webhook_queue_worker(application) -> None:
+    """صف تایید خودکار وب‌هوک SMS بانکی را هر ۲۰ ثانیه پردازش می‌کند.
+
+    وب‌هوک پرداخت‌های تطبیق‌یافته نمایندگی‌ها را در customer_bot.db صف می‌کند؛
+    ساخت سرویس و تحویل باید در همین پروسه انجام شود (توکن ربات مشتری اینجاست).
+    """
+    from AgentBot.handlers.settings_customer_payments import process_sms_webhook_queue
+
+    while True:
+        try:
+            await process_sms_webhook_queue(application, limit=5)
+        except Exception as e:
+            logger.warning("sms webhook queue worker error: %s", e)
+        await asyncio.sleep(20)
+
+
 async def _post_init(application) -> None:
     commands = [
         BotCommand("start", "Agent panel"),
@@ -38,6 +54,10 @@ async def _post_init(application) -> None:
         await application.bot.set_my_commands(commands)
     except Exception as e:
         logger.warning("Failed setting bot commands: %s", e)
+    try:
+        application.create_task(_sms_webhook_queue_worker(application))
+    except Exception as e:
+        logger.warning("Failed starting sms webhook queue worker: %s", e)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -528,6 +528,112 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             logger.warning("Failed to send approval reply for payment %s: %s", pay_id, reply_err)
 
 
+async def process_sms_webhook_queue(context: ContextTypes.DEFAULT_TYPE, limit: int = 5) -> int:
+    """پردازش صف تایید خودکار وب‌هوک SMS بانکی برای پرداخت‌های مشتریان نمایندگی‌ها.
+
+    وب‌هوک (پروسه UserBot) فقط پرداخت تطبیق‌یافته را صف می‌کند؛ ساخت سرویس، کسر
+    کیف پول عمده و تحویل اشتراک باید در همین پروسه (با رویداد لوپ و توکن ربات
+    مشتریِ هر نماینده) انجام شود — دقیقاً مثل تایید دستی ادمین.
+    """
+    from CustomerBot.database import fetch_pending_sms_auto_queue, mark_sms_auto_queue_processed
+
+    processed = 0
+    try:
+        rows = fetch_pending_sms_auto_queue(limit=limit)
+    except Exception as e:
+        logger.warning("sms webhook queue fetch failed: %s", e)
+        return 0
+    for row in rows or []:
+        qid = int(row.get("id") or 0)
+        agent_id = int(row.get("agent_id") or 0)
+        pay_id = int(row.get("pay_id") or 0)
+        try:
+            ok, note = await _auto_approve_from_sms_webhook(context, agent_id, pay_id)
+        except Exception as e:
+            ok, note = False, f"{type(e).__name__}: {e}"
+            logger.exception("sms auto approve failed (agent=%s pay=%s)", agent_id, pay_id)
+        try:
+            mark_sms_auto_queue_processed(qid, note=note)
+        except Exception as e:
+            logger.warning("sms queue mark processed failed (id=%s): %s", qid, e)
+        processed += 1
+    return processed
+
+
+async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> tuple[bool, str]:
+    """تایید خودکار پرداخت مشتری از طریق SMS — بدون تعامل با پیام‌های ادمین."""
+    payments = get_customer_pending_card_payments(agent_id)
+    pay = next((p for p in payments if int(p.get("id") or 0) == pay_id), None)
+    if not pay:
+        return True, "payment is not pending anymore (probably approved manually)"
+
+    user_tg_id = int(pay.get("user_id") or 0)
+
+    if pay.get("_pay_type") == "buy" and pay.get("_order"):
+        order = dict(pay["_order"])
+        if not int(order.get("server_id") or 0):
+            order["server_id"] = int(pay.get("_server_id") or 0)
+        renew_service_id = int(order.get("renew_service_id") or 0)
+        if renew_service_id and str(order.get("status") or "").strip().lower() == "approved":
+            return True, "order already renewed"
+
+        wholesale_price = _calc_wholesale_price(agent_id, pay, order)
+        if wholesale_price <= 0:
+            return False, "wholesale price not set; left pending for agent"
+        wallet_balance = agent_db.get_wallet_balance(agent_id)
+        if wallet_balance < wholesale_price:
+            return False, f"insufficient agent wallet ({int(wallet_balance)} < {wholesale_price}); left pending"
+
+        if not update_customer_payment_status(agent_id, pay_id, "processing"):
+            return False, "failed to lock payment"
+        deducted, _ = agent_db.deduct_wallet(
+            agent_id,
+            wholesale_price,
+            description=f"کسر عمده سفارش مشتری #{order.get('order_id') or pay.get('tx_code')} (تایید خودکار SMS)",
+        )
+        if not deducted:
+            update_customer_payment_status(agent_id, pay_id, "pending")
+            return False, "wallet deduction failed; left pending"
+
+        if renew_service_id:
+            try:
+                svc = await _renew_subscription_from_order(context, agent_id, user_tg_id, order, tx_code=str(pay.get("tx_code") or ""))
+            except Exception as e:
+                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای تمدید سرویس سفارش #{order.get('order_id')}")
+                update_customer_payment_status(agent_id, pay_id, "pending")
+                logger.error("sms auto renew failed for payment %s: %s", pay_id, e)
+                return False, f"renew failed: {e}"
+        else:
+            try:
+                svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
+            except Exception as e:
+                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
+                update_customer_payment_status(agent_id, pay_id, "pending")
+                logger.error("sms auto service creation failed for payment %s: %s", pay_id, e)
+                return False, f"service creation failed: {e}"
+
+        if not update_customer_payment_status(agent_id, pay_id, "approved"):
+            return False, "service created but payment status update failed"
+        if int(order.get("order_id") or 0):
+            update_order_status(agent_id, int(order.get("order_id") or 0), "approved")
+    else:
+        if not update_customer_payment_status(agent_id, pay_id, "approved"):
+            return False, "status update failed (no-order payment)"
+
+    try:
+        await _notify_customer(
+            context,
+            agent_id,
+            user_tg_id,
+            "✅ پرداخت کارت‌به‌کارت شما با پیامک بانکی به‌صورت خودکار تایید شد.",
+        )
+    except Exception as e:
+        logger.warning("sms auto approve customer notify failed (agent=%s pay=%s): %s", agent_id, pay_id, e)
+
+    logger.info("sms webhook auto-approved agency payment (agent=%s pay=%s)", agent_id, pay_id)
+    return True, "approved"
+
+
 async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:
     query = update.callback_query
     if pay is None:
