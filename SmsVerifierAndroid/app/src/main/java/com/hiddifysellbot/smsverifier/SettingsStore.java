@@ -18,6 +18,7 @@ public final class SettingsStore {
     private static final String KEY_SECRET = "secret";
     private static final String KEY_SENDER_FILTERS = "sender_filters";
     private static final String KEY_CARD_LAST4_ENABLED = "card_last4_enabled";
+    private static final String KEY_NOTIFICATION_MODE = "notification_mode";
     private static final String KEY_THEME_MODE = "theme_mode";
     private static final String KEY_CUSTOM_BANK_COUNT = "custom_bank_count";
     private static final int MAX_CUSTOM_BANKS = 5;
@@ -65,6 +66,14 @@ public final class SettingsStore {
 
     public boolean isCardLast4Enabled() {
         return prefs.getBoolean(KEY_CARD_LAST4_ENABLED, false);
+    }
+
+    public boolean isNotificationModeEnabled() {
+        return prefs.getBoolean(KEY_NOTIFICATION_MODE, false);
+    }
+
+    public void saveNotificationMode(boolean enabled) {
+        prefs.edit().putBoolean(KEY_NOTIFICATION_MODE, enabled).apply();
     }
 
     public String getThemeMode() {

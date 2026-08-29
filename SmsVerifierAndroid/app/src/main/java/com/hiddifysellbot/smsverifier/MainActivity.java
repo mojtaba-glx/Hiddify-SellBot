@@ -3,6 +3,7 @@ package com.hiddifysellbot.smsverifier;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.NotificationManager;
 import android.content.DialogInterface;
 import android.app.role.RoleManager;
 import android.content.Intent;
@@ -31,6 +32,7 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
@@ -76,6 +78,8 @@ public class MainActivity extends Activity {
     private LinearLayout topMenuPanel;
     private PopupWindow topMenuPopup;
     private CheckBox enabledBox;
+    private CheckBox notificationModeBox;
+    private TextView notificationStatusView;
     private EditText webhookInput;
     private EditText secretInput;
     private Spinner themeSpinner;
@@ -133,6 +137,7 @@ public class MainActivity extends Activity {
     private int softGoldColor;
     private int softGreenColor;
     private boolean editSettingsMode = false;
+    private boolean suppressNotificationToggle = false;
     private boolean addingCustomBank = false;
     private boolean suppressThemeChange = false;
     private boolean suppressBankSelection = false;
@@ -163,6 +168,7 @@ public class MainActivity extends Activity {
         maybeAskAppPassword();
         refreshHistory();
         refreshTransactionSmsWarning();
+        refreshNotificationListenerStatus();
         autoSyncPendingEntries();
         updateClockView();
         clockHandler.removeCallbacks(clockTicker);
@@ -1014,6 +1020,49 @@ public class MainActivity extends Activity {
                         }
                 });
 
+        LinearLayout notificationCard = addCard(securityContent);
+        addSectionTitle(notificationCard, "🔔 حالت هم‌زمان با اپ پیامک اصلی (خواندن از اعلان‌ها)");
+        TextView notificationHelp = new TextView(this);
+        notificationHelp.setText("هر دو اپ نمی‌توانند هم‌زمان «اپ پیش‌فرض پیامک» باشند (قانون اندروید). ولی اگر اپ پیامک اصلی گوشی پیش‌فرض بماند، این اپ می‌تواند پرداخت‌های بانکی را از اعلان‌های همان پیامک‌ها بخواند و به ربات اعلام کند:\n\n1️⃣ دکمه «دادن دسترسی اعلان‌ها» را بزنید و این اپ را در لیست مجاز کنید\n2️⃣ گزینه «خواندن پرداخت‌ها از اعلان‌ها» را روشن کنید\n3️⃣ روی اندروید ۱۲+ مجوز «پیامک اعلانی MIUI» بانک‌ها هم باید روشن باشد تا اعلان متن پیامک را نشان دهد\n\n💡 اگر این اپ خودش «اپ پیش‌فرض پیامک» است، این گزینه را خاموش بگذارید تا ارسال دوباره انجام نشود.");
+        notificationHelp.setTextColor(mutedColor);
+        notificationHelp.setTextSize(12);
+        notificationHelp.setLineSpacing(0, 1.15f);
+        notificationHelp.setPadding(0, 0, 0, dp(8));
+        notificationCard.addView(notificationHelp, matchWrap());
+
+        notificationStatusView = new TextView(this);
+        notificationStatusView.setTextSize(12);
+        notificationStatusView.setPadding(dp(10), dp(10), dp(10), dp(10));
+        notificationCard.addView(notificationStatusView, matchWrap());
+
+        notificationModeBox = new CheckBox(this);
+        notificationModeBox.setText("🔔 خواندن پرداخت‌های بانکی از اعلان‌ها");
+        notificationModeBox.setTextSize(13);
+        notificationModeBox.setTextColor(textColor);
+        notificationCard.addView(notificationModeBox, matchWrap());
+        notificationModeBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (suppressNotificationToggle) {
+                    return;
+                }
+                new SettingsStore(MainActivity.this).saveNotificationMode(isChecked);
+                refreshNotificationListenerStatus();
+            }
+        });
+
+        Button notificationAccessButton = new Button(this);
+        notificationAccessButton.setText("🔔 دادن دسترسی اعلان‌ها");
+        styleButton(notificationAccessButton, true);
+        notificationCard.addView(notificationAccessButton, matchWrap());
+        notificationAccessButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openNotificationListenerSettings();
+            }
+        });
+        refreshNotificationListenerStatus();
+
         LinearLayout lockCard = addCard(securityContent);
         addSectionTitle(lockCard, "🔐 قفل ورود به اپ");
         TextView lockHelp = new TextView(this);
@@ -1250,6 +1299,10 @@ public class MainActivity extends Activity {
     private void loadSettings() {
         SettingsStore settings = new SettingsStore(this);
         enabledBox.setChecked(settings.isEnabled());
+        suppressNotificationToggle = true;
+        notificationModeBox.setChecked(settings.isNotificationModeEnabled());
+        suppressNotificationToggle = false;
+        refreshNotificationListenerStatus();
         webhookInput.setText(settings.getWebhookUrl());
         secretInput.setText(settings.getSecret());
         suppressThemeChange = true;
@@ -1850,6 +1903,44 @@ public class MainActivity extends Activity {
                     Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             openSmsDefaultFallbackSettings();
+        }
+    }
+
+    private boolean isNotificationListenerEnabled() {
+        try {
+            return NotificationManager.getEnabledListenerPackages(this).contains(getPackageName());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void refreshNotificationListenerStatus() {
+        if (notificationStatusView == null) {
+            return;
+        }
+        boolean accessGranted = isNotificationListenerEnabled();
+        boolean modeOn = new SettingsStore(this).isNotificationModeEnabled();
+        if (accessGranted && modeOn) {
+            notificationStatusView.setText("✅ حالت اعلان فعال است؛ پرداخت‌ها از اعلان‌های پیامک خوانده می‌شوند.");
+            styleGradientRounded(notificationStatusView, softGreenColor, inputColor, greenColor, dp(18));
+        } else if (accessGranted) {
+            notificationStatusView.setText("🟡 دسترسی اعلان داده شده ولی گزینه «خواندن از اعلان‌ها» خاموش است.");
+            styleGradientRounded(notificationStatusView, softGoldColor, inputColor, goldColor, dp(18));
+        } else {
+            notificationStatusView.setText("⚪ دسترسی اعلان هنوز داده نشده؛ برای حالت هم‌زمان دکمه زیر را بزنید.");
+            styleRounded(notificationStatusView, inputColor, strokeColor, dp(12));
+        }
+    }
+
+    private void openNotificationListenerSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
+            } catch (Exception ignored) {
+                Toast.makeText(this, "تنظیمات باز نشد؛ دستی برو: تنظیمات ← اعلان‌ها ← دسترسی اعلان‌ها", Toast.LENGTH_LONG).show();
+            }
         }
     }
 
