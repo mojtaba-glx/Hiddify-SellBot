@@ -503,6 +503,75 @@ def _is_unlimited_time(days_val: int, br: dict) -> bool:
     return int(days_val) >= threshold
 
 
+def _renew_br_settings(agent_id: int) -> Dict[str, Any]:
+    """تنظیمات قوانین تمدید: اول تنظیمات ادمین (ربات کاربران)، در غیر این صورت تنظیمات محلی نماینده."""
+    try:
+        from Shared import userbot_db
+        s = userbot_db.get_buy_renew_settings()
+        if isinstance(s, dict) and s:
+            return s
+    except Exception:
+        pass
+    try:
+        from CustomerBot.database import get_buy_renew_settings
+        return get_buy_renew_settings(agent_id) or {}
+    except Exception:
+        return {}
+
+
+def service_is_renewable(svc: Optional[Dict[str, Any]], agent_id: int) -> bool:
+    """شرط مجاز بودن تمدید — مطابق ربات کاربران (UserBot):
+
+    - default / fair: بدون محدودیت ورود به تمدید
+    - advanced: باید یکی از شروط برقرار باشد:
+        1) کمتر از renew_max_days روز تا اتمام اشتراک باقی مانده باشد
+        2) حجم باقی‌مانده کمتر از renew_max_remaining_gb گیگابایت باشد
+    """
+    if not isinstance(svc, dict):
+        return False
+    br = _renew_br_settings(agent_id)
+    policy = str(br.get("renew_policy") or "advanced").strip().lower()
+    if policy in {"default", "fair"}:
+        return True
+    try:
+        max_days = int(br.get("renew_max_days") or 3)
+    except (TypeError, ValueError):
+        max_days = 3
+    try:
+        max_remaining_gb = int(br.get("renew_max_remaining_gb") or 3)
+    except (TypeError, ValueError):
+        max_remaining_gb = 3
+
+    days_left = int(float(svc.get("days_left") or 0) or 0)
+    days_ok = days_left < max_days
+
+    usage_limit = float(svc.get("usage_limit") or 0)
+    usage_current = float(svc.get("usage_current") or 0)
+    usage_ok = False
+    if usage_limit > 0:
+        usage_ok = (usage_limit - usage_current) < max_remaining_gb
+
+    return days_ok or usage_ok
+
+
+def renew_not_allowed_text(agent_id: int) -> str:
+    br = _renew_br_settings(agent_id)
+    try:
+        max_days = int(br.get("renew_max_days") or 3)
+    except (TypeError, ValueError):
+        max_days = 3
+    try:
+        max_remaining_gb = int(br.get("renew_max_remaining_gb") or 3)
+    except (TypeError, ValueError):
+        max_remaining_gb = 3
+    return (
+        "🛑 در حال حاضر شما امکان تمدید اشتراک خود را ندارید.\n"
+        "جهت تمدید اشتراک (حالت پیشرفته) باید یکی از شروط زیر برقرار باشد:\n"
+        f"1- کمتر از {max_days} روز تا اتمام اشتراک شما باقی مانده باشد.\n"
+        f"2- حجم باقی مانده اشتراک شما کمتر از {max_remaining_gb} گیگابایت باشد."
+    )
+
+
 def is_customer_service_visible(svc: Optional[Dict[str, Any]]) -> bool:
     """بررسی اینکه سرویس هنوز معتبر و باید در لیست مشتری نمایش داده شود."""
     if not isinstance(svc, dict):

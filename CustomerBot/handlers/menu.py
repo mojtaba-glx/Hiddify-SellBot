@@ -160,7 +160,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         from Shared.agent_db import get_services_by_customer
-        from CustomerBot.services import is_customer_service_visible
+        from CustomerBot.services import is_customer_service_visible, service_is_renewable, renew_not_allowed_text
         services = get_services_by_customer(cust["id"])
         visible = [s for s in services if is_customer_service_visible(s)]
         if not visible:
@@ -169,9 +169,17 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu_keyboard(),
             )
             return
+        # قوانین تمدید (حالت پیشرفته): فقط سرویس‌های نزدیک به اتمام حجم/زمان
+        renewable = [s for s in visible if service_is_renewable(s, agent_id)]
+        if not renewable:
+            await update.message.reply_text(
+                renew_not_allowed_text(agent_id),
+                reply_markup=main_menu_keyboard(),
+            )
+            return
         await update.message.reply_text(
             "👇 لطفا یکی از اشتراک‌ها را برای تمدید انتخاب کنید:",
-            reply_markup=renew_services_keyboard(visible),
+            reply_markup=renew_services_keyboard(renewable),
         )
 
     elif BTN_STATUS in text or text == BTN_STATUS:
