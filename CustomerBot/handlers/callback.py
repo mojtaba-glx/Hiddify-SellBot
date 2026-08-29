@@ -95,6 +95,14 @@ def _ikb(rows):
     return InlineKeyboardMarkup(rows)
 
 
+async def _edit_or_reply(msg, text: str, **kwargs):
+    """همان پیام را ویرایش می‌کند تا جریان تمیز بماند؛ اگر ممکن نبود پیام جدید می‌فرستد."""
+    try:
+        return await msg.edit_text(text, **kwargs)
+    except Exception:
+        return await msg.reply_text(text, **kwargs)
+
+
 def _active_discount_simple(settings) -> bool:
     """تخفیف حجمی ساده را با احترام به تایمر و حالت ذخیره‌شده فعال محسوب می‌کند."""
     global _plans_storage
@@ -1075,9 +1083,10 @@ async def _handle_status(query, context, agent_id, user, data):
         if mode == "fixed":
             plans = get_fixed_plans(agent_id)
             if not plans:
-                await msg.edit_text("❌ هیچ پلنی برای این نماینده تعریف نشده است.")
+                await _edit_or_reply(msg, "❌ هیچ پلنی برای این نماینده تعریف نشده است.")
                 return
-            await msg.edit_text(
+            await _edit_or_reply(
+                msg,
                 "📋 پلن تمدید را انتخاب کنید:",
                 reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
@@ -1093,7 +1102,8 @@ async def _handle_status(query, context, agent_id, user, data):
             context.user_data[UD_BUY_GB] = gb
             context.user_data[UD_BUY_MONTHS] = months
             price, off_pct = _calc_dynamic_price(gb, months, dyn)
-            await msg.edit_text(
+            await _edit_or_reply(
+                msg,
                 "🎛 بسته تمدید را انتخاب کنید:",
                 reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
             )
@@ -1120,9 +1130,10 @@ async def _handle_renew(query, context, agent_id, user, data):
         if mode == "fixed":
             plans = get_fixed_plans(agent_id)
             if not plans:
-                await msg.reply_text("❌ هیچ پلنی برای این نماینده تعریف نشده است.", reply_markup=main_menu_keyboard())
+                await _edit_or_reply(msg, "❌ هیچ پلنی برای این نماینده تعریف نشده است.", reply_markup=main_menu_keyboard())
                 return
-            await msg.reply_text(
+            await _edit_or_reply(
+                msg,
                 "📋 پلن تمدید را انتخاب کنید:",
                 reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
@@ -1138,7 +1149,8 @@ async def _handle_renew(query, context, agent_id, user, data):
             context.user_data[UD_BUY_GB] = gb
             context.user_data[UD_BUY_MONTHS] = months
             price, off_pct = _calc_dynamic_price(gb, months, dyn)
-            await msg.reply_text(
+            await _edit_or_reply(
+                msg,
                 "🎛 بسته تمدید را انتخاب کنید:",
                 reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
             )
