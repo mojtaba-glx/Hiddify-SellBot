@@ -300,7 +300,9 @@ public final class SettingsStore {
             return "";
         }
 
-        if (!hasActiveBankSenderFilters() && matchesAnyFilter(normalizedSender, parseFilters(getSenderFiltersRaw()))) {
+        // فیلترهای عمومی همیشه به‌عنوان آخرین فال‌بک بررسی می‌شوند
+        // (قبلاً اگر حتی یک بانک فیلتر داشت، این مسیر کلاً غیرفعال بود)
+        if (matchesAnyFilter(normalizedSender, parseFilters(getSenderFiltersRaw()))) {
             return "تنظیمات عمومی";
         }
         return "";
@@ -319,13 +321,13 @@ public final class SettingsStore {
             }
         }
 
+        // فال‌بک متنی: اگر هیچ فیلتر سرشماره‌ای نگرفت (مثلاً بانک از شماره
+        // جدیدی پیامک فرستاده)، نام بانک داخل متن پیامک بررسی می‌شود —
+        // حتی برای بانک‌هایی که فیلتر سرشماره دارند
         if (!normalizedBody.isEmpty()) {
             for (int i = 0; i < getBankCount(); i++) {
                 BankConfig bank = getBank(i);
                 if (!bank.enabled) {
-                    continue;
-                }
-                if (!parseFilters(bank.senderFilters).isEmpty()) {
                     continue;
                 }
                 String bankName = normalizeBankText(bank.name);

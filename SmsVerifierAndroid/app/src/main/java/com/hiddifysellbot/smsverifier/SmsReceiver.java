@@ -10,7 +10,13 @@ import android.telephony.SmsMessage;
 public final class SmsReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (intent == null || !"android.provider.Telephony.SMS_RECEIVED".equals(intent.getAction())) {
+        // SMS_RECEIVED: برای اپ‌های غیر پیش‌فرض
+        // SMS_DELIVER: وقتی این اپ «اپ پیش‌فرض پیامک» است (لازم برای اندروید ۱۲/۱۳)
+        // بدون SMS_DELIVER اپ بعد از default شدن هیچ پیامکی دریافت نمی‌کرد
+        String action = intent == null ? "" : intent.getAction();
+        boolean isReceived = "android.provider.Telephony.SMS_RECEIVED".equals(action);
+        boolean isDeliver = "android.provider.Telephony.SMS_DELIVER".equals(action);
+        if (!isReceived && !isDeliver) {
             return;
         }
 

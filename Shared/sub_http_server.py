@@ -172,14 +172,20 @@ def _sms_amount_candidates_toman(amount_raw: int, currency_raw: str) -> list[int
     elif currency == "toman":
         candidates.append(amount)
     else:
+        # واحد نامشخص: فقط همان مقدار — ضریب ۱۰ با env صریح فعال می‌شود
+        # (fallback /10 می‌توانست پرداخت را ۱۰ برابر بیش از واریز واقعی تأیید کند)
         candidates.append(amount)
-        if amount >= 10:
+        if _env_bool("SMS_WEBHOOK_ALLOW_RIAL_FALLBACK", False) and amount >= 10:
             candidates.append(int(round(amount / 10)))
     out: list[int] = []
     for item in candidates:
         if item > 0 and item not in out:
             out.append(item)
     return out
+
+
+def _sms_webhook_manual_window_minutes() -> int:
+    return max(5, _to_int(_dotenv_get("SMS_WEBHOOK_MANUAL_APPROVAL_WINDOW_MINUTES", "120"), 120))
 
 
 def _sms_webhook_secret() -> str:
@@ -1104,6 +1110,45 @@ class _SubHandler(BaseHTTPRequestHandler):
                 "matched_payment_id": int((prior_event or {}).get("matched_payment_id") or 0),
             }
 
+        # ضد cross-user replay: اگر ادمین به‌تازگی همین مبلغ را به‌صورت دستی
+        # تأیید کرده، این پیامک متعلق به همان پرداخت است — هرگز پرداخت
+        # در انتظار کاربر دیگری با این پیامک تأیید نشود
+        manual_window = _sms_webhook_manual_window_minutes()
+        sms_time_ms = int(received_at_ms or device_time_ms or 0)
+        for amount_toman in candidates:
+            manually_approved = userbot_db.find_recently_admin_approved_card_payments(
+                int(amount_toman),
+                max_age_minutes=manual_window,
+                sms_time_ms=sms_time_ms,
+            )
+            if manually_approved:
+                payment = manually_approved[0]
+                payment_id = int((payment or {}).get("id") or 0)
+                userbot_db.attach_sms_event_to_approved_payment(
+                    payment_id,
+                    event_id=event_id,
+                    reference=reference,
+                    sender=sender,
+                    amount_raw=amount_raw,
+                    currency_raw=currency_raw,
+                )
+                userbot_db.update_sms_webhook_event(
+                    event_id,
+                    status="approved",
+                    matched_payment_id=payment_id,
+                    message="bank SMS attached to admin-approved payment",
+                    amount_toman=int(amount_toman),
+                )
+                return 200, {
+                    "ok": True,
+                    "matched": True,
+                    "status": "attached_manual_approved",
+                    "payment_id": payment_id,
+                    "tx_code": (payment or {}).get("tx_code"),
+                    "amount_toman": int(amount_toman),
+                    "message": "bank SMS attached to admin-approved payment",
+                }
+
         matches: list[dict] = []
         matched_amount = 0
         for amount_toman in candidates:
@@ -1111,7 +1156,7 @@ class _SubHandler(BaseHTTPRequestHandler):
                 int(amount_toman),
                 card_last4=card_last4,
                 max_age_minutes=_sms_webhook_max_pending_age_minutes(),
-                sms_time_ms=int(received_at_ms or device_time_ms or 0),
+                sms_time_ms=sms_time_ms,
             )
             if matches:
                 matched_amount = int(amount_toman)

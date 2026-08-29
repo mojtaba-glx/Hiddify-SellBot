@@ -4183,14 +4183,99 @@ def _sms_amount_candidates_toman(amount_raw: int, currency_raw: str) -> List[int
     elif currency in {"toman", "تومان"}:
         candidates = [amount]
     else:
+        # واحد نامشخص: فقط همان مقدار — ضریب ۱۰ تنها با کلید env صریح فعال
+        # می‌شود (fallback /10 باعث خطای ۱۰ برابری اعتبار می‌شد)
         candidates = [amount]
-        if amount >= 10:
-            candidates.append(int(round(amount / 10)))
+        if os.getenv("SMS_WEBHOOK_ALLOW_RIAL_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "on"}:
+            if amount >= 10:
+                candidates.append(int(round(amount / 10)))
     out: List[int] = []
     for item in candidates:
         if item > 0 and item not in out:
             out.append(item)
     return out
+
+
+def find_recently_admin_approved_card_payments(
+    amount_toman: int,
+    *,
+    max_age_minutes: int = 120,
+    sms_time_ms: int = 0,
+) -> List[Dict[str, Any]]:
+    """
+    پرداخت‌های کارت‌به‌کارت که ادمین به‌صورت دستی (بدون وب‌هوک SMS) تأیید کرده و
+    تأییدشان تازه است. اگر پیامک بانکی دیر برسد، باید به همین پرداخت متصل شود
+    و نه به پرداخت در انتظار کاربر دیگری با مبلغ مشابه (ضد cross-user replay).
+    """
+    init_db()
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        return []
+    window = max(5, min(1440, int(max_age_minutes or 120)))
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    lower_s = (now - timedelta(minutes=window)).strftime("%Y-%m-%d %H:%M:%S")
+    upper_s = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT p.*, u.username, u.full_name, u.telegram_id
+            FROM userbot_payments p
+            LEFT JOIN userbot_users u ON u.id = p.user_id
+            WHERE p.status = 'approved'
+              AND p.method = 'card'
+              AND p.amount = ?
+              AND COALESCE(p.updated_at, '') >= ?
+              AND COALESCE(p.updated_at, '') <= ?
+              AND COALESCE(p.receipt_image, '') NOT LIKE '%sms_event_id:%'
+              AND COALESCE(p.receipt_image, '') NOT LIKE '%pay_flow:direct_buy%'
+            ORDER BY p.updated_at DESC
+            LIMIT 10
+            """,
+            (amount, lower_s, upper_s),
+        )
+        rows = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    sms_dt = _parse_sms_epoch_datetime(sms_time_ms)
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        approved_dt = _parse_db_datetime(row.get("updated_at"))
+        if sms_dt is not None and approved_dt is not None and sms_dt < approved_dt - timedelta(minutes=window):
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def attach_sms_event_to_approved_payment(
+    payment_id: int,
+    *,
+    event_id: str,
+    reference: str = "",
+    sender: str = "",
+    amount_raw: int = 0,
+    currency_raw: str = "",
+) -> bool:
+    """اتصال رویداد پیامک به یک پرداخت تأییدشده دستی — برای idempotency پیامک‌های تکراری."""
+    pid = int(payment_id or 0)
+    if pid <= 0:
+        return False
+    try:
+        _patch_payment_receipt_meta(
+            pid,
+            {
+                "sms_event_id": event_id,
+                "sms_reference": reference,
+                "sms_sender": sender,
+                "sms_amount_raw": amount_raw,
+                "sms_currency": currency_raw,
+            },
+        )
+        return True
+    except Exception:
+        return False
 
 
 def try_approve_payment_from_unmatched_sms(
