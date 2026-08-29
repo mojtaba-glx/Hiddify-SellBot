@@ -64,7 +64,7 @@ public class MainActivity extends Activity {
     private static final int REQ_EXPORT_BACKUP = 2001;
     private static final int REQ_IMPORT_BACKUP = 2002;
     private static final int MAX_VISIBLE_BANK_SMS = 50;
-    private static final long AUTO_SYNC_MIN_INTERVAL_MS = 3L * 60L * 1000L;
+    private static final long AUTO_SYNC_MIN_INTERVAL_MS = 60L * 1000L;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private ScrollView scrollView;
@@ -175,7 +175,7 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * همگام‌سازی هوشمند بی‌صدا: هر بار اپ باز می‌شود (حداکثر هر ۳ دقیقه یک‌بار)
+     * همگام‌سازی هوشمند بی‌صدا: هر بار اپ باز می‌شود (حداکثر هر ۱ دقیقه یک‌بار)
      * رکوردهای تایید‌نشده به ربات استعلام می‌شوند؛ اگر پرداخت در تلگرام تایید
      * شده باشد، رکورد خودکار به «تایید شده» منتقل می‌شود و نیازی به زدن دستی
      * دکمه همگام‌سازی نیست.

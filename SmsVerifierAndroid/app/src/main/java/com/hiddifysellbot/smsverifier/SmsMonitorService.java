@@ -16,7 +16,7 @@ import android.os.Looper;
 public class SmsMonitorService extends Service {
     private static final String CHANNEL_ID = "sellbot_sms_monitor";
     private static final int NOTIFICATION_ID = 2107;
-    private static final long AUTO_SYNC_INTERVAL_MS = 10L * 60L * 1000L;
+    private static final long AUTO_SYNC_INTERVAL_MS = 3L * 60L * 1000L;
 
     private final Handler autoSyncHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoSyncTask = new Runnable() {
