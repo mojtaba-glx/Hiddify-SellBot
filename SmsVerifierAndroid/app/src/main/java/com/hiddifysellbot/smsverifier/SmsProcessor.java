@@ -18,6 +18,21 @@ public final class SmsProcessor {
         String configuredBankName = settings.getMatchedConfiguredBankName(sender, body);
         String bankName = configuredBankName.isEmpty() ? settings.getMatchedBankName(sender, body) : configuredBankName;
         if (bankName.isEmpty()) {
+            // به‌جای نادیده گرفتن بی‌صدا: اگر SMS شبیه واریز است، با سرشماره واقعی لاگ کن
+            // تا کاربر بتواند آن سرشماره را در بخش بانک‌ها اضافه کند
+            if (PaymentSmsParser.isIncomingPayment(body)) {
+                String unmatchedEventId = PaymentSmsParser.buildEventId(sender, body, 0, "");
+                HistoryStore.addUnique(
+                        context,
+                        "BANK_UNMATCHED",
+                        "SMS واریزی از سرشماره ثبت‌نشده رسید و ارسال نشد.\n"
+                                + "👤 سرشماره دریافتی: " + sender
+                                + "\n🔐 شناسه داخلی: " + unmatchedEventId
+                                + "\n→ این سرشماره را در «بانک‌ها و الگوهای SMS» اضافه کن.\n"
+                                + "\n📄 متن SMS:\n" + body,
+                        unmatchedEventId
+                );
+            }
             return;
         }
         if (!settings.canSendWebhook()) {

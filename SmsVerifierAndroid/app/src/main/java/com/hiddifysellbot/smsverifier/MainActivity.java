@@ -984,6 +984,17 @@ public class MainActivity extends Activity {
                                 }
                             }
                     });
+
+            addButtonRow(smsRoleCard,
+                    new String[]{"↩️ بازگرداندن اپ پیامک اصلی گوشی"},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    openDefaultAppsForRestore();
+                                }
+                            }
+                    });
         }
 
         addButtonRow(securityCard,
@@ -1823,6 +1834,22 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
                 Toast.makeText(this, "با دستی به تنظیمات گوشی برو و این اپ را پیش‌فرض پیامک کن", Toast.LENGTH_LONG).show();
             }
+        }
+    }
+
+    /**
+     * باز کردن صفحه اپ‌های پیش‌فرض برای برگرداندن اپ پیامک اصلی گوشی.
+     * فقط یک اپ می‌تواند پیش‌فرض پیامک باشد؛ با این کار اپ اصلی دوباره پیامک‌ها را
+     * نشان می‌دهد و تاریخچه پیامک‌ها دست‌نخورده می‌ماند.
+     */
+    private void openDefaultAppsForRestore() {
+        try {
+            startActivity(new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS));
+            Toast.makeText(this,
+                    "در صفحه باز شده «برنامه پیامک» را باز کن و اپ پیامک اصلی گوشی را انتخاب کن",
+                    Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            openSmsDefaultFallbackSettings();
         }
     }
 
