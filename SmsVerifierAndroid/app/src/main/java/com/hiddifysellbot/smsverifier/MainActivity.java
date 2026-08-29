@@ -8,6 +8,7 @@ import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ComponentInfo;
 import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -1640,8 +1641,11 @@ public class MainActivity extends Activity {
 
     private String buildSmsRoleDiagnostics() {
         StringBuilder report = new StringBuilder();
-        report.append("نسخه اندروید (SDK): ").append(Build.VERSION.SDK_INT).append('\n');
-        report.append("نسخه اپ: ").append(versionName()).append('\n');
+        report.append("گوشی: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
+                .append(" | اندروید: ").append(Build.VERSION.RELEASE)
+                .append(" | بیلد: ").append(Build.VERSION.INCREMENTAL).append('\n');
+        report.append("SDK: ").append(Build.VERSION.SDK_INT)
+                .append(" | نسخه اپ: ").append(versionName()).append('\n');
         String defaultPkg;
         try {
             defaultPkg = Telephony.Sms.getDefaultSmsPackage(this);
@@ -1668,11 +1672,14 @@ public class MainActivity extends Activity {
 
         report.append('\n').append("الزامات کاندید شدن به اپ پیش‌فرض پیامک:\n");
         appendComponentCheck(report, "گیرنده SMS_DELIVER با مجوز BROADCAST_SMS",
-                "android.provider.Telephony.SMS_DELIVER", "android.permission.BROADCAST_SMS", true);
+                "android.provider.Telephony.SMS_DELIVER", null,
+                "android.permission.BROADCAST_SMS", true, "SmsReceiver");
         appendComponentCheck(report, "گیرنده WAP_PUSH_DELIVER با مجوز BROADCAST_WAP_PUSH",
-                "android.provider.Telephony.WAP_PUSH_DELIVER", "android.permission.BROADCAST_WAP_PUSH", true);
+                "android.provider.Telephony.WAP_PUSH_DELIVER", "application/vnd.wap.mms-message",
+                "android.permission.BROADCAST_WAP_PUSH", true, "WapPushReceiver");
         appendComponentCheck(report, "سرویس CONFIGURATION",
-                "android.telephony.action.CONFIGURATION", null, false);
+                "android.telephony.action.CONFIGURATION", null,
+                null, false, "SmsConfigService");
         try {
             Intent sendto = new Intent(Intent.ACTION_SENDTO, Uri.parse("sms:"));
             sendto.setPackage(getPackageName());
@@ -1683,7 +1690,8 @@ public class MainActivity extends Activity {
             report.append("❌ اکتیویتی SENDTO (خطا: ").append(e.getClass().getSimpleName()).append(")\n");
         }
 
-        report.append('\n').append("مجوزهای خواسته‌شده و وضعیت grant:\n");
+        report.append('\n').append("مجوزهای اعلان‌شده در مانیفست و وضعیت grant:\n");
+        report.append("بعد از فعال شدن «اپ پیش‌فرض پیامک»، مجوزهای grant نشده خودکار داده می‌شوند؛ پس ◻️ این‌ها مانع نیست.\n");
         String[] perms = {
                 Manifest.permission.RECEIVE_SMS,
                 Manifest.permission.READ_SMS,
@@ -1692,40 +1700,95 @@ public class MainActivity extends Activity {
                 Manifest.permission.RECEIVE_WAP_PUSH
         };
         for (String perm : perms) {
+            boolean declared = isPermissionDeclared(perm);
             boolean granted = checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED;
-            report.append(granted ? "✅ " : "❌ ").append(perm).append('\n');
+            report.append(declared ? "📄" : "❌").append(' ').append(perm)
+                    .append(" | grant: ").append(granted ? "✅" : "◻️").append('\n');
         }
-        report.append('\n').append("راهنما: همه ردیف‌های بالا باید ✅ باشند تا اپ در لیست «برنامه پیامک پیش‌فرض» گوشی ظاهر شود. اگر ردیفی ❌ است، عکس این صفحه را برای پشتیبانی بفرست.");
+        report.append('\n')
+                .append("راهنما: سه الزام بالا و اکتیویتی SENDTO باید ✅ باشند. 🟡 یعنی کامپوننت در APK هست ولی گوشی اجازه تطبیق اکشن را نداد (محدودیت query روم).\n")
+                .append("اگر همه ✅/🟡 بود ولی گوشی کاندید نمی‌کند، محدودیت روم است؛ با دستور adb زیر نقش پیش‌فرض پیامک مستقیم داده می‌شود:\n")
+                .append("adb shell cmd role add-role-holder android.app.role.SMS com.hiddifysellbot.smsverifier");
         return report.toString();
     }
 
-    private void appendComponentCheck(StringBuilder report, String label, String action, String requiredPermission, boolean receiver) {
+    private boolean isPermissionDeclared(String permission) {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_PERMISSIONS);
+            if (info.requestedPermissions != null) {
+                for (String declared : info.requestedPermissions) {
+                    if (permission.equals(declared)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    private static final int COMPONENT_MATCHED = 2;
+    private static final int COMPONENT_EXISTS_UNVERIFIED = 1;
+    private static final int COMPONENT_MISSING = 0;
+
+    private void appendComponentCheck(StringBuilder report, String label, String action, String mimeType,
+                                      String requiredPermission, boolean receiver, String className) {
+        int state = COMPONENT_MISSING;
+        PackageManager pm = getPackageManager();
         try {
             Intent intent = new Intent(action);
+            if (mimeType != null) {
+                intent.setType(mimeType);
+            }
             intent.setPackage(getPackageName());
-            PackageManager pm = getPackageManager();
-            List<ResolveInfo> infos = receiver ? pm.queryBroadcastReceivers(intent, 0) : pm.queryIntentServices(intent, 0);
-            boolean found = false;
+            List<ResolveInfo> infos = receiver
+                    ? pm.queryBroadcastReceivers(intent, 0)
+                    : pm.queryIntentServices(intent, 0);
             if (infos != null) {
                 for (ResolveInfo info : infos) {
-                    if (info == null || info.activityInfo == null) {
+                    if (info == null) {
                         continue;
                     }
-                    if (requiredPermission == null || requiredPermission.equals(info.activityInfo.permission)) {
-                        found = true;
+                    ComponentInfo ci = info.activityInfo != null ? info.activityInfo : info.serviceInfo;
+                    if (ci == null) {
+                        continue;
+                    }
+                    if (requiredPermission == null || requiredPermission.equals(ci.permission)) {
+                        state = COMPONENT_MATCHED;
                         break;
                     }
                 }
             }
-            report.append(found ? "✅" : "❌").append(' ').append(label);
-            if (!found) {
-                report.append(receiver
-                        ? "\n    (گیرنده‌ای با این اکشن و مجوز لازم پیدا نشد)"
-                        : "\n    (سرویسی با این اکشن پیدا نشد)");
+        } catch (Exception ignored) {
+        }
+        if (state != COMPONENT_MATCHED) {
+            // fallback: وجود خود کامپوننت در APK (برای روم‌هایی که query را محدود می‌کنند)
+            try {
+                PackageInfo pkg = pm.getPackageInfo(getPackageName(),
+                        PackageManager.GET_RECEIVERS | PackageManager.GET_SERVICES);
+                ComponentInfo[] comps = receiver ? pkg.receivers : pkg.services;
+                if (comps != null) {
+                    String suffix = "." + className;
+                    for (ComponentInfo ci : comps) {
+                        if (ci != null && ci.name != null && ci.name.endsWith(suffix)) {
+                            state = COMPONENT_EXISTS_UNVERIFIED;
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
             }
-            report.append('\n');
-        } catch (Exception e) {
-            report.append("❌ ").append(label).append(" (خطا: ").append(e.getClass().getSimpleName()).append(")\n");
+        }
+        if (state == COMPONENT_MATCHED) {
+            report.append("✅ ").append(label).append('\n');
+        } else if (state == COMPONENT_EXISTS_UNVERIFIED) {
+            report.append("🟡 ").append(label)
+                    .append(" (کامپوننت ").append(className).append(" در APK هست؛ روم اجازه تطبیق اکشن را نداد)\n");
+        } else {
+            report.append("❌ ").append(label)
+                    .append(receiver
+                            ? "\n    (گیرنده‌ای با این اکشن و مجوز لازم پیدا نشد)"
+                            : "\n    (سرویسی با این اکشن پیدا نشد)").append('\n');
         }
     }
 
