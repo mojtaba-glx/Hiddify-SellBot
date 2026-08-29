@@ -280,8 +280,9 @@ async def _list_pending_payments(update: Update, context: ContextTypes.DEFAULT_T
     if not page_pays:
         text += "\u0647\u06cc\u0686 \u067e\u0631\u062f\u0627\u062e\u062a \u0645\u0646\u062a\u0638\u0631\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f."
     else:
-        ptype = "\U0001f4e6 خرید اشتراک"
         for p in page_pays:
+            _order_row = p.get("_order") or {}
+            ptype = "\u267b\ufe0f \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if int(_order_row.get("renew_service_id") or 0) else "\U0001f4e6 \u062e\u0631\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9"
             name = p.get("full_name") or p.get("username") or f"\u06a9\u0627\u0631\u0628\u0631 #{p.get('user_id', '?')}"
             amount = p.get("amount", 0)
             tx_code = p.get("tx_code", "")
@@ -327,8 +328,8 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
     amount = pay.get("amount", 0)
     tx_code = pay.get("tx_code", "")
     created = pay.get("created_at", "") or ""
-    ptype = "\U0001f4e6 خرید اشتراک"
     order = pay.get("_order")
+    ptype = "\u267b\ufe0f \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if (order and int(order.get("renew_service_id") or 0)) else "\U0001f4e6 خرید اشتراک"
 
     text = (
         f"<b>جزئیات درخواست مشتری</b>\n\n"
@@ -407,10 +408,14 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
     user_tg_id = pay.get("user_id", 0)
 
     if pay.get("_pay_type") == "buy" and pay.get("_order"):
-        # Create subscription for approved buy payment
+        # Create subscription for approved buy payment / renew approved renew order
         order = dict(pay["_order"])
         if not int(order.get("server_id") or 0):
             order["server_id"] = int(pay.get("_server_id") or 0)
+        renew_service_id = int(order.get("renew_service_id") or 0)
+        if renew_service_id and str(order.get("status") or "").strip().lower() == "approved":
+            await query.answer("⚠️ برای این سفارش قبلاً تمدید انجام شده است.", show_alert=True)
+            return
         wholesale_price = _calc_wholesale_price(agent_id, pay, order)
         if wholesale_price <= 0:
             await query.answer("قیمت عمده برای این سفارش تنظیم نشده است. از ادمین بخواهید تعرفه عمده را ثبت کند.", show_alert=True)
@@ -434,16 +439,28 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             update_customer_payment_status(agent_id, pay_id, "pending")
             await query.answer("موجودی کیف پول کافی نیست. لطفاً کیف پول خود را شارژ کنید.", show_alert=True)
             return
-        try:
-            svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
-        except Exception as e:
-            agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
-            update_customer_payment_status(agent_id, pay_id, "pending")
-            if int(order.get("order_id") or 0):
-                update_order_status(agent_id, int(order.get("order_id")), "pending")
-            logger.error(f"Failed to create subscription for payment {pay_id}: {e}")
-            await query.answer(f"خطا در ساخت سرویس؛ مبلغ از کیف پول نماینده برگشت خورد: {e}", show_alert=True)
-            return
+        if renew_service_id:
+            try:
+                svc = await _renew_subscription_from_order(context, agent_id, user_tg_id, order, tx_code=str(pay.get("tx_code") or ""))
+            except Exception as e:
+                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای تمدید سرویس سفارش #{order.get('order_id')}")
+                update_customer_payment_status(agent_id, pay_id, "pending")
+                if int(order.get("order_id") or 0):
+                    update_order_status(agent_id, int(order.get("order_id")), "pending")
+                logger.error(f"Failed to renew subscription for payment {pay_id}: {e}")
+                await query.answer(f"خطا در تمدید سرویس؛ مبلغ از کیف پول نماینده برگشت خورد: {e}", show_alert=True)
+                return
+        else:
+            try:
+                svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
+            except Exception as e:
+                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
+                update_customer_payment_status(agent_id, pay_id, "pending")
+                if int(order.get("order_id") or 0):
+                    update_order_status(agent_id, int(order.get("order_id")), "pending")
+                logger.error(f"Failed to create subscription for payment {pay_id}: {e}")
+                await query.answer(f"خطا در ساخت سرویس؛ مبلغ از کیف پول نماینده برگشت خورد: {e}", show_alert=True)
+                return
         if not update_customer_payment_status(agent_id, pay_id, "approved"):
             logger.error("Payment %s approved service %s but status update failed", pay_id, (svc or {}).get("id"))
             await query.answer("سرویس ساخته شد اما ثبت وضعیت پرداخت خطا داد. لاگ را بررسی کنید.", show_alert=True)
@@ -459,11 +476,11 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
                     agent_id,
                     user_tg_id,
                     svc,
-                    "create",
+                    "renew" if renew_service_id else "create",
                     int(pay.get("amount") or order.get("price") or 0),
                 )
             except Exception as report_err:
-                logger.warning("Failed to send create subscription report for payment %s: %s", pay_id, report_err)
+                logger.warning("Failed to send subscription report for payment %s: %s", pay_id, report_err)
     else:
         # No order info - just mark approved
         ok = update_customer_payment_status(agent_id, pay_id, "approved")
@@ -489,7 +506,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             card_last4 = ""
     if card_last4:
         done_text += f"\n💳 ۴ رقم آخر کارت: <code>{card_last4}</code>"
-    done_text += "\n\n✅ پرداخت تایید شد؛ اشتراک مشتری ساخته شد."
+    done_text += "\n\n✅ پرداخت تایید شد؛ " + ("اشتراک مشتری تمدید شد." if renew_service_id else "اشتراک مشتری ساخته شد.")
     done_kb = _ikb([
         [IButton(f"👤 {customer_name}", callback_data=f"agbot:custpay:profile:{user_tg_id}")],
     ])
@@ -722,6 +739,107 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
     if svc:
         await _send_subscription_delivery(context, agent_id, user_tg_id, svc["id"])
     return svc or {}
+
+
+async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, tx_code: str = "") -> dict:
+    """تمدید سرویس موجود مشتری پس از تایید پرداخت سفارش تمدید (♻️).
+
+    الگوی حجم/زمان (add/reset) از تنظیمات ربات ادمین خوانده می‌شود؛
+    اول سرور اصلی روی پنل آپدیت می‌شود (خطا → exception تا پول برگشت بخورد)،
+    سپس نودها best-effort و در انتها دیتابیس محلی.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from CustomerBot.services import get_service_panel_targets
+    from Shared import multi_panel
+
+    service_id = int(order.get("renew_service_id") or 0)
+    svc = agent_db.get_service_by_id(service_id)
+    if not svc or int(svc.get("agent_id") or 0) != int(agent_id):
+        raise RuntimeError("service_not_found")
+    shared_cust = agent_db.get_customer_by_telegram_id(agent_id, user_tg_id)
+    if not shared_cust or int(svc.get("customer_id") or 0) != int(shared_cust.get("id") or 0):
+        raise RuntimeError("service_not_owned")
+
+    extra_days = int(order.get("days") or 0)
+    extra_gb = float(order.get("volume_gb") or 0)
+    if extra_days <= 0 and extra_gb <= 0:
+        raise RuntimeError("empty_renew_package")
+
+    vol_mode, time_mode = "add", "add"
+    try:
+        from Shared.userbot_db import get_renew_modes
+        vol_mode, time_mode = get_renew_modes()
+    except Exception:
+        pass
+    vol_mode = str(vol_mode or "add").strip().lower()
+    time_mode = str(time_mode or "add").strip().lower()
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # ── زمان ──
+    if time_mode == "add":
+        end_date = str(svc.get("end_date") or "").strip()
+        if end_date:
+            try:
+                current_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                current_end = now
+        else:
+            current_end = now
+        new_end = current_end + timedelta(days=extra_days)
+    else:
+        new_end = now + timedelta(days=extra_days)
+    new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
+
+    # ── حجم ──
+    if vol_mode == "add":
+        new_usage_limit = float(svc.get("usage_limit") or 0) + extra_gb
+    else:
+        new_usage_limit = float(extra_gb)
+
+    # ── پنل‌ها ──
+    targets = get_service_panel_targets(svc)
+    if targets:
+        primary_sid = int(svc.get("server_id") or 0)
+        primary_target = next(
+            (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
+            targets[0],
+        )
+        panel_payload = {
+            "usage_limit_GB": new_usage_limit,
+            "expire_date": new_end_str.split(" ")[0],
+        }
+        try:
+            await multi_panel.patch_user(
+                primary_target[0], primary_target[1],
+                panel_payload,
+                marzban_username=primary_target[2],
+            )
+        except Exception as e:
+            raise RuntimeError(f"panel_patch_failed: {str(e)[:100]}")
+        for srv, uuid, marzban_un in targets:
+            if int(srv.get("id") or 0) == int(primary_target[0].get("id") or 0):
+                continue
+            try:
+                await multi_panel.patch_user(srv, uuid, panel_payload, marzban_username=marzban_un)
+            except Exception as e:
+                logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
+
+    # ── دیتابیس محلی ──
+    agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, vol_mode, time_mode)
+
+    notify = (
+        "♻️ اشتراک شما با موفقیت تمدید شد.\n\n"
+        f"📊 حجم: {new_usage_limit:g} گیگ\n"
+        f"⏳ تاریخ انقضا: {new_end_str[:10]}\n\n"
+        "از دکمه «📊وضعیت اشتراک» می‌توانید اطلاعات به‌روزشده را ببینید."
+    )
+    if tx_code:
+        notify += f"\n\n🎁 شناسه تراکنش: {tx_code}"
+    await _notify_customer(context, agent_id, user_tg_id, notify)
+    updated_svc = agent_db.get_service_by_id(service_id) or dict(svc)
+    await _send_subscription_delivery(context, agent_id, user_tg_id, service_id)
+    return updated_svc
 
 
 async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, service_id: int) -> None:

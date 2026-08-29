@@ -290,12 +290,13 @@ async def _notify_agent_new_payment(
         if tx_marker > 0:
             caption += f"🔢 مشخصه تراکنش: <code>{tx_marker}</code>\n"
         if order:
+            order_kind = "♻️ تمدید" if int(order.get("renew_service_id") or 0) else "📦 سفارش"
             caption += (
-                f"📦 سفارش: <code>{order_id}</code> | 📊 حجم: {float(meta.get('gb') or order.get('volume_gb') or 0):g} گیگ\n"
+                f"{order_kind}: <code>{order_id}</code> | 📊 حجم: {float(meta.get('gb') or order.get('volume_gb') or 0):g} گیگ\n"
                 f"⏰ زمان: {int(meta.get('days') or order.get('days') or 0)} روز | 🏷 هزینه عمده: <b>{wholesale:,}</b> تومان\n"
                 f"💼 کیف پول نماینده: <b>{wallet_balance:,}</b> تومان\n"
             )
-        caption += "\nدر تایید، اشتراک مشتری پس از بررسی کیف پول نماینده فعال می‌شود."
+        caption += "\nدر تایید، " + ("اشتراک مشتری تمدید می‌شود." if (order and int(order.get('renew_service_id') or 0)) else "اشتراک مشتری پس از بررسی کیف پول نماینده فعال می‌شود.")
 
         kb = InlineKeyboardMarkup([
             [

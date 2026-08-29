@@ -167,6 +167,13 @@ def selected_plan_keyboard(server_id: int, gb: int, days: int, price: int):
     ])
 
 
+def renew_payment_keyboard(service_id: int, server_id: int, gb: int, days: int, price: int):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 پرداخت مستقیم", callback_data=f"renew:pay_direct:{service_id}:{server_id}:{gb}:{days}:{price}")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"status:menu:{service_id}")],
+    ])
+
+
 def buy_wizard_keyboard(server_id, gb, months, price, off_percent=0):
     price_str = f"{price:,}"
     keyboard = [

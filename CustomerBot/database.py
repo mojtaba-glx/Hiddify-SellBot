@@ -195,6 +195,7 @@ def init_db() -> None:
     _ensure_column(cur, "customer_orders", "server_id", "INTEGER DEFAULT 0")
     _ensure_column(cur, "customer_orders", "plan_id", "INTEGER DEFAULT 0")
     _ensure_column(cur, "customer_orders", "wholesale_price", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "customer_orders", "renew_service_id", "INTEGER DEFAULT 0")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS customer_payments (
@@ -798,7 +799,8 @@ def generate_order_id(agent_id: int) -> int:
 
 def create_order(agent_id: int, telegram_id: int, volume_gb: float, days: int, price: int,
                  plan_title: str, server_location: str, username: str = "", full_name: str = "",
-                 server_id: int = 0, plan_id: int = 0, wholesale_price: int = 0) -> Dict[str, Any]:
+                 server_id: int = 0, plan_id: int = 0, wholesale_price: int = 0,
+                 renew_service_id: int = 0) -> Dict[str, Any]:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
@@ -812,11 +814,12 @@ def create_order(agent_id: int, telegram_id: int, volume_gb: float, days: int, p
     cur.execute(
         "UPDATE customer_orders SET user_id=?, telegram_id=?, username=?, full_name=?, "
         "created_at=?, volume_gb=?, days=?, price=?, plan_title=?, server_location=?, "
-        "server_id=?, plan_id=?, wholesale_price=?, status='pending' "
+        "server_id=?, plan_id=?, wholesale_price=?, renew_service_id=?, status='pending' "
         "WHERE agent_id=? AND order_id=?",
         (user_id, telegram_id, username, full_name, now,
          volume_gb, days, price, plan_title, server_location,
          int(server_id or 0), int(plan_id or 0), int(wholesale_price or 0),
+         int(renew_service_id or 0),
          agent_id, oid),
     )
     conn.commit()

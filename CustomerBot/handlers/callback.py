@@ -50,7 +50,7 @@ from CustomerBot.database import (
 from Shared.agent_db import (
     upsert_customer, get_customer_by_telegram_id, get_services_by_customer,
     get_service_by_id, create_service, add_service_node,
-    renew_service, renew_service_with_policy, set_service_active, calculate_wholesale_price,
+    set_service_active, calculate_wholesale_price,
     update_service, make_service_note,
 )
 from Shared.database import (
@@ -64,7 +64,7 @@ from CustomerBot.keyboards import (
     main_menu_keyboard, cancel_keyboard, location_keyboard, trial_location_keyboard,
     category_keyboard, plans_keyboard, confirm_buy_keyboard, selected_plan_keyboard,
     buy_wizard_keyboard, mixed_buy_keyboard, mixed_mode_keyboard,
-    renew_wizard_keyboard,
+    renew_wizard_keyboard, renew_payment_keyboard,
     confirm_payment_keyboard, confirm_payment_inline_keyboard,
     cancel_inline_keyboard, subscription_status_keyboard,
     replace_subscription_link_confirm_keyboard,
@@ -89,6 +89,10 @@ from CustomerBot.services import (
 from Shared.qr_utils import make_qr_image
 
 _plans_storage = None
+
+
+def _ikb(rows):
+    return InlineKeyboardMarkup(rows)
 
 
 def _active_discount_simple(settings) -> bool:
@@ -1078,6 +1082,7 @@ async def _handle_status(query, context, agent_id, user, data):
                 reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
         else:
+            context.user_data.pop(UD_BUY_PLAN_ID, None)
             dyn = _agent_dyn_settings(agent_id, server_id)
             _start_buy_wizard(context)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
@@ -1122,6 +1127,7 @@ async def _handle_renew(query, context, agent_id, user, data):
                 reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
         else:
+            context.user_data.pop(UD_BUY_PLAN_ID, None)
             dyn = _agent_dyn_settings(agent_id, server_id)
             _start_buy_wizard(context)
             gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
@@ -1193,8 +1199,9 @@ async def _handle_renew(query, context, agent_id, user, data):
             pass
 
     elif data.startswith("renew:confirm_dyn:"):
-        # تایید تمدید پویا
-        server_id = int(parts[2]) if len(parts) > 2 else 0
+        # تایید تمدید پویا → هدایت به صفحه انتخاب روش پرداخت (مثل مسیر خرید).
+        # تمدید فقط پس از تایید پرداخت توسط نماینده انجام می‌شود.
+        server_id_cb = int(parts[2]) if len(parts) > 2 else 0
         service_id = int(context.user_data.get("renew_target_service_id") or 0)
         if not service_id:
             await msg.reply_text("❌ سرویس مورد نظر برای تمدید پیدا نشد.", reply_markup=main_menu_keyboard())
@@ -1203,26 +1210,35 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not svc:
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
-        dyn = _agent_dyn_settings(agent_id, server_id)
-        gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)))
-        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)))
-        days = months * 30
-        extra_gb = float(gb)
-        vol_mode, time_mode = _renew_admin_modes()
-        ok = await asyncio.to_thread(renew_service_with_policy, service_id, days, extra_gb, vol_mode, time_mode)
-        context.user_data.pop("renew_target_service_id", None)
-        context.user_data.pop(UD_BUY_GB, None)
-        context.user_data.pop(UD_BUY_MONTHS, None)
-        if not ok:
-            await msg.reply_text("❌ تمدید اشتراک انجام نشد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+        if _wizard_expired(context):
+            _reset_buy_wizard(context)
+            await msg.edit_text(
+                "⏳ نشست تمدید منقضی شده است. لطفاً تمدید را از ابتدا شروع کنید.",
+                reply_markup=_ikb([[InlineKeyboardButton("🔙 بازگشت", callback_data=f"status:menu:{service_id}")]]),
+            )
             return
-        try:
-            updated_svc = get_service_by_id(service_id) or svc
-            renew_price, _ = _calc_dynamic_price(gb, months, dyn)
-            await _send_subscription_report_to_agent(agent_id, user.id, updated_svc, "renew", int(renew_price or 0))
-        except Exception:
-            pass
-        await _show_subscription_status(msg, agent_id, service_id)
+        server_id = int(svc.get("server_id") or 0) or server_id_cb
+        dyn = _agent_dyn_settings(agent_id, server_id)
+        gb = int(context.user_data.get(UD_BUY_GB, safe_float(dyn.get("min_gb", 1), 1.0)) or 0)
+        months = int(context.user_data.get(UD_BUY_MONTHS, safe_int(dyn.get("min_month", 1), 1)) or 0)
+        gb = max(gb, int(safe_float(dyn.get("min_gb", 1), 1.0)))
+        min_month, max_month, _ = _dyn_month_limits(dyn)
+        months = _clamp_months(months, min_month, max_month)
+        days = months * 30
+        price, _ = _calc_dynamic_price(gb, months, dyn)
+        context.user_data[UD_BUY_SERVER_ID] = server_id
+        context.user_data[UD_BUY_GB] = gb
+        context.user_data[UD_BUY_MONTHS] = months
+        context.user_data.pop(UD_BUY_PLAN_ID, None)
+        context.user_data.pop(UD_WIZARD_START_TS, None)
+        await msg.edit_text(
+            f"📄 اطلاعات بسته تمدید\n\n"
+            f"📊 حجم: {gb:g} گیگ\n"
+            f"⏳ زمان: {days} روز\n"
+            f"💰 قیمت: {price:,} تومان\n\n"
+            "💳 لطفاً روش پرداخت را انتخاب کنید:",
+            reply_markup=renew_payment_keyboard(service_id, server_id, int(gb), days, price),
+        )
 
     elif data.startswith("renew:plan:"):
         plan_id = int(parts[3]) if len(parts) > 3 else 0
@@ -1238,22 +1254,121 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not plan:
             await msg.reply_text("❌ پلن انتخابی نامعتبر است.", reply_markup=main_menu_keyboard())
             return
-        extra_days = int(plan.get("days") or 0)
-        if extra_days <= 0:
-            extra_days = 30
-        extra_gb = float(plan.get("gb") or 0)
-        vol_mode, time_mode = _renew_admin_modes()
-        ok = await asyncio.to_thread(renew_service_with_policy, service_id, extra_days, extra_gb, vol_mode, time_mode)
-        context.user_data.pop("renew_target_service_id", None)
-        if not ok:
-            await msg.reply_text("❌ تمدید اشتراک انجام نشد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+        price = safe_int(plan.get("price", 0))
+        gb = int(safe_float(plan.get("gb", 0)))
+        days = safe_int(plan.get("days", 0))
+        if days <= 0:
+            days = 30
+        server_id = int(svc.get("server_id") or 0)
+        context.user_data[UD_BUY_SERVER_ID] = server_id
+        context.user_data[UD_BUY_PLAN_ID] = plan_id
+        context.user_data[UD_BUY_GB] = gb
+        context.user_data[UD_BUY_MONTHS] = max(1, days // 30)
+        context.user_data.pop(UD_WIZARD_START_TS, None)
+        await msg.edit_text(
+            f"📄 اطلاعات بسته تمدید\n\n"
+            f"📊 حجم: {gb:g} گیگ\n"
+            f"⏳ زمان: {days} روز\n"
+            f"💰 قیمت: {price:,} تومان\n\n"
+            "💳 لطفاً روش پرداخت را انتخاب کنید:",
+            reply_markup=renew_payment_keyboard(service_id, server_id, gb, days, price),
+        )
+
+    elif data.startswith("renew:pay_direct:"):
+        # پرداخت تمدید — مطابق مسیر خرید: ساخت سفارش + رسید کارت به کارت.
+        service_id = int(parts[2]) if len(parts) > 2 else 0
+        server_id = int(parts[3]) if len(parts) > 3 else 0
+        gb = int(parts[4]) if len(parts) > 4 else 0
+        days = int(parts[5]) if len(parts) > 5 else 0
+        price = int(parts[6]) if len(parts) > 6 else 0
+        svc = get_service_by_id(service_id)
+        if not svc:
+            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
-        try:
-            updated_svc = get_service_by_id(service_id) or svc
-            await _send_subscription_report_to_agent(agent_id, user.id, updated_svc, "renew", int(plan.get("price") or 0))
-        except Exception:
-            pass
-        await _show_subscription_status(msg, agent_id, service_id)
+        # بررسی مالکیت سرویس (ضد دستکاری callback data)
+        cust = get_customer_by_telegram_id(agent_id, user.id)
+        if not cust or int(svc.get("customer_id") or 0) != int(cust.get("id") or 0):
+            await msg.reply_text("❌ این سرویس متعلق به شما نیست.", reply_markup=main_menu_keyboard())
+            return
+        # قیمت نمایشی سفارش همیشه سمت سرور دوباره محاسبه می‌شود —
+        # ضد دستکاری callback data (قیمت جعلی می‌تواند نماینده را در تایید رسید گول بزند)
+        recomputed_price = None
+        plan_id_cached = int(context.user_data.get(UD_BUY_PLAN_ID, 0) or 0)
+        if plan_id_cached > 0:
+            cached_plan = get_fixed_plan(agent_id, plan_id_cached)
+            if cached_plan and int(float(cached_plan.get("gb") or 0)) == gb and int(cached_plan.get("days") or 0) == days:
+                recomputed_price = safe_int(cached_plan.get("price", 0))
+        if recomputed_price is None and gb > 0 and days > 0 and days % 30 == 0:
+            dyn_settings_renew = _agent_dyn_settings(agent_id, int(svc.get("server_id") or 0) or server_id)
+            recomputed_price, _off = _calc_dynamic_price(gb, days // 30, dyn_settings_renew)
+        if recomputed_price is None or recomputed_price <= 0:
+            try:
+                await query.answer("❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً تمدید را از نو انجام دهید.", show_alert=True)
+            except Exception:
+                pass
+            await _back_to_main_menu(msg, "❌ اطلاعات این دکمه منقضی است. لطفاً تمدید را از نو انجام دهید.")
+            return
+        price = int(recomputed_price)
+        card = _random_active_agent_card(agent_id)
+        if not card.get("number"):
+            try:
+                await query.answer("❌ کارتی برای پرداخت ثبت نشده است", show_alert=True)
+            except Exception:
+                pass
+            await _back_to_main_menu(msg, "❌ کارتی برای پرداخت ثبت نشده است.")
+            return
+        wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
+        order = create_order(
+            agent_id=agent_id,
+            telegram_id=user.id,
+            volume_gb=float(gb),
+            days=days,
+            price=price,
+            plan_title=f"تمدید بسته {gb}GB-{days}D",
+            server_location=(get_server_by_id(server_id) or {}).get("title", ""),
+            username=user.username or "",
+            full_name=user.full_name or "",
+            server_id=server_id,
+            plan_id=int(context.user_data.get(UD_BUY_PLAN_ID, 0) or 0),
+            wholesale_price=wholesale_price,
+            renew_service_id=service_id,
+        )
+        context.user_data[UD_BUY_SERVER_ID] = server_id
+        context.user_data[UD_BUY_GB] = gb
+        context.user_data[UD_BUY_MONTHS] = max(1, days // 30) if days > 0 else 1
+        context.user_data["last_order_id"] = order.get("order_id", 0)
+        context.user_data[UD_STATE] = STATE_RECEIPT_WAITING
+        ps = get_payment_settings(agent_id)
+        tx_settings = get_tx_plans_settings(agent_id)
+        tx_marker = 0
+        pay_price = price
+        if bool((tx_settings or {}).get("random_tx_spec")):
+            tx_marker = random.randint(101, 997)
+            if tx_marker % 10 == 0:
+                tx_marker += 1
+            pay_price = price + tx_marker
+            context.user_data["pending_tx_marker"] = tx_marker
+        else:
+            context.user_data.pop("pending_tx_marker", None)
+        context.user_data["pending_pay_price"] = pay_price
+        card_text = ps.get("card_to_card_text", "0")
+        if card_text == "0":
+            rial_price = pay_price * 10
+            card_text = (
+                f"💰 لطفا دقیقا مبلغ: `{rial_price}` ریال\n"
+                f"💰 معادل: `{pay_price}` تومان\n"
+                f"💳 به شماره کارت: `{card.get('number', '?')}`\n"
+                f"👤 به نام: {card.get('owner', '?')}\n"
+                f"❗️ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.\n\n"
+                f"⚡️ پس از تایید پرداخت، تمدید اشتراک شما به‌صورت خودکار انجام می‌شود."
+            )
+            if tx_marker > 0:
+                card_text = (
+                    f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker} تومان\n\n"
+                    f"{card_text}"
+                )
+        context.user_data.pop("renew_target_service_id", None)
+        await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
 
     elif data.startswith(CB_RENEW_BACK):
         context.user_data.pop("renew_target_service_id", None)
@@ -1283,6 +1398,7 @@ async def _handle_pay(query, context, agent_id, user, data):
         context.user_data.pop("pending_receipt_meta", None)
         context.user_data.pop("pending_amount", None)
         context.user_data.pop("pending_order_id", None)
+        context.user_data.pop("renew_target_service_id", None)
         await _back_to_main_menu(msg, "❌ پرداخت لغو شد.")
 
 
@@ -1324,24 +1440,6 @@ async def _handle_trial(query, context, agent_id, user, data):
 
     elif data == CB_TRIAL_BACK:
         await _back_to_main_menu(msg, "🔙 بازگشت")
-
-
-async def _send_subscription_report_to_agent(agent_id: int, user_tg_id: int, svc, action: str, amount: int) -> None:
-    """ارسال گزارش ایجاد/تمدید اشتراک به ربات نماینده."""
-    try:
-        import os
-        from telegram import Bot
-        from Shared.subscription_reports import send_subscription_report
-        from Shared.agent_db import get_agent_by_id
-        agent = get_agent_by_id(agent_id)
-        agent_tg_id = int((agent or {}).get("telegram_id") or 0)
-        token = os.getenv("AGENT_BOT_TOKEN", "").strip()
-        if not agent_tg_id or not token:
-            return
-        bot = Bot(token=token)
-        await send_subscription_report(bot, agent_tg_id, agent_id, user_tg_id, svc, action, amount)
-    except Exception:
-        return
 
 
 async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer_id: int, service_name: str, gb: float, days: int, server_title: str) -> None:
@@ -1508,13 +1606,29 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
             pass
 
 
-def _renew_admin_modes():
-    """بازگرداندن الگوی تمدید تعریف‌شده توسط ادمین: (حجم add/reset، زمان add/reset)."""
+def _random_active_agent_card(agent_id: int) -> dict:
+    """انتخاب تصادفی یک کارت فعال از کارت‌های نماینده برای پرداخت کارت به کارت."""
+    from AgentBot.database import get_cards as get_agent_cards
     try:
-        from Shared import userbot_db
-        return userbot_db.get_renew_modes()
+        agent_cards = get_agent_cards(agent_id) or []
     except Exception:
-        return "add", "add"
+        agent_cards = []
+
+    def _card_is_active(c):
+        try:
+            return int(c.get("is_active", 1) or 1) != 0
+        except (TypeError, ValueError):
+            return True
+
+    active_cards = [c for c in agent_cards if _card_is_active(c)]
+    if not active_cards:
+        return {}
+    chosen = random.choice(active_cards)
+    return {
+        "number": str(chosen.get("card_number") or "").strip(),
+        "owner": str(chosen.get("owner_name") or "").strip(),
+        "bank": str(chosen.get("bank_name") or "").strip(),
+    }
 
 
 async def _handle_buy(query, context, agent_id, user, data):
@@ -1754,32 +1868,14 @@ async def _handle_buy(query, context, agent_id, user, data):
             await _back_to_main_menu(msg, "❌ اطلاعات این دکمه منقضی است. لطفاً خرید را از نو انجام دهید.")
             return
         price = int(recomputed_price)
-        from AgentBot.database import get_cards as get_agent_cards
-        try:
-            agent_cards = get_agent_cards(agent_id) or []
-        except Exception:
-            agent_cards = []
-
-        def _card_is_active(c):
-            try:
-                return int(c.get("is_active", 1) or 1) != 0
-            except (TypeError, ValueError):
-                return True
-
-        active_cards = [c for c in agent_cards if _card_is_active(c)]
-        if not active_cards:
+        card = _random_active_agent_card(agent_id)
+        if not card.get("number"):
             try:
                 await query.answer("❌ کارتی برای پرداخت ثبت نشده است", show_alert=True)
             except Exception:
                 pass
             await _back_to_main_menu(msg, "❌ کارتی برای پرداخت ثبت نشده است.")
             return
-        chosen = random.choice(active_cards)
-        card = {
-            "number": str(chosen.get("card_number") or "").strip(),
-            "owner": str(chosen.get("owner_name") or "").strip(),
-            "bank": str(chosen.get("bank_name") or "").strip(),
-        }
         wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
         order = create_order(
             agent_id=agent_id,
