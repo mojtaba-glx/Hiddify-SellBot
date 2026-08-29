@@ -3,7 +3,6 @@ package com.hiddifysellbot.smsverifier;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.NotificationManager;
 import android.content.DialogInterface;
 import android.app.role.RoleManager;
 import android.content.Intent;
@@ -1908,7 +1907,18 @@ public class MainActivity extends Activity {
 
     private boolean isNotificationListenerEnabled() {
         try {
-            return NotificationManager.getEnabledListenerPackages(this).contains(getPackageName());
+            // معادل NotificationManagerCompat.getEnabledListenerPackages بدون نیاز به androidx
+            String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+            if (flat == null || flat.trim().isEmpty()) {
+                return false;
+            }
+            String pkg = getPackageName();
+            for (String entry : flat.split(":")) {
+                if (entry != null && entry.contains(pkg)) {
+                    return true;
+                }
+            }
+            return false;
         } catch (Exception e) {
             return false;
         }
