@@ -123,6 +123,7 @@ sudo ./install.sh ssl your-domain.com admin@example.com
 ## 🎛 دستورهای مدیریت
 
 ```bash
+cd ~/Hiddify-SellBot
 sudo ./install.sh panel        # منوی مدیریت (پیشنهادی)
 sudo ./install.sh status       # وضعیت ربات‌ها
 sudo ./install.sh restart      # ری‌استارت
@@ -135,6 +136,7 @@ sudo ./install.sh uninstall    # حذف کامل ربات (سورس می‌ما�
 اجراهای دستی:
 
 ```bash
+cd ~/Hiddify-SellBot
 python -m AdminBot.main     # ربات ادمین
 python -m UserBot.main      # ربات کاربران
 python -m AgentBot.main     # ربات نمایندگی
