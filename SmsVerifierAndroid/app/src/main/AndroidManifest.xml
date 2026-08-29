@@ -57,6 +57,27 @@
             </intent-filter>
         </receiver>
 
+        <!-- سرویس الزامی برای کاندید شدن به‌عنوان اپ پیش‌فرض پیامک (ROLE_SMS).
+             بدون این سرویس، اپ در تنظیمات «برنامه پیامک پیش‌فرض» اندروید ۱۲/۱۳
+             نمایش داده نمی‌شود و دیالوگ فعال‌سازی RoleManager خطا می‌دهد. -->
+        <service
+            android:name=".SmsConfigService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telephony.action.CONFIGURATION" />
+            </intent-filter>
+        </service>
+
+        <!-- گیرنده نتیجه ارسال SMS (الزام تکمیلی ROLE_SMS) -->
+        <receiver
+            android:name=".SmsSentReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_SENT" />
+                <action android:name="android.provider.Telephony.SMS_DELIVERED" />
+            </intent-filter>
+        </receiver>
+
         <!-- الزامی برای کاندید شدن به‌عنوان اپ پیش‌فرض پیامک (ROLE_SMS) -->
         <receiver
             android:name=".WapPushReceiver"

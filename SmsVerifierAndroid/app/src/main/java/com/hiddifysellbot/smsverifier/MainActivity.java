@@ -98,6 +98,8 @@ public class MainActivity extends Activity {
     private LinearLayout bankSmsListView;
     private TextView historyView;
     private TextView smsDefaultStatusView;
+    private LinearLayout transactionSmsWarningCard;
+    private TextView smsTxnWarningView;
     private TextView clockView;
     private final Handler clockHandler = new Handler(Looper.getMainLooper());
     private final Runnable clockTicker = new Runnable() {
@@ -155,6 +157,7 @@ public class MainActivity extends Activity {
         super.onResume();
         maybeAskAppPassword();
         refreshHistory();
+        refreshTransactionSmsWarning();
         updateClockView();
         clockHandler.removeCallbacks(clockTicker);
         clockHandler.postDelayed(clockTicker, 1000L);
@@ -193,6 +196,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_DEFAULT_SMS) {
             refreshSmsRoleStatus();
+            refreshTransactionSmsWarning();
             Toast.makeText(
                     this,
                     isDefaultSmsApp()
@@ -888,50 +892,54 @@ public class MainActivity extends Activity {
             }
         });
 
-        LinearLayout smsRoleCard = addCard(securityContent);
-        addSectionTitle(smsRoleCard, "📨 دسترسی کامل پیامک (اندروید 12/13)");
-        TextView smsRoleHelp = new TextView(this);
-        smsRoleHelp.setText("از اندروید ۱۲/۱۳، سیستم‌عامل اجازه خواندن صندوق پیامک را فقط به «اپ پیش‌فرض پیامک» می‌دهد.\nروی MIUI، پیامک‌های بانکی/اعلانی یک مجوز جداگانه دارند که باید با دکمه «مجوز پیامک اعلانی MIUI» از امنیت گوشی فعال شود؛ در آن صفحه، مجوز «پیامک» را روی «همیشه اجازه بده» بگذار.");
-        smsRoleHelp.setTextColor(mutedColor);
-        smsRoleHelp.setTextSize(12);
-        smsRoleHelp.setLineSpacing(0, 1.15f);
-        smsRoleHelp.setPadding(0, 0, 0, dp(8));
-        smsRoleCard.addView(smsRoleHelp, matchWrap());
+        // کارت «دسترسی کامل پیامک» فقط برای اندروید 12 به بالا معنی دارد؛
+        // روی اندروید 11 به پایین این بخش نمایش داده نمی‌شود
+        if (Build.VERSION.SDK_INT >= 31) {
+            LinearLayout smsRoleCard = addCard(securityContent);
+            addSectionTitle(smsRoleCard, "📨 دسترسی کامل پیامک (اندروید 12/13)");
+            TextView smsRoleHelp = new TextView(this);
+            smsRoleHelp.setText("از اندروید ۱۲/۱۳، سیستم‌عامل اجازه خواندن صندوق پیامک را فقط به «اپ پیش‌فرض پیامک» می‌دهد.\nروی MIUI، پیامک‌های بانکی/اعلانی یک مجوز جداگانه دارند که باید با دکمه «مجوز پیامک اعلانی MIUI» از امنیت گوشی فعال شود؛ در آن صفحه، مجوز «پیامک» را روی «همیشه اجازه بده» بگذار.");
+            smsRoleHelp.setTextColor(mutedColor);
+            smsRoleHelp.setTextSize(12);
+            smsRoleHelp.setLineSpacing(0, 1.15f);
+            smsRoleHelp.setPadding(0, 0, 0, dp(8));
+            smsRoleCard.addView(smsRoleHelp, matchWrap());
 
-        smsDefaultStatusView = new TextView(this);
-        smsDefaultStatusView.setTextSize(12);
-        smsDefaultStatusView.setTextColor(textColor);
-        smsDefaultStatusView.setPadding(dp(10), dp(10), dp(10), dp(10));
-        smsRoleCard.addView(smsDefaultStatusView, matchWrap());
+            smsDefaultStatusView = new TextView(this);
+            smsDefaultStatusView.setTextSize(12);
+            smsDefaultStatusView.setTextColor(textColor);
+            smsDefaultStatusView.setPadding(dp(10), dp(10), dp(10), dp(10));
+            smsRoleCard.addView(smsDefaultStatusView, matchWrap());
 
-        addButtonRow(smsRoleCard,
-                new String[]{"📨 فعال‌سازی پیش‌فرض پیامک", "🔄 بررسی وضعیت"},
-                new View.OnClickListener[]{
-                        new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                openSmsDefaultRole();
+            addButtonRow(smsRoleCard,
+                    new String[]{"📨 فعال‌سازی پیش‌فرض پیامک", "🔄 بررسی وضعیت"},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    openSmsDefaultRole();
+                                }
+                            },
+                            new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    refreshSmsRoleStatus();
+                                }
                             }
-                        },
-                        new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                refreshSmsRoleStatus();
-                            }
-                        }
-                });
-        refreshSmsRoleStatus();
+                    });
+            refreshSmsRoleStatus();
 
-        addButtonRow(smsRoleCard,
-                new String[]{"🔧 مجوز پیامک اعلانی MIUI"},
-                new View.OnClickListener[]{
-                        new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                openMiuiSmsPermissionSettings();
+            addButtonRow(smsRoleCard,
+                    new String[]{"🔧 مجوز پیامک اعلانی MIUI"},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    openMiuiSmsPermissionSettings();
+                                }
                             }
-                        }
-                });
+                    });
+        }
 
         addButtonRow(securityCard,
                 new String[]{"🤖 تنظیمات تلگرام", "📊 گزارش‌ها"},
@@ -1068,6 +1076,36 @@ public class MainActivity extends Activity {
         hint.setLineSpacing(0, 1.15f);
         hint.setPadding(0, dp(6), 0, dp(10));
         smsCard.addView(hint, matchWrap());
+
+        // هشدار «دسترسی کامل پیامک» — فقط برای اندروید 12 به بالا (SDK 31+) نمایش داده می‌شود.
+        // روی اندروید 11 به پایین، خواندن پیامک بدون اپ پیش‌فرض هم کار می‌کند و هشدار لازم نیست.
+        transactionSmsWarningCard = new LinearLayout(this);
+        transactionSmsWarningCard.setOrientation(LinearLayout.VERTICAL);
+        smsCard.addView(transactionSmsWarningCard, matchWrap());
+
+        smsTxnWarningView = new TextView(this);
+        smsTxnWarningView.setTextSize(13);
+        smsTxnWarningView.setLineSpacing(0, 1.18f);
+        smsTxnWarningView.setPadding(dp(12), dp(12), dp(12), dp(12));
+        transactionSmsWarningCard.addView(smsTxnWarningView, matchWrap());
+
+        addButtonRow(transactionSmsWarningCard,
+                new String[]{"🚀 فعال‌سازی", "🗺️ راهنمای دستی"},
+                new View.OnClickListener[]{
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                openSmsDefaultRole();
+                            }
+                        },
+                        new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                openSmsDefaultFallbackSettings();
+                            }
+                        }
+                });
+        refreshTransactionSmsWarning();
 
         addButtonRow(smsCard,
                 new String[]{"⬅️ داشبورد", "🔎 بررسی پیامک‌ها"},
@@ -1528,6 +1566,24 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void refreshTransactionSmsWarning() {
+        if (transactionSmsWarningCard == null || smsTxnWarningView == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT < 31) {
+            transactionSmsWarningCard.setVisibility(View.GONE);
+            return;
+        }
+        transactionSmsWarningCard.setVisibility(View.VISIBLE);
+        if (isDefaultSmsApp()) {
+            smsTxnWarningView.setText("✅ این اپ اپ پیش‌فرض پیامک است.\nتشخیص خودکار پیامک‌های بانکی در اندروید ۱۲/۱۳ فعال است.");
+            styleGradientRounded(smsTxnWarningView, softGreenColor, inputColor, greenColor, dp(18));
+        } else {
+            smsTxnWarningView.setText("⚠️ در اندروید 12/13 برای خواندن و تشخیص خودکار پیامک‌های بانکی، این اپ باید «اپ پیش‌فرض پیامک» باشد (مثل تلفن که فقط برای کار وصل است).\nدکمه «فعال‌سازی» را بزنید و در پنجره سیستم‌عامل، این اپ را انتخاب کنید.");
+            styleGradientRounded(smsTxnWarningView, softGoldColor, inputColor, goldColor, dp(18));
+        }
+    }
+
     private void showSmsDefaultDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("📨 دسترسی کامل پیامک")
@@ -1555,7 +1611,9 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "اجازه READ_SMS را بده و دوباره دکمه بررسی پیامک‌ها را بزن", Toast.LENGTH_LONG).show();
             return;
         }
-        if (Build.VERSION.SDK_INT >= 29 && !isDefaultSmsApp()) {
+        // فقط اندروید 12 (SDK 31) به بالا نیاز دارد اپ، پیش‌فرض پیامک شود؛
+        // روی اندروید 11 به پایین با مجوز READ_SMS صندوق خوانده می‌شود
+        if (Build.VERSION.SDK_INT >= 31 && !isDefaultSmsApp()) {
             showSmsDefaultDialog();
             return;
         }
