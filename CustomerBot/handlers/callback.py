@@ -1734,6 +1734,26 @@ async def _handle_buy(query, context, agent_id, user, data):
         gb = int(parts[3]) if len(parts) > 3 else 0
         days = int(parts[4]) if len(parts) > 4 else 0
         price = int(parts[5]) if len(parts) > 5 else 0
+        # قیمت نمایشی سفارش همیشه سمت سرور دوباره محاسبه می‌شود —
+        # ضد دستکاری callback data (شارژ واقعی از wholesale سمت سرور است ولی
+        # قیمت جعلی می‌تواند نماینده را در تایید رسید گول بزند)
+        recomputed_price = None
+        plan_id_cached = int(context.user_data.get(UD_BUY_PLAN_ID, 0) or 0)
+        if plan_id_cached > 0:
+            cached_plan = get_fixed_plan(agent_id, plan_id_cached)
+            if cached_plan and int(float(cached_plan.get("gb") or 0)) == gb and int(cached_plan.get("days") or 0) == days:
+                recomputed_price = safe_int(cached_plan.get("price", 0))
+        if recomputed_price is None and gb > 0 and days > 0 and days % 30 == 0:
+            dyn_settings_buy = _agent_dyn_settings(agent_id, server_id)
+            recomputed_price, _off = _calc_dynamic_price(gb, days // 30, dyn_settings_buy)
+        if recomputed_price is None or recomputed_price <= 0:
+            try:
+                await query.answer("❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً خرید را از نو انجام دهید.", show_alert=True)
+            except Exception:
+                pass
+            await _back_to_main_menu(msg, "❌ اطلاعات این دکمه منقضی است. لطفاً خرید را از نو انجام دهید.")
+            return
+        price = int(recomputed_price)
         from AgentBot.database import get_cards as get_agent_cards
         try:
             agent_cards = get_agent_cards(agent_id) or []

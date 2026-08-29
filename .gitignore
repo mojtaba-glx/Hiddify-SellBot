@@ -37,3 +37,7 @@ SmsVerifierAndroid/*.jks
 SmsVerifierAndroid/*.keystore
 *.apk
 *.aab
+*.db-wal
+*.db-shm
+Shared/*.db-wal
+Shared/*.db-shm

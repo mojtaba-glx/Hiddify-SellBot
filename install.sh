@@ -92,9 +92,9 @@ ensure_dirs() {
   touch "$ADMIN_LOG_FILE" "$USER_LOG_FILE" "$AGENT_LOG_FILE" "$CUSTOMER_LOG_FILE"
   # دسترسی سخت‌گیرانه روی داده‌های حساس (توکن‌ها، دیتابیس، بکاپ‌ها)
   chmod 600 "$ENV_FILE" 2>/dev/null || true
-  chmod 600 "$BASE_DIR"/Shared/*.db "$BASE_DIR"/Shared/*.db-wal "$BASE_DIR"/Shared/*.db-shm 2>/dev/null || true
-  chmod 700 "$BASE_DIR/backups" 2>/dev/null || true
-  chmod 600 "$BASE_DIR"/backups/* 2>/dev/null || true
+  chmod 600 "$ROOT_DIR"/Shared/*.db "$ROOT_DIR"/Shared/*.db-wal "$ROOT_DIR"/Shared/*.db-shm 2>/dev/null || true
+  chmod 700 "$ROOT_DIR/backups" 2>/dev/null || true
+  chmod 600 "$ROOT_DIR"/backups/* 2>/dev/null || true
 }
 
 load_env_file() {
