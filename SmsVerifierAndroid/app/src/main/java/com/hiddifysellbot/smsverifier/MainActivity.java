@@ -1704,7 +1704,7 @@ public class MainActivity extends Activity {
             Intent intent = new Intent(action);
             intent.setPackage(getPackageName());
             PackageManager pm = getPackageManager();
-            List<ResolveInfo> infos = receiver ? pm.queryIntentReceivers(intent, 0) : pm.queryIntentServices(intent, 0);
+            List<ResolveInfo> infos = receiver ? pm.queryBroadcastReceivers(intent, 0) : pm.queryIntentServices(intent, 0);
             boolean found = false;
             if (infos != null) {
                 for (ResolveInfo info : infos) {
