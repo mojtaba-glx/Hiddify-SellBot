@@ -110,6 +110,9 @@ public final class HistoryStore {
                 || raw.contains("📨 پیامک به ربات ارسال شد")
                 || raw.contains("📨 به ربات ارسال شد")
                 || raw.trim().toUpperCase(Locale.US).startsWith("FAILED")
+                || text.contains("ambiguous")
+                || text.contains("sms_reused")
+                || text.contains("approve_failed")
                 || text.contains("retry\":true");
     }
 
