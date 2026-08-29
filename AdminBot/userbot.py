@@ -410,17 +410,36 @@ def _build_payment_approved_report_text(pay: Dict[str, Any]) -> str:
     amount = _format_toman(pay.get("amount") or 0)
     method = str(pay.get("method") or "card")
     receipt_meta = _parse_receipt_meta(str(pay.get("receipt_image") or ""))
-    is_direct_buy = str(receipt_meta.get("pay_flow") or "").strip().lower() == "direct_buy"
+    pay_flow = str(receipt_meta.get("pay_flow") or "").strip().lower()
+    is_direct_buy = pay_flow == "direct_buy"
     if method == "card" and is_direct_buy:
         method_title = "کارت به کارت (خرید مستقیم)"
     else:
         method_title = "کارت به کارت" if method == "card" else method
-    return (
+    text = (
         "💸گزارش تایید پرداخت🕊\n\n"
         f"🔖شیوه پرداخت:{method_title}\n"
         f"🔑شناسه تراکنش:{tx_code}\n"
         f"💰مبلغ پرداخت:{amount} تومان"
     )
+    # گزارش شارژ کیف پول: موجودی جدید کاربر بعد از تایید نمایش داده می‌شود
+    if pay_flow == "wallet_topup":
+        balance = 0
+        try:
+            u = None
+            tg_id = int(pay.get("telegram_id") or 0)
+            if tg_id > 0:
+                u = userbot_db.get_user_by_telegram_id(tg_id)
+            if not u:
+                u = userbot_db.get_user_by_id(int(pay.get("user_id") or 0))
+            balance = int((u or {}).get("wallet_balance") or 0)
+        except Exception:
+            balance = 0
+        text += (
+            "\n\n✅ کیف پول کاربر شارژ شد."
+            f"\n💼 مانده کیف پول کاربر: {_format_toman(balance)} تومان"
+        )
+    return text
 
 
 def _ticket_status_title(status: str) -> str:
