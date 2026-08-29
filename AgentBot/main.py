@@ -30,7 +30,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 async def _sms_webhook_queue_worker(application) -> None:
-    """صف تایید خودکار وب‌هوک SMS بانکی را هر ۲۰ ثانیه پردازش می‌کند.
+    """صف تایید خودکار وب‌هوک SMS بانکی را هر ۵ ثانیه پردازش می‌کند.
 
     وب‌هوک پرداخت‌های تطبیق‌یافته نمایندگی‌ها را در customer_bot.db صف می‌کند؛
     ساخت سرویس و تحویل باید در همین پروسه انجام شود (توکن ربات مشتری اینجاست).
@@ -42,7 +42,7 @@ async def _sms_webhook_queue_worker(application) -> None:
             await process_sms_webhook_queue(application, limit=5)
         except Exception as e:
             logger.warning("sms webhook queue worker error: %s", e)
-        await asyncio.sleep(20)
+        await asyncio.sleep(5)
 
 
 async def _post_init(application) -> None:
