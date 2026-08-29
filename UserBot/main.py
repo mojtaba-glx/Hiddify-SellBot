@@ -3612,6 +3612,8 @@ def _build_subscription_created_caption(
     amount: Optional[int] = None,
     is_trial: bool = False,
     is_renew: bool = False,
+    payment_method: str = "",
+    wallet_balance_after: Optional[int] = None,
 ) -> str:
     if is_trial:
         title = "📄 گزارش ایجاد اشتراک تستی"
@@ -3629,6 +3631,10 @@ def _build_subscription_created_caption(
     ]
     if amount is not None:
         lines.append(f"💰مبلغ پرداختی: {int(amount):,} تومان")
+    if payment_method == "wallet":
+        lines.append("💳پرداخت از کیف پول کاربر — مبلغ کسر شد")
+        if wallet_balance_after is not None:
+            lines.append(f"💼مانده کیف پول کاربر: {int(wallet_balance_after):,} تومان")
     lines.append(f"🔑شناسه اشتراک:{service_code}")
     return "\n".join(lines)
 
@@ -5478,6 +5484,12 @@ async def _process_wallet_purchase(
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")]
             ])
+            wallet_balance_after: Optional[int] = None
+            if wallet_charged:
+                try:
+                    wallet_balance_after = int((userbot_db.get_user_by_id(internal_user_id) or {}).get("wallet_balance") or 0)
+                except Exception:
+                    wallet_balance_after = None
             await admin_bot.send_message(
                 chat_id=ADMIN_ID,
                 text=_build_subscription_created_caption(
@@ -5488,6 +5500,8 @@ async def _process_wallet_purchase(
                     amount=amount,
                     service_code=service_code,
                     is_renew=is_renew_flow,
+                    payment_method="wallet" if wallet_charged else "card",
+                    wallet_balance_after=wallet_balance_after,
                 ),
                 reply_markup=kb,
             )
