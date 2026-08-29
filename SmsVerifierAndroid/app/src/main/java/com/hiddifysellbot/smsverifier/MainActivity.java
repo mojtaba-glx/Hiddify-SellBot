@@ -8,6 +8,7 @@ import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageInfo;
 import android.content.pm.ComponentInfo;
 import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
@@ -1749,11 +1750,20 @@ public class MainActivity extends Activity {
                     if (info == null) {
                         continue;
                     }
-                    ComponentInfo ci = info.activityInfo != null ? info.activityInfo : info.serviceInfo;
-                    if (ci == null) {
+                    // برای گیرنده‌ها activityInfo و برای سرویس‌ها serviceInfo مقدار دارد؛
+                    // فیلد permission هم روی ActivityInfo و ServiceInfo جداگانه تعریف شده است
+                    String componentPermission;
+                    ComponentInfo ci;
+                    if (info.activityInfo != null) {
+                        ci = info.activityInfo;
+                        componentPermission = info.activityInfo.permission;
+                    } else if (info.serviceInfo != null) {
+                        ci = info.serviceInfo;
+                        componentPermission = info.serviceInfo.permission;
+                    } else {
                         continue;
                     }
-                    if (requiredPermission == null || requiredPermission.equals(ci.permission)) {
+                    if (requiredPermission == null || requiredPermission.equals(componentPermission)) {
                         state = COMPONENT_MATCHED;
                         break;
                     }
