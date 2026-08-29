@@ -4825,6 +4825,26 @@ async def _send_buy_flow_for_server(
         )
         return
 
+    # قوانین تمدید — گیت ورود به ویزارد (ضد پرش مراحل)
+    if is_renew:
+        renew_target_id = int(context.user_data.get(f"renew_target_{user_id}") or 0)
+        renew_svc_gate = userbot_db.get_service_by_id(renew_target_id) if renew_target_id > 0 else None
+        if not renew_svc_gate:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ سرویس انتخاب‌شده برای تمدید یافت نشد.",
+                reply_markup=_main_menu_keyboard(),
+            )
+            return
+        if not _service_is_renewable(renew_svc_gate):
+            context.user_data.pop(f"renew_target_{user_id}", None)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=_renew_not_allowed_text(),
+                reply_markup=_main_menu_keyboard(),
+            )
+            return
+
     display_mode = _resolve_plan_display_mode(server_block)
     title = "تمدید اشتراک" if is_renew else "خرید اشتراک"
 
@@ -5054,6 +5074,24 @@ async def _process_wallet_purchase(
             reply_markup=_main_menu_keyboard(),
         )
         return False
+
+    # قوانین تمدید (حالت پیشرفته) — قبل از هر پرداختی بررسی می‌شود تا پولی کم و کسر نشود
+    if renew_service_id > 0:
+        renew_service_pre = userbot_db.get_service_by_id(renew_service_id)
+        if (not renew_service_pre) or int(renew_service_pre.get("user_id") or 0) != int(internal_user_id):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ سرویس انتخاب‌شده برای تمدید یافت نشد.",
+                reply_markup=_main_menu_keyboard(),
+            )
+            return False
+        if not _service_is_renewable(renew_service_pre):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=_renew_not_allowed_text(),
+                reply_markup=_main_menu_keyboard(),
+            )
+            return False
 
     if not skip_wallet_charge:
         current_user = userbot_db.get_user_by_id(internal_user_id) or {}
@@ -5999,12 +6037,16 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ اشتراک وجود ندارد.", reply_markup=_main_menu_keyboard())
             return
 
+        # قوانین تمدید (حالت پیشرفته): فقط سرویس‌های نزدیک به اتمام حجم/زمان
+        renewable_services = [s for s in visible_services if _service_is_renewable(s)]
+        if not renewable_services:
+            await update.message.reply_text(_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
+            return
+
         await update.message.reply_text(
             "👇 لطفا یکی از اشتراک‌های خود را برای تمدید انتخاب نمایید",
-reply_markup=renew_services_keyboard(visible_services),
+reply_markup=renew_services_keyboard(renewable_services),
         )
-        if not any(_service_is_renewable(s) for s in visible_services):
-            await update.message.reply_text(_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
 
     elif "کیف پول" in text:
         u_db = userbot_db.get_user_by_telegram_id(user_id)
