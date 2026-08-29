@@ -705,7 +705,8 @@ async def _send_sms_auto_approval_report(
 
     amount = int(pay.get("amount") or 0)
     tx_code = str(pay.get("tx_code") or "-")
-    customer_display = str(pay.get("full_name") or pay.get("username") or user_tg_id_of(pay))
+    user_tg_id = int(pay.get("user_id") or 0)
+    customer_display = str(pay.get("full_name") or pay.get("username") or user_tg_id)
     caption = (
         "✅ <b>پرداخت با SMS بانک تایید شد</b>\n\n"
         f"🔖 نوع: {'♻️ تمدید اشتراک' if is_renew else '🛍 خرید مستقیم'}\n"
@@ -718,24 +719,46 @@ async def _send_sms_auto_approval_report(
         f"🔖 پیگیری SMS: <code>{reference}</code>"
     )
 
+    try:
+        profile_kb = _ikb([[IButton(f"👤 {customer_display}", callback_data=f"agbot:custpay:profile:{user_tg_id}")]])
+    except Exception:
+        profile_kb = None
+
     file_id = ""
     try:
-        import json as _json
-        meta_obj = _json.loads(str(pay.get("receipt_image") or "{}"))
+        meta_obj = json.loads(str(pay.get("receipt_image") or "{}"))
         if isinstance(meta_obj, dict):
             file_id = str(meta_obj.get("file_id") or "")
     except Exception:
         file_id = ""
 
+    # file_id رسید مالِ ربات مشتری است؛ باید فایل با ربات مشتری دانلود و با
+    # ربات نماینده (context.bot) دوباره آپلود شود وگرنه ارسال عکس شکست می‌خورد
     sent = False
     if file_id:
         try:
-            await context.bot.send_photo(chat_id=agent_tg_id, photo=file_id, caption=caption[:1024], parse_mode="HTML")
-            sent = True
+            customer_token = str((get_active_customer_bot(agent_id) or {}).get("bot_token") or "").strip()
+            if customer_token:
+                from telegram import Bot as _CustomerBot
+                import io as _io
+                customer_bot = _CustomerBot(token=customer_token)
+                tg_file = await customer_bot.get_file(file_id)
+                bio = _io.BytesIO()
+                await tg_file.download_to_memory(out=bio)
+                bio.seek(0)
+                bio.name = f"payment_{pay_id}.jpg"
+                await context.bot.send_photo(
+                    chat_id=agent_tg_id,
+                    photo=bio,
+                    caption=caption[:1024],
+                    parse_mode="HTML",
+                    reply_markup=profile_kb,
+                )
+                sent = True
         except Exception as e:
             logger.warning("sms auto report photo send failed (pay=%s): %s", pay_id, e)
     if not sent:
-        await context.bot.send_message(chat_id=agent_tg_id, text=caption, parse_mode="HTML")
+        await context.bot.send_message(chat_id=agent_tg_id, text=caption, parse_mode="HTML", reply_markup=profile_kb)
 
     if svc:
         try:
@@ -744,20 +767,13 @@ async def _send_sms_auto_approval_report(
                 context.bot,
                 agent_tg_id,
                 agent_id,
-                int(pay.get("user_id") or 0),
+                user_tg_id,
                 svc,
                 "renew" if is_renew else "create",
                 amount,
             )
         except Exception as e:
             logger.warning("sms auto report: subscription report failed (pay=%s): %s", pay_id, e)
-
-
-def user_tg_id_of(pay: dict) -> int:
-    try:
-        return int(pay.get("user_id") or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:

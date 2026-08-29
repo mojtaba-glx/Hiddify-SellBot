@@ -256,8 +256,8 @@ async def _notify_agent_new_payment(
     meta: dict,
     order: Optional[dict],
     customer_user,
-) -> None:
-    """ارسال رسید مشتری به ربات نماینده همراه دکمه تایید/رد."""
+) -> Optional[int]:
+    """ارسال رسید مشتری به ربات نماینده همراه دکمه تایید/رد؛ message_id پیام را برمی‌گرداند."""
     try:
         from Shared.agent_db import get_agent_by_id, get_wallet_balance
         agent = get_agent_by_id(agent_id)
@@ -326,35 +326,14 @@ async def _notify_agent_new_payment(
             except Exception:
                 sent_message = None
         if sent_message is not None:
-            await _store_agent_pending_message_marker(agent_id, int(pay["id"]), int(sent_message.message_id))
+            return int(sent_message.message_id)
+        return None
     except Exception:
-        return
+        return None
 
 
 def _receipt_meta_has_agent_notified_marker(receipt_meta: str) -> bool:
     return "|agent_notified:1" in str(receipt_meta or "")
-
-
-async def _store_agent_pending_message_marker(agent_id: int, pay_id: int, message_id: int) -> None:
-    """message_id پیام رسید در چت نماینده را در متادیتا ذخیره می‌کند تا بعد از
-    تایید خودکار (SMS بانکی) بتوان همان پیام را از چت نماینده پاک کرد."""
-    try:
-        from CustomerBot.database import get_payment, update_payment_status
-        pay = get_payment(agent_id, pay_id)
-        if not pay:
-            return
-        meta_raw = str(pay.get("receipt_image") or "")
-        if f"agent_pending_message_id:{message_id}" in meta_raw:
-            return
-        updated_meta = _append_receipt_meta_marker(meta_raw, f"agent_pending_message_id:{message_id}")
-        update_payment_status(
-            agent_id=agent_id,
-            payment_id=pay_id,
-            status=str(pay.get("status") or "pending"),
-            receipt_image=updated_meta,
-        )
-    except Exception as e:
-        logger.warning("store agent pending message marker failed (pay=%s): %s", pay_id, e)
 
 
 def _append_receipt_meta_marker(receipt_meta: str, marker: str) -> str:
@@ -423,17 +402,22 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         order = get_order(agent_id, order_id)
 
     if pay and notify_agent:
-        await _notify_agent_new_payment(context, agent_id, pay, meta, order, user)
+        agent_msg_id = await _notify_agent_new_payment(context, agent_id, pay, meta, order, user)
         try:
             pay = get_payment_by_idempotency_key(agent_id, idempotency_key) or pay
+            meta_after_agent = _append_receipt_meta_marker(receipt_meta, "agent_notified:1")
+            if agent_msg_id:
+                meta_after_agent = _append_receipt_meta_marker(meta_after_agent, f"agent_pending_message_id:{agent_msg_id}")
             update_payment_status(
                 agent_id=agent_id,
                 payment_id=int(pay["id"]),
                 status="pending",
-                receipt_image=_append_receipt_meta_marker(receipt_meta, "agent_notified:1"),
+                receipt_image=meta_after_agent,
             )
         except Exception:
             pass
+    else:
+        agent_msg_id = None
     pending_msg = await update.message.reply_text(
         "✅ تراکنش شما در انتظار تایید توسط ادمین است.\n"
         "لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
@@ -442,10 +426,16 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if pay and pending_msg:
         try:
             pending_meta = _append_receipt_meta_marker(receipt_meta, f"customer_pending_message_id:{pending_msg.message_id}")
-            if notify_agent:
-                pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
-            elif _receipt_meta_has_agent_notified_marker(existing_receipt_meta):
-                pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
+            pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
+            if agent_msg_id:
+                pending_meta = _append_receipt_meta_marker(pending_meta, f"agent_pending_message_id:{agent_msg_id}")
+            else:
+                # رسید دوباره ارسال شده و پیام جدیدی برای نماینده نرفته؛
+                # شناسه پیام قبلی در چت نماینده را حفظ کن
+                for marker_part in str(existing_receipt_meta or "").split("|"):
+                    if marker_part.startswith("agent_pending_message_id:"):
+                        pending_meta = _append_receipt_meta_marker(pending_meta, marker_part)
+                        break
             update_payment_status(
                 agent_id=agent_id,
                 payment_id=int(pay["id"]),
