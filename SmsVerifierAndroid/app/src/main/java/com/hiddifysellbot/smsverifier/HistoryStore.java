@@ -109,6 +109,7 @@ public final class HistoryStore {
                 || raw.contains("پرداخت در انتظار با این مبلغ پیدا نشد")
                 || raw.contains("📨 پیامک به ربات ارسال شد")
                 || raw.contains("📨 به ربات ارسال شد")
+                || raw.trim().toUpperCase(Locale.US).startsWith("FAILED")
                 || text.contains("retry\":true");
     }
 

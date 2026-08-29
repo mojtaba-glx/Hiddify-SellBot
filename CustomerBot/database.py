@@ -1078,6 +1078,34 @@ def mark_sms_auto_queue_processed(queue_id: int, note: str = "") -> None:
         conn.close()
 
 
+def get_sms_auto_queue_by_event(event_id: str) -> Optional[Dict[str, Any]]:
+    """ردیف صف مربوط به یک رویداد SMS را برمی‌گرداند (برای تشخیص duplicate در وب‌هوک)."""
+    init_db()
+    eid = str(event_id or "").strip()
+    if not eid:
+        return None
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM customer_payment_sms_queue WHERE event_id = ? LIMIT 1", (eid,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_payment_status_any_agent(pay_id: int) -> str:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT status FROM customer_payments WHERE id = ? LIMIT 1", (int(pay_id or 0),))
+        row = cur.fetchone()
+        return str(dict(row).get("status") or "") if row else ""
+    finally:
+        conn.close()
+
+
 def find_pending_card_payments_by_amount(
     amount_toman: int,
     max_age_minutes: int = 360,

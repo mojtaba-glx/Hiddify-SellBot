@@ -1163,6 +1163,34 @@ class _SubHandler(BaseHTTPRequestHandler):
                 break
 
         if not matches:
+            # اگر این SMS قبلاً برای پرداخت نمایندگی صف شده و آن پرداخت حالا تایید شده است
+            # (خودکار یا دستی)، به اپ approved_duplicate برگردان تا رکوردش به «تایید شده» برود
+            try:
+                from CustomerBot.database import get_sms_auto_queue_by_event as _qrow
+                from CustomerBot.database import get_payment_status_any_agent as _pstat
+                qrow = _qrow(event_id)
+                if qrow:
+                    agency_pay_status = _pstat(int(qrow.get("pay_id") or 0))
+                    if agency_pay_status == "approved":
+                        approved_pay_id = int(qrow.get("pay_id") or 0)
+                        userbot_db.update_sms_webhook_event(
+                            event_id,
+                            status="approved_duplicate",
+                            matched_payment_id=approved_pay_id,
+                            message="agency payment approved for this SMS",
+                            amount_toman=int(qrow.get("amount_toman") or candidates[0] or 0),
+                        )
+                        return 200, {
+                            "ok": True,
+                            "matched": True,
+                            "duplicate": True,
+                            "status": "approved_duplicate",
+                            "message": "bank_sms_already_approved",
+                            "matched_payment_id": approved_pay_id,
+                        }
+            except Exception as exc:
+                logger.warning("agency sms duplicate check failed: %s", exc)
+
             # تطبیق با پرداخت‌های مشتریانِ نمایندگی‌ها (دیتابیس CustomerBot) —
             # پرداخت صف می‌شود تا پروسه AgentBot سرویس را بسازد و تحویل دهد
             agency_matches: list = []
@@ -1202,13 +1230,15 @@ class _SubHandler(BaseHTTPRequestHandler):
                 agency_pay_id = int(agency_pay.get("id") or 0)
                 try:
                     from CustomerBot.database import enqueue_sms_auto_approval as _enqueue_agency
-                    queued = _enqueue_agency(
+                    # اگر event قبلاً صف شده باشد (استعلام دوباره اپ) هم مشکلی نیست
+                    _enqueue_agency(
                         agency_id,
                         agency_pay_id,
                         event_id,
                         agency_matched_amount,
                         card_last4=card_last4,
                     )
+                    queued = True
                 except Exception as exc:
                     queued = False
                     logger.warning("agency sms enqueue failed: %s", exc)
