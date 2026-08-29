@@ -1501,6 +1501,31 @@ async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer
         kb = InlineKeyboardMarkup(
             [[InlineKeyboardButton(btn_label, callback_data=f"agbot:set:users:detail:{customer_id}")]]
         )
+
+        # کپی گزارش تست رایگان برای ادمین / کانال رویداد نمایندگی
+        try:
+            from Shared.admin_reports import send_agency_event_report
+            agent_name = (
+                str((agent or {}).get("full_name") or "").strip()
+                or str((agent or {}).get("username") or "").strip()
+                or (str(agent_tg_id) if agent_tg_id else "")
+                or "—"
+            )
+            event_text = (
+                "🏬 <b>گزارش نمایندگی — ایجاد اشتراک تست رایگان</b>\n"
+                f"👤 نماینده: {escape(agent_name)}\n"
+                f"👥 مشتری: {escape(btn_custom)}\n"
+                "📄 گزارش ایجاد اشتراک تستی\n\n"
+                f"👤اشتراک: {escape(str(service_name))}\n"
+                f"🛰سرور: {escape(str(server_title or '-'))}\n"
+                f"📊حجم: {float(gb):g} گیگابایت\n"
+                f"⏳زمان: {int(days)} روز\n"
+                f"🔑شناسه اشتراک:{service_id}"
+            )
+            await send_agency_event_report(event_text)
+        except Exception:
+            pass
+
         await Bot(token=token).send_message(chat_id=agent_tg_id, text=text, parse_mode="HTML", reply_markup=kb)
     except Exception:
         return
