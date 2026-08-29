@@ -481,22 +481,18 @@ _PLANS_FILE = Path(__file__).with_name("plans.json")
 
 
 def _load_plans_data() -> dict:
-    if not _PLANS_FILE.exists():
-        return {"servers": {}}
-    try:
-        with _PLANS_FILE.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        data = {"servers": {}}
+    # مسیر واحد خواندن plans.json — همیشه از plans_storage (یک نویسنده واحد)
+    from Shared import plans_storage
+    data = plans_storage._load_all_plans()
     if "servers" not in data or not isinstance(data["servers"], dict):
         data["servers"] = {}
     return data
 
 
 def _save_plans_data(data: dict) -> None:
-    _PLANS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with _PLANS_FILE.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    # مسیر واحد نوشتن plans.json — اتمیک و از طریق plans_storage
+    from Shared import plans_storage
+    plans_storage._save_all_plans(data)
 
 
 def _get_server_plans_block(data: dict, server_id: int) -> dict:
@@ -608,11 +604,13 @@ def get_plan_mode(server_id: int, default: str = "dynamic") -> str:
 
 
 def set_plan_mode(server_id: int, mode: str) -> None:
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
-    server["display_mode"] = mode
-    server.pop("mode", None)
-    _save_plans_data(data)
+    from Shared import plans_storage
+    with plans_storage._plans_file_lock():
+        data = _load_plans_data()
+        server = _get_server_plans_block(data, server_id)
+        server["display_mode"] = mode
+        server.pop("mode", None)
+        _save_plans_data(data)
 
 
 # ---------- تنظیمات پلن پویا ----------
@@ -623,10 +621,12 @@ def get_plan_dynamic_settings(server_id: int) -> dict:
 
 
 def set_plan_dynamic_settings(server_id: int, settings: dict) -> None:
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
-    server["dynamic_settings"] = settings or {}
-    _save_plans_data(data)
+    from Shared import plans_storage
+    with plans_storage._plans_file_lock():
+        data = _load_plans_data()
+        server = _get_server_plans_block(data, server_id)
+        server["dynamic_settings"] = settings or {}
+        _save_plans_data(data)
 
 
 # ---------- دسته‌های پلن (Categories) ----------
@@ -647,38 +647,47 @@ def get_plan_category(server_id: int, category_id: int) -> dict | None:
 
 
 def add_plan_category(server_id: int, title: str, priority: int) -> dict:
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
-    cid = int(server.get("next_cat_id", 1))
-    server["next_cat_id"] = cid + 1
-    cat = {"id": cid, "title": title, "priority": int(priority)}
-    server["categories"].append(cat)
-    _save_plans_data(data)
-    return cat
+    from Shared import plans_storage
+    # از همان شمارنده plans_storage استفاده می‌شود تا آی‌دی دسته‌بندی‌ها
+    # بین دو مسیر قدیمی/جدید تکراری نشود
+    with plans_storage._plans_file_lock():
+        data = _load_plans_data()
+        server = _get_server_plans_block(data, server_id)
+        cid = int(server.get("next_category_id") or server.get("next_cat_id") or 1)
+        server["next_category_id"] = cid + 1
+        server.pop("next_cat_id", None)
+        cat = {"id": cid, "title": title, "priority": int(priority)}
+        server["categories"].append(cat)
+        _save_plans_data(data)
+        return cat
 
 
 def update_plan_category(
     server_id: int, category_id: int, title: str | None = None, priority: int | None = None
 ) -> None:
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
-    for c in server.get("categories", []):
-        if int(c.get("id", 0)) == int(category_id):
-            if title is not None:
-                c["title"] = title
-            if priority is not None:
-                c["priority"] = int(priority)
-            break
-    _save_plans_data(data)
+    from Shared import plans_storage
+    with plans_storage._plans_file_lock():
+        data = _load_plans_data()
+        server = _get_server_plans_block(data, server_id)
+        for c in server.get("categories", []):
+            if int(c.get("id", 0)) == int(category_id):
+                if title is not None:
+                    c["title"] = title
+                if priority is not None:
+                    c["priority"] = int(priority)
+                break
+        _save_plans_data(data)
 
 
 def delete_plan_category(server_id: int, category_id: int) -> None:
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
-    cid = int(category_id)
-    server["categories"] = [c for c in server["categories"] if int(c.get("id", 0)) != cid]
-    server["plans"] = [p for p in server["plans"] if int(p.get("category_id", 0)) != cid]
-    _save_plans_data(data)
+    from Shared import plans_storage
+    with plans_storage._plans_file_lock():
+        data = _load_plans_data()
+        server = _get_server_plans_block(data, server_id)
+        cid = int(category_id)
+        server["categories"] = [c for c in server["categories"] if int(c.get("id", 0)) != cid]
+        server["plans"] = [p for p in server["plans"] if int(p.get("category_id", 0)) != cid]
+        _save_plans_data(data)
 
 
 # ---------- پلن‌ها ----------
@@ -729,32 +738,36 @@ def add_plan(server_id: int, *args: Any, **kwargs: Any) -> dict:
         if price is None or days is None or gb is None or title is None:
             raise ValueError("add_plan requires category_id, price, days, gb, title")
 
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
-    pid = int(server.get("next_plan_id", 1))
-    server["next_plan_id"] = pid + 1
-    plan = {
-        "id": pid,
-        "server_id": int(server_id),
-        "category_id": int(category_id) if category_id is not None else None,
-        "title": str(title),
-        "price": int(price),
-        "days": int(days),
-        "gb": float(gb),
-    }
-    server["plans"].append(plan)
-    _save_plans_data(data)
-    return plan
+    from Shared import plans_storage
+    with plans_storage._plans_file_lock():
+        data = _load_plans_data()
+        server = _get_server_plans_block(data, server_id)
+        pid = int(server.get("next_plan_id", 1))
+        server["next_plan_id"] = pid + 1
+        plan = {
+            "id": pid,
+            "server_id": int(server_id),
+            "category_id": int(category_id) if category_id is not None else None,
+            "title": str(title),
+            "price": int(price),
+            "days": int(days),
+            "gb": float(gb),
+        }
+        server["plans"].append(plan)
+        _save_plans_data(data)
+        return plan
 
 
 def delete_plan(server_id: int, plan_id: int) -> bool:
-    data = _load_plans_data()
-    server = _get_server_plans_block(data, server_id)
-    pid = int(plan_id)
-    before = len(server["plans"])
-    server["plans"] = [p for p in server["plans"] if int(p.get("id", 0)) != pid]
-    _save_plans_data(data)
-    return len(server["plans"]) != before
+    from Shared import plans_storage
+    with plans_storage._plans_file_lock():
+        data = _load_plans_data()
+        server = _get_server_plans_block(data, server_id)
+        pid = int(plan_id)
+        before = len(server["plans"])
+        server["plans"] = [p for p in server["plans"] if int(p.get("id", 0)) != pid]
+        _save_plans_data(data)
+        return len(server["plans"]) != before
 
 
 

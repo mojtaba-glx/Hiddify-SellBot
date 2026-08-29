@@ -2,9 +2,11 @@
 # ذخیره‌سازی پلن‌ها و تنظیمات‌شان در plans.json
 
 from pathlib import Path
+import fcntl
 import json
 import os
 import time
+from contextlib import contextmanager
 from typing import Dict, Any, List, Optional
 
 _PLANS_FILE = Path(__file__).with_name("plans.json")
@@ -70,6 +72,20 @@ def _save_all_plans(data: Dict[str, Any]) -> None:
     os.replace(tmp_path, _PLANS_FILE)
 
 
+@contextmanager
+def _plans_file_lock():
+    """قفل بین-پروسه‌ای روی plans.json — چرخه خواندن→تغییر→نوشتن اتمیک می‌شود
+    تا AdminBot و CustomerBot تغییرات هم را بازنویسی نکنند (lost update)."""
+    lock_path = _PLANS_FILE.with_name(_PLANS_FILE.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
 def _get_server_block(
     data: Dict[str, Any], server_id: int, create: bool = False
 ) -> Optional[Dict[str, Any]]:
@@ -107,10 +123,11 @@ def get_plan_display_mode(server_id: int) -> str:
 def set_plan_display_mode(server_id: int, mode: str) -> None:
     if mode not in {"fixed", "dynamic", "mixed"}:
         raise ValueError("Invalid plan display mode")
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=True)
-    block["display_mode"] = mode
-    _save_all_plans(data)
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=True)
+        block["display_mode"] = mode
+        _save_all_plans(data)
 
 
 # ------------------ دسته‌بندی پلن‌ها ------------------
@@ -126,17 +143,18 @@ def get_plan_categories(server_id: int) -> List[Dict[str, Any]]:
 
 
 def add_plan_category(server_id: int, title: str, priority: int = 0) -> Dict[str, Any]:
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=True)
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=True)
 
-    cid = int(block.get("next_category_id") or 1)
-    block["next_category_id"] = cid + 1
+        cid = int(block.get("next_category_id") or 1)
+        block["next_category_id"] = cid + 1
 
-    cat = {"id": cid, "title": title, "priority": int(priority)}
-    block.setdefault("categories", []).append(cat)
+        cat = {"id": cid, "title": title, "priority": int(priority)}
+        block.setdefault("categories", []).append(cat)
 
-    _save_all_plans(data)
-    return cat
+        _save_all_plans(data)
+        return cat
 
 
 def edit_plan_category(
@@ -146,42 +164,44 @@ def edit_plan_category(
     title: Optional[str] = None,
     priority: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=False)
-    if not block:
-        return None
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=False)
+        if not block:
+            return None
 
-    for c in block.get("categories", []):
-        if int(c.get("id")) == int(category_id):
-            if title is not None:
-                c["title"] = title
-            if priority is not None:
-                c["priority"] = int(priority)
-            _save_all_plans(data)
-            return c
-    return None
+        for c in block.get("categories", []):
+            if int(c.get("id")) == int(category_id):
+                if title is not None:
+                    c["title"] = title
+                if priority is not None:
+                    c["priority"] = int(priority)
+                _save_all_plans(data)
+                return c
+        return None
 
 
 def delete_plan_category(server_id: int, category_id: int) -> bool:
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=False)
-    if not block:
-        return False
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=False)
+        if not block:
+            return False
 
-    cats = block.get("categories", [])
-    new_cats = [c for c in cats if int(c.get("id")) != int(category_id)]
-    if len(new_cats) == len(cats):
-        return False
+        cats = block.get("categories", [])
+        new_cats = [c for c in cats if int(c.get("id")) != int(category_id)]
+        if len(new_cats) == len(cats):
+            return False
 
-    block["categories"] = new_cats
+        block["categories"] = new_cats
 
-    # category_id را روی پلن‌ها پاک می‌کنیم
-    for p in block.get("plans", []):
-        if int(p.get("category_id") or 0) == int(category_id):
-            p["category_id"] = None
+        # category_id را روی پلن‌ها پاک می‌کنیم
+        for p in block.get("plans", []):
+            if int(p.get("category_id") or 0) == int(category_id):
+                p["category_id"] = None
 
-    _save_all_plans(data)
-    return True
+        _save_all_plans(data)
+        return True
 
 
 # ------------------ پلن‌های ثابت ------------------
@@ -233,24 +253,26 @@ def add_plan(
     gb: float,
     priority: int = 0,
 ) -> Dict[str, Any]:
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=True)
+    data = None
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=True)
 
-    pid = int(block.get("next_plan_id") or 1)
-    block["next_plan_id"] = pid + 1
+        pid = int(block.get("next_plan_id") or 1)
+        block["next_plan_id"] = pid + 1
 
-    plan = {
-        "id": pid,
-        "category_id": int(category_id) if category_id is not None else None,
-        "title": title,
-        "price": int(price),
-        "days": int(days),
-        "gb": float(gb),
-        "priority": int(priority),
-    }
-    block.setdefault("plans", []).append(plan)
-    _save_all_plans(data)
-    return plan
+        plan = {
+            "id": pid,
+            "category_id": int(category_id) if category_id is not None else None,
+            "title": title,
+            "price": int(price),
+            "days": int(days),
+            "gb": float(gb),
+            "priority": int(priority),
+        }
+        block.setdefault("plans", []).append(plan)
+        _save_all_plans(data)
+        return plan
 
 
 def edit_plan(
@@ -264,44 +286,46 @@ def edit_plan(
     gb: Optional[float] = None,
     priority: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=False)
-    if not block:
-        return None
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=False)
+        if not block:
+            return None
 
-    for p in block.get("plans", []):
-        if int(p.get("id")) == int(plan_id):
-            if category_id is not None:
-                p["category_id"] = int(category_id)
-            if title is not None:
-                p["title"] = title
-            if price is not None:
-                p["price"] = int(price)
-            if days is not None:
-                p["days"] = int(days)
-            if gb is not None:
-                p["gb"] = float(gb)
-            if priority is not None:
-                p["priority"] = int(priority)
-            _save_all_plans(data)
-            return p
-    return None
+        for p in block.get("plans", []):
+            if int(p.get("id")) == int(plan_id):
+                if category_id is not None:
+                    p["category_id"] = int(category_id)
+                if title is not None:
+                    p["title"] = title
+                if price is not None:
+                    p["price"] = int(price)
+                if days is not None:
+                    p["days"] = int(days)
+                if gb is not None:
+                    p["gb"] = float(gb)
+                if priority is not None:
+                    p["priority"] = int(priority)
+                _save_all_plans(data)
+                return p
+        return None
 
 
 def delete_plan(server_id: int, plan_id: int) -> bool:
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=False)
-    if not block:
-        return False
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=False)
+        if not block:
+            return False
 
-    plans = block.get("plans", [])
-    new_plans = [p for p in plans if int(p.get("id")) != int(plan_id)]
-    if len(new_plans) == len(plans):
-        return False
+        plans = block.get("plans", [])
+        new_plans = [p for p in plans if int(p.get("id")) != int(plan_id)]
+        if len(new_plans) == len(plans):
+            return False
 
-    block["plans"] = new_plans
-    _save_all_plans(data)
-    return True
+        block["plans"] = new_plans
+        _save_all_plans(data)
+        return True
 
 
 # ------------------ تنظیمات پلن پویا ------------------
@@ -464,25 +488,26 @@ def get_plan_dynamic_settings(server_id: int) -> Dict[str, Any]:
 
 
 def set_plan_dynamic_settings(server_id: int, **kwargs: Any) -> Dict[str, Any]:
-    data = _load_all_plans()
-    block = _get_server_block(data, server_id, create=True)
-    dyn = block.get("dynamic_settings") or {}
+    with _plans_file_lock():
+        data = _load_all_plans()
+        block = _get_server_block(data, server_id, create=True)
+        dyn = block.get("dynamic_settings") or {}
 
-    for k, v in kwargs.items():
-        if k not in _DEFAULT_DYNAMIC_SETTINGS:
-            continue
-        if isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], list):
-            dyn[k] = normalize_discount_tiers(v)
-        elif isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], bool):
-            if isinstance(v, bool):
-                dyn[k] = v
+        for k, v in kwargs.items():
+            if k not in _DEFAULT_DYNAMIC_SETTINGS:
+                continue
+            if isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], list):
+                dyn[k] = normalize_discount_tiers(v)
+            elif isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], bool):
+                if isinstance(v, bool):
+                    dyn[k] = v
+                else:
+                    dyn[k] = str(v).strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], int):
+                dyn[k] = int(v)
             else:
-                dyn[k] = str(v).strip().lower() in {"1", "true", "yes", "on"}
-        elif isinstance(_DEFAULT_DYNAMIC_SETTINGS[k], int):
-            dyn[k] = int(v)
-        else:
-            dyn[k] = float(v)
+                dyn[k] = float(v)
 
-    block["dynamic_settings"] = dyn
-    _save_all_plans(data)
-    return dyn
+        block["dynamic_settings"] = dyn
+        _save_all_plans(data)
+        return dyn

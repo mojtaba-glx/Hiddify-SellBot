@@ -41,3 +41,5 @@ SmsVerifierAndroid/*.keystore
 *.db-shm
 Shared/*.db-wal
 Shared/*.db-shm
+Shared/*.lock
+*.lock
