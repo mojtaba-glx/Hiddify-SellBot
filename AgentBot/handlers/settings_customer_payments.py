@@ -600,6 +600,17 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
             update_customer_payment_status(agent_id, pay_id, "pending")
             return False, "wallet deduction failed; left pending"
 
+        # پیام تایید خودکار باید اول از همه در چت مشتری بیاید (بالای پیام‌های تحویل اشتراک)
+        try:
+            await _notify_customer(
+                context,
+                agent_id,
+                user_tg_id,
+                "✅ پرداخت کارت‌به‌کارت شما با پیامک بانکی به‌صورت خودکار تایید شد.",
+            )
+        except Exception as e:
+            logger.warning("sms auto approve customer notify failed (agent=%s pay=%s): %s", agent_id, pay_id, e)
+
         if renew_service_id:
             try:
                 svc = await _renew_subscription_from_order(context, agent_id, user_tg_id, order, tx_code=str(pay.get("tx_code") or ""))
@@ -607,6 +618,15 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
                 agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای تمدید سرویس سفارش #{order.get('order_id')}")
                 update_customer_payment_status(agent_id, pay_id, "pending")
                 logger.error("sms auto renew failed for payment %s: %s", pay_id, e)
+                try:
+                    await _notify_customer(
+                        context,
+                        agent_id,
+                        user_tg_id,
+                        "⚠️ پرداخت شما تایید شد اما در تمدید سرویس خطایی رخ داد؛ به‌زودی توسط ادمین بررسی و فعال می‌شود.",
+                    )
+                except Exception:
+                    pass
                 return False, f"renew failed: {e}"
         else:
             try:
@@ -615,6 +635,15 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
                 agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
                 update_customer_payment_status(agent_id, pay_id, "pending")
                 logger.error("sms auto service creation failed for payment %s: %s", pay_id, e)
+                try:
+                    await _notify_customer(
+                        context,
+                        agent_id,
+                        user_tg_id,
+                        "⚠️ پرداخت شما تایید شد اما در ساخت سرویس خطایی رخ داد؛ به‌زودی توسط ادمین بررسی و فعال می‌شود.",
+                    )
+                except Exception:
+                    pass
                 return False, f"service creation failed: {e}"
 
         if not update_customer_payment_status(agent_id, pay_id, "approved"):
@@ -640,16 +669,6 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
         await _send_sms_auto_approval_report(context, agent_id, pay_id, pay, svc, is_renew, queue_row)
     except Exception as e:
         logger.warning("sms auto approval report failed (agent=%s pay=%s): %s", agent_id, pay_id, e)
-
-    try:
-        await _notify_customer(
-            context,
-            agent_id,
-            user_tg_id,
-            "✅ پرداخت کارت‌به‌کارت شما با پیامک بانکی به‌صورت خودکار تایید شد.",
-        )
-    except Exception as e:
-        logger.warning("sms auto approve customer notify failed (agent=%s pay=%s): %s", agent_id, pay_id, e)
 
     logger.info("sms webhook auto-approved agency payment (agent=%s pay=%s)", agent_id, pay_id)
     return True, "approved"
