@@ -47,6 +47,7 @@ AGENCY_SET_WHOLESALE_DAYS = "agency:set_wholesale_days"
 AGENCY_BULK_WHOLESALE = "agency:bulk_wholesale"
 AGENCY_SET_AGENT_TOKEN = "agency:set_agent_token"
 AGENCY_SVC_SEARCH = "agency:svc_search"
+AGENCY_EVENT_CHANNEL_STATE = "agency:event_channel"
 
 # کلیدهای user_data برای صفحه‌بندی
 AGENCY_PAGE_KEY = "agency_page"
@@ -155,6 +156,11 @@ def _fmt_agent_display(agent: Dict[str, Any]) -> str:
 
 
 def _main_menu_kb() -> InlineKeyboardMarkup:
+    try:
+        ev = userbot_db.get_agency_event_settings()
+        event_icon = "✅" if ev.get("event_channel_enabled") else "❌"
+    except Exception:
+        event_icon = "❌"
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("➕ افزودن نماینده", callback_data="agency:add")],
@@ -165,6 +171,10 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton("📊 آمار کلی", callback_data="agency:stats"),
                 InlineKeyboardButton("⚙️ توکن ربات نماینده", callback_data="agency:agenttoken"),
+            ],
+            [
+                InlineKeyboardButton(event_icon, callback_data="agency:event:toggle"),
+                InlineKeyboardButton("تنظیم کانال رویداد📢", callback_data="agency:event:set"),
             ],
             [InlineKeyboardButton("🔙 منوی اصلی", callback_data="agency:exit")],
         ]
@@ -1843,6 +1853,40 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
         await send_global_stats(update, context)
         return
 
+    if action == "event" and len(parts) > 2:
+        sub = parts[2]
+        if sub == "toggle":
+            ev = userbot_db.toggle_agency_event_enabled()
+            state_txt = "فعال شد ✅ — گزارش‌ها به کانال رویداد ارسال می‌شود." if ev.get("event_channel_enabled") else "غیرفعال شد ❌ — گزارش‌ها به چت ادمین ارسال می‌شود."
+            if ev.get("event_channel_enabled") and not str(ev.get("event_channel_id") or "").strip():
+                state_txt += "\n⚠️ هنوز کانالی تنظیم نشده است؛ دکمه «تنظیم کانال رویداد» را بزنید."
+            await query.answer(state_txt, show_alert=True)
+            await handle_agencies_entry(update, context)
+            return
+        if sub == "set":
+            context.user_data["state"] = AGENCY_EVENT_CHANNEL_STATE
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=(
+                    "📢 تنظیم کانال رویداد نمایندگی\n\n"
+                    "یک پیام از کانال مورد نظر را فوروارد کنید\n"
+                    "یا آیدی کانال را بفرستید (@channel یا -100...)\n\n"
+                    "❗️ ربات ادمین باید در کانال ادمین باشد.\n"
+                    "برای لغو: لغو"
+                ),
+                reply_markup=admin_main_keyboard(),
+            )
+            return
+        if sub == "status":
+            ev = userbot_db.get_agency_event_settings()
+            status_txt = "✅ فعال" if ev.get("event_channel_enabled") else "❌ غیرفعال"
+            channel = str(ev.get("event_channel_id") or "—تنظیم نشده—")
+            await query.answer(
+                f"وضعیت: {status_txt}\nکانال: {channel}",
+                show_alert=True,
+            )
+            return
+
     if action == "list":
         page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
         await send_agents_list(update, context, page=page)
@@ -2031,6 +2075,63 @@ async def handle_agencies_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if state == AGENCY_SVC_SEARCH:
         return await handle_agent_service_search_text(update, context)
+
+    if state == AGENCY_EVENT_CHANNEL_STATE:
+        context.user_data.pop("state", None)
+        channel_target = ""
+        channel_title = ""
+
+        # 1) فوروارد پیام از کانال
+        try:
+            fchat = getattr(update.message, "forward_from_chat", None)
+            if fchat and str(getattr(fchat, "type", "")) in {"channel", "supergroup"}:
+                channel_target = str(getattr(fchat, "id", "") or "").strip()
+                channel_title = str(getattr(fchat, "title", "") or "").strip()
+        except Exception:
+            pass
+
+        # 2) PTB v20+: forward_origin
+        if not channel_target:
+            try:
+                origin = getattr(update.message, "forward_origin", None)
+                ochat = getattr(origin, "chat", None) if origin else None
+                if ochat and str(getattr(ochat, "type", "")) in {"channel", "supergroup"}:
+                    channel_target = str(getattr(ochat, "id", "") or "").strip()
+                    channel_title = str(getattr(ochat, "title", "") or "").strip()
+            except Exception:
+                pass
+
+        # 3) ورود دستی @channel یا -100...
+        if not channel_target:
+            t = text.strip()
+            if t.startswith("@") and len(t) > 1:
+                channel_target = t
+            elif t.lstrip("-").isdigit():
+                channel_target = t
+
+        if not channel_target:
+            await update.message.reply_text(
+                "❌ ورودی معتبر نیست.\n"
+                "لطفاً یک پیام از کانال فوروارد کنید یا @channel / -100... را بفرستید.",
+                reply_markup=admin_main_keyboard(),
+            )
+            return True
+
+        try:
+            userbot_db.set_agency_event_settings({
+                "event_channel_id": channel_target,
+                "event_channel_enabled": userbot_db.get_agency_event_settings().get("event_channel_enabled", False),
+            })
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در ذخیره کانال رویداد:\n{e}", reply_markup=admin_main_keyboard())
+            return True
+
+        title_part = f" ({channel_title})" if channel_title else ""
+        await update.message.reply_text(
+            f"✅ کانال رویداد نمایندگی ذخیره شد:\n{channel_target}{title_part}",
+            reply_markup=admin_main_keyboard(),
+        )
+        return True
 
     if state == AGENCY_SET_AGENT_TOKEN:
         return await handle_set_agent_token_text(update, context)

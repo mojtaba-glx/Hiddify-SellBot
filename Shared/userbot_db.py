@@ -1440,6 +1440,65 @@ def toggle_payment_setting(name: str) -> Dict[str, Any]:
     return set_payment_settings(settings)
 
 
+# ---- تنظیمات کانال رویداد نمایندگی (AdminBot → داشبورد نماینده‌ها) ----
+
+def get_agency_event_settings() -> Dict[str, Any]:
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT value FROM userbot_settings WHERE key = 'agency_event_settings' LIMIT 1")
+        row = cur.fetchone()
+        settings = {"event_channel_enabled": False, "event_channel_id": ""}
+        if row and row["value"]:
+            try:
+                raw = json.loads(row["value"])
+                if isinstance(raw, dict):
+                    for key in settings.keys():
+                        if key in raw and raw[key] is not None:
+                            settings[key] = raw[key]
+            except Exception:
+                pass
+        settings["event_channel_enabled"] = _as_bool(settings.get("event_channel_enabled"), False)
+        settings["event_channel_id"] = str(settings.get("event_channel_id") or "").strip()
+        return settings
+    finally:
+        conn.close()
+
+
+def set_agency_event_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    current = {"event_channel_enabled": False, "event_channel_id": ""}
+    if isinstance(settings, dict):
+        for key in current.keys():
+            if key in settings and settings[key] is not None:
+                current[key] = settings[key]
+    current["event_channel_enabled"] = _as_bool(current.get("event_channel_enabled"), False)
+    current["event_channel_id"] = str(current.get("event_channel_id") or "").strip()
+
+    payload = json.dumps(current, ensure_ascii=False)
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO userbot_settings (key, value) VALUES ('agency_event_settings', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (payload,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return current
+
+
+def toggle_agency_event_enabled() -> Dict[str, Any]:
+    settings = get_agency_event_settings()
+    settings["event_channel_enabled"] = not bool(settings.get("event_channel_enabled"))
+    return set_agency_event_settings(settings)
+
+
 def get_backup_restore_settings() -> Dict[str, Any]:
     init_db()
     conn = _get_conn()

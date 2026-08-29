@@ -60,5 +60,25 @@ async def send_subscription_report(bot, chat_id: int, agent_id: int, user_tg_id:
                 [[IButton("\U0001f464 \u067e\u0631\u0648\u0641\u0627\u06cc\u0644 \u06a9\u0627\u0631\u0628\u0631", callback_data=f"agbot:set:users:detail:{customer_id}")]]
             )
         await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=kb)
+
+        # کپی گزارش برای ادمین / کانال رویداد نمایندگی
+        try:
+            from Shared.admin_reports import send_agency_event_report
+            agent_row = agent_db.get_agent_by_id(agent_id) or {}
+            agent_name = (
+                str(agent_row.get("full_name") or "").strip()
+                or str(agent_row.get("username") or "").strip()
+                or str(agent_row.get("telegram_id") or "").strip()
+                or "—"
+            )
+            action_title = "ایجاد اشتراک مشتری" if action == "create" else "تمدید اشتراک مشتری"
+            event_text = (
+                f"🏬 <b>گزارش نمایندگی — {action_title}</b>\n"
+                f"👤 نماینده: {escape(agent_name)}\n"
+                + build_subscription_report_text(action, svc, amount)
+            )
+            await send_agency_event_report(event_text)
+        except Exception as e:
+            logger.warning("agency event copy failed agent=%s user=%s: %s", agent_id, user_tg_id, e)
     except Exception as e:
         logger.warning("send_subscription_report failed agent=%s user=%s: %s", agent_id, user_tg_id, e)

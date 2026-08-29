@@ -19,6 +19,45 @@ def _admin_credentials() -> tuple[int, str]:
     return admin_id, str(os.getenv("ADMIN_BOT_TOKEN", "") or "").strip()
 
 
+def _agency_event_target() -> str:
+    """مقصد گزارش‌های نمایندگی: کانال رویداد اگر فعال باشد، وگرنه چت ادمین."""
+    target = ""
+    try:
+        from Shared import userbot_db
+        s = userbot_db.get_agency_event_settings()
+        if s.get("event_channel_enabled"):
+            target = str(s.get("event_channel_id") or "").strip()
+    except Exception:
+        target = ""
+    if not target:
+        admin_id, _ = _admin_credentials()
+        target = str(admin_id) if admin_id else ""
+    return target
+
+
+async def send_agency_event_report(text: str, *, parse_mode: str = "HTML", reply_markup=None) -> bool:
+    """ارسال گزارش رویداد نمایندگی به کانال رویداد (اگر فعال باشد) یا چت ادمین."""
+    admin_id, admin_token = _admin_credentials()
+    if not admin_token:
+        return False
+    target = _agency_event_target()
+    if not target:
+        return False
+    try:
+        from telegram import Bot
+
+        await Bot(token=admin_token).send_message(
+            chat_id=target,
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return True
+    except Exception as e:
+        logger.warning("agency event report send failed target=%s: %s", target, e)
+        return False
+
+
 def _agent_display_name(agent: dict | None) -> str:
     if not agent:
         return "—"
@@ -107,6 +146,25 @@ async def notify_admin_delivery_report(
             lines.append("\nپول/کیفپول نماینده به‌درستی جابه‌جا شده؟ عملیات را بررسی کنید.")
 
         text = "\n".join(lines)
+
+        # مسیریابی رویداد نمایندگی: اگر کانال رویداد فعال باشد، گزارش‌های
+        # موفق/ناقص به کانال می‌رود؛ گزارش خطا همیشه به چت ادمین می‌رود.
+        if status != "error":
+            try:
+                from Shared import userbot_db as _udb
+                _s = _udb.get_agency_event_settings()
+            except Exception:
+                _s = {}
+            if _s.get("event_channel_enabled") and str(_s.get("event_channel_id") or "").strip():
+                try:
+                    await Bot(token=admin_token).send_message(
+                        chat_id=str(_s["event_channel_id"]).strip(),
+                        text=text,
+                        parse_mode="HTML",
+                    )
+                    return True
+                except Exception as e:
+                    logger.warning("agency event channel delivery failed: %s", e)
 
         kb = None
         if status == "partial" and sync_primary_server_id > 0:
