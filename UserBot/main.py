@@ -1795,17 +1795,13 @@ async def _find_panel_user_targets_by_uuid(user_uuid: str) -> list[tuple[dict, d
 
 def _service_is_renewable(service: dict) -> bool:
     """
-    شرط مجاز بودن تمدید بر اساس تنظیمات:
-    - advanced: باید یکی از شروط حد مجاز برقرار باشد (روز/حجم)
-    - default / fair: محدودیت ورود به تمدید ندارند
+    شرط مجاز بودن تمدید — در همه حالت‌ها اعمال می‌شود (حتی default/fair):
+    - کمتر از renew_max_days روز تا اتمام اشتراک مانده باشد، یا
+    - حجم باقی‌مانده کمتر از renew_max_remaining_gb گیگابایت باشد
     """
     br = _get_buy_renew_settings()
-    policy = str(br.get("renew_policy") or "advanced").strip().lower()
     max_days = int(br.get("renew_max_days") or 3)
     max_remaining_gb = int(br.get("renew_max_remaining_gb") or 3)
-
-    if policy in {"default", "fair"}:
-        return True
 
     # days_left نامشخص (NULL/غیرعددی) → اجازه تمدید داده نمی‌شود (fail-closed)
     raw_days = service.get("days_left")
@@ -1836,7 +1832,13 @@ async def _service_is_renewable_live(service: dict) -> bool:
             service = refreshed
     except Exception:
         logger.warning("renew policy: live sync failed svc=%s; using DB values", service.get("id"))
-    return _service_is_renewable(service)
+    ok = _service_is_renewable(service)
+    logger.info(
+        "renew policy svc=%s days_left=%s usage=%s/%sGB → renewable=%s",
+        service.get("id"), service.get("days_left"),
+        service.get("usage_current"), service.get("usage_limit"), ok,
+    )
+    return ok
 
 
 def _renew_not_allowed_text() -> str:

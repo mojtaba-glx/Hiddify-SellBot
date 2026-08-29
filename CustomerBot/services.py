@@ -530,9 +530,6 @@ def service_is_renewable(svc: Optional[Dict[str, Any]], agent_id: int) -> bool:
     if not isinstance(svc, dict):
         return False
     br = _renew_br_settings(agent_id)
-    policy = str(br.get("renew_policy") or "advanced").strip().lower()
-    if policy in {"default", "fair"}:
-        return True
     try:
         max_days = int(br.get("renew_max_days") or 3)
     except (TypeError, ValueError):
@@ -569,7 +566,14 @@ async def service_is_renewable_live(service_id: int, agent_id: int) -> bool:
     except Exception:
         pass
     svc = agent_db.get_service_by_id(int(service_id))
-    return service_is_renewable(svc, agent_id)
+    ok = service_is_renewable(svc, agent_id)
+    if svc:
+        logger.info(
+            "renew policy svc=%s days_left=%s usage=%s/%sGB → renewable=%s",
+            svc.get("id"), svc.get("days_left"),
+            svc.get("usage_current"), svc.get("usage_limit"), ok,
+        )
+    return ok
 
 
 def renew_not_allowed_text(agent_id: int) -> str:
