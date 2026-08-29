@@ -9,11 +9,33 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 public class SmsMonitorService extends Service {
     private static final String CHANNEL_ID = "sellbot_sms_monitor";
     private static final int NOTIFICATION_ID = 2107;
+    private static final long AUTO_SYNC_INTERVAL_MS = 10L * 60L * 1000L;
+
+    private final Handler autoSyncHandler = new Handler(Looper.getMainLooper());
+    private final Runnable autoSyncTask = new Runnable() {
+        @Override
+        public void run() {
+            // همگام‌سازی هوشمند خودکار: رکوردهای تایید‌نشده دوباره به ربات استعلام
+            // می‌شوند تا وضعیتشان (مثلا تایید در تلگرام) بدون دخالت کاربر بروز شود
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        PendingSyncRunner.run(SmsMonitorService.this);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }, "sellbot-auto-sync").start();
+            autoSyncHandler.postDelayed(this, AUTO_SYNC_INTERVAL_MS);
+        }
+    };
 
     public static void start(Context context) {
         try {
@@ -45,7 +67,15 @@ public class SmsMonitorService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        autoSyncHandler.removeCallbacks(autoSyncTask);
+        autoSyncHandler.post(autoSyncTask);
         return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        autoSyncHandler.removeCallbacksAndMessages(null);
+        super.onDestroy();
     }
 
     @Override

@@ -59,7 +59,8 @@ public class MainActivity extends Activity {
     private static final int REQ_DEFAULT_SMS = 1003;
     private static final int REQ_EXPORT_BACKUP = 2001;
     private static final int REQ_IMPORT_BACKUP = 2002;
-    private static final int MAX_VISIBLE_BANK_SMS = 15;
+    private static final int MAX_VISIBLE_BANK_SMS = 50;
+    private static final long AUTO_SYNC_MIN_INTERVAL_MS = 3L * 60L * 1000L;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private ScrollView scrollView;
@@ -136,6 +137,7 @@ public class MainActivity extends Activity {
     private boolean lockDialogShowing = false;
     private String selectedConversationKey = "";
     private String bankSmsFilter = "all";
+    private long lastAutoSyncAt = 0L;
     private SharedPreferences historyPreferences;
     private SharedPreferences incomePreferences;
     private SharedPreferences.OnSharedPreferenceChangeListener historyChangeListener;
@@ -158,9 +160,38 @@ public class MainActivity extends Activity {
         maybeAskAppPassword();
         refreshHistory();
         refreshTransactionSmsWarning();
+        autoSyncPendingEntries();
         updateClockView();
         clockHandler.removeCallbacks(clockTicker);
         clockHandler.postDelayed(clockTicker, 1000L);
+    }
+
+    /**
+     * همگام‌سازی هوشمند بی‌صدا: هر بار اپ باز می‌شود (حداکثر هر ۳ دقیقه یک‌بار)
+     * رکوردهای تایید‌نشده به ربات استعلام می‌شوند؛ اگر پرداخت در تلگرام تایید
+     * شده باشد، رکورد خودکار به «تایید شده» منتقل می‌شود و نیازی به زدن دستی
+     * دکمه همگام‌سازی نیست.
+     */
+    private void autoSyncPendingEntries() {
+        long now = System.currentTimeMillis();
+        if (now - lastAutoSyncAt < AUTO_SYNC_MIN_INTERVAL_MS) {
+            return;
+        }
+        lastAutoSyncAt = now;
+        executor.execute(new Runnable() {
+            @Override
+            public void run() {
+                final int retried = PendingSyncRunner.run(MainActivity.this);
+                if (retried > 0) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            refreshHistory();
+                        }
+                    });
+                }
+            }
+        });
     }
 
     private void updateClockView() {
@@ -197,13 +228,13 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_DEFAULT_SMS) {
             refreshSmsRoleStatus();
             refreshTransactionSmsWarning();
-            Toast.makeText(
-                    this,
-                    isDefaultSmsApp()
-                            ? "✅ این اپ حالا اپ پیش‌فرض پیامک است. تشخیص پیامک فعال شد."
-                            : "پیش‌فرض پیامک فعال نشد. در صورت ادامه مشکل، دستی از تنظیمات گوشی انجام بده.",
-                    Toast.LENGTH_LONG
-            ).show();
+            if (isDefaultSmsApp()) {
+                Toast.makeText(this,
+                        "✅ این اپ حالا اپ پیش‌فرض پیامک است. تشخیص پیامک فعال شد.",
+                        Toast.LENGTH_LONG).show();
+            } else {
+                showSmsRoleFailedDialog();
+            }
             return;
         }
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
@@ -1491,22 +1522,73 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 29) {
             try {
                 RoleManager roleManager = (RoleManager) getSystemService(ROLE_SERVICE);
-                if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_SMS)) {
-                    if (roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
-                        Toast.makeText(this, "✅ این اپ از قبل اپ پیش‌فرض پیامک است.", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    startActivityForResult(
-                            roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS),
-                            REQ_DEFAULT_SMS
-                    );
+                if (roleManager == null || !roleManager.isRoleAvailable(RoleManager.ROLE_SMS)) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("📨 اپ پیش‌فرض پیامک")
+                            .setMessage("روی این گوشی قابلیت انتخاب «اپ پیش‌فرض پیامک» در دسترس نیست (روم گوشی آن را محدود کرده).\n\nمسیر دستی: تنظیمات ← Apps ← Default apps ← SMS app")
+                            .setPositiveButton("باز کردن تنظیمات پیش‌فرض", new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialog, int which) {
+                                    openSmsDefaultFallbackSettings();
+                                }
+                            })
+                            .setNegativeButton("بستن", null)
+                            .show();
                     return;
                 }
+                if (roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
+                    Toast.makeText(this, "✅ این اپ از قبل اپ پیش‌فرض پیامک است.", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                startActivityForResult(
+                        roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS),
+                        REQ_DEFAULT_SMS
+                );
+                return;
             } catch (Exception e) {
                 // fallback به تنظیمات دستی
             }
         }
         openSmsDefaultFallbackSettings();
+    }
+
+    /**
+     * وقتی پنجره سیستمی انتخاب اپ پیش‌فرض پیامک بسته شد ولی اپ همچنان پیش‌فرض
+     * نشده بود، راهنمای کامل (و بدون بریدن متن) با دکمه‌های عملی نمایش داده می‌شود.
+     */
+    private void showSmsRoleFailedDialog() {
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(8), 0, dp(8), 0);
+
+        TextView text = new TextView(this);
+        text.setText("اپ پیش‌فرض پیامک نشد. مرحله به مرحله چک کن:\n\n"
+                + "1️⃣ نسخه اپ: تنظیمات ← Apps ← این اپ؛ باید نسخه 1.5.1 (کد 42) یا بالاتر نصب باشد. اگر نسخه قدیمی است، APK جدید را نصب کن.\n\n"
+                + "2️⃣ تنظیمات ← Apps ← Default apps ← SMS app ← این اپ (SellBot SMS Verifier) را انتخاب کن.\n\n"
+                + "3️⃣ گوشی شیائومی/ردمی: علاوه بر بالا، مجوز پیامک اعلانی MIUI را با دکمه مخصوص در بخش امنیت اپ روی «همیشه اجازه بده» بگذار.\n\n"
+                + "4️⃣ گوشی را یک‌بار ری‌استارت کن و دوباره تلاش کن.");
+        text.setTextSize(13);
+        text.setLineSpacing(0, 1.2f);
+        text.setPadding(dp(4), dp(4), dp(4), dp(8));
+        box.addView(text, matchWrap());
+
+        new AlertDialog.Builder(this)
+                .setTitle("⚠️ فعال‌سازی پیش‌فرض پیامک انجام نشد")
+                .setView(box)
+                .setPositiveButton("🔄 تلاش دوباره", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        openSmsDefaultRole();
+                    }
+                })
+                .setNeutralButton("🗺️ تنظیمات پیش‌فرض", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        openSmsDefaultFallbackSettings();
+                    }
+                })
+                .setNegativeButton("بستن", null)
+                .show();
     }
 
     private void openSmsDefaultFallbackSettings() {
