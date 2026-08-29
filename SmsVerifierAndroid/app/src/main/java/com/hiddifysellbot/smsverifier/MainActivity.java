@@ -8,6 +8,7 @@ import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -970,6 +971,17 @@ public class MainActivity extends Activity {
                                 }
                             }
                     });
+
+            addButtonRow(smsRoleCard,
+                    new String[]{"🔍 تشخیص کامل الزامات پیش‌فرض پیامک"},
+                    new View.OnClickListener[]{
+                            new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    showSmsRoleDiagnosticsDialog();
+                                }
+                            }
+                    });
         }
 
         addButtonRow(securityCard,
@@ -1589,6 +1601,132 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("بستن", null)
                 .show();
+
+        Button diagButton = new Button(this);
+        diagButton.setText("🔍 نمایش گزارش تشخیص (برای اشکال‌زدایی)");
+        styleButton(diagButton, false);
+        box.addView(diagButton, matchWrap());
+        diagButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showSmsRoleDiagnosticsDialog();
+            }
+        });
+    }
+
+    private void showSmsRoleDiagnosticsDialog() {
+        TextView reportView = new TextView(this);
+        reportView.setText(buildSmsRoleDiagnostics());
+        reportView.setTextSize(12);
+        reportView.setLineSpacing(0, 1.2f);
+        reportView.setPadding(dp(16), dp(12), dp(16), dp(12));
+        reportView.setTextIsSelectable(true);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(reportView);
+        new AlertDialog.Builder(this)
+                .setTitle("🔍 تشخیص کامل اپ پیش‌فرض پیامک")
+                .setView(scroll)
+                .setPositiveButton("بستن", null)
+                .show();
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "-";
+        }
+    }
+
+    private String buildSmsRoleDiagnostics() {
+        StringBuilder report = new StringBuilder();
+        report.append("نسخه اندروید (SDK): ").append(Build.VERSION.SDK_INT).append('\n');
+        report.append("نسخه اپ: ").append(versionName()).append('\n');
+        String defaultPkg;
+        try {
+            defaultPkg = Telephony.Sms.getDefaultSmsPackage(this);
+        } catch (Exception e) {
+            defaultPkg = null;
+        }
+        report.append("اپ پیش‌فرض پیامک فعلی گوشی: ")
+                .append(defaultPkg == null || defaultPkg.trim().isEmpty() ? "-" : defaultPkg).append('\n');
+        report.append("این اپ پیش‌فرض پیامک است: ").append(isDefaultSmsApp() ? "بله ✅" : "خیر ❌").append('\n');
+        try {
+            RoleManager roleManager = (RoleManager) getSystemService(ROLE_SERVICE);
+            if (roleManager == null) {
+                report.append("RoleManager: در دسترس نیست ❌\n");
+            } else {
+                report.append("RoleManager: موجود | ROLE_SMS available: ")
+                        .append(roleManager.isRoleAvailable(RoleManager.ROLE_SMS) ? "بله ✅" : "خیر ❌")
+                        .append(" | held: ")
+                        .append(roleManager.isRoleHeld(RoleManager.ROLE_SMS) ? "بله ✅" : "خیر ❌")
+                        .append('\n');
+            }
+        } catch (Exception e) {
+            report.append("RoleManager خطا: ").append(e.getClass().getSimpleName()).append('\n');
+        }
+
+        report.append('\n').append("الزامات کاندید شدن به اپ پیش‌فرض پیامک:\n");
+        appendComponentCheck(report, "گیرنده SMS_DELIVER با مجوز BROADCAST_SMS",
+                "android.provider.Telephony.SMS_DELIVER", "android.permission.BROADCAST_SMS", true);
+        appendComponentCheck(report, "گیرنده WAP_PUSH_DELIVER با مجوز BROADCAST_WAP_PUSH",
+                "android.provider.Telephony.WAP_PUSH_DELIVER", "android.permission.BROADCAST_WAP_PUSH", true);
+        appendComponentCheck(report, "سرویس CONFIGURATION",
+                "android.telephony.action.CONFIGURATION", null, false);
+        try {
+            Intent sendto = new Intent(Intent.ACTION_SENDTO, Uri.parse("sms:"));
+            sendto.setPackage(getPackageName());
+            List<ResolveInfo> activities = getPackageManager().queryIntentActivities(sendto, 0);
+            report.append(activities != null && !activities.isEmpty() ? "✅" : "❌")
+                    .append(" اکتیویتی SENDTO (sms/smsto/mms/mmsto)\n");
+        } catch (Exception e) {
+            report.append("❌ اکتیویتی SENDTO (خطا: ").append(e.getClass().getSimpleName()).append(")\n");
+        }
+
+        report.append('\n').append("مجوزهای خواسته‌شده و وضعیت grant:\n");
+        String[] perms = {
+                Manifest.permission.RECEIVE_SMS,
+                Manifest.permission.READ_SMS,
+                Manifest.permission.SEND_SMS,
+                Manifest.permission.RECEIVE_MMS,
+                Manifest.permission.RECEIVE_WAP_PUSH
+        };
+        for (String perm : perms) {
+            boolean granted = checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED;
+            report.append(granted ? "✅ " : "❌ ").append(perm).append('\n');
+        }
+        report.append('\n').append("راهنما: همه ردیف‌های بالا باید ✅ باشند تا اپ در لیست «برنامه پیامک پیش‌فرض» گوشی ظاهر شود. اگر ردیفی ❌ است، عکس این صفحه را برای پشتیبانی بفرست.");
+        return report.toString();
+    }
+
+    private void appendComponentCheck(StringBuilder report, String label, String action, String requiredPermission, boolean receiver) {
+        try {
+            Intent intent = new Intent(action);
+            intent.setPackage(getPackageName());
+            PackageManager pm = getPackageManager();
+            List<ResolveInfo> infos = receiver ? pm.queryIntentReceivers(intent, 0) : pm.queryIntentServices(intent, 0);
+            boolean found = false;
+            if (infos != null) {
+                for (ResolveInfo info : infos) {
+                    if (info == null || info.activityInfo == null) {
+                        continue;
+                    }
+                    if (requiredPermission == null || requiredPermission.equals(info.activityInfo.permission)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            report.append(found ? "✅" : "❌").append(' ').append(label);
+            if (!found) {
+                report.append(receiver
+                        ? "\n    (گیرنده‌ای با این اکشن و مجوز لازم پیدا نشد)"
+                        : "\n    (سرویسی با این اکشن پیدا نشد)");
+            }
+            report.append('\n');
+        } catch (Exception e) {
+            report.append("❌ ").append(label).append(" (خطا: ").append(e.getClass().getSimpleName()).append(")\n");
+        }
     }
 
     private void openSmsDefaultFallbackSettings() {
