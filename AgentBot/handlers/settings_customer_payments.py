@@ -707,6 +707,18 @@ async def _send_sms_auto_approval_report(
     tx_code = str(pay.get("tx_code") or "-")
     user_tg_id = int(pay.get("user_id") or 0)
     customer_display = str(pay.get("full_name") or pay.get("username") or user_tg_id)
+
+    # receipt_image = JSON متادیتا + markerهای جداشده با | — ابتدا JSON را جدا کن
+    file_id = ""
+    try:
+        json_part = str(pay.get("receipt_image") or "").split("|", 1)[0].strip()
+        if json_part:
+            meta_obj = json.loads(json_part)
+            if isinstance(meta_obj, dict):
+                file_id = str(meta_obj.get("file_id") or "")
+    except Exception:
+        file_id = ""
+
     caption = (
         "✅ <b>پرداخت با SMS بانک تایید شد</b>\n\n"
         f"🔖 نوع: {'♻️ تمدید اشتراک' if is_renew else '🛍 خرید مستقیم'}\n"
@@ -716,21 +728,14 @@ async def _send_sms_auto_approval_report(
         f"🆔 شناسه پرداخت: {pay_id}\n"
         f"📨 سرشماره SMS: <code>{sender}</code>\n"
         f"🏦 مبلغ خام SMS: {amount_raw} {currency_raw}\n"
-        f"🔖 پیگیری SMS: <code>{reference}</code>"
+        f"🔖 پیگیری SMS: {reference}\n"
+        f"🖼 رسید کاربر: {'پیوست شد' if file_id else 'در دسترس نیست'}"
     )
 
     try:
         profile_kb = _ikb([[IButton(f"👤 {customer_display}", callback_data=f"agbot:custpay:profile:{user_tg_id}")]])
     except Exception:
         profile_kb = None
-
-    file_id = ""
-    try:
-        meta_obj = json.loads(str(pay.get("receipt_image") or "{}"))
-        if isinstance(meta_obj, dict):
-            file_id = str(meta_obj.get("file_id") or "")
-    except Exception:
-        file_id = ""
 
     # file_id رسید مالِ ربات مشتری است؛ باید فایل با ربات مشتری دانلود و با
     # ربات نماینده (context.bot) دوباره آپلود شود وگرنه ارسال عکس شکست می‌خورد
