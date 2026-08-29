@@ -57,6 +57,22 @@
             </intent-filter>
         </receiver>
 
+        <!-- سرویس الزامی پنجم ROLE_SMS: «پاسخ سریع با پیامک».
+             بدون این سرویس PermissionController اپ را کاندید اپ پیش‌فرض پیامک قبول نمی‌کند. -->
+        <service
+            android:name=".RespondViaMessageService"
+            android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
+
         <!-- سرویس الزامی برای کاندید شدن به‌عنوان اپ پیش‌فرض پیامک (ROLE_SMS).
              بدون این سرویس، اپ در تنظیمات «برنامه پیامک پیش‌فرض» اندروید ۱۲/۱۳
              نمایش داده نمی‌شود و دیالوگ فعال‌سازی RoleManager خطا می‌دهد. -->

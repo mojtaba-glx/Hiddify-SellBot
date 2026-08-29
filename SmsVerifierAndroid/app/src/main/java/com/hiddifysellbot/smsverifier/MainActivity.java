@@ -1673,14 +1673,17 @@ public class MainActivity extends Activity {
 
         report.append('\n').append("الزامات کاندید شدن به اپ پیش‌فرض پیامک:\n");
         appendComponentCheck(report, "گیرنده SMS_DELIVER با مجوز BROADCAST_SMS",
-                "android.provider.Telephony.SMS_DELIVER", null,
+                "android.provider.Telephony.SMS_DELIVER", null, null,
                 "android.permission.BROADCAST_SMS", true, "SmsReceiver");
         appendComponentCheck(report, "گیرنده WAP_PUSH_DELIVER با مجوز BROADCAST_WAP_PUSH",
-                "android.provider.Telephony.WAP_PUSH_DELIVER", "application/vnd.wap.mms-message",
+                "android.provider.Telephony.WAP_PUSH_DELIVER", "application/vnd.wap.mms-message", null,
                 "android.permission.BROADCAST_WAP_PUSH", true, "WapPushReceiver");
         appendComponentCheck(report, "سرویس CONFIGURATION",
-                "android.telephony.action.CONFIGURATION", null,
+                "android.telephony.action.CONFIGURATION", null, null,
                 null, false, "SmsConfigService");
+        appendComponentCheck(report, "سرویس RESPOND_VIA_MESSAGE با مجوز SEND_RESPOND_VIA_MESSAGE",
+                "android.intent.action.RESPOND_VIA_MESSAGE", null, "smsto:",
+                "android.permission.SEND_RESPOND_VIA_MESSAGE", false, "RespondViaMessageService");
         try {
             Intent sendto = new Intent(Intent.ACTION_SENDTO, Uri.parse("sms:"));
             sendto.setPackage(getPackageName());
@@ -1733,13 +1736,16 @@ public class MainActivity extends Activity {
     private static final int COMPONENT_MISSING = 0;
 
     private void appendComponentCheck(StringBuilder report, String label, String action, String mimeType,
-                                      String requiredPermission, boolean receiver, String className) {
+                                      String dataScheme, String requiredPermission, boolean receiver, String className) {
         int state = COMPONENT_MISSING;
         PackageManager pm = getPackageManager();
         try {
             Intent intent = new Intent(action);
             if (mimeType != null) {
                 intent.setType(mimeType);
+            }
+            if (dataScheme != null) {
+                intent.setData(Uri.parse(dataScheme));
             }
             intent.setPackage(getPackageName());
             List<ResolveInfo> infos = receiver
