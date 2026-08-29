@@ -776,8 +776,10 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
     time_mode = str(time_mode or "add").strip().lower()
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    # ── زمان ──
+    old_days_left = int(float(svc.get("days_left") or 0) or 0)
+    # ── زمان (مطابق renew_service_with_policy) ──
     if time_mode == "add":
+        new_days_left = old_days_left + extra_days
         end_date = str(svc.get("end_date") or "").strip()
         if end_date:
             try:
@@ -788,16 +790,17 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
             current_end = now
         new_end = current_end + timedelta(days=extra_days)
     else:
+        new_days_left = extra_days
         new_end = now + timedelta(days=extra_days)
     new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
 
-    # ── حجم ──
+    # ── حجم (مطابق renew_service_with_policy) ──
     if vol_mode == "add":
         new_usage_limit = float(svc.get("usage_limit") or 0) + extra_gb
     else:
         new_usage_limit = float(extra_gb)
 
-    # ── پنل‌ها ──
+    # ── پنل‌ها ── (payload مطابق مسیر تمدید نماینده در AgentBot.services.subscription_service)
     targets = get_service_panel_targets(svc)
     if targets:
         primary_sid = int(svc.get("server_id") or 0)
@@ -805,14 +808,18 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
             (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
             targets[0],
         )
-        panel_payload = {
+        patch_data = {
             "usage_limit_GB": new_usage_limit,
-            "expire_date": new_end_str.split(" ")[0],
+            "package_days": int(new_days_left),
         }
+        if vol_mode == "reset":
+            patch_data["current_usage_GB"] = 0
+        if time_mode == "reset":
+            patch_data["start_date"] = now.strftime("%Y-%m-%d")
         try:
             await multi_panel.patch_user(
                 primary_target[0], primary_target[1],
-                panel_payload,
+                patch_data,
                 marzban_username=primary_target[2],
             )
         except Exception as e:
@@ -821,12 +828,20 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
             if int(srv.get("id") or 0) == int(primary_target[0].get("id") or 0):
                 continue
             try:
-                await multi_panel.patch_user(srv, uuid, panel_payload, marzban_username=marzban_un)
+                await multi_panel.patch_user(srv, uuid, patch_data, marzban_username=marzban_un)
             except Exception as e:
                 logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
 
     # ── دیتابیس محلی ──
     agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, vol_mode, time_mode)
+
+    # ── فعال‌سازی مجدد (اگر به‌خاطر اتمام حجم/زمان غیرفعال شده بود) ──
+    for srv, uuid, marzban_un in targets:
+        try:
+            await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+        except Exception as e:
+            logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
+    agent_db.set_service_active(service_id, True)
 
     notify = (
         "♻️ اشتراک شما با موفقیت تمدید شد.\n\n"
