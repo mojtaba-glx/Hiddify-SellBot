@@ -96,5 +96,18 @@
   "lang_changed": "✅ Language changed to {lang_name}.",
   "lang_btn": "🌐 Change language",
   "not_allowed_now": "❌ This action is not available at this step.",
-  "info_sent": "📩 Your information has been sent."
+  "info_sent": "📩 Your information has been sent.",
+  "gb_gigabyte_label": "{g} GB",
+  "months_count_label": "{m} months",
+  "buy_ready_plans": "📋 Ready-made plans",
+  "mixed_fixed_btn": "📦 Fixed packages (recommended)",
+  "mixed_dyn_btn": "🎛 Custom package (choose volume & time)",
+  "back_to_locations": "🔙 Back to locations",
+  "pkg_volume_line": "📊 Volume: {g} GB",
+  "pkg_days_line": "⏳ Duration: {d} days",
+  "pkg_price_line": "💰 Price: {p} Toman",
+  "service_not_owned": "❌ This service does not belong to you.",
+  "flow_buy_title": "Buy Subscription",
+  "flow_renew_title": "Renew Subscription",
+  "status_loading": "⏳ Please wait. Loading your subscription status..."
 }

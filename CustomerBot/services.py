@@ -15,6 +15,7 @@ from urllib.error import HTTPError
 from uuid import uuid4
 
 from Shared import agent_db, database, hiddify_api, multi_panel
+from Shared import i18n as i18n_mod
 from AgentBot.database import get_fixed_plan
 from CustomerBot.utils.helpers import escape_markdown
 
@@ -576,7 +577,12 @@ async def service_is_renewable_live(service_id: int, agent_id: int) -> bool:
     return ok
 
 
-def renew_not_allowed_text(agent_id: int) -> str:
+def renew_not_allowed_text(agent_id: int, lang: str = "fa") -> str:
+    if (lang or "fa").strip().lower() != "fa":
+        return i18n_mod.t(
+            "renew_not_allowed", lang,
+            max_days=_renew_limits(agent_id)[0], max_gb=_renew_limits(agent_id)[1],
+        )
     br = _renew_br_settings(agent_id)
     try:
         max_days = int(br.get("renew_max_days") or 3)
@@ -591,6 +597,19 @@ def renew_not_allowed_text(agent_id: int) -> str:
         f"1- کمتر از {max_days} روز تا اتمام اشتراک شما باقی مانده باشد.\n"
         f"2- حجم باقی مانده اشتراک شما کمتر از {max_remaining_gb} گیگابایت باشد."
     )
+
+
+def _renew_limits(agent_id: int) -> tuple:
+    br = _renew_br_settings(agent_id)
+    try:
+        max_days = int(br.get("renew_max_days") or 3)
+    except (TypeError, ValueError):
+        max_days = 3
+    try:
+        max_remaining_gb = int(br.get("renew_max_remaining_gb") or 3)
+    except (TypeError, ValueError):
+        max_remaining_gb = 3
+    return max_days, max_remaining_gb
 
 
 def is_customer_service_visible(svc: Optional[Dict[str, Any]]) -> bool:

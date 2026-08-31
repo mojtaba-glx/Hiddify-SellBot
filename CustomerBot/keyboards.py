@@ -194,91 +194,80 @@ def renew_payment_keyboard(service_id: int, server_id: int, gb: int, days: int, 
     ])
 
 
-def buy_wizard_keyboard(server_id, gb, months, price, off_percent=0):
+def _wizard_rows(prefix: str, server_id, gb, months, price, off_percent=0, lang: str = "fa",
+                 confirm_label: str = "", back_cb: str = "buy:back_main"):
+    price_str = f"{price:,}"
+    return [
+        [InlineKeyboardButton(i18n.t("volume_label", lang), callback_data="noop")],
+        [
+            InlineKeyboardButton("➖", callback_data=f"{prefix}:{server_id}:gb_dec"),
+            InlineKeyboardButton(i18n.t("gb_gigabyte_label", lang, g=gb), callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"{prefix}:{server_id}:gb_inc")
+        ],
+        [InlineKeyboardButton(i18n.t("time_label", lang), callback_data="noop")],
+        [
+            InlineKeyboardButton("➖", callback_data=f"{prefix}:{server_id}:month_dec"),
+            InlineKeyboardButton(i18n.t("months_count_label", lang, m=months), callback_data="noop"),
+            InlineKeyboardButton("➕", callback_data=f"{prefix}:{server_id}:month_inc")
+        ],
+        [
+            InlineKeyboardButton(i18n.t("discount_label", lang, p=off_percent), callback_data="noop"),
+            InlineKeyboardButton(i18n.t("price_label", lang, p=price_str), callback_data="noop")
+        ],
+        [InlineKeyboardButton(confirm_label, callback_data=f"{prefix.replace('wiz', 'buy') if prefix == 'wiz' else 'renew'}:confirm_dyn:{server_id}")],
+        [InlineKeyboardButton(i18n.t("back", lang), callback_data=back_cb)]
+    ]
+
+
+def buy_wizard_keyboard(server_id, gb, months, price, off_percent=0, lang: str = "fa"):
+    return InlineKeyboardMarkup(
+        _wizard_rows("wiz", server_id, gb, months, price, off_percent, lang,
+                     confirm_label=i18n.t("buy_confirm_pay", lang), back_cb="buy:back_main")
+    )
+
+
+def mixed_buy_keyboard(server_id, gb, days, price, plans=None, off_percent=0, lang: str = "fa"):
     price_str = f"{price:,}"
     keyboard = [
-        [InlineKeyboardButton("📊 حجم", callback_data="noop")],
+        [InlineKeyboardButton(i18n.t("buy_build_package", lang), callback_data="noop")],
+        [InlineKeyboardButton(i18n.t("volume_label", lang), callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:gb_dec"),
-            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
+            InlineKeyboardButton(i18n.t("gb_gigabyte_label", lang, g=gb), callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:gb_inc")
         ],
-        [InlineKeyboardButton("⏳ زمان", callback_data="noop")],
+        [InlineKeyboardButton(i18n.t("time_label", lang), callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:month_dec"),
-            InlineKeyboardButton(f"{months} ماهه", callback_data="noop"),
+            InlineKeyboardButton(i18n.t("months_count_label", lang, m=days), callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:month_inc")
         ],
         [
-            InlineKeyboardButton(f"🏷 تخفیف: {off_percent}%", callback_data="noop"),
-            InlineKeyboardButton(f"💰 قیمت: {price_str} تومان", callback_data="noop")
+            InlineKeyboardButton(i18n.t("discount_label", lang, p=off_percent), callback_data="noop"),
+            InlineKeyboardButton(i18n.t("price_label", lang, p=price_str), callback_data="noop")
         ],
-        [InlineKeyboardButton("💳 تایید و خرید", callback_data=f"buy:confirm_dyn:{server_id}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="buy:back_main")]
+        [InlineKeyboardButton(i18n.t("buy_confirm_pay", lang), callback_data=f"buy:confirm_dyn:{server_id}")],
+        [InlineKeyboardButton(i18n.t("buy_ready_plans", lang), callback_data=f"wiz:{server_id}:show_fixed")],
+        [InlineKeyboardButton(i18n.t("back", lang), callback_data="buy:back_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
-def mixed_buy_keyboard(server_id, gb, days, price, plans=None, off_percent=0):
-    price_str = f"{price:,}"
-    keyboard = [
-        [InlineKeyboardButton("🎛 بسته دلخواه خود را بسازید", callback_data="noop")],
-        [InlineKeyboardButton("📊 حجم", callback_data="noop")],
-        [
-            InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:gb_dec"),
-            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
-            InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:gb_inc")
-        ],
-        [InlineKeyboardButton("⏳ زمان", callback_data="noop")],
-        [
-            InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:month_dec"),
-            InlineKeyboardButton(f"{days} ماهه", callback_data="noop"),
-            InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:month_inc")
-        ],
-        [
-            InlineKeyboardButton(f"🏷 تخفیف: {off_percent}%", callback_data="noop"),
-            InlineKeyboardButton(f"💰 قیمت: {price_str}", callback_data="noop")
-        ],
-        [InlineKeyboardButton("💳 خرید بسته دلخواه", callback_data=f"buy:confirm_dyn:{server_id}")],
-        [InlineKeyboardButton("📋 پلن های آماده", callback_data=f"wiz:{server_id}:show_fixed")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="buy:back_main")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def mixed_mode_keyboard(server_id):
+def mixed_mode_keyboard(server_id, lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦 بسته‌های ثابت (پیشنهادی)", callback_data=f"buy:mixed:fixed:{server_id}")],
-        [InlineKeyboardButton("🎛 بسته دلخواه (تعیین حجم و زمان)", callback_data=f"buy:mixed:dyn:{server_id}")],
-        [InlineKeyboardButton("🔙 بازگشت به لوکیشن‌ها", callback_data="buy:back_main")]
+        [InlineKeyboardButton(i18n.t("mixed_fixed_btn", lang), callback_data=f"buy:mixed:fixed:{server_id}")],
+        [InlineKeyboardButton(i18n.t("mixed_dyn_btn", lang), callback_data=f"buy:mixed:dyn:{server_id}")],
+        [InlineKeyboardButton(i18n.t("back_to_locations", lang), callback_data="buy:back_main")]
     ])
 
 
 
 
-def renew_wizard_keyboard(server_id, gb, months, price, off_percent=0):
-    price_str = f"{price:,}"
-    keyboard = [
-        [InlineKeyboardButton("📊 حجم", callback_data="noop")],
-        [
-            InlineKeyboardButton("➖", callback_data=f"rwiz:{server_id}:gb_dec"),
-            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
-            InlineKeyboardButton("➕", callback_data=f"rwiz:{server_id}:gb_inc")
-        ],
-        [InlineKeyboardButton("⏳ زمان", callback_data="noop")],
-        [
-            InlineKeyboardButton("➖", callback_data=f"rwiz:{server_id}:month_dec"),
-            InlineKeyboardButton(f"{months} ماهه", callback_data="noop"),
-            InlineKeyboardButton("➕", callback_data=f"rwiz:{server_id}:month_inc")
-        ],
-        [
-            InlineKeyboardButton(f"🏷 تخفیف: {off_percent}%", callback_data="noop"),
-            InlineKeyboardButton(f"💰 قیمت: {price_str} تومان", callback_data="noop")
-        ],
-        [InlineKeyboardButton("💳 تایید و تمدید", callback_data=f"renew:confirm_dyn:{server_id}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="renew:back:0")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def renew_wizard_keyboard(server_id, gb, months, price, off_percent=0, lang: str = "fa"):
+    return InlineKeyboardMarkup(
+        _wizard_rows("rwiz", server_id, gb, months, price, off_percent, lang,
+                     confirm_label=i18n.t("buy_confirm_renew", lang), back_cb="renew:back:0")
+    )
 
 
 def confirm_payment_keyboard():

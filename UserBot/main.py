@@ -2573,8 +2573,8 @@ async def _deactivate_created_users(created_nodes: list[dict]) -> None:
             await hiddify_api.disable_user(server, uuid)
             if marzban_un:
                 try:
-                    from Shared import marzban_api
-                    await marzban_api.disable_user(server, marzban_un)
+                    from Shared import multi_panel
+                    await multi_panel.panel_api(server).disable_user(server, marzban_un)
                 except Exception:
                     pass
         except Exception as e:
@@ -4883,7 +4883,8 @@ async def _send_buy_flow_for_server(
             return
 
     display_mode = _resolve_plan_display_mode(server_block)
-    title = "تمدید اشتراک" if is_renew else "خرید اشتراک"
+    _lg = _user_lang(user_id)
+    title = i18n.t("flow_renew_title", _lg) if is_renew else i18n.t("flow_buy_title", _lg)
 
     if display_mode == "mixed":
         dyn_settings = server_block.get("dynamic_settings", {})
@@ -6015,9 +6016,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(f"renew_target_{user_id}", None)
         br = _get_buy_renew_settings()
         if not bool(br.get("enable_buy", True)):
+            _lg = _user_lang(user_id)
             await update.message.reply_text(
-                "🚫 خرید اشتراک در حال حاضر غیرفعال است.",
-                reply_markup=_main_menu_keyboard(),
+                i18n.t("buy_disabled", _lg),
+                reply_markup=_main_menu_keyboard(lang=_lg),
             )
             return
         buy_open_key = f"buy_menu_open_until_{user_id}"
@@ -6053,18 +6055,19 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             u_db = userbot_db.get_user_by_id(internal_user_id) or {}
 
+        _lg = _user_lang(user_id)
         if int(u_db.get("got_free_trial") or 0) == 1:
             await update.message.reply_text(
-                "🚫 شما قبلا اکانت تست رایگان خود را دریافت نموده‌اید!",
-                reply_markup=_main_menu_keyboard(),
+                i18n.t("trial_already_msg", _lg),
+                reply_markup=_main_menu_keyboard(lang=_lg),
             )
             return
 
         trial_settings = userbot_db.get_trial_spec_settings()
         if not bool(trial_settings.get("enabled", True)):
             await update.message.reply_text(
-                "🚫 دریافت تست رایگان در حال حاضر غیرفعال است.",
-                reply_markup=_main_menu_keyboard(),
+                i18n.t("trial_disabled_msg", _lg),
+                reply_markup=_main_menu_keyboard(lang=_lg),
             )
             return
 
@@ -6114,9 +6117,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
             return
 
+        _lg = _user_lang(user_id)
         await update.message.reply_text(
-            "👇 لطفا یکی از اشتراک‌های خود را برای تمدید انتخاب نمایید",
-reply_markup=renew_services_keyboard(renewable_services),
+            i18n.t("renew_choose", _lg),
+            reply_markup=renew_services_keyboard(renewable_services),
         )
 
     elif "کیف پول" in text:
@@ -6140,13 +6144,15 @@ reply_markup=renew_services_keyboard(renewable_services),
                 bool(pay_settings.get("enable_crypto", False)),
             ]
         ):
+            _lg = _user_lang(user_id)
             await update.message.reply_text(
-                f"🔻 موجودی کیف پول شما {balance:,} تومان میباشد{status_line}\n\n🚫 در حال حاضر هیچ روش شارژی فعال نیست.",
+                i18n.t("wallet_title", _lg, b=balance) + status_line + "\n\n" + i18n.t("wallet_no_method", _lg),
                 reply_markup=wallet_inline_keyboard(show_coupon=can_use_coupon, show_card=False),
             )
             return
+        _lg = _user_lang(user_id)
         await update.message.reply_text(
-            f"🔻 موجودی کیف پول شما {balance:,} تومان میباشد{status_line}",
+            i18n.t("wallet_title", _lg, b=balance) + status_line,
             reply_markup=wallet_inline_keyboard(
                 show_coupon=can_use_coupon,
                 show_card=bool(pay_settings.get("enable_card_to_card", True)),
@@ -6160,7 +6166,7 @@ reply_markup=renew_services_keyboard(renewable_services),
         loading_key = f"status_loading_{user_id}"
         if context.user_data.get(loading_key):
             await update.message.reply_text(
-                "⏳ لطفا صبر کنید. وضعیت اشتراک شما در حال بارگذاری است...",
+                i18n.t("status_loading", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return

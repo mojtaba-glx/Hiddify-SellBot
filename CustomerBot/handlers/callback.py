@@ -1099,12 +1099,13 @@ async def _handle_status(query, context, agent_id, user, data):
         if not svc:
             await msg.edit_text("❌ سرویس یافت نشد.")
             return
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         br = get_buy_renew_settings(agent_id)
         if not br.get("enable_renew", True):
-            await msg.edit_text("🚫 تمدید غیرفعال است.")
+            await msg.edit_text(i18n.t("renew_disabled", _lg))
             return
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
-            await _edit_or_reply(msg, renew_not_allowed_text(agent_id))
+            await _edit_or_reply(msg, renew_not_allowed_text(agent_id, _lg))
             return
         context.user_data["renew_target_service_id"] = int(svc_id)
         server_id = svc.get("server_id", 0)
@@ -1112,11 +1113,11 @@ async def _handle_status(query, context, agent_id, user, data):
         if mode == "fixed":
             plans = get_fixed_plans(agent_id)
             if not plans:
-                await _edit_or_reply(msg, "❌ هیچ پلنی برای این نماینده تعریف نشده است.")
+                await _edit_or_reply(msg, i18n.t("no_plans", _lg))
                 return
             await _edit_or_reply(
                 msg,
-                "📋 پلن تمدید را انتخاب کنید:",
+                i18n.t("renew_choose_plan", _lg),
                 reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
             )
         else:
@@ -1133,8 +1134,8 @@ async def _handle_status(query, context, agent_id, user, data):
             price, off_pct = _calc_dynamic_price(gb, months, dyn)
             await _edit_or_reply(
                 msg,
-                "🎛 بسته تمدید را انتخاب کنید:",
-                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+                i18n.t("renew_choose_package", _lg),
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct, lang=_lg),
             )
 
     elif data.startswith(CB_STATUS_LIST_BACK):
@@ -1197,13 +1198,14 @@ async def _handle_renew(query, context, agent_id, user, data):
         if _wizard_expired(context):
             _reset_buy_wizard(context)
             _start_buy_wizard(context)
+            _lg = i18n.get_customer_lang(agent_id, user.id)
             gb = int(safe_float(dyn.get("min_gb", 1), 1.0))
             min_month, max_month, _ = _dyn_month_limits(dyn)
             months = min_month
             price, off_pct = _calc_dynamic_price(gb, months, dyn)
             await msg.edit_text(
-                "⏳ نشست تمدید به پایان رسیده بود؛ از ابتدا شروع میشود:\n\n🎛 بسته تمدید را انتخاب کنید:",
-                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+                i18n.t("renew_session_expired", _lg) + "\n\n" + i18n.t("renew_choose_package", _lg),
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct, lang=_lg),
             )
             context.user_data[UD_BUY_GB] = gb
             context.user_data[UD_BUY_MONTHS] = months
@@ -1236,9 +1238,10 @@ async def _handle_renew(query, context, agent_id, user, data):
         context.user_data[UD_BUY_MONTHS] = months
         price, off_pct = _calc_dynamic_price(gb, months, dyn)
         try:
+            _lg = i18n.get_customer_lang(agent_id, user.id)
             await msg.edit_text(
-                "🎛 بسته تمدید را انتخاب کنید:",
-                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+                i18n.t("renew_choose_package", _lg),
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct, lang=_lg),
             )
         except Exception:
             pass
@@ -1279,12 +1282,13 @@ async def _handle_renew(query, context, agent_id, user, data):
         context.user_data[UD_BUY_MONTHS] = months
         context.user_data.pop(UD_BUY_PLAN_ID, None)
         context.user_data.pop(UD_WIZARD_START_TS, None)
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
-            f"📄 اطلاعات بسته تمدید\n\n"
-            f"📊 حجم: {gb:g} گیگ\n"
-            f"⏳ زمان: {days} روز\n"
-            f"💰 قیمت: {price:,} تومان\n\n"
-            "💳 لطفاً روش پرداخت را انتخاب کنید:",
+            i18n.t("renew_confirm_title", _lg) + "\n\n"
+            + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
+            + i18n.t("pkg_days_line", _lg, d=days) + "\n"
+            + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
+            + i18n.t("buy_choose_method", _lg),
             reply_markup=renew_payment_keyboard(service_id, server_id, int(gb), days, price),
         )
 
@@ -1316,12 +1320,13 @@ async def _handle_renew(query, context, agent_id, user, data):
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = max(1, days // 30)
         context.user_data.pop(UD_WIZARD_START_TS, None)
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
-            f"📄 اطلاعات بسته تمدید\n\n"
-            f"📊 حجم: {gb:g} گیگ\n"
-            f"⏳ زمان: {days} روز\n"
-            f"💰 قیمت: {price:,} تومان\n\n"
-            "💳 لطفاً روش پرداخت را انتخاب کنید:",
+            i18n.t("renew_confirm_title", _lg) + "\n\n"
+            + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
+            + i18n.t("pkg_days_line", _lg, d=days) + "\n"
+            + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
+            + i18n.t("buy_choose_method", _lg),
             reply_markup=renew_payment_keyboard(service_id, server_id, gb, days, price),
         )
 
@@ -1333,13 +1338,14 @@ async def _handle_renew(query, context, agent_id, user, data):
         days = int(parts[5]) if len(parts) > 5 else 0
         price = int(parts[6]) if len(parts) > 6 else 0
         svc = get_service_by_id(service_id)
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         if not svc:
-            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("service_not_found", _lg), reply_markup=main_menu_keyboard(lang=_lg))
             return
         # بررسی مالکیت سرویس (ضد دستکاری callback data)
         cust = get_customer_by_telegram_id(agent_id, user.id)
         if not cust or int(svc.get("customer_id") or 0) != int(cust.get("id") or 0):
-            await msg.reply_text("❌ این سرویس متعلق به شما نیست.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("service_not_owned", _lg), reply_markup=main_menu_keyboard(lang=_lg))
             return
         # قوانین تمدید — گیت نهایی سمت سرور (ضد پرش مراحل)
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
@@ -1371,10 +1377,10 @@ async def _handle_renew(query, context, agent_id, user, data):
         card = _random_active_agent_card(agent_id)
         if not card.get("number"):
             try:
-                await query.answer("❌ کارتی برای پرداخت ثبت نشده است", show_alert=True)
+                await query.answer(i18n.t("no_card", _lg), show_alert=True)
             except Exception:
                 pass
-            await _back_to_main_menu(msg, "❌ کارتی برای پرداخت ثبت نشده است.")
+            await _back_to_main_menu(msg, i18n.t("no_card", _lg))
             return
         wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
         order = create_order(
@@ -1411,19 +1417,20 @@ async def _handle_renew(query, context, agent_id, user, data):
             context.user_data.pop("pending_tx_marker", None)
         context.user_data["pending_pay_price"] = pay_price
         card_text = ps.get("card_to_card_text", "0")
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         if card_text == "0":
             rial_price = pay_price * 10
             card_text = (
-                f"💰 لطفا دقیقا مبلغ: `{rial_price}` ریال\n"
-                f"💰 معادل: `{pay_price}` تومان\n"
-                f"💳 به شماره کارت: `{card.get('number', '?')}`\n"
-                f"👤 به نام: {card.get('owner', '?')}\n"
-                f"❗️ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.\n\n"
-                f"⚡️ پس از تایید پرداخت، تمدید اشتراک شما به‌صورت خودکار انجام می‌شود."
+                i18n.t("pay_exact_rial", _lg, r=f"{rial_price:,}") + "\n"
+                + i18n.t("pay_equiv_toman", _lg, p=f"{pay_price:,}") + "\n"
+                + i18n.t("pay_card_number", _lg, c=card.get("number", "?")) + "\n"
+                + i18n.t("pay_card_owner", _lg, o=card.get("owner", "?")) + "\n"
+                + i18n.t("card_receipt_intro", _lg) + "\n\n"
+                + i18n.t("renew_auto_done", _lg)
             )
             if tx_marker > 0:
                 card_text = (
-                    f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker} تومان\n\n"
+                    i18n.t("tx_spec_applied", _lg, m=tx_marker) + "\n\n"
                     f"{card_text}"
                 )
         context.user_data.pop("renew_target_service_id", None)
@@ -1867,12 +1874,13 @@ async def _handle_buy(query, context, agent_id, user, data):
         days = safe_int(p.get("days", 0))
         context.user_data[UD_BUY_SERVER_ID] = server_id
         context.user_data[UD_BUY_PLAN_ID] = plan_id
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
-            f"📄 اطلاعات پلن انتخاب شده\n\n"
-            f"📊 حجم: {gb:g} گیگ\n"
-            f"⏳ زمان: {days} روز\n"
-            f"💰 قیمت: {price:,} تومان\n\n"
-            "💳 لطفاً روش پرداخت را انتخاب کنید:",
+            i18n.t("buy_plan_title", _lg) + "\n\n"
+            + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
+            + i18n.t("pkg_days_line", _lg, d=days) + "\n"
+            + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
+            + i18n.t("buy_choose_method", _lg),
             reply_markup=selected_plan_keyboard(server_id, int(gb), days, price),
         )
 
@@ -1899,12 +1907,13 @@ async def _handle_buy(query, context, agent_id, user, data):
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = months
         context.user_data.pop(UD_WIZARD_START_TS, None)
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
-            f"📄 اطلاعات پلن انتخاب شده\n\n"
-            f"📊 حجم: {gb:g} گیگ\n"
-            f"⏳ زمان: {days} روز\n"
-            f"💰 قیمت: {price:,} تومان\n\n"
-            "💳 لطفاً روش پرداخت را انتخاب کنید:",
+            i18n.t("buy_plan_title", _lg) + "\n\n"
+            + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
+            + i18n.t("pkg_days_line", _lg, d=days) + "\n"
+            + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
+            + i18n.t("buy_choose_method", _lg),
             reply_markup=selected_plan_keyboard(server_id, int(gb), days, price),
         )
 
@@ -1918,12 +1927,13 @@ async def _handle_buy(query, context, agent_id, user, data):
         price = safe_int(p.get("price", 0))
         gb = safe_float(p.get("gb", 0))
         days = safe_int(p.get("days", 0))
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
-            f"📄 اطلاعات پلن انتخاب شده\n\n"
-            f"📊 حجم: {gb:g} گیگ\n"
-            f"⏳ زمان: {days} روز\n"
-            f"💰 قیمت: {price:,} تومان\n\n"
-            "💳 لطفاً روش پرداخت را انتخاب کنید:",
+            i18n.t("buy_plan_title", _lg) + "\n\n"
+            + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
+            + i18n.t("pkg_days_line", _lg, d=days) + "\n"
+            + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
+            + i18n.t("buy_choose_method", _lg),
             reply_markup=selected_plan_keyboard(server_id, int(gb), days, price),
         )
 

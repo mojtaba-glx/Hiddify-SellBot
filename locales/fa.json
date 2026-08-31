@@ -96,5 +96,18 @@
   "lang_changed": "✅ زبان به {lang_name} تغییر کرد.",
   "lang_btn": "🌐 تغییر زبان",
   "not_allowed_now": "❌ در این مرحله امکان انجام این عملیات نیست.",
-  "info_sent": "📩 اطلاعات برای شما ارسال شد."
+  "info_sent": "📩 اطلاعات برای شما ارسال شد.",
+  "gb_gigabyte_label": "{g} گیگابایت",
+  "months_count_label": "{m} ماهه",
+  "buy_ready_plans": "📋 پلن های آماده",
+  "mixed_fixed_btn": "📦 بسته‌های ثابت (پیشنهادی)",
+  "mixed_dyn_btn": "🎛 بسته دلخواه (تعیین حجم و زمان)",
+  "back_to_locations": "🔙 بازگشت به لوکیشن‌ها",
+  "pkg_volume_line": "📊 حجم: {g} گیگ",
+  "pkg_days_line": "⏳ زمان: {d} روز",
+  "pkg_price_line": "💰 قیمت: {p} تومان",
+  "service_not_owned": "❌ این سرویس متعلق به شما نیست.",
+  "flow_buy_title": "خرید اشتراک",
+  "flow_renew_title": "تمدید اشتراک",
+  "status_loading": "⏳ لطفا صبر کنید. وضعیت اشتراک شما در حال بارگذاری است..."
 }

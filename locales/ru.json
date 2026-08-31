@@ -96,5 +96,18 @@
   "lang_changed": "✅ Язык изменён на {lang_name}.",
   "lang_btn": "🌐 Сменить язык",
   "not_allowed_now": "❌ Это действие недоступно на этом шаге.",
-  "info_sent": "📩 Информация отправлена."
+  "info_sent": "📩 Информация отправлена.",
+  "gb_gigabyte_label": "{g} ГБ",
+  "months_count_label": "{m} мес.",
+  "buy_ready_plans": "📋 Готовые планы",
+  "mixed_fixed_btn": "📦 Фиксированные пакеты (рекомендуется)",
+  "mixed_dyn_btn": "🎛 Свой пакет (объём и срок)",
+  "back_to_locations": "🔙 Назад к локациям",
+  "pkg_volume_line": "📊 Объём: {g} ГБ",
+  "pkg_days_line": "⏳ Срок: {d} дней",
+  "pkg_price_line": "💰 Цена: {p} томан",
+  "service_not_owned": "❌ Эта услуга вам не принадлежит.",
+  "flow_buy_title": "Купить подписку",
+  "flow_renew_title": "Продлить подписку",
+  "status_loading": "⏳ Пожалуйста, подождите. Загружаем статус вашей подписки..."
 }
