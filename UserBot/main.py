@@ -6258,17 +6258,18 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
     elif "اتصال اشتراک" in text:
+        _lg = _user_lang(user_id)
         set_user_step(context, user_id, "WAIT_CONNECT_SUB_INPUT")
         await update.message.reply_text(
-            "لطفا اطلاعات اشتراک خود را وارد کنید.\n"
-            "یکی از کانفیگ ها، uuid یا لینک اشتراک⬇️",
-            reply_markup=cancel_keyboard(),
+            i18n.t("connect_prompt", _lg),
+            reply_markup=cancel_keyboard(lang=_lg),
         )
 
     elif "پشتیبانی" in text:
+        _lg = _user_lang(user_id)
         await update.message.reply_text(
-            text_settings.get("ticket_panel_text") or "📩 برای ارتباط با پشتیبانی، پیام خود را ارسال کنید.",
-            reply_markup=support_panel_keyboard(),
+            text_settings.get("ticket_panel_text") or i18n.t("support_panel_msg", _lg),
+            reply_markup=support_panel_keyboard(lang=_lg),
         )
 
     elif "راهنما" in text:
@@ -6278,12 +6279,13 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif "سوالات متداول" in text:
+        _lg = _user_lang(user_id)
         faq_text = str(text_settings.get("faq_text") or "").strip()
         if (not faq_text) or ("به‌زودی تکمیل می‌شود" in faq_text) or ("به زودی تکمیل می شود" in faq_text):
-            faq_text = _default_faq_text()
+            faq_text = i18n.t("faq_default_full", _lg)
         await update.message.reply_text(
             faq_text,
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(lang=_lg),
         )
 
     elif "دعوت دوستان" in text:

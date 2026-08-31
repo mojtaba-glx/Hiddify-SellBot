@@ -161,5 +161,14 @@
   "adm_menu_userbot": "🤖 Users bot management",
   "adm_menu_status": "📊 Server status",
   "adm_menu_backup": "📫 Get backup",
-  "adm_menu_agencies": "🏢 Agencies"
+  "adm_menu_agencies": "🏢 Agencies",
+  "connect_prompt": "Please enter your subscription info.\nOne of the configs, UUID or subscription link ⬇️",
+  "support_panel_msg": "📩 To contact support, send us your message.",
+  "guide_android": "📱 Android guide",
+  "guide_ios": "📱 iOS guide",
+  "guide_windows": "🖥️ Windows guide",
+  "guide_mac": "💻 macOS guide",
+  "guide_linux": "🖥️ Linux guide",
+  "faq_default": "❗️ FAQ\n\nComing soon.",
+  "faq_default_full": "❓ FAQ\n\n1) Where do I paste the subscription link?\nOpen the service from «📊 My subscription» and tap «Subscription link».\n\n2) The config is not connecting — what should I do?\nFirst check your internet and the phone's date/time, then tap «Refresh info».\n\n3) How do I renew?\nChoose the service from «♾ Renew» and buy a renewal plan.\n\n4) Where is support?\nSend your message via the «📩 Support» button."
 }

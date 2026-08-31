@@ -44,12 +44,12 @@ def language_keyboard():
     return InlineKeyboardMarkup(rows)
 
 # --- دکمه بازگشت (برای مراحل پرداخت) ---
-def cancel_keyboard():
-    return ReplyKeyboardMarkup([[KeyboardButton("بازگشت")]], resize_keyboard=True)
+def cancel_keyboard(lang: str = "fa"):
+    return ReplyKeyboardMarkup([[KeyboardButton(i18n.t("btn_back", lang))]], resize_keyboard=True)
 
 # --- دکمه بازگشت قرمز رنگ برای صفحه ارسال رسید ---
-def receipt_cancel_keyboard():
-    return ReplyKeyboardMarkup([[KeyboardButton("بازگشت", style="danger")]], resize_keyboard=True)
+def receipt_cancel_keyboard(lang: str = "fa"):
+    return ReplyKeyboardMarkup([[KeyboardButton(i18n.t("btn_back", lang), style="danger")]], resize_keyboard=True)
 
 # --- انتخاب لوکیشن (Inline) ---
 def location_keyboard(servers, columns: int = 1):
@@ -394,14 +394,14 @@ def force_join_keyboard(join_url: str = ""):
     return InlineKeyboardMarkup(rows)
 
 
-def guide_os_keyboard(back_token: str = "m"):
+def guide_os_keyboard(back_token: str = "m", lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📱 راهنمای اندروید", callback_data=f"guide:android:{back_token}")],
-        [InlineKeyboardButton("📱 راهنمای IOS", callback_data=f"guide:ios:{back_token}")],
-        [InlineKeyboardButton("🖥️ راهنمای ویندوز", callback_data=f"guide:windows:{back_token}")],
-        [InlineKeyboardButton("💻 راهنمای مک", callback_data=f"guide:mac:{back_token}")],
-        [InlineKeyboardButton("🖥️ راهنمای لینوکس", callback_data=f"guide:linux:{back_token}")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data=f"guide:back:{back_token}")],
+        [InlineKeyboardButton(i18n.t("guide_android", lang), callback_data=f"guide:android:{back_token}")],
+        [InlineKeyboardButton(i18n.t("guide_ios", lang), callback_data=f"guide:ios:{back_token}")],
+        [InlineKeyboardButton(i18n.t("guide_windows", lang), callback_data=f"guide:windows:{back_token}")],
+        [InlineKeyboardButton(i18n.t("guide_mac", lang), callback_data=f"guide:mac:{back_token}")],
+        [InlineKeyboardButton(i18n.t("guide_linux", lang), callback_data=f"guide:linux:{back_token}")],
+        [InlineKeyboardButton(i18n.t("back", lang), callback_data=f"guide:back:{back_token}")],
     ])
 
 
@@ -457,12 +457,12 @@ def renew_services_keyboard(services):
     return InlineKeyboardMarkup(rows)
 
 
-def support_panel_keyboard():
+def support_panel_keyboard(lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("❗️سوالات متداول", callback_data="support:faq")],
-        [InlineKeyboardButton("📬تیکت‌های من", callback_data="support:my:1")],
-        [InlineKeyboardButton("📩ایجاد تیکت", callback_data="support:new")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="support:back_main")],
+        [InlineKeyboardButton(i18n.t("menu_faq", lang), callback_data="support:faq")],
+        [InlineKeyboardButton(i18n.t("support_my_tickets", lang), callback_data="support:my:1")],
+        [InlineKeyboardButton(i18n.t("support_new_ticket", lang), callback_data="support:new")],
+        [InlineKeyboardButton(i18n.t("back", lang), callback_data="support:back_main")],
     ])
 
 
