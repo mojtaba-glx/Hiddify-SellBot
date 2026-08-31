@@ -57,6 +57,9 @@ def _get_panel_url(server: Dict[str, Any]) -> str:
     if not url:
         url = str(server.get("marzban_panel_url") or "").strip().rstrip("/")
     if not url:
+        # Fallback: standard panel_url field (used by the AdminBot add-server wizard)
+        url = str(server.get("panel_url") or "").strip().rstrip("/")
+    if not url:
         raise MarzbanApiError("Marzban panel_url is not configured for this server.")
     return url
 
@@ -261,10 +264,19 @@ async def create_user(
 
     username = str(payload.get("username") or "").strip()
     if not username:
+        # Hiddify-style payloads pass "name" — sanitize it into a valid username
+        import re as _re
+        raw_name = str(payload.get("name") or "").strip()
+        username = _re.sub(r'[^a-zA-Z0-9_\-@.]', '_', raw_name).strip("_")[:32]
+    if not username:
         raise MarzbanApiError("username is required for Marzban create_user.")
 
     # Build Marzban payload
-    data_limit_bytes = int(float(payload.get("data_limit_GB") or 0) * 1024 * 1024 * 1024)
+    gb_limit = payload.get("data_limit_GB")
+    if gb_limit is None:
+        # Hiddify-style key
+        gb_limit = payload.get("usage_limit_GB")
+    data_limit_bytes = int(float(gb_limit or 0) * 1024 * 1024 * 1024)
     expire_ts: Optional[int] = None
     expire_days = payload.get("expire_days") or payload.get("package_days")
     if expire_days:
@@ -318,8 +330,8 @@ async def create_user(
             "shadowsocks": {},
         }
 
-    if payload.get("note"):
-        marzban_payload["note"] = str(payload["note"])
+    if payload.get("note") or payload.get("comment"):
+        marzban_payload["note"] = str(payload.get("note") or payload.get("comment"))
 
     if payload.get("status"):
         marzban_payload["status"] = str(payload["status"])
@@ -328,19 +340,21 @@ async def create_user(
     if not isinstance(result, dict):
         raise MarzbanApiError("Marzban create_user returned non-dict response.")
     logger.info("Marzban user created: username=%s", username)
-    return result
+    return normalize_user(result, server=server)
 
 
 async def get_user(server: Dict[str, Any], username: str) -> Dict[str, Any]:
     """
     GET /api/user/{username}
+    Returns a hiddify-like normalized dict (see normalize_user) with the raw
+    response attached under ``_marzban_raw``.
     """
     base = _get_panel_url(server)
     url = f"{base}/api/user/{username}"
     result = await _request("GET", url, server)
     if not isinstance(result, dict):
         raise MarzbanApiError("Marzban get_user returned non-dict response.")
-    return result
+    return normalize_user(result, server=server)
 
 
 async def update_user(
@@ -388,6 +402,8 @@ async def update_user(
         marzban_payload["proxies"] = payload["proxies"]
     if "note" in payload:
         marzban_payload["note"] = str(payload["note"])
+    if "comment" in payload:
+        marzban_payload["note"] = str(payload["comment"])
     if "username" in payload:
         marzban_payload["username"] = str(payload["username"])
 
@@ -428,15 +444,19 @@ async def enable_user(server: Dict[str, Any], username: str) -> Dict[str, Any]:
 async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     GET /api/users
+    Returns hiddify-like normalized user dicts (see normalize_user).
     """
     base = _get_panel_url(server)
     url = f"{base}/api/users"
     result = await _request("GET", url, server)
+    raw_users: List[Dict[str, Any]] = []
     if isinstance(result, dict) and "users" in result:
-        return list(result["users"])
-    if isinstance(result, list):
-        return result
-    raise MarzbanApiError("Unexpected response from list_users.")
+        raw_users = list(result["users"])
+    elif isinstance(result, list):
+        raw_users = result
+    else:
+        raise MarzbanApiError("Unexpected response from list_users.")
+    return [normalize_user(u, server=server) for u in raw_users if isinstance(u, dict)]
 
 
 async def get_user_configs(server: Dict[str, Any], username: str) -> List[str]:
@@ -450,10 +470,18 @@ async def get_user_configs(server: Dict[str, Any], username: str) -> List[str]:
 
 async def get_subscription_url(server: Dict[str, Any], username: str) -> str:
     """
-    Get the subscription URL for a Marzban user.
+    Get the subscription URL for a Marzban user (absolute URL).
+    Marzban returns a relative path like /sub/{token}; we join it with the
+    panel base URL so the bot can hand it to users directly.
     """
     user = await get_user(server, username)
-    return str(user.get("subscription_url") or "")
+    sub = str(user.get("subscription_url") or "").strip()
+    if not sub:
+        return ""
+    if sub.startswith(("http://", "https://")):
+        return sub
+    base = _get_panel_url(server)
+    return f"{base}{sub if sub.startswith('/') else '/' + sub}"
 
 
 async def get_user_usage(server: Dict[str, Any], username: str) -> Dict[str, Any]:
@@ -525,5 +553,335 @@ def hiddify_payload_to_marzban(hiddify_payload: Dict[str, Any]) -> Dict[str, Any
         result["start_date"] = str(hiddify_payload["start_date"])
     if "is_active" in hiddify_payload:
         result["is_active"] = bool(hiddify_payload["is_active"])
+    if "comment" in hiddify_payload:
+        result["note"] = str(hiddify_payload["comment"])
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Panel info / inbounds / system stats / backup
+# ---------------------------------------------------------------------------
+async def test_connect(server: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Verify credentials + connectivity by listing inbounds.
+    Raises MarzbanApiError on failure.  Returns the inbound list.
+    """
+    try:
+        inbounds = await get_inbounds(server)
+        logger.info("Marzban test_connect OK: server_id=%s inbounds=%s", server.get("id"), len(inbounds))
+        return inbounds
+    except MarzbanApiError:
+        raise
+    except Exception as e:
+        raise MarzbanApiError(f"Marzban test_connect failed: {e}") from e
+
+
+async def get_inbounds(server: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    GET /api/inbounds  → grouped by node:  { "": [...], "node_name": [...] }
+
+    Flattens into a list of dicts:
+      {"id", "node", "tag", "protocol", "port" (int), "raw": {...}}
+    """
+    base = _get_panel_url(server)
+    url = f"{base}/api/inbounds"
+    data = await _request("GET", url, server)
+    if not isinstance(data, dict):
+        raise MarzbanApiError("Unexpected response from /api/inbounds.")
+
+    out: List[Dict[str, Any]] = []
+    for node_name, items in (data or {}).items():
+        for inb in (items or []):
+            if not isinstance(inb, dict):
+                continue
+            try:
+                port = int(inb.get("port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            out.append({
+                "id": inb.get("id"),
+                "node": str(node_name or "master"),
+                "tag": str(inb.get("tag") or ""),
+                "protocol": str(inb.get("protocol") or ""),
+                "port": port,
+                "raw": inb,
+            })
+    return out
+
+
+async def get_system_info(server: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    GET /api/system  → panel/system stats.
+
+    Response fields (Marzban v0.8+):
+      version, mem_total, mem_used, cpu_cores, cpu_usage, total_user,
+      users_active, incoming_bandwidth, outgoing_bandwidth, incoming_bandwidth_speed,
+      outgoing_bandwidth_speed, etc.
+    """
+    base = _get_panel_url(server)
+    url = f"{base}/api/system"
+    data = await _request("GET", url, server)
+    if not isinstance(data, dict):
+        raise MarzbanApiError("Unexpected response from /api/system.")
+    return data
+
+
+def _bytes_to_gb(v: Any) -> float:
+    try:
+        return float(v or 0) / (1024 ** 3)
+    except Exception:
+        return 0.0
+
+
+def _to_float(v: Any, default: float = 0.0) -> float:
+    try:
+        if v is None:
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def _to_int(v: Any, default: int = 0) -> int:
+    try:
+        if v is None:
+            return default
+        return int(float(v))
+    except Exception:
+        return default
+
+
+async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    System + user stats, same output shape as hiddify_api.get_server_stats /
+    xui get_server_stats so callers can treat all panels uniformly.
+    """
+    users = []
+    try:
+        users = await list_users(server)
+    except Exception:
+        users = []
+
+    online_now = 0
+    active_today = 0
+    active_month = 0
+    total_usage_gb = 0.0
+    now = datetime.now(timezone.utc)
+    for u in users:
+        total_usage_gb += _bytes_to_gb(u.get("used_traffic"))
+        online = str(u.get("online_at") or "").strip()
+        if online:
+            dt = _parse_online_dt(online)
+            if dt:
+                diff = (now - dt).total_seconds()
+                if diff < 300:
+                    online_now += 1
+                if diff < 86400:
+                    active_today += 1
+                if diff < 2592000:
+                    active_month += 1
+
+    out = {
+        "cpu_percent": 0.0,
+        "cpu_cores": 1,
+        "ram_used": 0.0,
+        "ram_total": 1.0,
+        "disk_used": 0.0,
+        "disk_total": 20.0,
+        "users_total": len(users),
+        "users_online": online_now,
+        "users_today": active_today,
+        "users_month": active_month,
+        "usage_today_gb": 0.0,
+        "usage_30days_gb": 0.0,
+        "traffic_dl": 0.0,
+        "traffic_ul": 0.0,
+        "now_net_recv_mb": 0.0,
+        "now_net_sent_mb": 0.0,
+    }
+
+    try:
+        sysinfo = await get_system_info(server)
+    except Exception:
+        sysinfo = {}
+
+    if sysinfo:
+        out["cpu_percent"] = _to_float(sysinfo.get("cpu_usage"), out["cpu_percent"])
+        out["cpu_cores"] = max(_to_int(sysinfo.get("cpu_cores"), 1), 1)
+        out["ram_used"] = _to_float(sysinfo.get("mem_used"), 0.0) / (1024 ** 2)  # → MB
+        out["ram_total"] = _to_float(sysinfo.get("mem_total"), 1.0) / (1024 ** 2)
+        out["disk_total"] = 20.0  # Marzban /api/system does not expose disk
+        out["users_total"] = _to_int(sysinfo.get("total_user"), out["users_total"])
+        out["users_month"] = _to_int(sysinfo.get("users_active"), out["users_month"])
+        out["traffic_dl"] = _bytes_to_gb(sysinfo.get("incoming_bandwidth"))
+        out["traffic_ul"] = _bytes_to_gb(sysinfo.get("outgoing_bandwidth"))
+        # live speeds in bytes/s → MB
+        out["now_net_recv_mb"] = _to_float(sysinfo.get("incoming_bandwidth_speed"), 0.0) / (1024 ** 2)
+        out["now_net_sent_mb"] = _to_float(sysinfo.get("outgoing_bandwidth_speed"), 0.0) / (1024 ** 2)
+
+        # users_active on Marzban means currently-active accounts, use for online fallback
+        if out["users_online"] == 0:
+            out["users_online"] = _to_int(sysinfo.get("users_active"), 0)
+
+    return out
+
+
+def _parse_online_dt(raw: str) -> Optional[datetime]:
+    """Parse Marzban online_at / created_at ISO strings (UTC)."""
+    raw = str(raw or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def normalize_user(
+    raw: Dict[str, Any],
+    fallback_name: str = "",
+    server: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Convert a raw Marzban user response into the hiddify-like shape the bot
+    expects everywhere (AdminBot/UserBot/AgentBot/CustomerBot).
+
+    Guarantees:
+      - ``uuid`` / ``username`` == Marzban username (bot stores it as uuid)
+      - ``expire`` is a parseable ``YYYY-MM-DD`` string (NOT a raw timestamp)
+        so AdminBot._parse_dt / _compute_package_info work safely
+      - ``days_left`` is pre-computed
+      - ``subscription_url`` is absolute (joined with panel base URL)
+    """
+    raw = raw or {}
+    username = str(raw.get("username") or "").strip()
+
+    data_limit_gb = 0.0
+    try:
+        data_limit_gb = round(float(raw.get("data_limit") or 0) / (1024 ** 3), 3)
+    except Exception:
+        pass
+    used_gb = 0.0
+    try:
+        used_gb = round(float(raw.get("used_traffic") or 0) / (1024 ** 3), 3)
+    except Exception:
+        pass
+
+    expire = raw.get("expire")
+    expire_date = ""
+    days_left: Optional[int] = None
+    if isinstance(expire, (int, float)) and expire > 0:
+        try:
+            expire_dt = datetime.fromtimestamp(int(expire), tz=timezone.utc)
+            expire_date = expire_dt.strftime("%Y-%m-%d")
+            days_left = (expire_dt.date() - datetime.now(timezone.utc).date()).days
+        except Exception:
+            expire_date = ""
+    elif isinstance(expire, str) and expire.strip():
+        # Some Marzban forks already return an ISO string
+        expire_date = str(expire).strip()[:10]
+
+    status = str(raw.get("status") or "").strip()
+
+    # online_at (ISO, UTC) → naive "%Y-%m-%d %H:%M:%S" so _parse_dt works
+    online_dt = _parse_online_dt(raw.get("online_at"))
+    last_online = online_dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if online_dt else ""
+
+    # Absolute subscription URL
+    subscription = str(raw.get("subscription_url") or "").strip()
+    if subscription and not subscription.startswith(("http://", "https://")):
+        base = ""
+        if server:
+            try:
+                base = _get_panel_url(server)
+            except Exception:
+                base = ""
+        if base:
+            subscription = f"{base}{subscription if subscription.startswith('/') else '/' + subscription}"
+
+    return {
+        "uuid": username,
+        "username": username,
+        "id": username,
+        "name": str(raw.get("note") or fallback_name or username),
+        "comment": str(raw.get("note") or ""),
+        "usage_limit_GB": data_limit_gb,
+        "current_usage_GB": used_gb,
+        "data_limit": raw.get("data_limit"),
+        "used_traffic": raw.get("used_traffic"),
+        "expire": expire_date,
+        "expire_date": expire_date,
+        "days_left": days_left,
+        "status": status,
+        "is_active": status == "active",
+        "online_at": str(raw.get("online_at") or ""),
+        "last_online": last_online,
+        "subscription_url": subscription,
+        "links": list(raw.get("links") or []),
+        "inbounds": list(raw.get("inbounds") or []),
+        "data_limit_reset_strategy": str(raw.get("data_limit_reset_strategy") or ""),
+        "_source": "marzban",
+        "_marzban_raw": raw,
+    }
+
+
+def _backup_filename(server: Dict[str, Any]) -> str:
+    title = str((server or {}).get("title") or "marzban").strip().replace(" ", "_")
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return f"{title}_{stamp}.json"
+
+
+async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Download a full database backup from the panel.
+
+    Marzban: GET /api/system/backup  (admin JWT required, returns the SQLite dump).
+    Response mirrors hiddify_api.download_server_backup:
+      {"filename": "...", "content": b"...", "source_url": "..."}
+    """
+    base = _get_panel_url(server)
+    url = f"{base}/api/system/backup"
+
+    token = await _get_token(server)
+    headers = {
+        "Accept": "application/octet-stream",
+        "Authorization": f"Bearer {token}",
+    }
+    timeout = _get_timeout()
+    mode = _get_ssl_mode()
+
+    async def _send(verify: Any) -> httpx.Response:
+        async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
+            return await client.get(url, headers=headers)
+
+    try:
+        if mode == SSL_MODE_SECURE:
+            resp = await _send(True)
+        elif mode == SSL_MODE_INSECURE:
+            resp = await _send(_build_insecure_ssl_context())
+        else:
+            try:
+                resp = await _send(True)
+            except httpx.RequestError as e:
+                if not _looks_like_tls_error(e):
+                    raise
+                resp = await _send(_build_insecure_ssl_context())
+    except httpx.RequestError as e:
+        raise MarzbanApiError(f"Connection error downloading Marzban backup: {e}") from e
+
+    if resp.status_code >= 400:
+        raise MarzbanApiError(f"Marzban backup failed (HTTP {resp.status_code}): {resp.text[:200]}")
+
+    body = resp.content or b""
+    if not body:
+        raise MarzbanApiError("Marzban backup returned an empty body.")
+
+    return {
+        "filename": _backup_filename(server),
+        "content": body,
+        "source_url": url,
+    }

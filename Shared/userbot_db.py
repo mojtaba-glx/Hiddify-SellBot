@@ -268,6 +268,11 @@ def init_db() -> None:
             referral_code TEXT DEFAULT ''
         )
     """)
+    # زبان رابط کاربری کاربر (چندزبانه)
+    try:
+        cur.execute("ALTER TABLE userbot_users ADD COLUMN language TEXT DEFAULT 'fa'")
+    except Exception:
+        pass
 
     # جداول دیگر بدون تغییر...
     cur.execute("""CREATE TABLE IF NOT EXISTS userbot_services (
@@ -1905,6 +1910,23 @@ def set_user_wallet(user_id: int, new_amount: int) -> None:
 # ==========================================
 #     بخش ۱: کاربران
 # ==========================================
+
+def set_user_language(telegram_id: int, lang: str) -> bool:
+    """ذخیره زبان رابط کاربری کاربر ربات کاربران."""
+    lg = str(lang or "fa").strip().lower()
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE userbot_users SET language = ? WHERE telegram_id = ?",
+            (lg, int(telegram_id or 0)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
 
 def upsert_user(telegram_id: int, username: Optional[str], full_name: Optional[str]) -> int:
     init_db()

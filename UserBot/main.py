@@ -163,10 +163,12 @@ def _validate_internal_modules():
 
 try:
     from Shared import database, plans_storage, userbot_db, hiddify_api, multi_panel, sub_http_server
+    from Shared import i18n as i18n
     from Shared.qr_utils import make_qr_image
+    from UserBot import keyboards as UserBot_keyboards
     from UserBot.keyboards import (
         main_menu_keyboard, cancel_keyboard, receipt_cancel_keyboard, location_keyboard,
-        confirm_payment_keyboard, category_keyboard, plans_keyboard, 
+        confirm_payment_keyboard, category_keyboard, plans_keyboard,
         confirm_buy_keyboard, buy_wizard_keyboard, mixed_buy_keyboard,
         trial_location_keyboard,
         renew_services_keyboard,
@@ -178,6 +180,7 @@ try:
         services_list_keyboard, guide_os_keyboard, invite_banner_keyboard, force_join_keyboard,
         support_panel_keyboard, ticket_skip_screenshot_keyboard, ticket_confirm_keyboard,
         user_tickets_list_keyboard, user_ticket_detail_keyboard,
+        language_keyboard,
     )
 
     # Validate internal modules
@@ -1229,7 +1232,7 @@ def _is_unlimited_time(days_val: int) -> bool:
     return int(days_val) >= threshold
 
 
-def _main_menu_keyboard():
+def _main_menu_keyboard(lang: str = "fa"):
     br = _get_buy_renew_settings()
     mkt = _get_marketing_settings()
     try:
@@ -1240,7 +1243,16 @@ def _main_menu_keyboard():
     return main_menu_keyboard(
         show_renew=bool(br.get("show_renew_in_main_menu", True)),
         show_invite=bool(mkt.get("show_gift_button", False)) or ref_enabled,
+        lang=lang,
     )
+
+
+def _user_lang(user_id: int) -> str:
+    """زبان ذخیره‌شده کاربر (چندزبانه)."""
+    try:
+        return i18n.get_user_lang(int(user_id or 0))
+    except Exception:
+        return "fa"
 
 
 def _resolve_sub_service_base_url(service: Optional[dict] = None) -> str:
@@ -5874,9 +5886,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         referral_consumed = _handle_referral_start_payload(start_payload, int(internal_user_id))
     text_settings = _get_text_settings()
+    _u_lang = _user_lang(user_id)
     welcome_text = (
         text_settings.get("welcome_message")
-        or "سلام {full_name} عزیز 👋\nبه ربات ما خوش آمدید."
+        or i18n.t("welcome", _u_lang, full_name=user.full_name)
     )
     formatted_text = _format_text_template(
         welcome_text,
@@ -5886,9 +5899,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if update.callback_query:
-        await update.callback_query.message.reply_text(formatted_text, reply_markup=_main_menu_keyboard())
+        await update.callback_query.message.reply_text(formatted_text, reply_markup=_main_menu_keyboard(lang=_u_lang))
     else:
-        await update.message.reply_text(formatted_text, reply_markup=_main_menu_keyboard())
+        await update.message.reply_text(formatted_text, reply_markup=_main_menu_keyboard(lang=_u_lang))
 
     if start_payload:
         # referral codes must never be treated as a coupon code
@@ -5916,6 +5929,28 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if _should_skip_stale_startup_update(update, context, user_id):
         return
+
+    # --- تغییر زبان رابط کاربری (چندزبانه) ---
+    lang_key = i18n.resolve_button(text, ("lang_btn",))
+    if lang_key == "lang_btn":
+        await update.message.reply_text(
+            i18n.t("lang_choose", i18n.get_user_lang(user_id)),
+            reply_markup=language_keyboard(),
+        )
+        return
+
+    # نگاشت دکمه فارسی/انگلیسی/روسی به کلید — کلید معادل همیشه به text تزریق می‌شود
+    menu_key = i18n.resolve_button(text, UserBot_keyboards.MENU_BTN_KEYS)
+    if menu_key:
+        text = {
+            "menu_status": "📊وضعیت اشتراک", "menu_renew": "♾تمدید اشتراک",
+            "menu_buy": "💳خرید اشتراک", "menu_connect": "🔗اتصال اشتراک",
+            "menu_trial": "🔥تست رایگان", "menu_wallet": "💰کیف پول",
+            "menu_support": "📩پشتیبانی", "menu_guide": "📚راهنما",
+            "menu_faq": "❗️سوالات متداول", "menu_invite": "💌دعوت دوستان",
+            "btn_pay_done": "✅ پرداخت کردم، ارسال رسید", "btn_back": "بازگشت",
+            "btn_cancel": "لغو",
+        }.get(menu_key, text)
 
     # اگر کاربر وسط یک مرحله انتظار ورود متن است (مثلاً نام تست رایگان)،
     # حتی اگر متن شبیه دکمهٔ منو باشد، باید به هندلر مرحله برود نه به منو.
@@ -6261,6 +6296,31 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
         except Exception:
             pass
+        return
+
+    # --- تغییر زبان رابط کاربری (چندزبانه) ---
+    if data.startswith("lang:set:"):
+        new_lang = data.split(":")[2].strip().lower()
+        if not i18n.is_supported(new_lang):
+            new_lang = "fa"
+        try:
+            userbot_db.set_user_language(user_id, new_lang)
+        except Exception as e:
+            logger.warning("set_user_language failed user=%s: %s", user_id, e)
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        lang_name = i18n.lang_display_name(new_lang)
+        try:
+            await query.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=i18n.t("lang_changed", new_lang, lang_name=lang_name),
+            reply_markup=_main_menu_keyboard(lang=new_lang),
+        )
         return
     br = _get_buy_renew_settings()
     text_settings = _get_text_settings()

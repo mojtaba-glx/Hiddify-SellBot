@@ -2,24 +2,46 @@
 
 from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup
 
+from Shared import i18n
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
+# کلیدهای i18n دکمه‌های منوی اصلی (برای مچر چندزبانه)
+MENU_BTN_KEYS = (
+    "menu_status", "menu_renew", "menu_buy", "menu_connect", "menu_trial",
+    "menu_wallet", "menu_support", "menu_guide", "menu_faq", "menu_invite",
+    "btn_back", "btn_pay_done", "btn_cancel", "lang_btn",
+)
+
+
+def _bl(key: str, lang: str = "fa") -> str:
+    """لیبل دکمه از i18n."""
+    return i18n.t(key, lang)
+
 # --- منوی اصلی (Reply Keyboard) ---
-def main_menu_keyboard(show_renew: bool = True, show_invite: bool = True):
-    keyboard = [[KeyboardButton("📊وضعیت اشتراک")]]
+def main_menu_keyboard(show_renew: bool = True, show_invite: bool = True, lang: str = "fa"):
+    keyboard = [[KeyboardButton(_bl("menu_status", lang))]]
     if show_renew:
-        keyboard.append([KeyboardButton("♾تمدید اشتراک"), KeyboardButton("💳خرید اشتراک")])
+        keyboard.append([KeyboardButton(_bl("menu_renew", lang)), KeyboardButton(_bl("menu_buy", lang))])
     else:
-        keyboard.append([KeyboardButton("💳خرید اشتراک")])
+        keyboard.append([KeyboardButton(_bl("menu_buy", lang))])
     keyboard.extend([
-        [KeyboardButton("🔗اتصال اشتراک")],
-        [KeyboardButton("🔥تست رایگان"), KeyboardButton("💰کیف پول")],
-        [KeyboardButton("📩پشتیبانی"), KeyboardButton("📚راهنما"), KeyboardButton("❗️سوالات متداول")],
+        [KeyboardButton(_bl("menu_connect", lang))],
+        [KeyboardButton(_bl("menu_trial", lang)), KeyboardButton(_bl("menu_wallet", lang))],
+        [KeyboardButton(_bl("menu_support", lang)), KeyboardButton(_bl("menu_guide", lang)), KeyboardButton(_bl("menu_faq", lang))],
+        [KeyboardButton(_bl("lang_btn", lang))],
     ])
     if show_invite:
-        keyboard.append([KeyboardButton("💌دعوت دوستان")])
+        keyboard.append([KeyboardButton(_bl("menu_invite", lang))])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def language_keyboard():
+    rows = []
+    langs = i18n.supported_langs()
+    for i in range(0, len(langs), 2):
+        rows.append([InlineKeyboardButton(i18n.lang_display_name(lg), callback_data=f"lang:set:{lg}") for lg in langs[i:i + 2]])
+    return InlineKeyboardMarkup(rows)
 
 # --- دکمه بازگشت (برای مراحل پرداخت) ---
 def cancel_keyboard():

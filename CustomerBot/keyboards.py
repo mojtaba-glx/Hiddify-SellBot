@@ -1,4 +1,5 @@
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup
+from Shared import i18n
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
@@ -13,21 +14,40 @@ from CustomerBot.constants import (
     BTN_TRIAL,
 )
 
+# کلیدهای i18n دکمه‌های منوی اصلی (برای مچر چندزبانه)
+MENU_BTN_KEYS = (
+    "menu_status", "menu_renew", "menu_buy", "menu_trial",
+    "menu_support", "menu_guide", "menu_faq", "btn_back", "lang_btn",
+)
+
+
+def _bl(key: str, lang: str = "fa") -> str:
+    return i18n.t(key, lang)
+
+
+def language_keyboard():
+    rows = []
+    langs = i18n.supported_langs()
+    for i in range(0, len(langs), 2):
+        rows.append([InlineKeyboardButton(i18n.lang_display_name(lg), callback_data=f"lang:set:{lg}") for lg in langs[i:i + 2]])
+    return InlineKeyboardMarkup(rows)
+
 
 def _ikb(rows):
     return InlineKeyboardMarkup(rows)
 
 
-def main_menu_keyboard(show_renew: bool = True):
-    keyboard = [[KeyboardButton(BTN_STATUS)]]
+def main_menu_keyboard(show_renew: bool = True, lang: str = "fa"):
+    keyboard = [[KeyboardButton(_bl("menu_status", lang))]]
     if show_renew:
-        keyboard.append([KeyboardButton(BTN_RENEW), KeyboardButton(BTN_BUY)])
+        keyboard.append([KeyboardButton(_bl("menu_renew", lang)), KeyboardButton(_bl("menu_buy", lang))])
     else:
-        keyboard.append([KeyboardButton(BTN_BUY)])
+        keyboard.append([KeyboardButton(_bl("menu_buy", lang))])
     keyboard.extend([
-        [KeyboardButton(BTN_TRIAL)],
-        [KeyboardButton(BTN_GUIDE), KeyboardButton(BTN_SUPPORT)],
-        [KeyboardButton(BTN_FAQ)],
+        [KeyboardButton(_bl("menu_trial", lang))],
+        [KeyboardButton(_bl("menu_guide", lang)), KeyboardButton(_bl("menu_support", lang))],
+        [KeyboardButton(_bl("menu_faq", lang))],
+        [KeyboardButton(_bl("lang_btn", lang))],
     ])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 

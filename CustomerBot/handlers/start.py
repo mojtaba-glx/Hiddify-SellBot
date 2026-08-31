@@ -11,7 +11,8 @@ from CustomerBot.database import (
     get_force_join_settings,
 )
 from Shared.agent_db import upsert_customer
-from CustomerBot.keyboards import main_menu_keyboard, force_join_keyboard
+from Shared import i18n
+from CustomerBot.keyboards import main_menu_keyboard, force_join_keyboard, language_keyboard
 from CustomerBot.utils.helpers import is_rate_limited, parse_deep_link
 
 
@@ -47,15 +48,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     text_settings = get_text_settings(agent_id)
-    welcome = text_settings.get("welcome_message", "").format(
-        full_name=user.full_name or "",
-        username=f"@{user.username}" if user.username else "",
-        id=user.id,
-    )
+    lang = i18n.get_customer_lang(agent_id, user.id)
+    if str(text_settings.get("welcome_message", "") or "").strip():
+        welcome = text_settings.get("welcome_message", "").format(
+            full_name=user.full_name or "",
+            username=f"@{user.username}" if user.username else "",
+            id=user.id,
+        )
+    else:
+        welcome = i18n.t("welcome", lang, full_name=user.full_name or "")
 
     await update.message.reply_text(
-        welcome or f"سلام {user.full_name} عزیز 👋\nبه ربات خوش آمدید.",
-        reply_markup=main_menu_keyboard(),
+        welcome,
+        reply_markup=main_menu_keyboard(lang=lang),
     )
 
     start_payload = _extract_start_payload(update)

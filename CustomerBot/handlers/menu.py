@@ -20,13 +20,30 @@ from CustomerBot.database import (
 )
 from Shared.agent_db import get_customer_by_telegram_id
 from Shared.database import get_servers, get_main_servers
+from Shared import i18n
 from CustomerBot.keyboards import (
     main_menu_keyboard, location_keyboard, trial_location_keyboard,
     services_list_keyboard, renew_services_keyboard,
     support_panel_keyboard, guide_os_keyboard,
     cancel_keyboard, subscription_status_keyboard,
+    language_keyboard, MENU_BTN_KEYS,
 )
 from CustomerBot.utils.helpers import is_rate_limited, format_price
+
+# نگاشت کلید i18n → لیبل مرجع فارسی (برای مچرهای موجود)
+_BTN_KEY_TO_FA = {
+    "menu_status": BTN_STATUS, "menu_renew": BTN_RENEW, "menu_buy": BTN_BUY,
+    "menu_trial": BTN_TRIAL, "menu_support": BTN_SUPPORT,
+    "menu_guide": BTN_GUIDE, "menu_faq": BTN_FAQ,
+    "btn_back": "بازگشت", "btn_cancel": "لغو",
+}
+
+
+def _menu_lang(agent_id: int, telegram_id: int) -> str:
+    try:
+        return i18n.get_customer_lang(int(agent_id or 0), int(telegram_id or 0))
+    except Exception:
+        return "fa"
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -34,6 +51,21 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
         return
+    agent_id = context.bot_data.get("agent_id", 0)
+    lang = _menu_lang(agent_id, user.id)
+
+    # --- تغییر زبان رابط کاربری (چندزبانه) ---
+    if i18n.resolve_button(text, ("lang_btn",)) == "lang_btn":
+        await update.message.reply_text(
+            i18n.t("lang_choose", lang),
+            reply_markup=language_keyboard(),
+        )
+        return
+
+    # نگاشت دکمه هر زبان به لیبل مرجع فارسی — مچرهای موجود بدون تغییر کار می‌کنند
+    menu_key = i18n.resolve_button(text, MENU_BTN_KEYS)
+    if menu_key:
+        text = _BTN_KEY_TO_FA.get(menu_key, text)
 
     main_buttons = {
         BTN_STATUS, BTN_RENEW, BTN_BUY, BTN_CONNECT, BTN_TRIAL,
@@ -48,7 +80,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_pay_price", None)
         context.user_data.pop("pending_tx_marker", None)
         if text in {"بازگشت", "لغو", "❌ لغو", "🚫 لغو", "/cancel"}:
-            await update.message.reply_text("🔙 به منوی اصلی بازگشتید.", reply_markup=main_menu_keyboard())
+            await update.message.reply_text(
+                i18n.t("back_to_main", lang),
+                reply_markup=main_menu_keyboard(lang=lang),
+            )
             return
 
     state = context.user_data.get(UD_STATE, "")

@@ -14,7 +14,7 @@ Shared/i18n.py
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # ریشه پروژه
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +116,58 @@ def get_agent_lang(agent_id: int, default: str = "fa") -> str:
     except Exception:
         pass
     return default
+
+
+def get_customer_lang(agent_id: int, telegram_id: int, default: str = "fa") -> str:
+    """زبان ذخیره‌شده مشتری نماینده (CustomerBot)."""
+    try:
+        from CustomerBot.database import get_user
+        u = get_user(int(agent_id or 0), int(telegram_id or 0))
+        if u:
+            lg = str(u.get("language") or "").strip().lower()
+            if lg in _SUPPORTED:
+                return lg
+    except Exception:
+        pass
+    return default
+
+
+LANG_DISPLAY_NAMES = {"fa": "فارسی", "en": "English", "ru": "Русский"}
+
+
+def supported_langs() -> tuple:
+    return tuple(sorted(_SUPPORTED))
+
+
+def lang_display_name(lang: str) -> str:
+    lg = (lang or _DEFAULT_LANG).strip().lower()
+    return LANG_DISPLAY_NAMES.get(lg, LANG_DISPLAY_NAMES[_DEFAULT_LANG])
+
+
+def is_supported(lang: str) -> bool:
+    return (lang or "").strip().lower() in _SUPPORTED
+
+
+def resolve_button(text: str, keys) -> Optional[str]:
+    """متن دکمه دریافتی را به کلید i18n نگاشت می‌کند (در همه زبان‌ها).
+
+    برای ReplyKeyboard هایی که لیبل دکمه‌ها بسته به زبان تغییر می‌کنند.
+    """
+    t_clean = str(text or "").strip()
+    if not t_clean:
+        return None
+    cache_key = "btnmap:" + ",".join(sorted(set(keys)))
+    m = _CACHE.get(cache_key)
+    if m is None:
+        m = {}
+        for lg in _SUPPORTED:
+            d = _load_lang(lg)
+            for k in keys:
+                v = d.get(k)
+                if v:
+                    m.setdefault(str(v).strip(), k)
+        _CACHE[cache_key] = m
+    return m.get(t_clean)
 
 
 def clear_cache() -> None:

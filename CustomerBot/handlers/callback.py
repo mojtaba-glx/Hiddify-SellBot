@@ -8,6 +8,7 @@ from telegram import Update, InlineKeyboardMarkup
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
+from Shared import i18n
 
 from CustomerBot.constants import (
     UD_STATE, UD_BUY_GB, UD_BUY_MONTHS, UD_BUY_SERVER_ID, UD_BUY_PLAN_ID,
@@ -248,6 +249,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
     except Exception:
         pass
+
+    # ---- تغییر زبان رابط کاربری (چندزبانه) ----
+    if data.startswith("lang:set:"):
+        new_lang = data.split(":")[2].strip().lower()
+        if not i18n.is_supported(new_lang):
+            new_lang = "fa"
+        try:
+            from CustomerBot.database import set_customer_language
+            set_customer_language(agent_id, user.id, new_lang)
+        except Exception as e:
+            logger.warning("set_customer_language failed user=%s: %s", user.id, e)
+        try:
+            await query.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        try:
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=i18n.t("lang_changed", new_lang, lang_name=i18n.lang_display_name(new_lang)),
+                reply_markup=main_menu_keyboard(lang=new_lang),
+            )
+        except Exception:
+            pass
+        return
 
     # ---- Force Join ----
     if data == CB_FORCEJOIN_CHECK:

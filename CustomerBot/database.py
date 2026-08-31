@@ -172,6 +172,7 @@ def init_db() -> None:
         )
     """)
     _ensure_column(cur, "customer_users", "updated_at", "TEXT")
+    _ensure_column(cur, "customer_users", "language", "TEXT DEFAULT 'fa'")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS customer_orders (
@@ -393,6 +394,23 @@ def upsert_user(agent_id: int, telegram_id: int, username: str = "", full_name: 
     conn.commit()
     conn.close()
     return int(uid)
+
+
+def set_customer_language(agent_id: int, telegram_id: int, lang: str) -> bool:
+    """ذخیره زبان رابط کاربری مشتری نماینده."""
+    lg = str(lang or "fa").strip().lower()
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE customer_users SET language = ? WHERE agent_id = ? AND telegram_id = ?",
+            (lg, int(agent_id or 0), int(telegram_id or 0)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
 
 
 def get_user(agent_id: int, telegram_id: int) -> Optional[Dict[str, Any]]:
