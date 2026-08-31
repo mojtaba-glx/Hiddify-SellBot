@@ -3216,7 +3216,8 @@ async def _send_service_direct_configs_shell(
         return
 
     server_title = _resolve_live_server_title(service, default="")
-    header = "🔗 کانفیگ‌های مستقیم"
+    _dlg = _user_lang(user_id)
+    header = i18n.t("direct_configs_title", _dlg)
     if server_title:
         header = f"{header} | {server_title}"
     clean_links = [str(x).strip() for x in links if str(x).strip()]
@@ -3225,7 +3226,7 @@ async def _send_service_direct_configs_shell(
     all_links_text = "\n".join(clean_links)
     one_block_text = (
         f"{source_hint}{header}\n"
-        "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
+        + i18n.t("direct_configs_copy_hint", _dlg) + "\n"
         f"<pre><code class=\"language-shell\">{escape(all_links_text)}</code></pre>"
     )
     if len(one_block_text) <= 3900:
@@ -3258,7 +3259,7 @@ async def _send_service_direct_configs_shell(
         part_header = header if len(parts) == 1 else f"{header} ({idx}/{len(parts)})"
         part_text = (
             f"{source_hint if idx == 1 else ''}{part_header}\n"
-            "برای کپی، باکس زیر را کپی کنید:\n"
+            + i18n.t("direct_configs_copy_hint_paged", _dlg) + "\n"
             f"<pre><code class=\"language-shell\">{escape(chr(10).join(chunk))}</code></pre>"
         )
         await context.bot.send_message(
@@ -5000,31 +5001,32 @@ async def _send_config_and_qr_after_delivery(
                         break
         except Exception:
             is_xui = False
+        _dlg = _user_lang(user_id)
         if is_xui:
             if settings.get("show_sub_link", True):
-                config_items.append(("🔗 لینک اشتراک:", base_url))
+                config_items.append(("🔗 " + i18n.t("config_sub_link", _dlg) + ":", base_url))
             if settings.get("show_sub_link_b64", False):
                 sep = "&" if "?" in base_url else "?"
-                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}{sep}base64=1"))
+                config_items.append(("🔐 " + i18n.t("sub_b64_label", _dlg), f"{base_url}{sep}base64=1"))
         else:
             if settings.get("show_sub_link", True):
-                config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+                config_items.append(("🔗 " + i18n.t("config_sub_link", _dlg) + ":", f"{base_url}/all.txt"))
             if settings.get("show_auto_sub_link", False):
-                config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+                config_items.append(("🤖 " + i18n.t("auto_sub_link_label", _dlg), f"{base_url}/sub/?asn=unknown"))
             if settings.get("show_sub_link_b64", False):
-                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+                config_items.append(("🔐 " + i18n.t("sub_b64_label", _dlg), f"{base_url}/all.txt?base64=1"))
         if settings.get("show_multi_server", False):
             try:
                 managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
                 if managed_link:
-                    config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
+                    config_items.append(("🌐 " + i18n.t("config_smart", _dlg) + ":", managed_link))
             except Exception as e:
                 logger.warning("Failed to build managed sub link after delivery (service_id=%s): %s", service_id, e)
         if settings.get("show_multi_server_b64", False):
             try:
                 _, managed_link_b64 = _get_or_create_bot_sub_links(int(service_id), service=service)
                 if managed_link_b64:
-                    config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
+                    config_items.append(("🌐 " + i18n.t("smart_b64_label", _dlg), managed_link_b64))
             except Exception as e:
                 logger.warning("Failed to build managed sub b64 link after delivery (service_id=%s): %s", service_id, e)
 
@@ -5032,10 +5034,10 @@ async def _send_config_and_qr_after_delivery(
         primary_link = config_items[0][1]
         qr_image = make_qr_image(primary_link)
         qr_caption = (
-            "🎉 اشتراک شما آماده‌ی استفاده است ✅\n\n"
+            i18n.t("delivery_ready_title", _dlg) + "\n\n"
             f"{config_items[0][0]}\n"
             f"<code>{escape(primary_link)}</code>\n\n"
-            "📄 جهت کپی شدن لینک کافیست یک‌بار روی لینک بالا لمس کنید."
+            + i18n.t("delivery_copy_hint", _dlg)
         )
         try:
             await context.bot.send_photo(
@@ -5450,14 +5452,15 @@ async def _process_wallet_purchase(
         if int(s.get("id") or 0) not in created_server_ids
     ]
 
+    _dlg = _user_lang(user_id)
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
-            "🎉 تراکنش شما تایید شد\n"
-            "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.\n\n"
-            f"🎁 شناسه تراکنش:{tx_code}"
+            i18n.t("created_notify_title", _dlg) + "\n"
+            + i18n.t("created_notify_hint", _dlg) + "\n\n"
+            f"🎁 {i18n.t('tx_id_label', _dlg)}{tx_code}"
         ),
-        reply_markup=_main_menu_keyboard(),
+        reply_markup=_main_menu_keyboard(lang=_dlg),
     )
 
     delivered_service = {
