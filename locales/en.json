@@ -130,5 +130,8 @@
   "send_btn": "✅Send",
   "edit_btn": "✏️Edit",
   "reply_btn": "📩Reply",
-  "close_ticket_btn": "🚫Close ticket"
+  "close_ticket_btn": "🚫Close ticket",
+  "last4_prompt": "🔢 Please send the last 4 digits of the source card:",
+  "last4_invalid_short": "❌ Invalid input.\nPlease send the last 4 digits of the source card:",
+  "pay_pending_admin": "✅ Your transaction is awaiting admin approval.\nPlease wait and avoid duplicate receipts."
 }

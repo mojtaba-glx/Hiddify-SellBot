@@ -3775,7 +3775,7 @@ def _sms_auto_approval_user_text(amount: int, *, direct_note: bool = False) -> s
     return text
 
 
-def _card_payment_result_user_text(amount: int, result: str, *, direct_note: bool = False) -> str:
+def _card_payment_result_user_text(amount: int, result: str, *, direct_note: bool = False, user_id: int = 0) -> str:
     status = str(result or "").strip().lower()
     if status == "auto_approved":
         return _sms_auto_approval_user_text(amount, direct_note=direct_note)
@@ -3789,7 +3789,7 @@ def _card_payment_result_user_text(amount: int, result: str, *, direct_note: boo
             "❌ این رسید قبلاً توسط ادمین رد شده است.\n"
             "اگر پرداخت جدید انجام داده‌اید، لطفاً رسید جدید همان پرداخت را ارسال کنید."
         )
-    return "✅ تراکنش شما در انتظار تایید توسط ادمین است.\nلطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
+    return i18n.t("pay_pending_admin", _user_lang(user_id))
 
 
 async def _safe_edit_message_text(query, text: str, **kwargs):
@@ -8912,7 +8912,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data[f"pending_wallet_topup_{user_id}"] = pending
                 set_user_step(context, user_id, "WAIT_WALLET_TOPUP_LAST4")
                 await update.message.reply_text(
-                    "🔢 لطفا ۴ رقم آخر کارت مبدا را ارسال کنید:",
+                    i18n.t("last4_prompt", _user_lang(user_id)),
                     reply_markup=cancel_keyboard(),
                 )
                 return
@@ -8938,7 +8938,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
             await update.message.reply_text(
-                _card_payment_result_user_text(amount, payment_result),
+                _card_payment_result_user_text(amount, payment_result, user_id=user_id),
                 reply_markup=_main_menu_keyboard(),
             )
             set_user_step(context, user_id, None)
@@ -8956,7 +8956,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payer_last4 = _parse_exact_card_last4(text)
         if not payer_last4:
             await update.message.reply_text(
-                "❌ ورودی نامعتبر است.\nلطفا ۴ رقم آخر کارت مبدا را ارسال کنید:",
+                i18n.t("last4_invalid_short", _user_lang(user_id)),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -8984,7 +8984,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             },
         )
         await update.message.reply_text(
-            _card_payment_result_user_text(amount, payment_result),
+            _card_payment_result_user_text(amount, payment_result, user_id=user_id),
             reply_markup=_main_menu_keyboard(),
         )
         set_user_step(context, user_id, None)
@@ -9100,7 +9100,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             
             await update.message.reply_text(
-                _card_payment_result_user_text(amount, payment_result, direct_note=True),
+                _card_payment_result_user_text(amount, payment_result, direct_note=True, user_id=user_id),
                 reply_markup=_main_menu_keyboard()
             )
             await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
@@ -9119,7 +9119,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payer_last4 = _parse_exact_card_last4(text)
         if not payer_last4:
             await update.message.reply_text(
-                "❌ ورودی نامعتبر است.\nلطفا ۴ رقم آخر کارت مبدا را ارسال کنید:",
+                i18n.t("last4_invalid_short", _user_lang(user_id)),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -9158,7 +9158,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             extra_meta=extra_meta,
         )
         await update.message.reply_text(
-            _card_payment_result_user_text(amount, payment_result, direct_note=True),
+            _card_payment_result_user_text(amount, payment_result, direct_note=True, user_id=user_id),
             reply_markup=_main_menu_keyboard(),
         )
         await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
