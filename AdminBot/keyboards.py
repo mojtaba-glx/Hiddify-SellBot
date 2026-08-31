@@ -17,7 +17,7 @@ BTN_AGENCIES = "🏢 نمایندگی"
 ADMIN_MENU_KEYS = (
     "adm_menu_servers", "adm_menu_search", "adm_menu_userbot",
     "adm_menu_status", "adm_menu_backup", "adm_menu_agencies",
-    "btn_cancel",
+    "btn_cancel", "lang_btn",
 )
 
 
@@ -40,6 +40,7 @@ def admin_main_keyboard(lang: str = "") -> ReplyKeyboardMarkup:
             KeyboardButton(i18n.t("adm_menu_agencies", lg)),
             KeyboardButton(i18n.t("adm_menu_backup", lg)),
         ],
+        [KeyboardButton(i18n.t("lang_btn", lg))],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, selective=True)
 

@@ -7853,6 +7853,17 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_key = _menu_key(text)
     chat_id = update.effective_chat.id
 
+    # --- دکمه تغییر زبان رابط کاربری ادمین (چندزبانه) ---
+    if _admin_menu_key(text) == "lang_btn":
+        from AdminBot.keyboards import language_keyboard
+        from Shared import userbot_db as _udb
+        from Shared.i18n import t as _t
+        await message.reply_text(
+            _t("lang_choose", _udb.get_admin_language()),
+            reply_markup=language_keyboard(),
+        )
+        return
+
     # اگر وسط جستجو بودیم و کاربر دکمه‌های منوی اصلی را زد، state را آزاد کن.
     if context.user_data.get(USER_SEARCH_STATE_KEY):
         if _is_cancel_text(text):
