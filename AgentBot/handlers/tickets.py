@@ -12,6 +12,7 @@ from AgentBot.constants import (
 )
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
+    agent_lang,
     tickets_menu_keyboard, ticket_detail_keyboard, back_keyboard, cancel_keyboard,
     ticket_reply_skip_keyboard, ticket_reply_confirm_keyboard,
 )
@@ -185,11 +186,11 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     if update.callback_query:
         try:
-            await update.callback_query.edit_message_text(text, reply_markup=tickets_menu_keyboard(), parse_mode="HTML")
+            await update.callback_query.edit_message_text(text, reply_markup=tickets_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
         except Exception:
-            await update.message.reply_text(text, reply_markup=tickets_menu_keyboard(), parse_mode="HTML")
+            await update.message.reply_text(text, reply_markup=tickets_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=tickets_menu_keyboard(), parse_mode="HTML")
+        await update.message.reply_text(text, reply_markup=tickets_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
 
 
 async def _send_ticket_list(update: Update, context: ContextTypes.DEFAULT_TYPE, status: str) -> None:
@@ -279,7 +280,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             text += "(\u067e\u06cc\u0627\u0645\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f)"
 
-        kb = ticket_detail_keyboard(ticket_code, ticket.get("status", ""))
+        kb = ticket_detail_keyboard(ticket_code, ticket.get("status", ""), lang=agent_lang(context))
 
         await _edit_or_reply(query, text[:4000], kb, parse_mode="HTML", disable_web_page_preview=True)
         return
@@ -348,7 +349,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer("\u062a\u06cc\u06a9\u062a \u0628\u0633\u062a\u0647 \u0634\u062f \u2705" if ok else "\u062e\u0637\u0627!")
         if ok:
             try:
-                await query.edit_message_reply_markup(reply_markup=ticket_detail_keyboard(ticket_code, "closed"))
+                await query.edit_message_reply_markup(reply_markup=ticket_detail_keyboard(ticket_code, "closed", lang=agent_lang(context)))
             except Exception:
                 pass
         return
@@ -358,7 +359,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ok = set_customer_ticket_status(agent_id, ticket_code, "open")
         await query.answer("\u062a\u06cc\u06a9\u062a \u062f\u0648\u0628\u0627\u0631\u0647 \u0628\u0627\u0632 \u0634\u062f \U0001f4ec" if ok else "\u062e\u0637\u0627!")
         try:
-            await query.edit_message_reply_markup(reply_markup=ticket_detail_keyboard(ticket_code, "open"))
+            await query.edit_message_reply_markup(reply_markup=ticket_detail_keyboard(ticket_code, "open", lang=agent_lang(context)))
         except Exception:
             pass
         return
@@ -439,7 +440,7 @@ async def _do_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, tic
             text += f"\n{sender} ({ts}):\n{msg_text}{photo_tag}\n"
     else:
         text += "(\u067e\u06cc\u0627\u0645\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f)"
-    kb = ticket_detail_keyboard(ticket_code, (fresh or {}).get("status", ""))
+    kb = ticket_detail_keyboard(ticket_code, (fresh or {}).get("status", ""), lang=agent_lang(context))
     out = "\u2705 \u067e\u0627\u0633\u062e \u062b\u0628\u062a \u0634\u062f \u0648 \u0628\u0647 \u0645\u0634\u062a\u0631\u06cc \u0627\u0637\u0644\u0627\u0639 \u062f\u0627\u062f\u0647 \u0634\u062f.\n\n" + text
     if update.callback_query:
         try:

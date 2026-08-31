@@ -35,6 +35,15 @@ def main_menu_keyboard(lang: str = "fa"):
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
 
+def agent_lang(context) -> str:
+    """زبان ذخیره‌شده نماینده از context."""
+    try:
+        from AgentBot.handlers.base import get_agent_id
+        return i18n.get_agent_lang(int(get_agent_id(context) or 0))
+    except Exception:
+        return "fa"
+
+
 def language_keyboard():
     rows = []
     langs = i18n.supported_langs()
@@ -81,37 +90,37 @@ def broadcast_skip_cancel_keyboard():
 
 
 # Subscription keyboards
-def subs_menu_keyboard():
+def subs_menu_keyboard(lang: str = "fa"):
     return _ikb([
-        [IButton("\U0001f465 \u0644\u06cc\u0633\u062a \u06a9\u0627\u0631\u0628\u0631\u0627\u0646", callback_data="agbot:subs:list:1")],
-        [IButton("\u2795 \u0633\u0627\u062e\u062a\u0646 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data="agbot:subs:create")],
-        [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648", callback_data="agbot:subs:search")],
-        [IButton("\U0001f51c \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 \u0645\u0646\u0642\u0636\u06cc \u0634\u062f\u0647", callback_data="agbot:subs:expired")],
-        [IButton(BTN_BACK, callback_data="agbot:menu")],
+        [IButton(i18n.t("ag_subs_users_list", lang), callback_data="agbot:subs:list:1")],
+        [IButton(i18n.t("ag_subs_create", lang), callback_data="agbot:subs:create")],
+        [IButton(i18n.t("ag_subs_search", lang), callback_data="agbot:subs:search")],
+        [IButton(i18n.t("ag_subs_expired", lang), callback_data="agbot:subs:expired")],
+        [IButton(i18n.t("back", lang), callback_data="agbot:menu")],
     ])
 
 
-def subs_search_keyboard() -> InlineKeyboardMarkup:
+def subs_search_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
     """زیرمنوی جستجو: جستجو با نام / جستجو با شناسه."""
     return _ikb([
-        [IButton("\U0001f464 \u062c\u0633\u062a\u062c\u0648 \u0628\u0627 \u0646\u0627\u0645", callback_data="agbot:subs:searchname")],
-        [IButton("\U0001f511 \u062c\u0633\u062a\u062c\u0648 \u0628\u0627 \u0634\u0646\u0627\u0633\u0647", callback_data="agbot:subs:searchid")],
-        [IButton(BTN_BACK, callback_data="agbot:subs:back")],
+        [IButton(i18n.t("ag_search_by_name", lang), callback_data="agbot:subs:searchname")],
+        [IButton(i18n.t("ag_search_by_id", lang), callback_data="agbot:subs:searchid")],
+        [IButton(i18n.t("back", lang), callback_data="agbot:subs:back")],
     ])
 
 
-def service_detail_keyboard(service_id: int, is_active: bool):
-    rows = [[IButton("\U0001f4e1 \u062f\u0631\u06cc\u0627\u0641\u062a \u06a9\u0627\u0646\u0641\u06cc\u06af", callback_data=f"agbot:subs:cfg:{service_id}")]]
+def service_detail_keyboard(service_id: int, is_active: bool, lang: str = "fa"):
+    rows = [[IButton(i18n.t("ag_svc_get_config", lang), callback_data=f"agbot:subs:cfg:{service_id}")]]
     if is_active:
-        rows.append([IButton("\u23f3 \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data=f"agbot:subs:renew:{service_id}")])
-        rows.append([IButton("\u270f\ufe0f \u062a\u063a\u06cc\u06cc\u0631 \u0646\u0627\u0645 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data=f"agbot:subs:rename:{service_id}")])
-        rows.append([IButton("\u274c \u063a\u06cc\u0631\u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:disable:{service_id}")])
+        rows.append([IButton(i18n.t("ag_svc_renew", lang), callback_data=f"agbot:subs:renew:{service_id}")])
+        rows.append([IButton(i18n.t("ag_svc_rename", lang), callback_data=f"agbot:subs:rename:{service_id}")])
+        rows.append([IButton(i18n.t("ag_svc_disable", lang), callback_data=f"agbot:subs:disable:{service_id}")])
     else:
-        rows.append([IButton("\u2705 \u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646", callback_data=f"agbot:subs:enable:{service_id}")])
-        rows.append([IButton("\u270f\ufe0f \u062a\u063a\u06cc\u06cc\u0631 \u0646\u0627\u0645 \u0627\u0634\u062a\u0631\u0627\u06a9", callback_data=f"agbot:subs:rename:{service_id}")])
-    rows.append([IButton("\U0001f504 \u0644\u06cc\u0646\u06a9 \u062c\u062f\u06cc\u062f", callback_data=f"agbot:subs:newlink:{service_id}")])
-    rows.append([IButton("\U0001f5d1 \u062d\u0630\u0641", callback_data=f"agbot:subs:delete:{service_id}")])
-    rows.append([IButton(BTN_BACK, callback_data="agbot:subs:back")])
+        rows.append([IButton(i18n.t("ag_svc_enable", lang), callback_data=f"agbot:subs:enable:{service_id}")])
+        rows.append([IButton(i18n.t("ag_svc_rename", lang), callback_data=f"agbot:subs:rename:{service_id}")])
+    rows.append([IButton(i18n.t("ag_svc_newlink", lang), callback_data=f"agbot:subs:newlink:{service_id}")])
+    rows.append([IButton(i18n.t("ag_svc_delete", lang), callback_data=f"agbot:subs:delete:{service_id}")])
+    rows.append([IButton(i18n.t("back", lang), callback_data="agbot:subs:back")])
     return _ikb(rows)
 
 
@@ -138,69 +147,69 @@ def subs_configs_keyboard(service_id: int, *, show_direct_config: bool = True,
 
 
 # Wallet keyboards
-def wallet_menu_keyboard():
+def wallet_menu_keyboard(lang: str = "fa"):
     return _ikb([
-        [IButton("\U0001f4b3 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a", callback_data="agbot:wallet:charge")],
-        [IButton(BTN_BACK, callback_data="agbot:menu")],
+        [IButton(i18n.t("ag_wallet_card", lang), callback_data="agbot:wallet:charge")],
+        [IButton(i18n.t("back", lang), callback_data="agbot:menu")],
     ])
 
 
 # Plans keyboards
-def plans_menu_keyboard(current_mode: str = "dynamic"):
+def plans_menu_keyboard(current_mode: str = "dynamic", lang: str = "fa"):
     mode = str(current_mode or "dynamic").strip().lower()
     if mode == "fixed":
-        settings_button = IButton("\u2699\ufe0f \u062a\u0646\u0638\u06cc\u0645 \u062b\u0627\u0628\u062a", callback_data="agbot:plans:fixed")
+        settings_button = IButton(i18n.t("ag_plans_set_fixed", lang), callback_data="agbot:plans:fixed")
     else:
-        settings_button = IButton("\u2699\ufe0f \u062a\u0646\u0638\u06cc\u0645 \u067e\u0648\u06cc\u0627", callback_data="agbot:plans:dynset")
+        settings_button = IButton(i18n.t("ag_plans_set_dyn", lang), callback_data="agbot:plans:dynset")
     return _ikb([
-        [IButton("\U0001f4cb \u0646\u0648\u0639 \u0646\u0645\u0627\u06cc\u0634 \u067e\u0644\u0646\u200c\u0647\u0627", callback_data="agbot:plans:mode")],
+        [IButton(i18n.t("ag_plans_display", lang), callback_data="agbot:plans:mode")],
         [settings_button],
-        [IButton("\U0001f39f \u0645\u062f\u06cc\u0631\u06cc\u062a \u062d\u0631\u0641\u0647\u200c\u0627\u06cc \u062a\u062e\u0641\u06cc\u0641\u200c\u0647\u0627", callback_data="agbot:plans:discount")],
-        [IButton(BTN_BACK, callback_data="agbot:menu")],
+        [IButton(i18n.t("ag_plans_discount", lang), callback_data="agbot:plans:discount")],
+        [IButton(i18n.t("back", lang), callback_data="agbot:menu")],
     ])
 
 
-def plans_mode_keyboard(current_mode: str):
-    dyn = "\u2705 \u067e\u0648\u06cc\u0627" if current_mode == "dynamic" else "\u274c \u067e\u0648\u06cc\u0627"
-    fix = "\u2705 \u062b\u0627\u0628\u062a" if current_mode == "fixed" else "\u274c \u062b\u0627\u0628\u062a"
+def plans_mode_keyboard(current_mode: str, lang: str = "fa"):
+    dyn = (i18n.t("ag_state_on", lang) if current_mode == "dynamic" else i18n.t("ag_state_off", lang)) + " " + i18n.t("ag_plans_dyn", lang)
+    fix = (i18n.t("ag_state_on", lang) if current_mode == "fixed" else i18n.t("ag_state_off", lang)) + " " + i18n.t("ag_plans_fixed", lang)
     return _ikb([
         [IButton(dyn, callback_data="agbot:plans:mode:toggle:dynamic")],
         [IButton(fix, callback_data="agbot:plans:mode:toggle:fixed")],
-        [IButton(BTN_BACK, callback_data="agbot:plans:back")],
+        [IButton(i18n.t("back", lang), callback_data="agbot:plans:back")],
     ])
 
 
 # Customer bot keyboards
-def cbot_menu_keyboard(bot_active: bool):
-    toggle = "\u2705 \u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646" if not bot_active else "\u274c \u063a\u06cc\u0631\u0641\u0639\u0627\u0644 \u06a9\u0631\u062f\u0646"
+def cbot_menu_keyboard(bot_active: bool, lang: str = "fa"):
+    toggle = (i18n.t("ag_state_on", lang) if not bot_active else i18n.t("ag_state_off", lang)) + " " + (i18n.t("ag_activate", lang) if not bot_active else i18n.t("ag_deactivate", lang))
     rows = [
         [IButton(toggle, callback_data="agbot:cbot:activate")],
-        [IButton("\U0001f511 \u062b\u0628\u062a \u062a\u0648\u06a9\u0646 \u0631\u0628\u0627\u062a", callback_data="agbot:cbot:token")],
-        [IButton("\U0001f504 \u0631\u06cc\u0633\u062a\u0627\u0631\u062a \u0631\u0628\u0627\u062a", callback_data="agbot:cbot:restart")],
-        [IButton(BTN_BACK, callback_data="agbot:menu")],
+        [IButton(i18n.t("ag_cbot_token", lang), callback_data="agbot:cbot:token")],
+        [IButton(i18n.t("ag_cbot_restart", lang), callback_data="agbot:cbot:restart")],
+        [IButton(i18n.t("back", lang), callback_data="agbot:menu")],
     ]
     return _ikb(rows)
 
 
 # Ticket keyboards
-def tickets_menu_keyboard():
+def tickets_menu_keyboard(lang: str = "fa"):
     return _ikb([
-        [IButton("📨 تیکت‌های در انتظار", callback_data="agbot:ticket:pending")],
-        [IButton("📬 تیکت‌های باز", callback_data="agbot:ticket:open")],
-        [IButton("📩 تیکت‌های بسته", callback_data="agbot:ticket:closed")],
-        [IButton(BTN_BACK, callback_data="agbot:menu")],
+        [IButton(i18n.t("ag_tickets_pending", lang), callback_data="agbot:ticket:pending")],
+        [IButton(i18n.t("ag_tickets_open", lang), callback_data="agbot:ticket:open")],
+        [IButton(i18n.t("ag_tickets_closed", lang), callback_data="agbot:ticket:closed")],
+        [IButton(i18n.t("back", lang), callback_data="agbot:menu")],
     ])
 
 
-def ticket_detail_keyboard(ticket_id: int, status: str):
+def ticket_detail_keyboard(ticket_id: int, status: str, lang: str = "fa"):
     rows = []
     if status in ("open", "pending"):
-        rows.append([IButton("\U0001f4ac \u067e\u0627\u0633\u062e", callback_data=f"agbot:ticket:reply:{ticket_id}")])
-        rows.append([IButton("\u2705 \u0628\u0633\u062a\u0646 \u062a\u06cc\u06a9\u062a", callback_data=f"agbot:ticket:close:{ticket_id}")])
+        rows.append([IButton(i18n.t("ag_ticket_reply", lang), callback_data=f"agbot:ticket:reply:{ticket_id}")])
+        rows.append([IButton(i18n.t("ag_ticket_close", lang), callback_data=f"agbot:ticket:close:{ticket_id}")])
     elif status == "closed":
         # مثل ربات ادمین: امکان باز کردن دوباره تیکت بسته
-        rows.append([IButton("\U0001f4ec \u0628\u0627\u0632 \u06a9\u0631\u062f\u0646 \u062a\u06cc\u06a9\u062a", callback_data=f"agbot:ticket:reopen:{ticket_id}")])
-    rows.append([IButton(BTN_BACK, callback_data="agbot:ticket:back")])
+        rows.append([IButton(i18n.t("ag_ticket_reopen", lang), callback_data=f"agbot:ticket:reopen:{ticket_id}")])
+    rows.append([IButton(i18n.t("back", lang), callback_data="agbot:ticket:back")])
     return _ikb(rows)
 
 
@@ -222,18 +231,18 @@ def ticket_reply_confirm_keyboard():
 
 
 # Settings root keyboard
-def settings_menu_keyboard():
+def settings_menu_keyboard(lang: str = "fa"):
     return _ikb([
-        [IButton("👥 مدیریت کاربران ربات", callback_data="agbot:set:users")],
+        [IButton(i18n.t("ag_set_users", lang), callback_data="agbot:set:users")],
         [
-            IButton("📦 مدیریت سفارشات", callback_data="agbot:set:orders"),
-            IButton("💳 مدیریت تراکنشات", callback_data="agbot:set:tx"),
+            IButton(i18n.t("ag_set_orders", lang), callback_data="agbot:set:orders"),
+            IButton(i18n.t("ag_set_tx", lang), callback_data="agbot:set:tx"),
         ],
         [
-            IButton("🎁 مدیریت هدایا", callback_data="agbot:set:gifts"),
-            IButton("📧 ارسال پیام همگانی", callback_data="agbot:set:broadcast"),
+            IButton(i18n.t("ag_set_gifts", lang), callback_data="agbot:set:gifts"),
+            IButton(i18n.t("ag_set_broadcast", lang), callback_data="agbot:set:broadcast"),
         ],
-        [IButton("⚙️ تنظیمات", callback_data="agbot:set:config")],
+        [IButton(i18n.t("ag_set_config", lang), callback_data="agbot:set:config")],
     ])
 
 

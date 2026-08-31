@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 from Shared import agent_db
 from AgentBot.constants import CBOT_ACTIVATE, CBOT_TOKEN, CBOT_BACK, MENU_MAIN, UD_STATE, STATE_CBOT_TOKEN
 from AgentBot.handlers.base import get_agent_id
-from AgentBot.keyboards import cbot_menu_keyboard, back_keyboard, cancel_keyboard
+from AgentBot.keyboards import cbot_menu_keyboard, back_keyboard, cancel_keyboard, agent_lang
 from AgentBot.utils.helpers import _escape
 
 logger = logging.getLogger(__name__)
@@ -36,11 +36,11 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text += "\u0647\u06cc\u0686 \u0631\u0628\u0627\u062a\u06cc \u062b\u0628\u062a \u0646\u0634\u062f\u0647."
     if update.callback_query:
         try:
-            await update.callback_query.edit_message_text(text, reply_markup=cbot_menu_keyboard(active), parse_mode="HTML")
+            await update.callback_query.edit_message_text(text, reply_markup=cbot_menu_keyboard(active, lang=agent_lang(context)), parse_mode="HTML")
         except Exception:
-            await update.message.reply_text(text, reply_markup=cbot_menu_keyboard(active), parse_mode="HTML")
+            await update.message.reply_text(text, reply_markup=cbot_menu_keyboard(active, lang=agent_lang(context)), parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=cbot_menu_keyboard(active), parse_mode="HTML")
+        await update.message.reply_text(text, reply_markup=cbot_menu_keyboard(active, lang=agent_lang(context)), parse_mode="HTML")
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -79,7 +79,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         active_bots = agent_db.get_customer_bots(agent_id)
         still_active = any(int(b.get("is_active", 0)) for b in active_bots)
         try:
-            await query.edit_message_reply_markup(reply_markup=cbot_menu_keyboard(still_active))
+            await query.edit_message_reply_markup(reply_markup=cbot_menu_keyboard(still_active, lang=agent_lang(context)))
         except Exception:
             pass
         return

@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes
 
 from Shared import agent_db
 from AgentBot.handlers.base import authenticate, get_agent_id, clear_state
-from AgentBot.keyboards import main_menu_keyboard, language_keyboard, AGENT_MENU_KEYS
+from AgentBot.keyboards import main_menu_keyboard, language_keyboard, AGENT_MENU_KEYS, agent_lang
 from AgentBot.constants import MENU_MAIN, UD_STATE
 from AgentBot.handlers import (
     subscriptions, wallet, plans, customer_bot, tickets,
@@ -139,7 +139,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
             from AgentBot.keyboards import settings_menu_keyboard
             await query.edit_message_text(
                 "⚙️ <b>مدیریت ربات</b>",
-                reply_markup=settings_menu_keyboard(), parse_mode="HTML",
+                reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
             )
             return
         set_routing = {
@@ -197,6 +197,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         }
         text = _fa_map.get(_menu_key, text)
     from AgentBot.keyboards import (
+    agent_lang,
         BTN_SUBSCRIPTIONS, BTN_WALLET, BTN_PLANS, BTN_CUSTOMER_BOT,
         BTN_TICKETS, BTN_SETTINGS, BTN_BACK,
     )
@@ -238,7 +239,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         from AgentBot.keyboards import settings_menu_keyboard
         await update.message.reply_text(
             "⚙️ <b>مدیریت ربات</b>",
-            reply_markup=settings_menu_keyboard(), parse_mode="HTML",
+            reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
         )
         return
 
@@ -297,7 +298,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         from AgentBot.keyboards import settings_menu_keyboard
         await update.message.reply_text(
             "\u2699\ufe0f <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u0631\u0628\u0627\u062a</b>",
-            reply_markup=settings_menu_keyboard(), parse_mode="HTML",
+            reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
         )
         return
 

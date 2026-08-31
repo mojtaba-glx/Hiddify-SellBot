@@ -13,7 +13,7 @@ from Shared import database as shared_db
 from AgentBot.constants import WALLET_VIEW, WALLET_CREATE, WALLET_BACK, MENU_MAIN, UD_STATE, STATE_WALLET_CREATE
 from AgentBot import database as agentbot_db
 from AgentBot.handlers.base import get_agent_id
-from AgentBot.keyboards import wallet_menu_keyboard, back_keyboard, cancel_keyboard
+from AgentBot.keyboards import wallet_menu_keyboard, back_keyboard, cancel_keyboard, agent_lang
 from AgentBot.utils.helpers import _escape, _fmt_toman, _normalize_digits
 
 logger = logging.getLogger(__name__)
@@ -137,13 +137,13 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     if update.callback_query:
         try:
-            await update.callback_query.edit_message_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
+            await update.callback_query.edit_message_text(text, reply_markup=wallet_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
         except Exception:
             if update.message:
-                await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
+                await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
     else:
         if update.message:
-            await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(), parse_mode="HTML")
+            await update.message.reply_text(text, reply_markup=wallet_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
 
 
 async def _handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -10,6 +10,7 @@ from AgentBot.constants import UD_STATE
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.utils.helpers import _escape, _fmt_toman, _fmt_gb, _status_icon
 from AgentBot.keyboards import (
+    agent_lang,
     settings_sub_menu_keyboard,
     back_keyboard,
     cancel_keyboard,
@@ -82,7 +83,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         from AgentBot.keyboards import settings_menu_keyboard
         await query.edit_message_text(
             "\u2699\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u0631\u0628\u0627\u062a</b>",
-            reply_markup=settings_menu_keyboard(), parse_mode="HTML",
+            reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
         )
         return
 
@@ -407,7 +408,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     if text in {"بازگشت", "❌ لغو", "لغو", "/cancel"}:
         context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text("⚙️ <b>تنظیمات ربات</b>", reply_markup=settings_menu_keyboard(), parse_mode="HTML")
+        await update.message.reply_text("⚙️ <b>تنظیمات ربات</b>", reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
         return True
     customers = agent_db.search_customers(agent_id, text, limit=10)
     if not customers:

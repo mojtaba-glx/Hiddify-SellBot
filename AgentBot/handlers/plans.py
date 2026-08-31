@@ -16,6 +16,7 @@ from AgentBot.constants import (
 )
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
+    agent_lang,
     _ikb, IButton, BTN_BACK,
     plans_menu_keyboard, plans_mode_keyboard, dyn_settings_keyboard,
     discount_settings_keyboard,
@@ -49,7 +50,7 @@ DISCOUNT_DEFAULTS = {
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = get_agent_id(context)
     current_mode = get_setting(agent_id, "plan_display_mode", "dynamic")
-    kb = plans_menu_keyboard(current_mode)
+    kb = plans_menu_keyboard(current_mode, lang=agent_lang(context))
     text = "\U0001f4b5 <b>\u067e\u0644\u0646\u200c\u0647\u0627</b>"
     if update.callback_query:
         try:
@@ -531,7 +532,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.answer(f"\u062d\u0627\u0644\u062a \u0646\u0645\u0627\u06cc\u0634 \u0628\u0647 {toggle_mode} \u062a\u063a\u06cc\u06cc\u0631 \u06a9\u0631\u062f.")
                 current = get_setting(agent_id, "plan_display_mode", "dynamic")
                 try:
-                    await query.edit_message_reply_markup(reply_markup=plans_mode_keyboard(current))
+                    await query.edit_message_reply_markup(reply_markup=plans_mode_keyboard(current, lang=agent_lang(context)))
                 except Exception:
                     pass
                 return
@@ -540,7 +541,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(
                 "\U0001f4cb <b>\u0646\u0648\u0639 \u0646\u0645\u0627\u06cc\u0634 \u067e\u0644\u0646\u200c\u0647\u0627</b>\n\n"
                 "\u0641\u0642\u0637 \u06cc\u06a9\u06cc \u0627\u0632 \u062f\u0648 \u062d\u0627\u0644\u062a \u0645\u06cc\u200c\u062a\u0648\u0627\u0646\u062f \u0641\u0639\u0627\u0644 \u0628\u0627\u0634\u062f:",
-                reply_markup=plans_mode_keyboard(current), parse_mode="HTML",
+                reply_markup=plans_mode_keyboard(current, lang=agent_lang(context)), parse_mode="HTML",
             )
         except Exception:
             pass

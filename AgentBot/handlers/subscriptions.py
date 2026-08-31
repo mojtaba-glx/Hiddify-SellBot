@@ -18,6 +18,7 @@ from AgentBot.constants import (
 )
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import (
+    agent_lang,
     subs_menu_keyboard, subs_configs_keyboard, service_detail_keyboard,
     back_keyboard, cancel_keyboard, rename_cancel_keyboard, main_menu_keyboard, BTN_BACK,
     pagination_keyboard,
@@ -239,16 +240,16 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = "\U0001f4ca <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9\u200c\u0647\u0627</b>"
     if update.callback_query:
         try:
-            await update.callback_query.edit_message_text(text, reply_markup=subs_menu_keyboard(), parse_mode="HTML")
+            await update.callback_query.edit_message_text(text, reply_markup=subs_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
             return
         except Exception:
             pass
         try:
-            await update.callback_query.message.reply_text(text, reply_markup=subs_menu_keyboard(), parse_mode="HTML")
+            await update.callback_query.message.reply_text(text, reply_markup=subs_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
         except Exception:
             pass
     else:
-        await update.message.reply_text(text, reply_markup=subs_menu_keyboard(), parse_mode="HTML")
+        await update.message.reply_text(text, reply_markup=subs_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
 
 
 async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1) -> None:
@@ -648,7 +649,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             last_online = "هرگز"
         await query.edit_message_text(
             _service_detail_text(svc, last_online),
-            reply_markup=service_detail_keyboard(svc_id, is_active),
+            reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
             parse_mode="HTML",
         )
         return
@@ -661,7 +662,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(
                 "🔍 <b>جستجوی اشتراک</b>\n\n"
                 "یکی از گزینه‌های زیر را انتخاب کنید:",
-                reply_markup=subs_search_keyboard(),
+                reply_markup=subs_search_keyboard(lang=agent_lang(context)),
                 parse_mode="HTML",
             )
         except Exception:
@@ -890,7 +891,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         try:
             await query.edit_message_text(
                 f"✅ حذف کاربران منقضی انجام شد.\n\n🗑 حذف‌شده: {ok} | ❌ خطا: {fail}",
-                reply_markup=subs_menu_keyboard(), parse_mode="HTML",
+                reply_markup=subs_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
             )
         except Exception:
             pass
@@ -995,7 +996,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 try:
                     await query.edit_message_text(
                         "❌ موجودی کیف پول کافی نیست.\nلطفاً ابتدا کیف پول خود را شارژ کنید.",
-                        reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0))),
+                        reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0)), lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1039,7 +1040,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     f"💴 کسر از کیف پول: {_fmt_toman(wholesale)} تومان\n\n"
                     f"📈 کل حجم: {_fmt_gb(updated.get('usage_limit', 0))}GB\n"
                     f"⏳ روز باقی‌مانده: {updated.get('days_left') or updated.get('days') or 0}",
-                    reply_markup=service_detail_keyboard(svc_id, bool(int(updated.get("is_active", 0) or 0))),
+                    reply_markup=service_detail_keyboard(svc_id, bool(int(updated.get("is_active", 0) or 0)), lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1102,7 +1103,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     _lo = await get_service_last_online(svc)
                     await query.edit_message_text(
                         _service_detail_text(svc, _lo),
-                        reply_markup=service_detail_keyboard(svc_id, False),
+                        reply_markup=service_detail_keyboard(svc_id, False, lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1125,7 +1126,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     _lo = await get_service_last_online(svc)
                     await query.edit_message_text(
                         _service_detail_text(svc, _lo),
-                        reply_markup=service_detail_keyboard(svc_id, True),
+                        reply_markup=service_detail_keyboard(svc_id, True, lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1167,7 +1168,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 await query.edit_message_text(
                     f"✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «{_escape(svc_name)}» با موفقیت حذف شد.",
-                    reply_markup=subs_menu_keyboard(),
+                    reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1176,7 +1177,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text=f"✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «{_escape(svc_name)}» با موفقیت حذف شد.",
-                        reply_markup=subs_menu_keyboard(),
+                        reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1185,7 +1186,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 await query.edit_message_text(
                     "❌ خطا در حذف اشتراک. لطفاً دوباره تلاش کنید.",
-                    reply_markup=subs_menu_keyboard(),
+                    reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1245,7 +1246,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 await query.edit_message_text(
                     _service_detail_text(svc, last_online),
-                    reply_markup=service_detail_keyboard(svc_id, is_active),
+                    reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1274,7 +1275,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "\U0001f447 \u0644\u06cc\u0646\u06a9 \u062c\u062f\u06cc\u062f \u0647\u0645\u0631\u0627\u0647 \u0628\u0627 QR \u062f\u0631 \u067e\u06cc\u0627\u0645 \u0628\u0639\u062f\u06cc \u0627\u0631\u0633\u0627\u0644 \u0645\u06cc\u0634\u0648\u062f."
             )
             try:
-                await query.edit_message_text(text, reply_markup=service_detail_keyboard(svc_id, is_active), parse_mode="HTML")
+                await query.edit_message_text(text, reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)), parse_mode="HTML")
             except Exception:
                 pass
             try:
@@ -1298,7 +1299,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             await query.edit_message_text(
                 "\u274c \u062e\u0637\u0627 \u062f\u0631 \u062a\u063a\u06cc\u06cc\u0631 \u0644\u06cc\u0646\u06a9. \u0644\u0637\u0641\u0627 \u062f\u0648\u0628\u0627\u0631\u0647 \u062a\u0644\u0627\u0634 \u06a9\u0646\u06cc\u062f.",
-                reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0))),
+                reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0)), lang=agent_lang(context)),
                 parse_mode="HTML",
             )
         return
@@ -1329,7 +1330,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         except Exception:
             _lo = "هرگز"
         detail = f"✅ <b>اشتراک یافت شد</b>\n\n" + _service_detail_text(svc, _lo)
-        await update.message.reply_text(detail, reply_markup=service_detail_keyboard(int(svc["id"]), is_active), parse_mode="HTML")
+        await update.message.reply_text(detail, reply_markup=service_detail_keyboard(int(svc["id"]), is_active, lang=agent_lang(context)), parse_mode="HTML")
         return True
 
     if state == STATE_SEARCH_NAME:
@@ -1356,7 +1357,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                     is_active = bool(int(svc_cancel.get("is_active", 0) or 0))
                     await update.message.reply_text(
                         _service_detail_text(svc_cancel, last_online),
-                        reply_markup=service_detail_keyboard(svc_id_cancel, is_active),
+                        reply_markup=service_detail_keyboard(svc_id_cancel, is_active, lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
             return True
@@ -1406,7 +1407,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             is_active = bool(int(refreshed.get("is_active", 0) or 0))
             await update.message.reply_text(
                 _service_detail_text(refreshed, last_online),
-                reply_markup=service_detail_keyboard(svc_id, is_active),
+                reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
                 parse_mode="HTML",
             )
         return True
@@ -1457,7 +1458,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         # پیام دوم: جزئیات اکانت + دکمه‌ها
         await update.message.reply_text(
             _service_detail_card_text(svc, note, last_online),
-            reply_markup=service_detail_keyboard(svc_id, is_active),
+            reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
             parse_mode="HTML",
         )
         return True
