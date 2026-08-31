@@ -269,7 +269,10 @@ async def create_user(
         raw_name = str(payload.get("name") or "").strip()
         username = _re.sub(r'[^a-zA-Z0-9_\-@.]', '_', raw_name).strip("_")[:32]
     if not username:
-        raise MarzbanApiError("username is required for Marzban create_user.")
+        # Non-Latin names (e.g. Persian) sanitize to empty — generate a safe fallback
+        import uuid as _uuid
+        username = f"user_{_uuid.uuid4().hex[:6]}"
+        logger.info("Marzban create_user: name sanitized to empty, generated username=%s", username)
 
     # Build Marzban payload
     gb_limit = payload.get("data_limit_GB")
@@ -373,6 +376,13 @@ async def update_user(
     marzban_payload: Dict[str, Any] = {}
 
     # Standardized conversions
+    # NOTE: "usage_limit_GB" is the key every bot module (AdminBot/UserBot/
+    # AgentBot/CustomerBot) sends when editing volume — it MUST be mapped.
+    if "usage_limit_GB" in payload:
+        try:
+            marzban_payload["data_limit"] = int(float(payload["usage_limit_GB"]) * 1024 * 1024 * 1024)
+        except (TypeError, ValueError):
+            marzban_payload["data_limit"] = 0
     if "data_limit_GB" in payload:
         marzban_payload["data_limit"] = int(float(payload["data_limit_GB"]) * 1024 * 1024 * 1024)
     if "data_limit" in payload:
@@ -404,6 +414,12 @@ async def update_user(
         marzban_payload["note"] = str(payload["note"])
     if "comment" in payload:
         marzban_payload["note"] = str(payload["comment"])
+    # Hiddify-style rename: Marzban has no "name" field; map it to note
+    # (renaming the username itself is unsafe — it would break sub links)
+    if "name" in payload and "note" not in marzban_payload:
+        new_name = str(payload["name"]).strip()
+        if new_name:
+            marzban_payload["note"] = new_name
     if "username" in payload:
         marzban_payload["username"] = str(payload["username"])
 
@@ -414,12 +430,15 @@ async def update_user(
             marzban_payload[key] = payload[key]
 
     if not marzban_payload:
-        raise MarzbanApiError("No fields to update.")
+        # Payload only contained unmappable keys (e.g. current_usage_GB,
+        # last_reset_time) — do NOT raise; just return the current user.
+        logger.debug("Marzban update_user called with no mappable fields for %s", username)
+        return await get_user(server, username)
 
     result = await _request("PUT", url, server, json=marzban_payload)
     if not isinstance(result, dict):
         raise MarzbanApiError("Marzban update_user returned non-dict response.")
-    return result
+    return normalize_user(result, server=server)
 
 
 async def delete_user(server: Dict[str, Any], username: str) -> None:
@@ -625,6 +644,82 @@ async def get_system_info(server: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise MarzbanApiError("Unexpected response from /api/system.")
     return data
+
+
+# ---------------------------------------------------------------------------
+# Native nodes (marzban-node)
+# ---------------------------------------------------------------------------
+NODE_STATUS_EMOJI = {
+    "connected": "🟢",
+    "connecting": "🟡",
+    "error": "🔴",
+    "disabled": "⚪",
+    "created": "🔵",
+}
+
+
+async def get_nodes(server: Dict[str, Any], *, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    GET /api/nodes  → marzban-node instances with live status.
+
+    Node response fields (Marzban v0.8+):
+      id, name, address, port, api_port, status (connected/connecting/error/
+      disabled/created), message, xray_version, node_version, cores,
+      mem_total, mem_used, uptime, usage, created_at
+    """
+    base = _get_panel_url(server)
+    url = f"{base}/api/nodes"
+    params = {"status": status} if status else None
+    data = await _request("GET", url, server, params=params)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("nodes"), list):
+        return list(data["nodes"])
+    raise MarzbanApiError("Unexpected response from /api/nodes.")
+
+
+async def get_node(server: Dict[str, Any], node_id: Any) -> Dict[str, Any]:
+    """GET /api/node/{node_id} → single node with live status."""
+    base = _get_panel_url(server)
+    url = f"{base}/api/node/{node_id}"
+    data = await _request("GET", url, server)
+    if not isinstance(data, dict):
+        raise MarzbanApiError("Unexpected response from /api/node.")
+    return data
+
+
+def format_node_line(node: Dict[str, Any]) -> str:
+    """One-line human summary of a marzban node (used by AdminBot)."""
+    status = str(node.get("status") or "created").strip().lower()
+    emoji = NODE_STATUS_EMOJI.get(status, "🔵")
+    name = str(node.get("name") or f"#{node.get('id') or '?'}")
+    address = str(node.get("address") or "")
+    port = node.get("port")
+    head = f"{emoji} {name}" + (f" ({address}:{port})" if address else "")
+    extras: List[str] = []
+    if node.get("xray_version"):
+        extras.append(f"xray {node['xray_version']}")
+    if node.get("node_version"):
+        extras.append(f"node {node['node_version']}")
+    cores = _to_int(node.get("cores"), 0)
+    if cores > 0:
+        extras.append(f"{cores} core")
+    mem_total = _to_float(node.get("mem_total"), 0.0)
+    if mem_total > 0:
+        mem_used = _to_float(node.get("mem_used"), 0.0)
+        extras.append(f"RAM {mem_used / (1024 ** 3):.1f}/{mem_total / (1024 ** 3):.1f} GB")
+    uptime = _to_int(node.get("uptime"), 0)
+    if uptime > 0:
+        d, rem = divmod(uptime, 86400)
+        h, _ = divmod(rem, 3600)
+        extras.append(f"up {d}d{h}h" if d else f"up {h}h")
+    line = head
+    if extras:
+        line += "\n    └ " + " | ".join(extras)
+    msg = str(node.get("message") or "").strip()
+    if status == "error" and msg:
+        line += f"\n    └ ⚠️ {msg[:120]}"
+    return line
 
 
 def _bytes_to_gb(v: Any) -> float:

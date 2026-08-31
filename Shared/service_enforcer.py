@@ -337,13 +337,15 @@ async def _disable_service_on_all_nodes(
                 user_uuid,
                 e,
             )
-        # Also disable on Marzban if applicable
+        # Also disable on Marzban/PasarGuard if applicable
         if marzban_un:
             try:
-                await marzban_api.disable_user(server, marzban_un)
+                from Shared import multi_panel
+                panel_mod = multi_panel.panel_api(server)
+                await panel_mod.disable_user(server, marzban_un)
             except Exception as e:
                 logger.warning(
-                    "Failed disabling Marzban user on server_id=%s username=%s: %s",
+                    "Failed disabling Marzban/PasarGuard user on server_id=%s username=%s: %s",
                     server_id,
                     marzban_un,
                     e,

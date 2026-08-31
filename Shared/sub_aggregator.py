@@ -610,10 +610,12 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: 
     except Exception:
         pass
 
-    # Marzban configs
+    # Marzban / PasarGuard configs
     if marzban_username:
         try:
-            marzban_links = _run_async(marzban_api.get_user_configs(server, marzban_username))
+            from Shared import multi_panel
+            panel_mod = multi_panel.panel_api(server)
+            marzban_links = _run_async(panel_mod.get_user_configs(server, marzban_username))
             existing = set(lines)
             for link in marzban_links or []:
                 link_str = str(link or "").strip()

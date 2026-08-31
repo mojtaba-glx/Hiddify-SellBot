@@ -60,6 +60,11 @@ def init_db() -> None:
             updated_at TEXT DEFAULT ''
         )
     """)
+    # زبان رابط کاربری نماینده (چندزبانه)
+    try:
+        cur.execute("ALTER TABLE agent_users ADD COLUMN language TEXT DEFAULT 'fa'")
+    except Exception:
+        pass
 
     # 2. کیف پول نماینده
     cur.execute("""
@@ -333,6 +338,20 @@ def upsert_agent(telegram_id: int, username: Optional[str] = None, full_name: Op
     conn.commit()
     conn.close()
     return int(agent_id)
+
+
+def set_agent_language(agent_id: int, lang: str) -> bool:
+    """ذخیره زبان رابط کاربری نماینده."""
+    lg = str(lang or "fa").strip().lower()
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE agent_users SET language = ? WHERE id = ?", (lg, int(agent_id or 0)))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
 
 
 def get_agent_by_id(agent_id: int) -> Optional[Dict[str, Any]]:

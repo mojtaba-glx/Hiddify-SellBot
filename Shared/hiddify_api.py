@@ -23,17 +23,30 @@ def _is_marzban_server(server: Dict[str, Any]) -> bool:
     return str((server or {}).get("panel_type") or "").strip().lower() in {"marzban", "pasarguard"}
 
 
+def _marzban_panel_module(server: Dict[str, Any]):
+    """Return the marzban-like client module for this server (marzban_api or pasarguard_api)."""
+    from Shared import marzban_api
+    pt = str((server or {}).get("panel_type") or "").strip().lower()
+    if pt == "pasarguard":
+        from Shared import pasarguard_api
+        return pasarguard_api
+    return marzban_api
+
+
 async def _marzban_dispatch(server: Dict[str, Any], func_name: str, *args: Any, **kwargs: Any) -> Any:
     """
-    Dispatch a call to marzban_api by function name (keeps lazy import).
-    Translates MarzbanApiError into HiddifyApiError so callers that catch
-    HiddifyApiError also handle Marzban failures uniformly.
+    Dispatch a call to the marzban-like client (marzban_api or pasarguard_api)
+    by function name.  Translates panel errors into HiddifyApiError so callers
+    that catch HiddifyApiError also handle Marzban/PasarGuard failures uniformly.
     """
     from Shared import marzban_api
+    module = _marzban_panel_module(server)
     try:
-        return await getattr(marzban_api, func_name)(*args, **kwargs)
-    except marzban_api.MarzbanApiError as e:
-        raise HiddifyApiError(str(e)) from e
+        return await getattr(module, func_name)(*args, **kwargs)
+    except Exception as e:
+        if isinstance(e, marzban_api.MarzbanApiError):
+            raise HiddifyApiError(str(e)) from e
+        raise
 
 
 SSL_MODE_ENV = "HIDDIFY_SSL_MODE"
@@ -1166,10 +1179,19 @@ async def create_user(
         return await xui_api.create_user(server, payload)
 
     if _is_marzban_server(server):
+        from Shared import marzban_api as _mb
+        import re as _re
+        import uuid as _uuid
+        payload = dict(payload or {})
+        if not str(payload.get("username") or "").strip():
+            # Marzban needs a unique [a-zA-Z0-9-_@.] username (3-32 chars).
+            # Sanitize the display name; non-Latin names fall back to "user".
+            raw_name = str(payload.get("name") or "").strip()
+            base_un = _re.sub(r'[^a-zA-Z0-9_\-@.]', '_', raw_name).strip("_")[:24] or "user"
+            payload["username"] = f"{base_un}_{_uuid.uuid4().hex[:6]}"[:32]
         raw = await _marzban_dispatch(server, "create_user", server, payload)
         # normalize so callers get uuid/name/usage_limit_GB keys
         try:
-            from Shared import marzban_api as _mb
             return _mb.normalize_user(raw if isinstance(raw, dict) else {}, server=server)
         except Exception:
             return raw

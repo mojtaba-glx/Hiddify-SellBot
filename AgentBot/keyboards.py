@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup
+from Shared import i18n
 from Shared.tg_button_styles import keyboard_button as KButton
 from Shared.tg_button_styles import inline_button as IButton
 
@@ -13,19 +14,33 @@ BTN_TICKETS = "\U0001f3ab \u0645\u062f\u06cc\u0631\u06cc\u062a \u062a\u06cc\u06a
 BTN_SETTINGS = "\u2699\ufe0f \u0645\u062f\u06cc\u0631\u06cc\u062a \u0631\u0628\u0627\u062a"
 BTN_BACK = "\U0001f519 \u0628\u0627\u0632\u06af\u0634\u062a"
 
+# کلیدهای i18n منوی اصلی نماینده (برای مچر چندزبانه)
+AGENT_MENU_KEYS = (
+    "ag_menu_subscriptions", "ag_menu_wallet", "ag_menu_plans",
+    "ag_menu_customer_bot", "ag_menu_tickets", "ag_menu_settings",
+)
+
 
 def _ikb(rows: List[List[Any]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def main_menu_keyboard():
+def main_menu_keyboard(lang: str = "fa"):
     kb = [
-        [KButton(BTN_SUBSCRIPTIONS)],
-        [KButton(BTN_PLANS), KButton(BTN_WALLET)],
-        [KButton(BTN_CUSTOMER_BOT)],
-        [KButton(BTN_TICKETS), KButton(BTN_SETTINGS)],
+        [KButton(i18n.t("ag_menu_subscriptions", lang))],
+        [KButton(i18n.t("ag_menu_plans", lang)), KButton(i18n.t("ag_menu_wallet", lang))],
+        [KButton(i18n.t("ag_menu_customer_bot", lang))],
+        [KButton(i18n.t("ag_menu_tickets", lang)), KButton(i18n.t("ag_menu_settings", lang))],
     ]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
+
+def language_keyboard():
+    rows = []
+    langs = i18n.supported_langs()
+    for i in range(0, len(langs), 2):
+        rows.append([IButton(i18n.lang_display_name(lg), callback_data=f"lang:set:{lg}") for lg in langs[i:i + 2]])
+    return _ikb(rows)
 
 
 def back_keyboard(callback_data: str = f"agbot:menu") -> InlineKeyboardMarkup:

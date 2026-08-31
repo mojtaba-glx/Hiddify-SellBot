@@ -27,7 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api, marzban_api
+from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api, marzban_api, multi_panel
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import (
     admin_main_keyboard,
@@ -2301,6 +2301,10 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
             5,
             [InlineKeyboardButton("🧩 لیست اینباندهای مرزبان", callback_data=f"server:{server_id}:marzban_inbounds")],
         )
+        keyboard.insert(
+            6,
+            [InlineKeyboardButton("🛰 نودهای مرزبان", callback_data=f"server:{server_id}:marzban_nodes")],
+        )
     keyboard.append([InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -3978,7 +3982,7 @@ async def handle_add_server_flow(
             )
         elif str(new_server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES:
             await message.reply_text(
-                "🌐 لطفاً آدرس پنل مرزبان را وارد کنید:\n"
+                f"🌐 لطفاً آدرس پنل {_panel_type_label(new_server.get('panel_type'))} را وارد کنید:\n"
                 "مثال: https://panel.example.com:8000\n"
                 "⚠️ فقط آدرس پایه پنل (بدون /api و بدون مسیر اضافه).\n"
                 "اگر پورت غیر استاندارد است، پورت را هم وارد کنید.",
@@ -4008,7 +4012,7 @@ async def handle_add_server_flow(
         if new_server.get("panel_type") in MARZBAN_PANEL_TYPES:
             context.user_data["state"] = ADD_STATE_MARZBAN_USERNAME
             await message.reply_text(
-                "👤 لطفاً «نام کاربری ادمین» پنل مرزبان را وارد کنید:\n"
+                f"👤 لطفاً «نام کاربری ادمین» پنل {_panel_type_label(new_server.get('panel_type'))} را وارد کنید:\n"
                 "(همان مدیری که در پنل ساخته‌اید، مثلاً admin)",
                 reply_markup=cancel_keyboard(),
             )
@@ -4227,7 +4231,7 @@ async def handle_add_server_flow(
         # تست اتصال به پنل با اطلاعات وارد شده
         try:
             if _is_marzban_pt:
-                await marzban_api.test_connect(new_server)
+                await multi_panel.panel_api(new_server).test_connect(new_server)
             elif new_server.get("panel_type") == "xui":
                 await xui_api.test_connect(new_server)
             else:
@@ -6885,7 +6889,7 @@ async def handle_server_inline_callback(
         if field == "test":
             try:
                 if str(server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES:
-                    await marzban_api.test_connect(server)
+                    await multi_panel.panel_api(server).test_connect(server)
                 else:
                     await hiddify_api.list_users(server)
                 await msg.edit_text(
@@ -7028,7 +7032,7 @@ async def handle_server_inline_callback(
                 await msg.edit_text("❌ این سرور از نوع مرزبان نیست.")
                 return
             try:
-                stats = await marzban_api.get_server_stats(server)
+                stats = await multi_panel.panel_api(server).get_server_stats(server)
             except Exception as e:
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]
@@ -7088,7 +7092,7 @@ async def handle_server_inline_callback(
                 await msg.edit_text("❌ این سرور از نوع مرزبان نیست.")
                 return
             try:
-                inbounds = await marzban_api.get_inbounds(server)
+                inbounds = await multi_panel.panel_api(server).get_inbounds(server)
             except Exception as e:
                 kb = InlineKeyboardMarkup(
                     [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]

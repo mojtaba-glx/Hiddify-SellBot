@@ -133,5 +133,11 @@
   "close_ticket_btn": "🚫Close ticket",
   "last4_prompt": "🔢 Please send the last 4 digits of the source card:",
   "last4_invalid_short": "❌ Invalid input.\nPlease send the last 4 digits of the source card:",
-  "pay_pending_admin": "✅ Your transaction is awaiting admin approval.\nPlease wait and avoid duplicate receipts."
+  "pay_pending_admin": "✅ Your transaction is awaiting admin approval.\nPlease wait and avoid duplicate receipts.",
+  "ag_menu_subscriptions": "📈 Subscriptions",
+  "ag_menu_wallet": "💰 Wallet",
+  "ag_menu_plans": "💴 Plans",
+  "ag_menu_customer_bot": "🤖 Customer bot",
+  "ag_menu_tickets": "🎫 Tickets",
+  "ag_menu_settings": "⚙️ Bot management"
 }

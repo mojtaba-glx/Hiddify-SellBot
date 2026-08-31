@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes
 
 from Shared import agent_db
 from AgentBot.handlers.base import authenticate, get_agent_id, clear_state
-from AgentBot.keyboards import main_menu_keyboard
+from AgentBot.keyboards import main_menu_keyboard, language_keyboard, AGENT_MENU_KEYS
 from AgentBot.constants import MENU_MAIN, UD_STATE
 from AgentBot.handlers import (
     subscriptions, wallet, plans, customer_bot, tickets,
@@ -39,10 +39,17 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     clear_state(context)
     name = agent.get("full_name") or agent.get("username") or f"\u0646\u0645\u0627\u06cc\u0646\u062f\u0647 #"
+    from Shared import i18n as _i18n
+    from Shared import agent_db as _adb
+    _lg = _i18n.get_agent_lang(int(agent.get("id") or 0))
     await update.message.reply_text(
         f"\u062e\u0648\u0634 \u0622\u0645\u062f\u06cc\u062f {name} \u0639\u0632\u06cc\u0632 \U0001f44b\n"
         "\u0627\u0632 \u0645\u0646\u0648\u06cc \u0632\u06cc\u0631 \u06af\u0632\u06cc\u0646\u0647 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f.",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(lang=_lg),
+    )
+    await update.message.reply_text(
+        _i18n.t("lang_choose", _lg),
+        reply_markup=language_keyboard(),
     )
 
 
@@ -51,6 +58,32 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
     if not query:
         return
     data = (query.data or "").strip()
+    # --- تغییر زبان رابط کاربری نماینده ---
+    if data.startswith("lang:set:"):
+        from Shared import i18n as _i18n
+        from Shared import agent_db as _adb
+        from AgentBot.handlers.base import get_agent_id as _gid
+        new_lang = data.split(":")[2].strip().lower()
+        if not _i18n.is_supported(new_lang):
+            new_lang = "fa"
+        try:
+            _adb.set_agent_language(int(_gid(context) or 0), new_lang)
+        except Exception:
+            pass
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        try:
+            await query.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text=_i18n.t("lang_changed", new_lang, lang_name=_i18n.lang_display_name(new_lang)),
+            reply_markup=main_menu_keyboard(lang=new_lang),
+        )
+        return
     if not data.startswith("agbot:"):
         return
     parts = data.split(":")
@@ -152,6 +185,17 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not agent:
             return
     text = (update.message.text or update.message.caption or "").strip()
+
+    # --- مچر چندزبانه: نگاشت دکمه هر زبان به لیبل مرجع فارسی ---
+    from Shared import i18n as _i18n
+    _menu_key = _i18n.resolve_button(text, AGENT_MENU_KEYS)
+    if _menu_key:
+        _fa_map = {
+            "ag_menu_subscriptions": BTN_SUBSCRIPTIONS, "ag_menu_wallet": BTN_WALLET,
+            "ag_menu_plans": BTN_PLANS, "ag_menu_customer_bot": BTN_CUSTOMER_BOT,
+            "ag_menu_tickets": BTN_TICKETS, "ag_menu_settings": BTN_SETTINGS,
+        }
+        text = _fa_map.get(_menu_key, text)
     from AgentBot.keyboards import (
         BTN_SUBSCRIPTIONS, BTN_WALLET, BTN_PLANS, BTN_CUSTOMER_BOT,
         BTN_TICKETS, BTN_SETTINGS, BTN_BACK,

@@ -25,6 +25,31 @@ _MARZBAN_PANEL_TYPES = {"marzban", "pasarguard"}
 
 
 # ---------------------------------------------------------------------------
+# Panel module resolver
+# ---------------------------------------------------------------------------
+def panel_api(server: Dict[str, Any]):
+    """
+    Return the correct panel client module for the given server.
+
+      panel_type == "pasarguard" → Shared.pasarguard_api
+      panel_type == "marzban"    → Shared.marzban_api
+      panel_type in xui variants → Shared.xui_api (hiddify_api routes these too)
+      otherwise                  → Shared.hiddify_api
+
+    Callers that previously did ``hiddify_api.create_user(server, ...)`` can
+    switch to ``(await multi_panel.panel_api(server)).create_user(server, ...)``
+    when they want the panel-native client directly.
+    """
+    pt = str((server or {}).get("panel_type") or "").strip().lower()
+    if pt == "pasarguard":
+        from Shared import pasarguard_api
+        return pasarguard_api
+    if pt == "marzban":
+        return marzban_api
+    return hiddify_api
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 def has_marzban(server: Dict[str, Any]) -> bool:
@@ -95,6 +120,9 @@ async def create_user(
         suffix = uuid_mod.uuid4().hex[:6]
         base_un = re.sub(r'[^a-zA-Z0-9_\-@.]', '_', raw_name).strip("_")[:24] or "user"
         marzban_username = f"{base_un}_{suffix}"[:32]
+        if not re.fullmatch(r'[a-zA-Z0-9_\-@.]{3,32}', marzban_username):
+            # non-Latin names sanitize to underscores only → safe fallback
+            marzban_username = f"user_{suffix}"
 
         marzban_payload: Dict[str, Any] = {
             "username": marzban_username,
@@ -212,9 +240,21 @@ async def patch_user(
                 logger.debug("Marzban-primary user updated: %s", un)
             except Exception as e:
                 logger.warning("Marzban-primary patch_user failed for %s: %s", un, e)
+        # Reset traffic on the panel when caller asks for a usage reset
+        if "current_usage_GB" in payload:
+            try:
+                new_val = float(payload["current_usage_GB"] or 0)
+            except (TypeError, ValueError):
+                new_val = 0.0
+            if new_val <= 0:
+                try:
+                    await marzban_api.reset_user_usage(server, un)
+                    logger.info("Marzban-primary usage reset: %s", un)
+                except Exception as e:
+                    logger.warning("Marzban-primary reset_user_usage failed for %s: %s", un, e)
         try:
             raw = await marzban_api.get_user(server, un)
-            return _normalize_marzban_user(raw)
+            return raw  # get_user already returns a normalized dict
         except Exception:
             return {"uuid": un, "username": un, "_marzban_username": un}
 
@@ -250,6 +290,19 @@ async def patch_user(
             logger.debug("Marzban user updated: %s", marzban_username)
         except Exception as e:
             logger.warning("Marzban patch_user failed for %s: %s", marzban_username, e)
+
+    # Reset traffic on the panel when caller asks for a usage reset
+    if "current_usage_GB" in payload:
+        try:
+            new_val = float(payload["current_usage_GB"] or 0)
+        except (TypeError, ValueError):
+            new_val = 0.0
+        if new_val <= 0:
+            try:
+                await marzban_api.reset_user_usage(server, marzban_username)
+                logger.info("Marzban usage reset: %s", marzban_username)
+            except Exception as e:
+                logger.warning("Marzban reset_user_usage failed for %s: %s", marzban_username, e)
 
     return hiddify_result
 
