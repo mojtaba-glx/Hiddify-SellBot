@@ -1498,6 +1498,41 @@ def set_agency_event_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     return current
 
 
+def get_admin_language() -> str:
+    """زبان رابط کاربری ادمین (AdminBot) — سراسری."""
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT value FROM userbot_settings WHERE key = 'admin_language' LIMIT 1")
+        row = cur.fetchone()
+        lg = str(dict(row).get("value") or "fa").strip().lower() if row else "fa"
+        return lg if lg in ("fa", "en", "ru") else "fa"
+    except Exception:
+        return "fa"
+    finally:
+        conn.close()
+
+
+def set_admin_language(lang: str) -> str:
+    lg = str(lang or "fa").strip().lower()
+    if lg not in ("fa", "en", "ru"):
+        lg = "fa"
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO userbot_settings (key, value) VALUES ('admin_language', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (lg,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return lg
+
+
 def toggle_agency_event_enabled() -> Dict[str, Any]:
     settings = get_agency_event_settings()
     settings["event_channel_enabled"] = not bool(settings.get("event_channel_enabled"))

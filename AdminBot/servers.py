@@ -147,27 +147,49 @@ def _is_confirm_text(text: str) -> bool:
     return key in {"تایید", "تائید", "تاييد", "confirm", "yes", "ok"}
 
 
+def _admin_menu_key(text: str):
+    """نگاشت دکمه منوی ادمین در هر زبان به کلید i18n."""
+    try:
+        from AdminBot.keyboards import ADMIN_MENU_KEYS
+        from Shared import i18n as _i18n
+        return _i18n.resolve_button(text, ADMIN_MENU_KEYS)
+    except Exception:
+        return None
+
+
 def _is_servers_button(text: str, text_key: str) -> bool:
+    if _admin_menu_key(text) == "adm_menu_servers":
+        return True
     return text in {BTN_SERVERS, "مدیریت سرورها🖥", "🖥️ سرورها"} or "مدیریتسرورها" in text_key or "سرورها" in text_key
 
 
 def _is_search_button(text: str, text_key: str) -> bool:
+    if _admin_menu_key(text) == "adm_menu_search":
+        return True
     return text in {BTN_SEARCH_USER, "🔍 جستجوی کاربر", "جستجوی کاربر🔍"} or "جستجویکاربر" in text_key
 
 
 def _is_userbot_button(text: str, text_key: str) -> bool:
+    if _admin_menu_key(text) == "adm_menu_userbot":
+        return True
     return text in {BTN_USERBOT, "🤖 مدیریت ربات کاربران", "🤖 ربات کاربران"} or "مدیریترباتکاربران" in text_key or "ربات کاربران" in text_key
 
 
 def _is_status_button(text: str, text_key: str) -> bool:
+    if _admin_menu_key(text) == "adm_menu_status":
+        return True
     return text in {BTN_STATUS, "📊 وضعیت سرور", "📈 وضعیت سرور", "🖥 وضعیت سرور"} or "وضعیتسرور" in text_key
 
 
 def _is_backup_button(text: str, text_key: str) -> bool:
+    if _admin_menu_key(text) == "adm_menu_backup":
+        return True
     return text in {BTN_BACKUP, "📫 دریافت بکاپ", "📣 دریافت بکاپ", "📬 دریافت بکاپ"} or "دریافتبکاپ" in text_key
 
 
 def _is_agencies_button(text: str, text_key: str) -> bool:
+    if _admin_menu_key(text) == "adm_menu_agencies":
+        return True
     return text in {BTN_AGENCIES, "🏢 نمایندگی", "🏢 نمایندگی‌ها"} or "نمایندگی" in text_key or "مدیریتنمایندهها" in text_key
 
 
@@ -7964,6 +7986,36 @@ async def admin_inline_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     data = (query.data or "").strip()
     msg = query.message
+
+    # --- تغییر زبان رابط کاربری ادمین ---
+    if data.startswith("lang:set:"):
+        from Shared import userbot_db as _udb
+        from AdminBot.keyboards import language_keyboard as _lang_kb
+        new_lang = data.split(":")[2].strip().lower()
+        if new_lang not in ("fa", "en", "ru"):
+            new_lang = "fa"
+        try:
+            _udb.set_admin_language(new_lang)
+        except Exception as e:
+            logger.warning("set_admin_language failed: %s", e)
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        try:
+            await msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        from Shared.i18n import t as _t, lang_display_name as _ldn
+        try:
+            await context.bot.send_message(
+                chat_id=query.from_user.id,
+                text=_t("lang_changed", new_lang, lang_name=_ldn(new_lang)),
+                reply_markup=admin_main_keyboard(lang=new_lang),
+            )
+        except Exception as e:
+            logger.warning("admin lang change send failed: %s", e)
+        return
 
     # --- هندلر مدیریت نماینده‌ها (agency) ---
     if data.startswith("agency:"):

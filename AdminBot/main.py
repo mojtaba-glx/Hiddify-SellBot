@@ -606,6 +606,24 @@ async def _run_subscription_reminder_cycle() -> dict:
 # ===============================
 #   /start ادمین
 # ===============================
+async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """دستور /language — تغییر زبان رابط کاربری ادمین."""
+    user = update.effective_user
+    message = update.message
+    if not user or not message:
+        return
+    if user.id != ADMIN_ID:
+        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        return
+    from AdminBot.keyboards import language_keyboard
+    from Shared import userbot_db as _udb
+    from Shared.i18n import t as _t
+    await message.reply_text(
+        _t("lang_choose", _udb.get_admin_language()),
+        reply_markup=language_keyboard(),
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     message = update.message
@@ -949,6 +967,7 @@ def main() -> None:
 
     # /start — همین فایل
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("language", language_command))
     application.add_handler(CommandHandler("debug", debug))
     application.add_handler(CommandHandler("enforce_now", enforce_now))
     application.add_handler(CommandHandler("agent_enforce", agent_enforce))

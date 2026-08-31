@@ -155,5 +155,11 @@
   "created_notify_title": "🎉 Your transaction has been approved",
   "created_notify_hint": "You can access your subscription info via the [📊 Subscription status 📊] button.",
   "payment_approved_cust": "✅ Your payment has been approved.\n💰 Charged amount: {a} Toman\n🎉 Your wallet has been topped up successfully.",
-  "payment_rejected_cust": "❌ Your payment was rejected.\nThe amount was not added to your wallet.\nContact support if needed."
+  "payment_rejected_cust": "❌ Your payment was rejected.\nThe amount was not added to your wallet.\nContact support if needed.",
+  "adm_menu_servers": "🖥 Server management",
+  "adm_menu_search": "🔍 User search",
+  "adm_menu_userbot": "🤖 Users bot management",
+  "adm_menu_status": "📊 Server status",
+  "adm_menu_backup": "📫 Get backup",
+  "adm_menu_agencies": "🏢 Agencies"
 }
