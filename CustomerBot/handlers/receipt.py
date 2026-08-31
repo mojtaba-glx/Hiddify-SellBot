@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 from telegram import Bot, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
+from Shared import i18n
 
 from CustomerBot.constants import (
     UD_STATE, UD_BUY_GB, UD_BUY_MONTHS, UD_BUY_SERVER_ID, UD_TICKET_MODE,
@@ -419,9 +420,8 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     else:
         agent_msg_id = None
     pending_msg = await update.message.reply_text(
-        "✅ تراکنش شما در انتظار تایید توسط ادمین است.\n"
-        "لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
-        reply_markup=main_menu_keyboard(),
+        i18n.t("pay_receipt_pending", i18n.get_customer_lang(agent_id, user.id)),
+        reply_markup=main_menu_keyboard(lang=i18n.get_customer_lang(agent_id, user.id)),
     )
     if pay and pending_msg:
         try:
@@ -473,26 +473,28 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(UD_TICKET_QUESTION, None)
         context.user_data.pop("pending_ticket", None)
         await update.message.reply_text(
-            "❌ عملیات لغو شد.",
-            reply_markup=main_menu_keyboard(),
+            i18n.t("operation_cancelled", i18n.get_customer_lang(agent_id, user.id)),
+            reply_markup=main_menu_keyboard(lang=i18n.get_customer_lang(agent_id, user.id)),
         )
         return
 
     # ---- Payment receipt trigger ----
     if state == STATE_RECEIPT_WAITING and is_pay_done_text(text):
         context.user_data[UD_STATE] = "wallet_receipt_photo"
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         await update.message.reply_text(
-            "📤 لطفاً تصویر رسید پرداخت را ارسال کنید.",
-            reply_markup=cancel_keyboard(),
+            i18n.t("pay_receipt_photo_prompt", _lg),
+            reply_markup=cancel_keyboard(lang=_lg),
         )
         return
 
     # ---- Receipt photo (kept until last-4 if required, else finalize now) ----
     if state in {STATE_RECEIPT_WAITING, "wallet_receipt_photo"}:
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         if not (update.message and update.message.photo):
             await update.message.reply_text(
-                "❌ لطفاً تصویر رسید را ارسال کنید.",
-                reply_markup=cancel_keyboard(),
+                i18n.t("pay_receipt_invalid", _lg),
+                reply_markup=cancel_keyboard(lang=_lg),
             )
             return
         try:
@@ -553,11 +555,9 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if req_last4:
                 context.user_data[UD_STATE] = STATE_CARD_LAST4
                 await update.message.reply_text(
-                    "📸 رسید شما ثبت شد.\n\n"
-                    "💳 حالا لطفاً <b>۴ رقم آخر کارت‌بانکی‌ای</b> که از آن پرداخت کرده‌اید را وارد کنید "
-                    "(فارسی یا انگلیسی، فقط ۴ رقم):",
+                    i18n.t("receipt_saved_last4_prompt", _lg),
                     parse_mode="HTML",
-                    reply_markup=cancel_keyboard(),
+                    reply_markup=cancel_keyboard(lang=_lg),
                 )
                 return
             return await _finalize_receipt(update, context, agent_id, meta, amount)
@@ -565,7 +565,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("customer receipt photo step failed uid=%s: %s", user.id, e)
             try:
                 await update.message.reply_text(
-                    "❌ خطایی در ثبت رسید رخ داد. لطفاً دوباره تلاش کنید.",
+                    i18n.t("receipt_error_retry", i18n.get_customer_lang(agent_id, user.id)),
                     reply_markup=cancel_keyboard(),
                 )
             except Exception:
@@ -578,9 +578,9 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         digits = re.sub(r"[^0-9]", "", str((text or "")).translate(fa_map))
         if len(digits) != 4:
             await update.message.reply_text(
-                "❌ باید دقیقاً <b>۴ رقم</b> آخر کارت را وارد کنید (نه کمتر، نه بیشتر).",
+                i18n.t("last4_invalid", i18n.get_customer_lang(agent_id, user.id)),
                 parse_mode="HTML",
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=i18n.get_customer_lang(agent_id, user.id)),
             )
             return
         meta = context.user_data.get("pending_receipt_meta") or {}
@@ -612,8 +612,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[UD_TICKET_QUESTION] = title
             context.user_data[UD_STATE] = STATE_TICKET_WAITING_TEXT
             await update.message.reply_text(
-                f"📋 موضوع: {title}\n\n"
-                f"📩 حالا متن پیام خود را ارسال کنید:",
+                i18n.t("ticket_text_prompt", i18n.get_customer_lang(agent_id, user.id), t=title),
                 reply_markup=cancel_keyboard(),
             )
             return

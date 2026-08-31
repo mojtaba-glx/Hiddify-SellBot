@@ -420,10 +420,11 @@ async def _handle_guide(query, context, agent_id, data):
 async def _handle_support(query, context, agent_id, user, data):
     text_settings = get_text_settings(agent_id)
     msg = query.message
+    _lg = i18n.get_customer_lang(agent_id, user.id)
 
     if data == CB_SUPPORT_FAQ:
         faq = text_settings.get("faq_text", "❗️ سوالات متداول\n\nبه‌زودی تکمیل می‌شود.")
-        await msg.edit_text(faq, reply_markup=support_panel_keyboard())
+        await msg.edit_text(faq, reply_markup=support_panel_keyboard(_lg))
 
     elif data.startswith(CB_SUPPORT_MY):
         page = int(data.split(":")[-1]) if data.split(":")[-1].isdigit() else 1
@@ -435,19 +436,18 @@ async def _handle_support(query, context, agent_id, user, data):
         start = (page - 1) * page_size
         page_tickets = tickets[start:start + page_size]
         if not page_tickets:
-            await msg.edit_text("📬 شما هیچ تیکتی ندارید.", reply_markup=support_panel_keyboard())
+            await msg.edit_text(i18n.t("no_tickets", _lg), reply_markup=support_panel_keyboard(lang=_lg))
             return
         await msg.edit_text(
-            f"📬 تیکت‌های شما (صفحه {page}/{total_pages}):",
-            reply_markup=user_tickets_list_keyboard(page_tickets, page, total_pages),
+            i18n.t("my_tickets_page", _lg, p=page, tp=total_pages),
+            reply_markup=user_tickets_list_keyboard(page_tickets, page, total_pages, lang=_lg),
         )
 
     elif data == CB_SUPPORT_NEW:
         context.user_data[UD_STATE] = STATE_TICKET_WAITING_TITLE
         context.user_data[UD_TICKET_MODE] = "new"
         await msg.edit_text(
-            "📩 <b>ایجاد تیکت جدید</b>\n\n"
-            "لطفا موضوع تیکت خود را ارسال کنید (مثال: مشکل اتصال):",
+            i18n.t("new_ticket_prompt", _lg),
             parse_mode="HTML",
         )
         await msg.reply_text(
@@ -462,7 +462,7 @@ async def _handle_support(query, context, agent_id, user, data):
         code = int(parts[2])
         ticket = get_ticket(agent_id, code)
         if not ticket:
-            await msg.edit_text("❌ تیکت یافت نشد.", reply_markup=support_panel_keyboard())
+            await msg.edit_text("❌ تیکت یافت نشد.", reply_markup=support_panel_keyboard(_lg))
             return
         is_closed = ticket["status"] == "closed"
         can_reply = not is_closed
@@ -486,7 +486,7 @@ async def _handle_support(query, context, agent_id, user, data):
                 has_photo = "📷 [عکس]" if m.get("photo_file_id") else ""
                 ts = str(m.get("created_at", ""))[:16]
                 text += f"\n{sender} ({ts}):\n{msg_text}\n{has_photo}\n"
-        await msg.edit_text(text, reply_markup=user_ticket_detail_keyboard(code, can_reply, is_closed), parse_mode="HTML")
+        await msg.edit_text(text, reply_markup=user_ticket_detail_keyboard(code, can_reply, is_closed, lang=_lg), parse_mode="HTML")
         for m in messages:
             photo_fid = m.get("photo_file_id", "")
             if photo_fid:
@@ -510,9 +510,9 @@ async def _handle_support(query, context, agent_id, user, data):
                 context.user_data[UD_STATE] = STATE_TICKET_CONFIRM
                 preview_text = f"📩 <b>تایید اطلاعات پاسخ تیکت</b>\n\n📝 پاسخ: {pending.get('reply_text', '')}\n\n❗️در صورت تایید، دکمه «✅ارسال» را بزنید."
                 try:
-                    await msg.edit_text(preview_text, reply_markup=ticket_confirm_keyboard("reply"), parse_mode="HTML")
+                    await msg.edit_text(preview_text, reply_markup=ticket_confirm_keyboard("reply", lang=_lg), parse_mode="HTML")
                 except Exception:
-                    await msg.reply_text(preview_text, reply_markup=ticket_confirm_keyboard("reply"), parse_mode="HTML")
+                    await msg.reply_text(preview_text, reply_markup=ticket_confirm_keyboard("reply", lang=_lg), parse_mode="HTML")
             elif _reply_sub == "edit":
                 pending = context.user_data.get("pending_reply", {})
                 code = int((pending or {}).get("ticket_code") or 0)
@@ -528,7 +528,7 @@ async def _handle_support(query, context, agent_id, user, data):
                 context.user_data.pop(UD_STATE, None)
                 context.user_data.pop(UD_TICKET_MODE, None)
                 context.user_data.pop("pending_reply", None)
-                await msg.edit_text("❌ ارسال پاسخ لغو شد.", reply_markup=support_panel_keyboard())
+                await msg.edit_text("❌ ارسال پاسخ لغو شد.", reply_markup=support_panel_keyboard(_lg))
             else:  # send
                 from CustomerBot.handlers.receipt import _build_ticket_detail_text, _notify_agent_ticket_reply
                 pending = context.user_data.get("pending_reply", {})
@@ -571,7 +571,7 @@ async def _handle_support(query, context, agent_id, user, data):
                     msgs = get_ticket_messages(agent_id, code) if fresh else []
                     detail_text = _build_ticket_detail_text(fresh, msgs)
                     out_text = "✅ پاسخ شما ثبت شد.\n\n" + detail_text
-                    await msg.edit_text(out_text, reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False), parse_mode="HTML")
+                    await msg.edit_text(out_text, reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False, lang=_lg), parse_mode="HTML")
                     for m in msgs:
                         pfid = m.get("photo_file_id", "")
                         if pfid:
@@ -580,7 +580,7 @@ async def _handle_support(query, context, agent_id, user, data):
                             except Exception:
                                 pass
                 except Exception:
-                    await msg.edit_text("✅ پاسخ شما ثبت شد.", reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False))
+                    await msg.edit_text("✅ پاسخ شما ثبت شد.", reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False, lang=_lg))
             return
         else:
             try:
@@ -601,7 +601,7 @@ async def _handle_support(query, context, agent_id, user, data):
     elif data.startswith(CB_SUPPORT_CLOSE):
         code = int(data.split(":")[-1])
         update_ticket_status(agent_id, code, "closed")
-        await msg.edit_text("✅ تیکت بسته شد.", reply_markup=support_panel_keyboard())
+        await msg.edit_text("✅ تیکت بسته شد.", reply_markup=support_panel_keyboard(_lg))
 
     elif data == "support:new:skip":
         pending = context.user_data.get("pending_ticket", {})
@@ -610,7 +610,7 @@ async def _handle_support(query, context, agent_id, user, data):
             return
         context.user_data[UD_STATE] = STATE_TICKET_CONFIRM
         from CustomerBot.handlers.receipt import _format_ticket_confirm_text
-        await msg.edit_text(_format_ticket_confirm_text(pending), reply_markup=ticket_confirm_keyboard("new"), parse_mode="HTML")
+        await msg.edit_text(_format_ticket_confirm_text(pending), reply_markup=ticket_confirm_keyboard("new", lang=_lg), parse_mode="HTML")
 
     elif data == "support:new:send":
         pending = context.user_data.get("pending_ticket", {})
@@ -665,19 +665,19 @@ async def _handle_support(query, context, agent_id, user, data):
         context.user_data[UD_STATE] = STATE_TICKET_WAITING_TITLE
         context.user_data[UD_TICKET_MODE] = "new"
         context.user_data.pop("pending_ticket", None)
-        await msg.edit_text("✏️ موضوع تیکت را دوباره ارسال کنید:", reply_markup=cancel_keyboard())
+        await msg.edit_text(i18n.t("ticket_title_prompt", i18n.get_customer_lang(agent_id, user.id)), reply_markup=cancel_keyboard())
 
     elif data == "support:new:cancel":
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_TICKET_MODE, None)
         context.user_data.pop(UD_TICKET_QUESTION, None)
         context.user_data.pop("pending_ticket", None)
-        await msg.edit_text("❌ ایجاد تیکت لغو شد.", reply_markup=support_panel_keyboard())
+        await msg.edit_text("❌ ایجاد تیکت لغو شد.", reply_markup=support_panel_keyboard(_lg))
 
     elif data == CB_SUPPORT_BACK_MAIN or data == CB_SUPPORT_MENU:
         await msg.edit_text(
             text_settings.get("ticket_panel_text", "📩 برای ارتباط با پشتیبانی، پیام خود را ارسال کنید."),
-            reply_markup=support_panel_keyboard(),
+            reply_markup=support_panel_keyboard(_lg),
         )
 
 
@@ -1035,15 +1035,14 @@ async def _handle_status(query, context, agent_id, user, data):
             await msg.edit_text("❌ سرویس یافت نشد.")
             return
         context.user_data[UD_STATE] = f"rename:{svc_id}"
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         try:
-            await msg.edit_text("✏️ نام جدید اشتراک را وارد کنید:")
+            await msg.edit_text(i18n.t("rename_prompt_short", _lg))
         except Exception:
             pass
         await msg.reply_text(
-            "نام جدید را بفرستید:\n"
-            "• حداقل 3 و حداکثر 64 کاراکتر\n"
-            "برای انصراف، دکمه «بازگشت» را بزنید.",
-            reply_markup=cancel_keyboard(),
+            i18n.t("rename_prompt", _lg),
+            reply_markup=cancel_keyboard(lang=_lg),
         )
 
     elif data.startswith(CB_STATUS_REPLACE_LINK):
@@ -1054,7 +1053,7 @@ async def _handle_status(query, context, agent_id, user, data):
                 await msg.edit_text("❌ سرویس یافت نشد.")
                 return
             try:
-                await msg.edit_text("⏳ در حال تغییر لینک اشتراک...")
+                await msg.edit_text(i18n.t("changing_link", i18n.get_customer_lang(agent_id, user.id)))
             except Exception:
                 pass
             ok, result_text, _new_uuid = await regenerate_service_uuid(svc)
@@ -1063,11 +1062,10 @@ async def _handle_status(query, context, agent_id, user, data):
                 await _show_subscription_status(msg, agent_id, svc_id)
         else:
             svc_id = int(parts[2]) if len(parts) > 2 else 0
+            _lg = i18n.get_customer_lang(agent_id, user.id)
             await msg.edit_text(
-                "⚠️ هشدار تغییر لینک اشتراک\n\n"
-                "با تغییر لینک اشتراک، لینک و کانفیگ قبلی از کار می‌افتد و باید لینک جدید را دوباره در برنامه وارد کنید.\n\n"
-                "اگر مطمئن هستید، تایید تغییر لینک را بزنید.",
-                reply_markup=replace_subscription_link_confirm_keyboard(svc_id),
+                i18n.t("replace_link_warning", _lg),
+                reply_markup=replace_subscription_link_confirm_keyboard(svc_id, lang=_lg),
             )
 
     elif data.startswith(CB_STATUS_DETACH):
@@ -1080,16 +1078,18 @@ async def _handle_status(query, context, agent_id, user, data):
     elif data.startswith(CB_STATUS_GUIDE):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         text_settings = get_text_settings(agent_id)
+        _lg = i18n.get_customer_lang(agent_id, user.id)
+        guide_txt = text_settings.get("guide_text") or i18n.t("guide_os_title", _lg)
         # دکمه «راهنمای اتصال» روی پیام عکس (QR) قرار دارد؛ به همین دلیل نمی‌توان
         # با edit_text ویرایشش کرد و باید پیام جدیدی ارسال شود.
         try:
             await msg.reply_text(
-                text_settings.get("guide_text", "راهنمای اتصال:\nلینک اشتراک را در کلاینت مورد نظر import کنید."),
+                guide_txt,
                 reply_markup=guide_os_keyboard(f"s:{svc_id}"),
             )
         except Exception:
             await msg.edit_text(
-                text_settings.get("guide_text", "راهنمای اتصال:\nلینک اشتراک را در کلاینت مورد نظر import کنید."),
+                guide_txt,
                 reply_markup=guide_os_keyboard(f"s:{svc_id}"),
             )
 

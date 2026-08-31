@@ -52,14 +52,14 @@ def main_menu_keyboard(show_renew: bool = True, lang: str = "fa"):
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
-def cancel_keyboard():
-    return ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True)
+def cancel_keyboard(lang: str = "fa"):
+    return ReplyKeyboardMarkup([[KeyboardButton(_bl("btn_back", lang))]], resize_keyboard=True)
 
 
-def receipt_cancel_keyboard():
+def receipt_cancel_keyboard(lang: str = "fa"):
     """دکمه بازگشت قرمز رنگ برای صفحه ارسال رسید (Reply keyboard fallback)"""
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("بازگشت", style="danger")]],
+        [[KeyboardButton(_bl("btn_back", lang), style="danger")]],
         resize_keyboard=True,
     )
 
@@ -305,10 +305,10 @@ def subscription_status_keyboard(service_id=None, *, show_direct_config: bool = 
     return InlineKeyboardMarkup(keyboard)
 
 
-def replace_subscription_link_confirm_keyboard(service_id=None):
+def replace_subscription_link_confirm_keyboard(service_id=None, lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚠️ تایید تغییر لینک🚨", callback_data=f"status:replace_link:{service_id}:confirm", style='danger')],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"status:menu:{service_id}")],
+        [InlineKeyboardButton(i18n.t("replace_link_confirm", lang), callback_data=f"status:replace_link:{service_id}:confirm", style='danger')],
+        [InlineKeyboardButton(i18n.t("back", lang), callback_data=f"status:menu:{service_id}")],
     ])
 
 
@@ -377,37 +377,37 @@ def renew_services_keyboard(services):
     return InlineKeyboardMarkup(rows)
 
 
-def support_panel_keyboard():
+def support_panel_keyboard(lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("❗️سوالات متداول", callback_data="support:faq")],
-        [InlineKeyboardButton("📬تیکت‌های من", callback_data="support:my:1")],
-        [InlineKeyboardButton("📩ایجاد تیکت", callback_data="support:new")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="support:back_main")],
+        [InlineKeyboardButton(i18n.t("support_faq_btn", lang), callback_data="support:faq")],
+        [InlineKeyboardButton(i18n.t("support_my_tickets", lang), callback_data="support:my:1")],
+        [InlineKeyboardButton(i18n.t("support_new_ticket", lang), callback_data="support:new")],
+        [InlineKeyboardButton(i18n.t("back", lang), callback_data="support:back_main")],
     ])
 
 
-def ticket_skip_screenshot_keyboard(mode: str = "new"):
+def ticket_skip_screenshot_keyboard(mode: str = "new", lang: str = "fa"):
     flow = str(mode or "new").strip().lower()
     if flow not in {"new", "reply"}:
         flow = "new"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("▶️رد کردن", callback_data=f"support:{flow}:skip")],
-        [InlineKeyboardButton("❌لغو", callback_data=f"support:{flow}:cancel")],
+        [InlineKeyboardButton(i18n.t("skip_btn", lang), callback_data=f"support:{flow}:skip")],
+        [InlineKeyboardButton(i18n.t("btn_cancel", lang), callback_data=f"support:{flow}:cancel")],
     ])
 
 
-def ticket_confirm_keyboard(mode: str = "new"):
+def ticket_confirm_keyboard(mode: str = "new", lang: str = "fa"):
     flow = str(mode or "new").strip().lower()
     if flow not in {"new", "reply"}:
         flow = "new"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ارسال", callback_data=f"support:{flow}:send"),
-         InlineKeyboardButton("✏️ویرایش", callback_data=f"support:{flow}:edit")],
-        [InlineKeyboardButton("❌لغو", callback_data=f"support:{flow}:cancel")],
+        [InlineKeyboardButton(i18n.t("send_btn", lang), callback_data=f"support:{flow}:send"),
+         InlineKeyboardButton(i18n.t("edit_btn", lang), callback_data=f"support:{flow}:edit")],
+        [InlineKeyboardButton(i18n.t("btn_cancel", lang), callback_data=f"support:{flow}:cancel")],
     ])
 
 
-def user_tickets_list_keyboard(tickets, page: int, total_pages: int):
+def user_tickets_list_keyboard(tickets, page: int, total_pages: int, lang: str = "fa"):
     rows = []
     current = []
     for t in tickets:
@@ -427,16 +427,16 @@ def user_tickets_list_keyboard(tickets, page: int, total_pages: int):
     if page < total_pages:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"support:my:{page+1}"))
     rows.append(nav)
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="support:menu")])
+    rows.append([InlineKeyboardButton(i18n.t("back", lang), callback_data="support:menu")])
     return InlineKeyboardMarkup(rows)
 
 
-def user_ticket_detail_keyboard(ticket_code: int, can_reply: bool = True, is_closed: bool = False):
+def user_ticket_detail_keyboard(ticket_code: int, can_reply: bool = True, is_closed: bool = False, lang: str = "fa"):
     rows = []
     if can_reply:
-        rows.append([InlineKeyboardButton("📩پاسخ", callback_data=f"support:reply:{int(ticket_code)}")])
-        rows.append([InlineKeyboardButton("🚫بستن تیکت", callback_data=f"support:close:{int(ticket_code)}")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="support:menu")])
+        rows.append([InlineKeyboardButton(i18n.t("reply_btn", lang), callback_data=f"support:reply:{int(ticket_code)}")])
+        rows.append([InlineKeyboardButton(i18n.t("close_ticket_btn", lang), callback_data=f"support:close:{int(ticket_code)}")])
+    rows.append([InlineKeyboardButton(i18n.t("back", lang), callback_data="support:menu")])
     return InlineKeyboardMarkup(rows)
 
 
