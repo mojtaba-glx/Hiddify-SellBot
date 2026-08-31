@@ -2,6 +2,13 @@ import json
 import logging
 import asyncio
 import re
+
+from Shared import i18n as _i18n
+
+
+def _t(lang: str, key: str, **kw) -> str:
+    """ترجمه کلید i18n برای متن‌های رو به مشتری."""
+    return _i18n.t(key, lang, **kw)
 from typing import Optional
 
 from telegram import Bot, Update
@@ -997,12 +1004,19 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
             )
 
     # Notify customer
+    _cust_lang = "fa"
+    try:
+        from CustomerBot.database import get_user as _cget
+        _cu = _cget(agent_id, user_tg_id) or {}
+        _cust_lang = str(_cu.get("language") or "fa").strip().lower() or "fa"
+    except Exception:
+        _cust_lang = "fa"
     notify = (
-        f"\U0001f389 \u062a\u0631\u0627\u06a9\u0646\u0634 \u0634\u0645\u0627 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\n"
-        f"\u0627\u0632 \u0637\u0631\u06cc\u0642 \u062f\u06a9\u0645\u0647 [\U0001f4ca\u0648\u0636\u0639\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9\U0001f4ca] \u0645\u06cc\u062a\u0648\u0627\u0646\u06cc\u062f \u0628\u0647 \u0627\u0637\u0644\u0627\u0639\u0627\u062a \u0627\u0634\u062a\u0631\u0627\u06a9 \u062e\u0648\u062f \u062f\u0633\u062a\u0631\u0633\u06cc \u062f\u0627\u0634\u062a\u0647 \u0628\u0627\u0634\u06cc\u062f.\n\n"
+        _t(_cust_lang, "created_notify_title") + "\n"
+        + _t(_cust_lang, "created_notify_hint") + "\n\n"
     )
     if tx_code:
-        notify += f"\U0001f381 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {tx_code}"
+        notify += "\U0001f381 " + _t(_cust_lang, "tx_id_label") + f"{tx_code}"
     await _notify_customer(context, agent_id, user_tg_id, notify)
     pay_stub = {"id": order.get("payment_id") or 0, "user_id": user_tg_id, "receipt_image": order.get("receipt_image", "")}
     await _delete_pending_customer_message(context, agent_id, pay_stub)
@@ -1115,14 +1129,21 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
             logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
     agent_db.set_service_active(service_id, True)
 
+    _cust_lang = "fa"
+    try:
+        from CustomerBot.database import get_user as _cget
+        _cu = _cget(agent_id, user_tg_id) or {}
+        _cust_lang = str(_cu.get("language") or "fa").strip().lower() or "fa"
+    except Exception:
+        _cust_lang = "fa"
     notify = (
-        "♻️ اشتراک شما با موفقیت تمدید شد.\n\n"
-        f"📊 حجم: {new_usage_limit:g} گیگ\n"
-        f"⏳ تاریخ انقضا: {new_end_str[:10]}\n\n"
-        "از دکمه «📊وضعیت اشتراک» می‌توانید اطلاعات به‌روزشده را ببینید."
+        "♻️ " + _t(_cust_lang, "renew_notify_title") + "\n\n"
+        f"📊 {_t(_cust_lang, 'volume_label')}: {new_usage_limit:g} {_t(_cust_lang, 'gb_unit')}\n"
+        f"⏳ {_t(_cust_lang, 'expire_label')}: {new_end_str[:10]}\n\n"
+        + _t(_cust_lang, "renew_notify_hint")
     )
     if tx_code:
-        notify += f"\n\n🎁 شناسه تراکنش: {tx_code}"
+        notify += "\n\n🎁 " + _t(_cust_lang, "tx_id_label") + f"{tx_code}"
     await _notify_customer(context, agent_id, user_tg_id, notify)
     updated_svc = agent_db.get_service_by_id(service_id) or dict(svc)
     await _send_subscription_delivery(context, agent_id, user_tg_id, service_id)
@@ -1150,29 +1171,36 @@ async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_
         customer_bot = Bot(token=customer_token)
         subs_settings = get_subs_settings(agent_id)
         sent_kind = ""
+        _cust_lang = "fa"
+        try:
+            from CustomerBot.database import get_user as _cget
+            _cu = _cget(agent_id, user_tg_id) or {}
+            _cust_lang = str(_cu.get("language") or "fa").strip().lower() or "fa"
+        except Exception:
+            _cust_lang = "fa"
 
         config_items: list[tuple[str, str]] = []
         base_urls = get_service_node_base_urls(svc)
         if base_urls:
             base_url = base_urls[0]
             if subs_settings.get("show_sub_link", True):
-                config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+                config_items.append(("🔗 " + _t(_cust_lang, "config_sub_link") + ":", f"{base_url}/all.txt"))
             if subs_settings.get("show_auto_sub_link", False):
-                config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+                config_items.append(("🤖 " + _t(_cust_lang, "auto_sub_link_label") + ":", f"{base_url}/sub/?asn=unknown"))
             if subs_settings.get("show_sub_link_b64", False):
-                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+                config_items.append(("🔐 " + _t(_cust_lang, "sub_b64_label") + ":", f"{base_url}/all.txt?base64=1"))
             if subs_settings.get("show_multi_server", False):
                 try:
                     managed_link, _ = get_or_create_bot_sub_links(svc)
                     if managed_link:
-                        config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
+                        config_items.append(("🌐 " + _t(_cust_lang, "config_smart") + ":", managed_link))
                 except Exception as e:
                     logger.warning("Failed to build managed sub link after delivery (service_id=%s): %s", service_id, e)
             if subs_settings.get("show_multi_server_b64", False):
                 try:
                     _, managed_link_b64 = get_or_create_bot_sub_links(svc)
                     if managed_link_b64:
-                        config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
+                        config_items.append(("🌐 " + _t(_cust_lang, "smart_b64_label") + ":", managed_link_b64))
                 except Exception as e:
                     logger.warning("Failed to build managed sub b64 link after delivery (service_id=%s): %s", service_id, e)
 
@@ -1180,10 +1208,10 @@ async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_
             primary_link = config_items[0][1]
             qr_image = make_qr_image(primary_link)
             qr_caption = (
-                "🎉 اشتراک شما آماده‌ی استفاده است ✅\n\n"
+                _t(_cust_lang, "delivery_ready_title") + "\n\n"
                 f"{config_items[0][0]}\n"
                 f"<code>{escape(primary_link)}</code>\n\n"
-                "📄 جهت کپی شدن لینک کافیست یک‌بار روی لینک بالا لمس کنید."
+                + _t(_cust_lang, "delivery_copy_hint")
             )
             try:
                 await customer_bot.send_photo(
@@ -1221,8 +1249,8 @@ async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_
             if clean_links:
                 all_links_text = "\n".join(clean_links)
                 one_block_text = (
-                    "🔗 کانفیگ‌های مستقیم\n"
-                    "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
+                    _t(_cust_lang, "direct_configs_title") + "\n"
+                    + _t(_cust_lang, "direct_configs_copy_hint") + "\n"
                     f"<pre><code class=\"language-shell\">{escape(all_links_text)}</code></pre>"
                 )
                 if len(one_block_text) <= 3900:
@@ -1250,10 +1278,10 @@ async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_
                     if cur:
                         parts_list.append(cur)
                     for idx, chunk in enumerate(parts_list, start=1):
-                        header = "🔗 کانفیگ‌های مستقیم" if len(parts_list) == 1 else f"🔗 کانفیگ‌های مستقیم ({idx}/{len(parts_list)})"
+                        header = _t(_cust_lang, "direct_configs_title") if len(parts_list) == 1 else _t(_cust_lang, "direct_configs_title") + f" ({idx}/{len(parts_list)})"
                         part_text = (
                             f"{header}\n"
-                            "برای کپی، باکس زیر را کپی کنید:\n"
+                            + _t(_cust_lang, "direct_configs_copy_hint_paged") + "\n"
                             f"<pre><code class=\"language-shell\">{escape(chr(10).join(chunk))}</code></pre>"
                         )
                         await customer_bot.send_message(

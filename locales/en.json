@@ -139,5 +139,21 @@
   "ag_menu_plans": "💴 Plans",
   "ag_menu_customer_bot": "🤖 Customer bot",
   "ag_menu_tickets": "🎫 Tickets",
-  "ag_menu_settings": "⚙️ Bot management"
+  "ag_menu_settings": "⚙️ Bot management",
+  "renew_notify_title": "Your subscription has been renewed ♻️",
+  "renew_notify_hint": "You can see the updated info via the «📊 Subscription status» button.",
+  "expire_label": "Expires",
+  "tx_id_label": "Transaction ID: ",
+  "auto_sub_link_label": "Auto subscription link:",
+  "sub_b64_label": "Subscription link b64:",
+  "smart_b64_label": "Smart subscription link b64:",
+  "delivery_ready_title": "🎉 Your subscription is ready ✅",
+  "delivery_copy_hint": "📄 Tap the link above once to copy it.",
+  "direct_configs_title": "🔗 Direct configs",
+  "direct_configs_copy_hint": "To copy, copy the entire box below at once:",
+  "direct_configs_copy_hint_paged": "To copy, copy the box below:",
+  "created_notify_title": "🎉 Your transaction has been approved",
+  "created_notify_hint": "You can access your subscription info via the [📊 Subscription status 📊] button.",
+  "payment_approved_cust": "✅ Your payment has been approved.\n💰 Charged amount: {a} Toman\n🎉 Your wallet has been topped up successfully.",
+  "payment_rejected_cust": "❌ Your payment was rejected.\nThe amount was not added to your wallet.\nContact support if needed."
 }
