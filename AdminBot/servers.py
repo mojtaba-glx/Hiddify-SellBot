@@ -7125,6 +7125,61 @@ async def handle_server_inline_callback(
                 await context.bot.send_message(chat_id, text, reply_markup=kb)
             return
 
+        if action == "marzban_nodes":
+            server = database.get_server_by_id(server_id)
+            if not server:
+                await msg.edit_text("❌ سرور پیدا نشد.")
+                return
+            if str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
+                await msg.edit_text("❌ این سرور از نوع مرزبان/پاسارگارد نیست.")
+                return
+            try:
+                nodes = await multi_panel.panel_api(server).get_nodes(server)
+            except Exception as e:
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]
+                )
+                await msg.edit_text(
+                    f"❌ دریافت نودهای مرزبان ناموفق بود:\n{e}\n\n"
+                    "💡 اگر پنل شما نسخه‌ی قدیمی marzban بدون /api/nodes است، این گزینه کار نمی‌کند.",
+                    reply_markup=kb,
+                )
+                return
+
+            from Shared import marzban_api as _mbapi
+            if not nodes:
+                text = (
+                    "🛰 هیچ نودی روی پنل مرزبان ثبت نشده.\n"
+                    "(فقط سرور اصلی/master فعال است)"
+                )
+            else:
+                lines = [
+                    "🛰 نودهای مرزبان",
+                    "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",
+                ]
+                for node in nodes[:25]:
+                    if isinstance(node, dict):
+                        lines.append(_mbapi.format_node_line(node))
+                if len(nodes) > 25:
+                    lines.append(f"... و {len(nodes) - 25} نود دیگر")
+                connected = sum(
+                    1 for n in nodes if isinstance(n, dict) and str(n.get("status") or "").lower() == "connected"
+                )
+                lines.append("")
+                lines.append(f"📊 مجموع: {len(nodes)} نود | 🟢 متصل: {connected}")
+                text = "\n".join(lines)
+            kb = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"server:{server_id}:marzban_nodes")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")],
+                ]
+            )
+            try:
+                await msg.edit_text(text, reply_markup=kb)
+            except Exception:
+                await context.bot.send_message(chat_id, text, reply_markup=kb)
+            return
+
         if action == "useruuid" and len(parts) >= 4:
             user_uuid = parts[3]
             await send_user_detail(server_id, user_uuid, chat_id, context, message=msg)
