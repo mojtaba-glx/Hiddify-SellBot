@@ -129,11 +129,13 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = get_agent_id(context) or 0
     wallet = agent_db.get_wallet(agent_id)
     agent = agent_db.get_agent_by_id(agent_id) or {}
-    active = "🟢 فعال" if int(agent.get("is_active", 0) or 0) else "🔴 غیرفعال"
+    from Shared import i18n as _i18n
+    _lg = agent_lang(context)
+    active = _i18n.t("ag_active", _lg) if int(agent.get("is_active", 0) or 0) else _i18n.t("ag_inactive", _lg)
     text = (
-        f"💰 <b>کیف پول</b>\n\n"
-        f"موجودی کیف پول شما <b>{_fmt_toman(wallet['balance'])}</b> تومان میباشد 🔻\n\n"
-        f"وضعیت کاربر: <b>{active}</b> 👤"
+        _i18n.t("ag_wallet_title", _lg) + "\n\n"
+        + _i18n.t("ag_wallet_balance", _lg, b=_fmt_toman(wallet['balance'])) + "\n\n"
+        + _i18n.t("ag_wallet_status", _lg, s=active)
     )
     if update.callback_query:
         try:

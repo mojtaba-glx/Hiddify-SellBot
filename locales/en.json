@@ -254,5 +254,17 @@
   "ag_agent_token": "⚙️ Agent bot token",
   "ag_main_menu_back": "🔙 Main menu",
   "ag_event_set": "Event channel setup📢",
-  "no_servers_found": "❌ No server found."
+  "no_servers_found": "❌ No server found.",
+  "ag_subs_title": "📈 <b>Subscriptions management</b>",
+  "ag_wallet_title": "💰 <b>Wallet</b>",
+  "ag_wallet_balance": "Your wallet balance is <b>{b}</b> Toman 🔻",
+  "ag_wallet_status": "Account status: <b>{s}</b> 👤",
+  "ag_active": "🟢 Active",
+  "ag_inactive": "🔴 Inactive",
+  "ag_plans_title": "💴 <b>Plans</b>",
+  "ag_tickets_title": "🎫 <b>Tickets management</b>",
+  "ag_cbot_title": "🤖 <b>Customer bot</b>",
+  "ag_settings_title": "⚙️ <b>Bot management</b>",
+  "ag_tickets_pending_count": "⏳ Pending: <b>{n}</b>",
+  "ag_tickets_open_count": "📬 Open: <b>{n}</b>"
 }

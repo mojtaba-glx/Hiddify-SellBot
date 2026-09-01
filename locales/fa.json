@@ -254,5 +254,17 @@
   "ag_agent_token": "⚙️ توکن ربات نماینده",
   "ag_main_menu_back": "🔙 منوی اصلی",
   "ag_event_set": "تنظیم کانال رویداد📢",
-  "no_servers_found": "❌ سروری یافت نشد."
+  "no_servers_found": "❌ سروری یافت نشد.",
+  "ag_subs_title": "📈 <b>مدیریت اشتراک‌ها</b>",
+  "ag_wallet_title": "💰 <b>کیف پول</b>",
+  "ag_wallet_balance": "موجودی کیف پول شما <b>{b}</b> تومان میباشد 🔻",
+  "ag_wallet_status": "وضعیت کاربر: <b>{s}</b> 👤",
+  "ag_active": "🟢 فعال",
+  "ag_inactive": "🔴 غیرفعال",
+  "ag_plans_title": "💴 <b>پلن‌ها</b>",
+  "ag_tickets_title": "🎫 <b>مدیریت تیکت‌ها</b>",
+  "ag_cbot_title": "🤖 <b>ربات مشتری</b>",
+  "ag_settings_title": "⚙️ <b>مدیریت ربات</b>",
+  "ag_tickets_pending_count": "⏳ در انتظار: <b>{n}</b>",
+  "ag_tickets_open_count": "📬 باز: <b>{n}</b>"
 }

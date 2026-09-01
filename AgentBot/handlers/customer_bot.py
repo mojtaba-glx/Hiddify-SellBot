@@ -22,7 +22,9 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = get_agent_id(context)
     bots = agent_db.get_customer_bots(agent_id)
     active = any(int(b.get("is_active", 0)) for b in bots) if bots else False
-    text = "\U0001f916 <b>\u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc</b>\n\n"
+    from Shared import i18n as _i18n
+    _lg = agent_lang(context)
+    text = _i18n.t("ag_cbot_title", _lg) + "\n\n"
     if bots:
         seen = set()
         for b in bots:

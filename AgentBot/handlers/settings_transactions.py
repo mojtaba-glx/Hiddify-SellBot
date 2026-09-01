@@ -1,3 +1,4 @@
+from Shared import i18n
 import json
 import logging
 from typing import Any, Dict
@@ -315,7 +316,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if text in {"بازگشت", "❌ لغو", "لغو", "/cancel"}:
         context.user_data.pop(UD_STATE, None)
         from AgentBot.keyboards import settings_menu_keyboard
-        await update.message.reply_text("⚙️ <b>تنظیمات ربات</b>", reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
+        await update.message.reply_text(i18n.t("ag_settings_title", agent_lang(context)), reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
         return True
 
     if text.isdigit():

@@ -179,10 +179,12 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = get_agent_id(context)
     pending = get_customer_tickets(agent_id, "pending")
     open_count = len(get_customer_tickets(agent_id, "open"))
+    from Shared import i18n as _i18n
+    _lg = agent_lang(context)
     text = (
-        f"\U0001f3ab <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u062a\u06cc\u06a9\u062a\u200c\u0647\u0627</b>\n\n"
-        f"\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631: <b>{len(pending)}</b>\n"
-        f"\U0001f4ec \u0628\u0627\u0632: <b>{open_count}</b>\n"
+        _i18n.t("ag_tickets_title", _lg) + "\n\n"
+        + _i18n.t("ag_tickets_pending_count", _lg, n=len(pending)) + "\n"
+        + _i18n.t("ag_tickets_open_count", _lg, n=open_count) + "\n"
     )
     if update.callback_query:
         try:

@@ -254,5 +254,17 @@
   "ag_agent_token": "⚙️ Токен бота агента",
   "ag_main_menu_back": "🔙 Главное меню",
   "ag_event_set": "Настройка канала событий📢",
-  "no_servers_found": "❌ Сервер не найден."
+  "no_servers_found": "❌ Сервер не найден.",
+  "ag_subs_title": "📈 <b>Управление подписками</b>",
+  "ag_wallet_title": "💰 <b>Кошелёк</b>",
+  "ag_wallet_balance": "Баланс вашего кошелька: <b>{b}</b> томан 🔻",
+  "ag_wallet_status": "Статус аккаунта: <b>{s}</b> 👤",
+  "ag_active": "🟢 Активен",
+  "ag_inactive": "🔴 Неактивен",
+  "ag_plans_title": "💴 <b>Планы</b>",
+  "ag_tickets_title": "🎫 <b>Управление тикетами</b>",
+  "ag_cbot_title": "🤖 <b>Клиентский бот</b>",
+  "ag_settings_title": "⚙️ <b>Управление ботом</b>",
+  "ag_tickets_pending_count": "⏳ Ожидают: <b>{n}</b>",
+  "ag_tickets_open_count": "📬 Открытые: <b>{n}</b>"
 }

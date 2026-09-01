@@ -237,7 +237,8 @@ def _service_detail_card_text(svc, note: str = "", last_online: str = "هرگز"
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = "\U0001f4ca <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9\u200c\u0647\u0627</b>"
+    from Shared import i18n as _i18n
+    text = _i18n.t("ag_subs_title", agent_lang(context))
     if update.callback_query:
         try:
             await update.callback_query.edit_message_text(text, reply_markup=subs_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")

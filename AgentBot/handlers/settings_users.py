@@ -1,3 +1,4 @@
+from Shared import i18n
 import logging
 import math
 
@@ -408,7 +409,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     if text in {"بازگشت", "❌ لغو", "لغو", "/cancel"}:
         context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text("⚙️ <b>تنظیمات ربات</b>", reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
+        await update.message.reply_text(i18n.t("ag_settings_title", agent_lang(context)), reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML")
         return True
     customers = agent_db.search_customers(agent_id, text, limit=10)
     if not customers:

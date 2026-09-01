@@ -51,7 +51,8 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = get_agent_id(context)
     current_mode = get_setting(agent_id, "plan_display_mode", "dynamic")
     kb = plans_menu_keyboard(current_mode, lang=agent_lang(context))
-    text = "\U0001f4b5 <b>\u067e\u0644\u0646\u200c\u0647\u0627</b>"
+    from Shared import i18n as _i18n
+    text = _i18n.t("ag_plans_title", agent_lang(context))
     if update.callback_query:
         try:
             await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
