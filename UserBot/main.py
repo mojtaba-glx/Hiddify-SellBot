@@ -6145,1140 +6145,88 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     step = get_user_step(context, user_id)
     text = update.message.text
 
-    if step == "WAIT_ADMIN_DIRECT_REPLY_TEXT":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        reply_text = str(text or "").strip()
-        if not reply_text:
-            await update.message.reply_text("❌ لطفا پاسخ خود را به صورت متنی ارسال کنید:")
-            return
-
-        user_row = userbot_db.get_user_by_telegram_id(user_id)
-        if not user_row:
-            internal_uid = userbot_db.upsert_user(
-                update.effective_user.id,
-                update.effective_user.username,
-                update.effective_user.full_name,
-            )
-            user_row = userbot_db.get_user_by_id(internal_uid) or {}
-        internal_uid = int((user_row or {}).get("id") or 0)
-        display_name = str(
-            (user_row or {}).get("full_name")
-            or update.effective_user.full_name
-            or (user_row or {}).get("username")
-            or update.effective_user.username
-            or user_id
-        ).strip()
-
-        if not (ADMIN_ID and ADMIN_BOT_TOKEN):
-            set_user_step(context, user_id, None)
-            await update.message.reply_text(
-                "❌ تنظیمات پشتیبانی کامل نیست. لطفا بعدا تلاش کنید.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        admin_text = (
-            "📬 تیکت جدیدی دریافت شد\n"
-            f"📄 متن تیکت: {reply_text}"
-        )
-
-        rows = []
-        if internal_uid > 0:
-            rows.append([InlineKeyboardButton(display_name, callback_data=f"userbot:user:{internal_uid}")])
-            rows.append([InlineKeyboardButton("📨پاسخ", callback_data=f"userbot:user:{internal_uid}:message")])
-        admin_kb = InlineKeyboardMarkup(rows) if rows else None
-
-        try:
-            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
-            await admin_bot.send_message(
-                chat_id=ADMIN_ID,
-                text=admin_text,
-                reply_markup=admin_kb,
-            )
-        except Exception as e:
-            logger.warning("Failed to forward direct admin message reply (tg=%s): %s", user_id, e)
-            await update.message.reply_text(
-                "❌ ارسال پیام با خطا مواجه شد. لطفا دوباره تلاش کنید.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        set_user_step(context, user_id, None)
-        await update.message.reply_text(
-            "✅ پیام شما با موفقیت برای پشتیبانی ارسال شد\n⏳ در سریع‌ترین زمان ممکن پاسخگو خواهیم بود.",
-            reply_markup=_main_menu_keyboard(),
-        )
+    if step == 'WAIT_ADMIN_DIRECT_REPLY_TEXT':
+        await _rs_admin_direct_reply(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_TICKET_TITLE":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-        title = str(text or "").strip()
-        if not title:
-            await update.message.reply_text("❌ لطفا موضوع درخواست را ارسال کنید:", reply_markup=_ticket_text_cancel_keyboard())
-            return
-        pending = context.user_data.get(f"pending_ticket_{user_id}") or {}
-        pending["title"] = title
-        context.user_data[f"pending_ticket_{user_id}"] = pending
-        set_user_step(context, user_id, "WAIT_TICKET_QUESTION")
-        await update.message.reply_text("✍️ لطفا سوال خود را به صورت کامل ارسال نمایید:", reply_markup=_ticket_text_cancel_keyboard())
+    if step == 'WAIT_TICKET_TITLE':
+        await _rs_ticket_title(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_TICKET_QUESTION":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-        question = str(text or "").strip()
-        if not question:
-            await update.message.reply_text("❌ لطفا متن سوال را کامل وارد کنید:", reply_markup=_ticket_text_cancel_keyboard())
-            return
-        pending = context.user_data.get(f"pending_ticket_{user_id}") or {}
-        pending["question"] = question
-        context.user_data[f"pending_ticket_{user_id}"] = pending
-        set_user_step(context, user_id, "WAIT_TICKET_SCREENSHOT")
-        await update.message.reply_text(
-            "🖼 لطفا اسکرین‌شات خود را ارسال کنید یا روی دکمه «▶️رد کردن» کلیک کنید.",
-            reply_markup=ticket_skip_screenshot_keyboard(),
-        )
+    if step == 'WAIT_TICKET_QUESTION':
+        await _rs_ticket_question(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_TICKET_SCREENSHOT":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        pending = context.user_data.get(f"pending_ticket_{user_id}") or {}
-        skip_text = _normalize_action_text(text or "")
-        if update.message.photo:
-            pending["receipt_photo_id"] = update.message.photo[-1].file_id
-        elif skip_text in {"▶️رد کردن", "▶️ رد کردن", "رد کردن", "⏭️رد کردن", "⏭️ رد کردن"}:
-            pending["receipt_photo_id"] = ""
-        else:
-            await update.message.reply_text(
-                "❌ لطفا عکس ارسال کنید یا روی دکمه «▶️رد کردن» بزنید.",
-                reply_markup=ticket_skip_screenshot_keyboard(),
-            )
-            return
-
-        context.user_data[f"pending_ticket_{user_id}"] = pending
-        set_user_step(context, user_id, "WAIT_TICKET_CONFIRM")
-        await update.message.reply_text(
-            _ticket_compose_preview_text(pending),
-            reply_markup=ticket_confirm_keyboard(),
-        )
+    if step == 'WAIT_TICKET_SCREENSHOT':
+        await _rs_ticket_screenshot(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_TICKET_CONFIRM":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-        await update.message.reply_text(
-            "برای ارسال تیکت از دکمه‌های «✅ارسال» یا «✏️ویرایش» استفاده کنید.",
-            reply_markup=ticket_confirm_keyboard(),
-        )
+    if step == 'WAIT_TICKET_CONFIRM':
+        await _rs_ticket_confirm(update, context, user_id, text, step)
         return
 
-    if step in {"WAIT_TICKET_REPLY", "WAIT_TICKET_REPLY_TEXT"}:
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-        state = context.user_data.get(f"ticket_reply_{user_id}") or {}
-        ticket_code = int(state.get("ticket_code") or 0)
-        if ticket_code <= 0:
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("❌ اطلاعات تیکت نامعتبر است.", reply_markup=_main_menu_keyboard())
-            return
-
-        user_row = userbot_db.get_user_by_telegram_id(user_id)
-        internal_uid = int((user_row or {}).get("id") or 0)
-        ticket = userbot_db.get_user_ticket_by_code(internal_uid, ticket_code)
-        if not ticket:
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("❌ تیکت موردنظر یافت نشد.", reply_markup=_main_menu_keyboard())
-            return
-
-        message_text = str(text or "").strip()
-        if not message_text:
-            await update.message.reply_text(
-                "❌ لطفا پاسخ خود را به صورت کامل ارسال نمایید:",
-                reply_markup=_ticket_text_cancel_keyboard("reply"),
-            )
-            return
-
-        state["reply_text"] = message_text
-        context.user_data[f"ticket_reply_{user_id}"] = state
-        set_user_step(context, user_id, "WAIT_TICKET_REPLY_SCREENSHOT")
-        await update.message.reply_text(
-            "🖼 لطفا اسکرین‌شات خود را ارسال کنید یا روی دکمه «▶️رد کردن» کلیک کنید.",
-            reply_markup=ticket_skip_screenshot_keyboard("reply"),
-        )
+    if step in {'WAIT_TICKET_REPLY', 'WAIT_TICKET_REPLY_TEXT'}:
+        await _rs_ticket_reply(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_TICKET_REPLY_SCREENSHOT":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        state = context.user_data.get(f"ticket_reply_{user_id}") or {}
-        ticket_code = int(state.get("ticket_code") or 0)
-        if ticket_code <= 0:
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("❌ اطلاعات تیکت نامعتبر است.", reply_markup=_main_menu_keyboard())
-            return
-
-        skip_text = _normalize_action_text(text or "")
-        if update.message.photo:
-            state["receipt_photo_id"] = update.message.photo[-1].file_id
-        elif skip_text in {"▶️رد کردن", "▶️ رد کردن", "رد کردن", "⏭️رد کردن", "⏭️ رد کردن"}:
-            state["receipt_photo_id"] = ""
-        else:
-            await update.message.reply_text(
-                "❌ لطفا عکس ارسال کنید یا روی دکمه «▶️رد کردن» بزنید.",
-                reply_markup=ticket_skip_screenshot_keyboard("reply"),
-            )
-            return
-
-        context.user_data[f"ticket_reply_{user_id}"] = state
-        set_user_step(context, user_id, "WAIT_TICKET_REPLY_CONFIRM")
-        preview_text = _ticket_reply_preview_text(state)
-        preview_photo_id = str(state.get("receipt_photo_id") or "").strip()
-        if preview_photo_id:
-            try:
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=preview_photo_id,
-                    caption=preview_text,
-                    reply_markup=ticket_confirm_keyboard("reply"),
-                )
-            except Exception:
-                await update.message.reply_text(
-                    preview_text,
-                    reply_markup=ticket_confirm_keyboard("reply"),
-                )
-        else:
-            await update.message.reply_text(
-                preview_text,
-                reply_markup=ticket_confirm_keyboard("reply"),
-            )
+    if step == 'WAIT_TICKET_REPLY_SCREENSHOT':
+        await _rs_ticket_reply_screenshot(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_TICKET_REPLY_CONFIRM":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-        await update.message.reply_text(
-            "برای ارسال پاسخ از دکمه‌های «✅ارسال» یا «✏️ویرایش» استفاده کنید.",
-            reply_markup=ticket_confirm_keyboard("reply"),
-        )
+    if step == 'WAIT_TICKET_REPLY_CONFIRM':
+        await _rs_ticket_reply_confirm(update, context, user_id, text, step)
         return
 
     # --- اتصال اشتراک: دریافت UUID/لینک/کانفیگ ---
-    if step == "WAIT_CONNECT_SUB_INPUT":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        parsed_uuid = _extract_uuid_from_user_input(text or "")
-        if not parsed_uuid:
-            await update.message.reply_text(
-                "❌ UUID معتبر پیدا نشد.\n"
-                "لطفاً UUID یا لینک اشتراک/کانفیگ معتبر بفرستید.",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-
-        u_db = userbot_db.get_user_by_telegram_id(user_id)
-        if not u_db:
-            internal_user_id = userbot_db.upsert_user(
-                update.effective_user.id,
-                update.effective_user.username,
-                update.effective_user.full_name,
-            )
-            u_db = userbot_db.get_user_by_id(internal_user_id) or {}
-        internal_user_id = int((u_db or {}).get("id") or 0)
-        if internal_user_id <= 0:
-            await update.message.reply_text("❌ کاربر یافت نشد.", reply_markup=_main_menu_keyboard())
-            set_user_step(context, user_id, None)
-            return
-
-        # امنیت: UUID فقط برای یک کاربر قابل اتصال باشد.
-        owner = userbot_db.get_service_owner_by_panel_uuid(parsed_uuid)
-        if owner and int(owner.get("user_id") or 0) != int(internal_user_id):
-            await update.message.reply_text(
-                "⛔ این اشتراک قبلاً توسط کاربر دیگری متصل شده است و قابل اتصال مجدد نیست.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            set_user_step(context, user_id, None)
-            return
-
-        existing_self = userbot_db.get_user_service_by_panel_uuid(internal_user_id, parsed_uuid)
-        if existing_self:
-            set_user_step(context, user_id, None)
-            service = await _sync_service_runtime_from_panels(existing_self)
-            settings = _get_subscription_settings()
-            await update.message.reply_text(
-                "ℹ️ این اشتراک قبلاً به حساب شما متصل شده است.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            await update.message.reply_text(
-                _build_subscription_status_text(service),
-                parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service.get("id"),
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
-            )
-            return
-
-        await update.message.reply_text("⏳ در حال بررسی اشتراک...")
-        targets = await _find_panel_user_targets_by_uuid(parsed_uuid)
-        if not targets:
-            await update.message.reply_text(
-                "❌ اشتراکی با این UUID روی سرورهای ربات پیدا نشد.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            set_user_step(context, user_id, None)
-            return
-
-        # سرور اصلی اتصال: اولین سرور پیدا‌شده
-        primary_server, primary_user = targets[0]
-        service_name = str(primary_user.get("name") or "اشتراک متصل‌شده").strip() or "اشتراک متصل‌شده"
-        usage_limit = _to_float(primary_user.get("usage_limit_GB"), 0.0)
-        total_usage = 0.0
-        min_days_left: Optional[int] = None
-        latest_last_online: Optional[datetime] = None
-        for _srv, pu in targets:
-            total_usage += _to_float(pu.get("current_usage_GB"), 0.0)
-            dleft = _days_left_from_panel_user(pu)
-            if dleft is not None:
-                min_days_left = dleft if min_days_left is None else min(min_days_left, dleft)
-            dt = _parse_panel_datetime(pu.get("last_online"))
-            if dt and (latest_last_online is None or dt > latest_last_online):
-                latest_last_online = dt
-
-        server_id = int(primary_server.get("id") or 0)
-        server_title = str(primary_server.get("title") or f"سرور #{server_id}").strip()
-        service_code = _generate_service_code()
-        service_comment = f"uuid:{parsed_uuid}|code:{service_code}|linked:1|source:connect"
-        service_db_id = None
-
-        try:
-            with userbot_db._get_conn() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    INSERT INTO userbot_services
-                    (user_id, name, server_id, server_title, usage_current, usage_limit, days_left, last_online, comment)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        int(internal_user_id),
-                        service_name,
-                        int(server_id),
-                        server_title,
-                        float(total_usage),
-                        float(usage_limit),
-                        int(min_days_left if min_days_left is not None else 0),
-                        (latest_last_online.strftime("%Y-%m-%d %H:%M:%S") if latest_last_online else None),
-                        service_comment,
-                    ),
-                )
-                service_db_id = int(cur.lastrowid)
-        except Exception as e:
-            logger.exception("Failed persisting connected subscription (telegram_id=%s)", user_id)
-            await update.message.reply_text(
-                f"❌ اتصال اشتراک با خطا مواجه شد: {e}",
-                reply_markup=_main_menu_keyboard(),
-            )
-            set_user_step(context, user_id, None)
-            return
-
-        for srv, pu in targets:
-            try:
-                sid = int(srv.get("id") or 0)
-                if sid <= 0:
-                    continue
-                userbot_db.add_service_node(
-                    service_id=int(service_db_id),
-                    server_id=sid,
-                    panel_user_uuid=parsed_uuid,
-                    server_title=str(srv.get("title") or ""),
-                    panel_user_id=(str(pu.get("id")).strip() if pu.get("id") is not None else None),
-                    is_active=1,
-                )
-            except Exception:
-                pass
-
-        set_user_step(context, user_id, None)
-        service = userbot_db.get_service_by_id(int(service_db_id)) or {}
-        service = await _sync_service_runtime_from_panels(service)
-        settings = _get_subscription_settings()
-        await update.message.reply_text(
-            "✅ اشتراک شما با موفقیت متصل شد.",
-            reply_markup=_main_menu_keyboard(),
-        )
-        await update.message.reply_text(
-            _build_subscription_status_text(service),
-            parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                service.get("id"),
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(service),
-            ),
-        )
+    if step == 'WAIT_CONNECT_SUB_INPUT':
+        await _rs_connect_sub_input(update, context, user_id, text, step)
         return
 
     # --- تغییر نام اشتراک: دریافت نام جدید ---
-    if step == "WAIT_RENAME_SERVICE_NAME":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_rename_service_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        pending_rename = context.user_data.get(f"pending_rename_service_{user_id}", None) or {}
-        service_id = int(pending_rename.get("service_id") or 0)
-        if service_id <= 0:
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_rename_service_{user_id}", None)
-            await update.message.reply_text("❌ اطلاعات سرویس نامعتبر است.", reply_markup=_main_menu_keyboard())
-            return
-
-        u_db = userbot_db.get_user_by_telegram_id(user_id) or {}
-        internal_user_id = int(u_db.get("id") or 0)
-        service = userbot_db.get_service_by_id(service_id) or {}
-        if not service or internal_user_id <= 0 or int(service.get("user_id") or 0) != internal_user_id:
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_rename_service_{user_id}", None)
-            await update.message.reply_text("❌ اشتراک موردنظر یافت نشد.", reply_markup=_main_menu_keyboard())
-            return
-
-        new_name = _normalize_service_name_input(text or "")
-        if len(new_name) < 3:
-            await update.message.reply_text(
-                "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-        if len(new_name) > 64:
-            await update.message.reply_text(
-                "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-
-        old_name = str(service.get("name") or "").strip()
-        if new_name == old_name:
-            await update.message.reply_text(
-                "ℹ️ نام جدید با نام فعلی یکسان است. نام دیگری وارد کنید.",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-
-        await update.message.reply_text("⏳ در حال بروزرسانی نام اشتراک...")
-        ok, result_text = await _rename_service_across_panels_and_db(service, new_name)
-        if not ok:
-            await update.message.reply_text(result_text, reply_markup=cancel_keyboard())
-            return
-
-        set_user_step(context, user_id, None)
-        context.user_data.pop(f"pending_rename_service_{user_id}", None)
-        refreshed = userbot_db.get_service_by_id(service_id) or service
-        refreshed = await _sync_service_runtime_from_panels(refreshed)
-        settings = _get_subscription_settings()
-        await update.message.reply_text(result_text, reply_markup=_main_menu_keyboard())
-        await update.message.reply_text(
-            _build_subscription_status_text(refreshed),
-            parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                refreshed.get("id"),
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(refreshed),
-            ),
-        )
+    if step == 'WAIT_RENAME_SERVICE_NAME':
+        await _rs_rename_service(update, context, user_id, text, step)
         return
 
     # --- تست رایگان: دریافت نام سرویس ---
-    if step == "WAIT_TRIAL_SERVICE_NAME":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_trial_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        service_name = (text or "").strip()
-        if not service_name:
-            await update.message.reply_text("❌ لطفاً نام خود را ارسال کنید:", reply_markup=cancel_keyboard())
-            return
-
-        pending_trial = context.user_data.get(f"pending_trial_{user_id}", None) or {}
-        internal_user_id = int(pending_trial.get("internal_user_id") or 0)
-        sid = int(pending_trial.get("sid") or 0)
-
-        if not internal_user_id:
-            u_db = userbot_db.get_user_by_telegram_id(user_id)
-            internal_user_id = int((u_db or {}).get("id") or 0)
-
-        if not internal_user_id or sid <= 0:
-            await update.message.reply_text(
-                "❌ اطلاعات تست رایگان ناقص است. لطفاً دوباره تلاش کنید.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_trial_{user_id}", None)
-            return
-
-        user_row = userbot_db.get_user_by_id(internal_user_id) or {}
-        if int(user_row.get("got_free_trial") or 0) == 1:
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_trial_{user_id}", None)
-            await update.message.reply_text(
-                "🚫 شما قبلا اکانت تست رایگان خود را دریافت نموده‌اید!",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        trial_settings = userbot_db.get_trial_spec_settings()
-        if not bool(trial_settings.get("enabled", True)):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_trial_{user_id}", None)
-            await update.message.reply_text(
-                "🚫 دریافت تست رایگان در حال حاضر غیرفعال است.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        gb = float(trial_settings.get("usage_gb") or 0.5)
-        days = int(trial_settings.get("days") or 1)
-        if gb <= 0:
-            gb = 0.5
-        if days <= 0:
-            days = 1
-
-        server = database.get_server_by_id(sid)
-        if not server:
-            await update.message.reply_text(
-                "❌ سرور انتخاب‌شده یافت نشد. لطفاً دوباره تلاش کنید.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_trial_{user_id}", None)
-            return
-
-        payload = {
-            "name": service_name,
-            "usage_limit_GB": float(gb),
-            "package_days": int(days),
-            "start_date": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d"),
-            "current_usage_GB": 0,
-            "last_reset_time": datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-            "is_active": True,
-            "comment": _build_panel_user_comment(int(user_id), is_test=True),
-        }
-
-        created_nodes: list[dict] = []
-        targets = _get_target_servers_for_sale(server)
-        if not targets:
-            targets = [server]
-
-        try:
-            created, created_nodes = await _create_service_users_on_targets(targets, payload)
-        except Exception as e:
-            logger.exception("Failed creating free-trial user(s) for telegram_id=%s", user_id)
-            if created_nodes:
-                await _deactivate_created_users(created_nodes)
-            await update.message.reply_text(
-                f"❌ ساخت اکانت تست رایگان انجام نشد.\nجزئیات خطا: {e}",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        panel_user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
-        panel_user_id = created.get("id")
-        server_title = server.get("title") or f"سرور #{sid}"
-        usage_limit = float(created.get("usage_limit_GB") or gb)
-        usage_current = float(created.get("current_usage_GB") or 0)
-
-        days_left = int(days)
-        try:
-            start_raw = created.get("start_date")
-            package_days = int(created.get("package_days") or days)
-            if start_raw:
-                start_dt = None
-                for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-                    try:
-                        start_dt = datetime.strptime(start_raw, fmt)
-                        break
-                    except ValueError:
-                        continue
-                if start_dt:
-                    end_dt = start_dt + timedelta(days=package_days)
-                    days_left = (end_dt.date() - datetime.now(timezone.utc).replace(tzinfo=None).date()).days
-        except Exception:
-            days_left = int(days)
-
-        service_code = _generate_service_code()
-        service_db_id = None
-        try:
-            with userbot_db._get_conn() as conn:
-                cur = conn.cursor()
-                comment_parts = []
-                if panel_user_uuid:
-                    comment_parts.append(f"uuid:{panel_user_uuid}")
-                comment_parts.append("price:0")
-                comment_parts.append(f"code:{service_code}")
-                comment_parts.append("test")
-                service_comment = "|".join(comment_parts)
-                cur.execute(
-                    """
-                    INSERT INTO userbot_services
-                    (user_id, name, server_id, server_title, usage_current, usage_limit, days_left, last_online, comment)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        internal_user_id,
-                        service_name,
-                        sid,
-                        server_title,
-                        usage_current,
-                        usage_limit,
-                        days_left,
-                        created.get("last_online"),
-                        service_comment,
-                    ),
-                )
-                service_db_id = cur.lastrowid
-            userbot_db.set_free_trial_used(internal_user_id, 1)
-            try:
-                userbot_db.try_grant_referral_trial_reward(internal_user_id)
-            except Exception as e:
-                logger.warning(
-                    "Failed to process referral trial reward (invitee user=%s): %s",
-                    internal_user_id,
-                    e,
-                )
-        except Exception as e:
-            logger.exception("Failed persisting free trial for telegram_id=%s", user_id)
-            await update.message.reply_text(
-                f"⚠️ اکانت تست ساخته شد ولی ثبت نهایی در ربات خطا داد: {e}",
-                reply_markup=_main_menu_keyboard(),
-            )
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_trial_{user_id}", None)
-            return
-
-        if service_db_id and created_nodes:
-            for node_item in created_nodes:
-                try:
-                    node_sid = int(node_item.get("server_id") or 0)
-                    node_uuid = str(node_item.get("panel_user_uuid") or "").strip()
-                    if node_sid <= 0 or not node_uuid:
-                        continue
-                    userbot_db.add_service_node(
-                        service_id=int(service_db_id),
-                        server_id=node_sid,
-                        panel_user_uuid=node_uuid,
-                        server_title=str(node_item.get("server_title") or ""),
-                        panel_user_id=(
-                            str(node_item.get("panel_user_id"))
-                            if node_item.get("panel_user_id") is not None
-                            else None
-                        ),
-                        is_active=1,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to create trial service-node mapping (service_id=%s, server_id=%s): %s",
-                        service_db_id,
-                        node_item.get("server_id"),
-                        e,
-                    )
-
-        set_user_step(context, user_id, None)
-        context.user_data.pop(f"pending_trial_{user_id}", None)
-
-        announce_enabled = bool(trial_settings.get("announce_enabled", True))
-        if announce_enabled:
-            await update.message.reply_text(
-                "✅ اکانت تست رایگان شما با موفقیت ثبت شد\n"
-                "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.",
-                reply_markup=_main_menu_keyboard(),
-            )
-        else:
-            await update.message.reply_text("🏠 منوی اصلی", reply_markup=_main_menu_keyboard())
-
-        delivered_service = {
-            "id": service_db_id or panel_user_id or "—",
-            "name": service_name,
-            "server_title": server_title,
-            "usage_current": usage_current,
-            "usage_limit": usage_limit,
-            "days_left": days_left,
-            "comment": f"price:0|code:{service_code}",
-            "user_id": internal_user_id,
-        }
-        settings = _get_subscription_settings()
-        await update.message.reply_text(
-            _build_subscription_status_text(delivered_service),
-            parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                service_db_id,
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(delivered_service),
-            ),
-        )
-
-        # گزارش به ادمین (ربات ادمین): ایجاد اشتراک تستی
-        if ADMIN_ID and ADMIN_BOT_TOKEN:
-            try:
-                admin_bot = Bot(token=ADMIN_BOT_TOKEN)
-                user_btn_title = (update.effective_user.full_name or update.effective_user.username or str(user_id)).strip()
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")]
-                ])
-
-                await admin_bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=_build_subscription_created_caption(
-                        service_name=service_name,
-                        server_title=server_title,
-                        gb=gb,
-                        days=days,
-                        service_code=service_code,
-                        amount=None,
-                        is_trial=True,
-                    ),
-                    reply_markup=kb,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to notify admin for free-trial creation (user={user_id}): {e}")
-
-        await _send_event_channel_subscription_report(
-            context,
-            action_title="ایجاد تست رایگان",
-            telegram_id=int(user_id),
-            display_name=(update.effective_user.full_name or update.effective_user.username or str(user_id)).strip(),
-            service_name=service_name,
-            server_title=server_title,
-            gb=float(gb),
-            days=int(days),
-            service_code=service_code,
-            amount=None,
-        )
+    if step == 'WAIT_TRIAL_SERVICE_NAME':
+        await _rs_trial_service_name(update, context, user_id, text, step)
         return
 
     # --- پرداخت از کیف پول: دریافت نام سرویس ---
-    if step == "WAIT_SERVICE_NAME":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_wallet_{user_id}", None)
-            context.user_data.pop(f"renew_target_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        service_name = (text or "").strip()
-        if not service_name:
-            await update.message.reply_text("❌ لطفاً نام سرویس را ارسال کنید:", reply_markup=cancel_keyboard())
-            return
-
-        pending_wallet = context.user_data.get(f"pending_wallet_{user_id}", None) or {}
-        ok = await _process_wallet_purchase(
-            context=context,
-            user_id=user_id,
-            tg_user=update.effective_user,
-            chat_id=user_id,
-            pending_wallet=pending_wallet,
-            service_name=service_name,
-        )
-        set_user_step(context, user_id, None)
-        context.user_data.pop(f"pending_wallet_{user_id}", None)
-        context.user_data.pop(f"renew_target_{user_id}", None)
-        if not ok:
-            await update.message.reply_text("❌ عملیات خرید/تمدید انجام نشد.", reply_markup=_main_menu_keyboard())
+    if step == 'WAIT_SERVICE_NAME':
+        await _rs_service_name(update, context, user_id, text, step)
         return
 
     # --- کیف پول: شارژ کارت به کارت (مبلغ دلخواه) ---
-    if step == "WAIT_WALLET_TOPUP_AMOUNT":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-        pay_settings = _get_payment_settings()
-        if not bool(pay_settings.get("enable_card_to_card", True)):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("🚫 کارت به کارت در حال حاضر غیرفعال است.", reply_markup=_main_menu_keyboard())
-            return
-
-        raw = (text or "").replace(",", "").strip()
-        if not raw.isdigit():
-            await update.message.reply_text("🔻 لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید:", reply_markup=cancel_keyboard())
-            return
-
-        amount_toman = int(raw)
-        if amount_toman <= 0:
-            await update.message.reply_text("🔻 لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید:", reply_markup=cancel_keyboard())
-            return
-        txp = _get_tx_plans_settings()
-        min_tx = int(txp.get("min_transaction_toman") or 1)
-        if amount_toman < min_tx:
-            await update.message.reply_text(
-                f"❌ حداقل مبلغ مجاز تراکنش {min_tx:,} تومان است.",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-
-        try:
-            card_info = database.get_next_card()
-        except Exception:
-            card_info = None
-        if not card_info:
-            try:
-                card_info = database.get_random_card()
-            except Exception:
-                card_info = None
-        card_number = (card_info or {}).get('number') or "-"
-        card_owner = (card_info or {}).get('owner') or "-"
-        card_bank = (card_info or {}).get('bank') or ""
-
-        pay_amount_toman, tx_marker = _apply_random_tx_marker(amount_toman, txp)
-
-        context.user_data[f"pending_wallet_topup_{user_id}"] = {
-            "amount": pay_amount_toman,
-            "card_number": card_number,
-            "card_owner": card_owner,
-            "card_bank": card_bank,
-            "base_amount": amount_toman,
-            "tx_marker": tx_marker,
-        }
-
-        msg = _build_card_to_card_payment_text(
-            amount_toman=pay_amount_toman,
-            card_number=card_number,
-            card_owner=card_owner,
-            card_bank=card_bank,
-            text_settings=_get_text_settings(),
-        )
-        if tx_marker > 0:
-            msg = f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker:,} تومان\n\n{msg}"
-        set_user_step(context, user_id, "WAIT_WALLET_TOPUP_CONFIRM")
-        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=confirm_payment_keyboard())
+    if step == 'WAIT_WALLET_TOPUP_AMOUNT':
+        await _rs_wallet_topup_amount(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_WALLET_TOPUP_CONFIRM":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
+    if step == 'WAIT_WALLET_TOPUP_CONFIRM':
+        await _rs_wallet_topup_confirm(update, context, user_id, text, step)
 
-        if text == "✅ پرداخت کردم، ارسال رسید":
-            set_user_step(context, user_id, "WAIT_WALLET_TOPUP_IMAGE")
-            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
-            return
-
-    if step == "WAIT_WALLET_TOPUP_IMAGE":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        if update.message.photo:
-            photo_file_id = update.message.photo[-1].file_id
-            pending = context.user_data.get(f"pending_wallet_topup_{user_id}", {})
-            amount = int(pending.get("amount") or 0)
-            pay_settings = _get_payment_settings()
-            require_last4 = bool(pay_settings.get("require_last4_for_card_receipt", False))
-            if require_last4:
-                pending["receipt_photo_file_id"] = photo_file_id
-                context.user_data[f"pending_wallet_topup_{user_id}"] = pending
-                set_user_step(context, user_id, "WAIT_WALLET_TOPUP_LAST4")
-                await update.message.reply_text(
-                    i18n.t("last4_prompt", _user_lang(user_id)),
-                    reply_markup=cancel_keyboard(),
-                )
-                return
-
-            pending = context.user_data.pop(f"pending_wallet_topup_{user_id}", {})
-            amount = int(pending.get("amount") or 0)
-            auto_approved = False
-            payment_result = "pending"
-            if amount > 0:
-                auto_approved, payment_result = await _finalize_pending_card_payment(
-                    update=update,
-                    context=context,
-                    user_id=user_id,
-                    amount=int(amount),
-                    photo_file_id=photo_file_id,
-                    flow="wallet_topup",
-                    payer_last4="",
-                    extra_meta={
-                        "pay_flow": "wallet_topup",
-                        "base_amount": int(pending.get("base_amount") or amount),
-                        "tx_marker": int(pending.get("tx_marker") or 0),
-                    },
-                )
-
-            await update.message.reply_text(
-                _card_payment_result_user_text(amount, payment_result, user_id=user_id),
-                reply_markup=_main_menu_keyboard(),
-            )
-            set_user_step(context, user_id, None)
-        else:
-            await update.message.reply_text("❌ لطفاً فقط عکس رسید را ارسال کنید یا برای بازگشت «بازگشت» را بزنید.")
+    if step == 'WAIT_WALLET_TOPUP_IMAGE':
+        await _rs_wallet_topup_image(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_WALLET_TOPUP_LAST4":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        payer_last4 = _parse_exact_card_last4(text)
-        if not payer_last4:
-            await update.message.reply_text(
-                i18n.t("last4_invalid_short", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
-            )
-            return
-
-        pending = context.user_data.pop(f"pending_wallet_topup_{user_id}", {})
-        amount = int(pending.get("amount") or 0)
-        photo_file_id = str(pending.get("receipt_photo_file_id") or "").strip()
-        if amount <= 0 or not photo_file_id:
-            set_user_step(context, user_id, None)
-            await update.message.reply_text("❌ اطلاعات پرداخت ناقص است. لطفا دوباره تلاش کنید.", reply_markup=_main_menu_keyboard())
-            return
-
-        auto_approved, payment_result = await _finalize_pending_card_payment(
-            update=update,
-            context=context,
-            user_id=user_id,
-            amount=int(amount),
-            photo_file_id=photo_file_id,
-            flow="wallet_topup",
-            payer_last4=payer_last4,
-            extra_meta={
-                "pay_flow": "wallet_topup",
-                "base_amount": int(pending.get("base_amount") or amount),
-                "tx_marker": int(pending.get("tx_marker") or 0),
-            },
-        )
-        await update.message.reply_text(
-            _card_payment_result_user_text(amount, payment_result, user_id=user_id),
-            reply_markup=_main_menu_keyboard(),
-        )
-        set_user_step(context, user_id, None)
+    if step == 'WAIT_WALLET_TOPUP_LAST4':
+        await _rs_wallet_topup_last4(update, context, user_id, text, step)
         return
 
     # --- کیف پول: کوپن هدیه ---
-    if step == "WAIT_COUPON_CODE":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-        mkt = _get_marketing_settings()
-        if not (
-            bool(mkt.get("enable_discount_code", False))
-            or bool(mkt.get("enable_increase_code", False))
-        ):
-            set_user_step(context, user_id, None)
-            await update.message.reply_text("🚫 استفاده از کد هدیه در حال حاضر غیرفعال است.", reply_markup=_main_menu_keyboard())
-            return
-        code = (text or "").strip()
-        if not code:
-            await update.message.reply_text("⬇️ لطفا کد کوپن خود را ارسال کنید:", reply_markup=cancel_keyboard())
-            return
-        set_user_step(context, user_id, None)
-        u_db = userbot_db.get_user_by_telegram_id(user_id)
-        internal_user_id = int((u_db or {}).get("id") or 0)
-        if internal_user_id <= 0:
-            await update.message.reply_text("❌ کاربر یافت نشد.", reply_markup=_main_menu_keyboard())
-            return
-        try:
-            ok, result_text, amount = userbot_db.redeem_zarin_voucher(code, internal_user_id)
-        except Exception as e:
-            logger.warning(f"Failed to redeem coupon in WAIT_COUPON_CODE user={user_id}: {e}")
-            await update.message.reply_text("❌ خطا در بررسی کوپن.", reply_markup=_main_menu_keyboard())
-            return
-        if not ok:
-            await update.message.reply_text(f"⚠️ {result_text}", reply_markup=_main_menu_keyboard())
-            return
-        fresh = userbot_db.get_user_by_id(internal_user_id) or {}
-        balance = int(fresh.get("wallet_balance") or 0)
-        await update.message.reply_text(
-            f"✅ کد شما با موفقیت اعمال شد.\n"
-            f"🎁 مبلغ هدیه: {int(amount):,} تومان\n"
-            f"💰 موجودی جدید کیف پول: {balance:,} تومان",
-            reply_markup=_main_menu_keyboard(),
-        )
+    if step == 'WAIT_COUPON_CODE':
+        await _rs_coupon_code(update, context, user_id, text, step)
         return
     
-    if step == "WAIT_RECEIPT_CONFIRM":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-            
-        if text == "✅ پرداخت کردم، ارسال رسید":
-            set_user_step(context, user_id, "WAIT_RECEIPT_IMAGE")
-            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
-            return
+    if step == 'WAIT_RECEIPT_CONFIRM':
+        await _rs_receipt_confirm(update, context, user_id, text, step)
 
-    if step == "WAIT_RECEIPT_IMAGE":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        if update.message.photo:
-            photo_file_id = update.message.photo[-1].file_id
-            pending = context.user_data.get(f"pending_pay_{user_id}", {})
-            amount = int(pending.get("amount") or 0)
-            pay_settings = _get_payment_settings()
-            require_last4 = bool(pay_settings.get("require_last4_for_card_receipt", False))
-            if require_last4:
-                pending["receipt_photo_file_id"] = photo_file_id
-                context.user_data[f"pending_pay_{user_id}"] = pending
-                set_user_step(context, user_id, "WAIT_RECEIPT_LAST4")
-                await update.message.reply_text(
-                    "🔢 لطفا ۴ رقم آخر کارت مبدا را ارسال کنید:",
-                    reply_markup=cancel_keyboard(),
-                )
-                return
-
-            pending = context.user_data.pop(f"pending_pay_{user_id}", {})
-            amount = int(pending.get("amount") or 0)
-            auto_approved = False
-            payment_result = "pending"
-            is_direct_buy = bool(pending.get("direct_buy"))
-            if amount > 0:
-                flow_kind = "direct_buy_payment" if is_direct_buy else "buy_payment"
-                extra_meta = {
-                    "pay_flow": "direct_buy" if is_direct_buy else "buy",
-                    "base_amount": int(pending.get("base_amount") or amount),
-                    "tx_marker": int(pending.get("tx_marker") or 0),
-                }
-                if is_direct_buy:
-                    extra_meta.update({
-                        "sid": int(pending.get("sid") or 0),
-                        "gb": float(pending.get("gb") or 0),
-                        "days": int(pending.get("days") or 0),
-                        "renew_service_id": int(pending.get("renew_service_id") or 0),
-                        "service_name": str(pending.get("direct_service_name") or "").strip(),
-                    })
-                auto_approved, payment_result = await _finalize_pending_card_payment(
-                    update=update,
-                    context=context,
-                    user_id=user_id,
-                    amount=int(amount),
-                    photo_file_id=photo_file_id,
-                    flow=flow_kind,
-                    payer_last4="",
-                    extra_meta=extra_meta,
-                )
-            
-            await update.message.reply_text(
-                _card_payment_result_user_text(amount, payment_result, direct_note=True, user_id=user_id),
-                reply_markup=_main_menu_keyboard()
-            )
-            await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
-            set_user_step(context, user_id, None)
-        else:
-             await update.message.reply_text("❌ لطفاً فقط عکس رسید را ارسال کنید یا برای بازگشت «بازگشت» را بزنید.")
+    if step == 'WAIT_RECEIPT_IMAGE':
+        await _rs_receipt_image(update, context, user_id, text, step)
         return
 
-    if step == "WAIT_RECEIPT_LAST4":
-        if _is_back_or_cancel_text(text):
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        payer_last4 = _parse_exact_card_last4(text)
-        if not payer_last4:
-            await update.message.reply_text(
-                i18n.t("last4_invalid_short", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
-            )
-            return
-
-        pending = context.user_data.pop(f"pending_pay_{user_id}", {})
-        amount = int(pending.get("amount") or 0)
-        photo_file_id = str(pending.get("receipt_photo_file_id") or "").strip()
-        if amount <= 0 or not photo_file_id:
-            set_user_step(context, user_id, None)
-            await update.message.reply_text("❌ اطلاعات پرداخت ناقص است. لطفا دوباره تلاش کنید.", reply_markup=_main_menu_keyboard())
-            return
-
-        is_direct_buy = bool(pending.get("direct_buy"))
-        flow_kind = "direct_buy_payment" if is_direct_buy else "buy_payment"
-        extra_meta = {
-            "pay_flow": "direct_buy" if is_direct_buy else "buy",
-            "base_amount": int(pending.get("base_amount") or amount),
-            "tx_marker": int(pending.get("tx_marker") or 0),
-        }
-        if is_direct_buy:
-            extra_meta.update({
-                "sid": int(pending.get("sid") or 0),
-                "gb": float(pending.get("gb") or 0),
-                "days": int(pending.get("days") or 0),
-                "renew_service_id": int(pending.get("renew_service_id") or 0),
-                "service_name": str(pending.get("direct_service_name") or "").strip(),
-            })
-        auto_approved, payment_result = await _finalize_pending_card_payment(
-            update=update,
-            context=context,
-            user_id=user_id,
-            amount=int(amount),
-            photo_file_id=photo_file_id,
-            flow=flow_kind,
-            payer_last4=payer_last4,
-            extra_meta=extra_meta,
-        )
-        await update.message.reply_text(
-            _card_payment_result_user_text(amount, payment_result, direct_note=True, user_id=user_id),
-            reply_markup=_main_menu_keyboard(),
-        )
-        await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
-        set_user_step(context, user_id, None)
+    if step == 'WAIT_RECEIPT_LAST4':
+        await _rs_receipt_last4(update, context, user_id, text, step)
         return
 
 async def _post_init_set_menu(application):
@@ -7582,48 +6530,71 @@ def main():
 
 # --- extracted inline_handler branches (verbatim bodies in UserBot/callback_branches.py) ---
 from UserBot import callback_branches as _cb_branches
-from UserBot.callback_branches import _cb_buy_back_main, _cb_buy_exit_main, _cb_buy_router, _cb_guide, _cb_invite, _cb_lang_set, _cb_pay, _cb_renew, _cb_status, _cb_support, _cb_trial_back, _cb_trial_loc, _cb_wallet
+from UserBot.callback_branches import _cb_buy_back_main, _cb_buy_exit_main, _cb_buy_router, _cb_guide, _cb_invite, _cb_lang_set, _cb_pay, _cb_renew, _cb_status, _cb_support, _cb_trial_back, _cb_trial_loc, _cb_wallet, _rs_admin_direct_reply, _rs_connect_sub_input, _rs_coupon_code, _rs_receipt_confirm, _rs_receipt_image, _rs_receipt_last4, _rs_rename_service, _rs_service_name, _rs_ticket_confirm, _rs_ticket_question, _rs_ticket_reply, _rs_ticket_reply_confirm, _rs_ticket_reply_screenshot, _rs_ticket_screenshot, _rs_ticket_title, _rs_trial_service_name, _rs_wallet_topup_amount, _rs_wallet_topup_confirm, _rs_wallet_topup_image, _rs_wallet_topup_last4
 
 _cb_branches.bind_main_namespace({
+    "ADMIN_BOT_TOKEN": ADMIN_BOT_TOKEN,
+    "ADMIN_ID": ADMIN_ID,
+    "Bot": Bot,
+    "Optional": Optional,
     "USERBOT_MISSING_SERVICE_DELETE_DAYS": USERBOT_MISSING_SERVICE_DELETE_DAYS,
     "_USER_WIZARD_LOCKS": _USER_WIZARD_LOCKS,
     "_apply_random_tx_marker": _apply_random_tx_marker,
     "_build_card_to_card_payment_text": _build_card_to_card_payment_text,
+    "_build_panel_user_comment": _build_panel_user_comment,
+    "_build_subscription_created_caption": _build_subscription_created_caption,
     "_build_subscription_status_text": _build_subscription_status_text,
     "_build_user_ticket_screenshot_links": _build_user_ticket_screenshot_links,
     "_build_zarinpal_links_keyboard": _build_zarinpal_links_keyboard,
     "_calc_dynamic_price": _calc_dynamic_price,
+    "_card_payment_result_user_text": _card_payment_result_user_text,
+    "_create_service_users_on_targets": _create_service_users_on_targets,
+    "_days_left_from_panel_user": _days_left_from_panel_user,
+    "_deactivate_created_users": _deactivate_created_users,
     "_default_faq_text": _default_faq_text,
     "_default_guide_intro_text": _default_guide_intro_text,
     "_default_zarinpal_text": _default_zarinpal_text,
+    "_deliver_direct_buy_after_sms_notice": _deliver_direct_buy_after_sms_notice,
     "_expected_server_price": _expected_server_price,
+    "_extract_uuid_from_user_input": _extract_uuid_from_user_input,
+    "_finalize_pending_card_payment": _finalize_pending_card_payment,
+    "_find_panel_user_targets_by_uuid": _find_panel_user_targets_by_uuid,
     "_format_text_template": _format_text_template,
     "_generate_random_service_name": _generate_random_service_name,
+    "_generate_service_code": _generate_service_code,
     "_get_location_servers": _get_location_servers,
     "_get_marketing_settings": _get_marketing_settings,
     "_get_or_create_bot_sub_links": _get_or_create_bot_sub_links,
     "_get_payment_settings": _get_payment_settings,
     "_get_service_node_base_urls": _get_service_node_base_urls,
     "_get_subscription_settings": _get_subscription_settings,
+    "_get_target_servers_for_sale": _get_target_servers_for_sale,
     "_get_text_settings": _get_text_settings,
     "_get_tx_plans_settings": _get_tx_plans_settings,
     "_get_user_bot_username": _get_user_bot_username,
     "_guide_platform_text": _guide_platform_text,
+    "_is_back_or_cancel_text": _is_back_or_cancel_text,
     "_is_connected_service": _is_connected_service,
     "_is_unlimited_time": _is_unlimited_time,
     "_is_unlimited_volume": _is_unlimited_volume,
     "_main_menu_keyboard": _main_menu_keyboard,
+    "_normalize_action_text": _normalize_action_text,
+    "_normalize_service_name_input": _normalize_service_name_input,
     "_notify_admin_new_ticket": _notify_admin_new_ticket,
     "_notify_admin_ticket_reply": _notify_admin_ticket_reply,
     "_older_than_days": _older_than_days,
+    "_parse_exact_card_last4": _parse_exact_card_last4,
+    "_parse_panel_datetime": _parse_panel_datetime,
     "_process_wallet_purchase": _process_wallet_purchase,
     "_regenerate_service_uuid_for_service": _regenerate_service_uuid_for_service,
+    "_rename_service_across_panels_and_db": _rename_service_across_panels_and_db,
     "_renew_not_allowed_text": _renew_not_allowed_text,
     "_resolve_plan_display_mode": _resolve_plan_display_mode,
     "_resolve_service_access_lock": _resolve_service_access_lock,
     "_safe_edit_message_reply_markup": _safe_edit_message_reply_markup,
     "_safe_edit_message_text": _safe_edit_message_text,
     "_send_buy_flow_for_server": _send_buy_flow_for_server,
+    "_send_event_channel_subscription_report": _send_event_channel_subscription_report,
     "_send_long_message": _send_long_message,
     "_send_service_direct_configs_shell": _send_service_direct_configs_shell,
     "_send_support_panel": _send_support_panel,
@@ -7637,9 +6608,13 @@ _cb_branches.bind_main_namespace({
     "_ticket_detail_text": _ticket_detail_text,
     "_ticket_reply_preview_text": _ticket_reply_preview_text,
     "_ticket_text_cancel_keyboard": _ticket_text_cancel_keyboard,
+    "_to_float": _to_float,
+    "_user_lang": _user_lang,
     "buy_wizard_keyboard": buy_wizard_keyboard,
     "confirm_payment_inline_keyboard": confirm_payment_inline_keyboard,
+    "confirm_payment_keyboard": confirm_payment_keyboard,
     "database": database,
+    "datetime": datetime,
     "get_user_step": get_user_step,
     "logger": logger,
     "mixed_buy_keyboard": mixed_buy_keyboard,
@@ -7650,6 +6625,9 @@ _cb_branches.bind_main_namespace({
     "show_fixed_categories": show_fixed_categories,
     "show_main_buy_menu": show_main_buy_menu,
     "start_dynamic_wizard": start_dynamic_wizard,
+    "ticket_skip_screenshot_keyboard": ticket_skip_screenshot_keyboard,
+    "timedelta": timedelta,
+    "timezone": timezone,
 })
 
 if __name__ == '__main__':
