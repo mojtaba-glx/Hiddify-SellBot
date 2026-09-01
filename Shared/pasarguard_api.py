@@ -194,3 +194,22 @@ async def get_nodes(server: Dict[str, Any], *, status: str = None) -> List[Dict[
 
 async def get_node(server: Dict[str, Any], node_id: Any) -> Dict[str, Any]:
     return await _call("get_node", server, node_id)
+
+
+# ---------------------------------------------------------------------------
+# Core (xray) config — create inbound from link (same contract as Marzban)
+# ---------------------------------------------------------------------------
+async def get_core_config(server: Dict[str, Any]) -> Dict[str, Any]:
+    return await _call("get_core_config", server)
+
+
+async def update_core_config(server: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    return await _call("update_core_config", server)
+
+
+def build_inbound_from_link(link: str, *, port: int = None, private_key: str = "") -> Dict[str, Any]:
+    return marzban_api.build_inbound_from_link(link, port=port, private_key=private_key)
+
+
+def add_inbound_to_core_config(config: Dict[str, Any], inbound: Dict[str, Any]) -> Dict[str, Any]:
+    return marzban_api.add_inbound_to_core_config(config, inbound)

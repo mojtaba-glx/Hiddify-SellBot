@@ -13,6 +13,7 @@ Environment variables:
 """
 
 import asyncio
+import json
 import logging
 import os
 import ssl
@@ -720,6 +721,335 @@ def format_node_line(node: Dict[str, Any]) -> str:
     if status == "error" and msg:
         line += f"\n    └ ⚠️ {msg[:120]}"
     return line
+
+
+# ---------------------------------------------------------------------------
+# Core (xray) config — create inbound from a config link
+# ---------------------------------------------------------------------------
+async def get_core_config(server: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    GET /api/core/config  → the full xray core config (sudo admin required).
+    """
+    base = _get_panel_url(server)
+    url = f"{base}/api/core/config"
+    data = await _request("GET", url, server)
+    if not isinstance(data, dict):
+        raise MarzbanApiError("Unexpected response from /api/core/config.")
+    return data
+
+
+async def update_core_config(server: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    PUT /api/core/config  → replace the xray core config and restart the core
+    (sudo admin required).  Marzban restarts the core automatically.
+    """
+    base = _get_panel_url(server)
+    url = f"{base}/api/core/config"
+    data = await _request("PUT", url, server, json=config)
+    if not isinstance(data, dict):
+        raise MarzbanApiError("Unexpected response from PUT /api/core/config.")
+    return data
+
+
+def _b64decode_padded(data: str) -> bytes:
+    """base64 decode tolerant to missing padding / urlsafe chars."""
+    import base64 as _b64
+    data = data.strip().replace("-", "+").replace("_", "/")
+    data += "=" * (-len(data) % 4)
+    return _b64.b64decode(data)
+
+
+def _stream_settings_from_params(params: Dict[str, str]) -> Dict[str, Any]:
+    """Build xray streamSettings from common config-link query params."""
+    network = (params.get("type") or params.get("network") or "tcp").strip().lower()
+    security = (params.get("security") or "").strip().lower() or ("tls" if params.get("tls") else "none")
+    host = (params.get("host") or params.get("sni") or "").strip()
+    path = (params.get("path") or "").strip()
+    header_type = (params.get("headerType") or "").strip().lower()
+
+    ss: Dict[str, Any] = {"network": network, "security": security}
+
+    if network == "ws":
+        ws: Dict[str, Any] = {"path": path or "/", "headers": {}}
+        if params.get("earlyData"):
+            ws["ed"] = params["earlyData"]
+        if host:
+            ws["headers"]["Host"] = host
+        ss["wsSettings"] = ws
+    elif network == "grpc":
+        ss["grpcSettings"] = {
+            "serviceName": (params.get("serviceName") or path or "").strip("/"),
+            "multiMode": False,
+        }
+    elif network == "httpupgrade":
+        ss["httpupgradeSettings"] = {"path": path or "/", "host": host or ""}
+    elif network in {"tcp", "raw"}:
+        if header_type == "http":
+            req_hosts = [h for h in (params.get("host") or "").split(",") if h]
+            ss["tcpSettings"] = {
+                "header": {
+                    "type": "http",
+                    "request": {
+                        "version": "1.1",
+                        "method": "GET",
+                        "path": [path or "/"],
+                        "headers": {"Host": req_hosts or [""], "User-Agent": ["Mozilla/5.0"]},
+                    },
+                }
+            }
+    else:
+        # keep plain network (kcp/quic/splithttp are rare; pass through raw)
+        ss["network"] = network
+
+    if security == "tls":
+        tls: Dict[str, Any] = {
+            "serverName": (params.get("sni") or host or "").strip(),
+            "alpn": [a for a in (params.get("alpn") or "").split(",") if a] or [],
+            "fingerprint": (params.get("fp") or "chrome").strip() or "chrome",
+        }
+        if not tls["alpn"]:
+            tls.pop("alpn")
+        ss["tlsSettings"] = tls
+    elif security == "reality":
+        ss["security"] = "reality"
+
+    return ss
+
+
+def _tag_from_name(raw_name: str, protocol: str, port: int) -> str:
+    import re as _re
+    name = _re.sub(r'[^a-zA-Z0-9_\-]', '_', raw_name or "").strip("_")
+    return (name or f"inb-{protocol}-{port}")[:40]
+
+
+def build_inbound_from_link(
+    link: str,
+    *,
+    port: Optional[int] = None,
+    private_key: str = "",
+) -> Dict[str, Any]:
+    """
+    Parse a proxy config link (vless/vmess/trojan/ss) into an xray inbound dict
+    suitable for injection into the Marzban core config's ``inbounds`` array.
+
+    - ``port``:        override the inbound port (default: port from the link)
+    - ``private_key``: required for REALITY links (a client link only carries
+                       the public key, so the panel operator must supply it)
+
+    Raises ValueError with a Persian message on unsupported/invalid input.
+    """
+    from urllib.parse import urlparse, parse_qsl, unquote
+
+    link = str(link or "").strip()
+    if not link:
+        raise ValueError("لینک خالی است.")
+    scheme = link.split("://", 1)[0].strip().lower()
+    if scheme in {"hysteria2", "hy2"}:
+        raise ValueError("hysteria2 روی xray (مرزبان) پشتیبانی نمی‌شود. فقط vless/vmess/trojan/ss مجاز است.")
+    if scheme not in {"vless", "vmess", "trojan", "ss"}:
+        raise ValueError("لینک پشتیبانی نمی‌شود. فقط vless/vmess/trojan/ss مجاز است.")
+
+    tag_name = ""
+    inbound_port = int(port) if port else 0
+
+    if scheme == "vmess":
+        try:
+            raw = _b64decode_padded(link.split("vmess://", 1)[1]).decode("utf-8", "ignore")
+            data = json.loads(raw)
+        except Exception as e:
+            raise ValueError("لینک vmess نامعتبر است (base64/json قابل خواندن نبود).") from e
+        if not isinstance(data, dict):
+            raise ValueError("لینک vmess نامعتبر است.")
+        uuid = str(data.get("id") or "").strip()
+        if not uuid:
+            raise ValueError("در لینک vmess شناسه (id) پیدا نشد.")
+        link_port = _to_int(data.get("port"), 0)
+        inbound_port = inbound_port or link_port
+        if not inbound_port:
+            raise ValueError("در لینک vmess پورت پیدا نشد.")
+        tag_name = str(data.get("ps") or "")
+        params: Dict[str, str] = {}
+        if str(data.get("tls") or "").lower() == "tls":
+            params["security"] = "tls"
+        if data.get("sni"):
+            params["sni"] = str(data["sni"])
+        if data.get("host"):
+            params["host"] = str(data["host"])
+        if data.get("path"):
+            params["path"] = str(data["path"])
+        if data.get("alpn"):
+            params["alpn"] = str(data["alpn"])
+        if data.get("fp"):
+            params["fp"] = str(data["fp"])
+        params["type"] = str(data.get("net") or "tcp")
+        if data.get("type"):
+            params["headerType"] = str(data["type"])
+        if data.get("serviceName"):
+            params["serviceName"] = str(data["serviceName"])
+        inbound: Dict[str, Any] = {
+            "listen": "",
+            "port": inbound_port,
+            "protocol": "vmess",
+            "settings": {
+                "clients": [{"id": uuid, "alterId": _to_int(data.get("aid"), 0), "email": f"inb-{inbound_port}"}],
+            },
+            "streamSettings": _stream_settings_from_params(params),
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+        }
+        inbound["tag"] = _tag_from_name(tag_name, "vmess", inbound_port)
+        return inbound
+
+    # vless / trojan / ss → URL-shaped links
+    try:
+        parsed = urlparse(link)
+        q = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    except Exception as e:
+        raise ValueError("لینک قابل پارس نبود.") from e
+    tag_name = unquote(parsed.fragment or "")
+    link_port = parsed.port or 0
+    inbound_port = inbound_port or link_port
+    if not inbound_port:
+        raise ValueError("در لینک پورت پیدا نشد.")
+
+    stream = _stream_settings_from_params(q)
+
+    if scheme == "vless":
+        uuid = str(parsed.username or "").strip()
+        if not uuid:
+            raise ValueError("در لینک vless شناسه (UUID) پیدا نشد.")
+        client: Dict[str, Any] = {"id": uuid, "email": f"inb-{inbound_port}"}
+        if q.get("flow"):
+            client["flow"] = q["flow"]
+        inbound = {
+            "listen": "",
+            "port": inbound_port,
+            "protocol": "vless",
+            "settings": {"clients": [client], "decryption": "none"},
+            "streamSettings": stream,
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+        }
+        inbound["tag"] = _tag_from_name(tag_name, "vless", inbound_port)
+        if stream.get("security") == "reality":
+            if not private_key:
+                raise ValueError(
+                    "این لینک REALITY است و ساخت اینباند به «کلید خصوصی (privateKey)» سرور نیاز دارد.\n"
+                    "کلید privateKey را بفرست (از دستور `xray x25519` یا تنظیمات اینباند اصلی)."
+                )
+            sni = (q.get("sni") or q.get("host") or "").strip()
+            inbound["streamSettings"]["realitySettings"] = {
+                "show": False,
+                "dest": (q.get("dest") or (sni + ":443" if sni else "")).strip(),
+                "serverNames": [sni] if sni else [],
+                "privateKey": private_key,
+                "shortIds": [q.get("sid")] if q.get("sid") else [""],
+            }
+        return inbound
+
+    if scheme == "trojan":
+        password = unquote(str(parsed.username or "")).strip()
+        if not password:
+            raise ValueError("در لینک trojan پسورد پیدا نشد.")
+        if stream.get("security") == "none" and not q.get("security"):
+            # trojan without explicit security is practically always TLS
+            stream["security"] = "tls"
+            if not stream.get("tlsSettings"):
+                host = (q.get("sni") or q.get("host") or "").strip()
+                if host:
+                    stream["tlsSettings"] = {"serverName": host, "fingerprint": "chrome"}
+        inbound = {
+            "listen": "",
+            "port": inbound_port,
+            "protocol": "trojan",
+            "settings": {"clients": [{"password": password, "email": f"inb-{inbound_port}"}]},
+            "streamSettings": stream,
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+        }
+        inbound["tag"] = _tag_from_name(tag_name, "trojan", inbound_port)
+        if stream.get("security") == "reality":
+            if not private_key:
+                raise ValueError(
+                    "این لینک REALITY است و ساخت اینباند به «کلید خصوصی (privateKey)» سرور نیاز دارد."
+                )
+            sni = (q.get("sni") or q.get("host") or "").strip()
+            inbound["streamSettings"]["realitySettings"] = {
+                "show": False,
+                "dest": (q.get("dest") or (sni + ":443" if sni else "")).strip(),
+                "serverNames": [sni] if sni else [],
+                "privateKey": private_key,
+                "shortIds": [q.get("sid")] if q.get("sid") else [""],
+            }
+        return inbound
+
+    # scheme == "ss" (shadowsocks)
+    method = password = ""
+    body = link.split("ss://", 1)[1]
+    userinfo = ""
+    rest = body
+    if "@" in body:
+        userinfo, rest = body.rsplit("@", 1)
+    else:
+        # legacy: whole thing is base64(method:pass@host:port)
+        try:
+            decoded = _b64decode_padded(body.split("#")[0]).decode("utf-8", "ignore")
+            userinfo, rest = decoded.rsplit("@", 1)
+        except Exception as e:
+            raise ValueError("لینک ss نامعتبر است.") from e
+    hostport = rest.split("?")[0].split("#")[0]
+    if "@" not in userinfo:
+        try:
+            userinfo = _b64decode_padded(userinfo).decode("utf-8", "ignore")
+        except Exception:
+            pass
+    if ":" not in userinfo:
+        raise ValueError("در لینک ss روش/رمز پیدا نشد.")
+    method, password = userinfo.split(":", 1)
+    if ":" not in hostport:
+        raise ValueError("در لینک ss پورت پیدا نشد.")
+    host, p = hostport.rsplit(":", 1)
+    try:
+        inbound_port = inbound_port or int(p)
+    except ValueError as e:
+        raise ValueError("پورت لینک ss نامعتبر است.") from e
+    inbound = {
+        "listen": "",
+        "port": inbound_port,
+        "protocol": "shadowsocks",
+        "settings": {"method": method.strip(), "password": unquote(password).strip(), "network": "tcp,udp"},
+        "streamSettings": stream,
+        "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+    }
+    inbound["tag"] = _tag_from_name(tag_name, "ss", inbound_port)
+    return inbound
+
+
+def add_inbound_to_core_config(config: Dict[str, Any], inbound: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Inject an inbound into the core config's ``inbounds`` array (in place).
+    Raises ValueError if the port is already used or the config shape is wrong.
+    """
+    if not isinstance(config, dict) or not isinstance(config.get("inbounds"), list):
+        raise ValueError("کانفیگ هسته فاقد آرایه inbounds است.")
+    port = _to_int(inbound.get("port"), 0)
+    if not (1 <= port <= 65535):
+        raise ValueError("پورت اینباند نامعتبر است.")
+    used_ports: List[int] = []
+    used_tags = set()
+    for ib in config["inbounds"]:
+        if not isinstance(ib, dict):
+            continue
+        if _to_int(ib.get("port"), 0):
+            used_ports.append(_to_int(ib.get("port"), 0))
+        if ib.get("tag"):
+            used_tags.add(str(ib["tag"]))
+    if port in used_ports:
+        sample = ", ".join(str(p) for p in sorted(set(used_ports))[:12])
+        raise ValueError(f"پورت {port} قبلاً در کانفیگ هسته استفاده شده است.\nپورت‌های در حال استفاده: {sample}")
+    tag = str(inbound.get("tag") or "")
+    if tag in used_tags:
+        tag = f"{tag}-{port}"
+        inbound["tag"] = tag
+    config["inbounds"].append(inbound)
+    return config
 
 
 def _bytes_to_gb(v: Any) -> float:

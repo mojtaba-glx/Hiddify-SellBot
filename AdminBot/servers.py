@@ -481,6 +481,11 @@ EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
 EDIT_SERVER_MARZBAN_USERNAME = "edit_server_marzban_username"
 EDIT_SERVER_MARZBAN_PASSWORD = "edit_server_marzban_password"
 
+# ساخت اینباند مرزبان از لینک
+MARZBAN_CREATE_INBOUND_LINK = "marzban_create_inbound_link"
+MARZBAN_CREATE_INBOUND_REALITY_KEY = "marzban_create_inbound_reality_key"
+MARZBAN_CREATE_INBOUND_PORT = "marzban_create_inbound_port"
+
 # افزودن کاربر
 ADD_USER_NAME = "add_user_name"
 ADD_USER_USAGE = "add_user_usage"
@@ -2341,6 +2346,10 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
         keyboard.insert(
             6,
             [InlineKeyboardButton("🛰 نودهای مرزبان", callback_data=f"server:{server_id}:marzban_nodes")],
+        )
+        keyboard.insert(
+            7,
+            [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:marzban_create_inbound")],
         )
     keyboard.append([InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
@@ -5602,6 +5611,10 @@ async def handle_server_state_message(
         await handle_xui_create_inbound_from_link_port(update, context)
         return
 
+    if state.startswith("marzban_create_inbound"):
+        await handle_marzban_create_inbound_flow(state, update, context)
+        return
+
     if state == SEARCH_SMART_INPUT:
         await handle_smart_search_input(update, context)
         return
@@ -5761,6 +5774,218 @@ async def handle_xui_create_inbound_from_link_port(update: Update, context: Cont
             f"❌ خطا در ساخت اینباند:\n{err}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]),
         )
+
+
+async def _marzban_core_used_ports(server: Dict[str, Any]) -> Optional[set]:
+    """پورت‌های اشغال‌شده در کانفیگ هسته مرزبان (برای پیشنهاد پورت آزاد)."""
+    try:
+        cfg = await multi_panel.panel_api(server).get_core_config(server)
+        used = set()
+        for ib in (cfg.get("inbounds") or []):
+            if isinstance(ib, dict) and ib.get("port"):
+                try:
+                    used.add(int(ib.get("port")))
+                except (TypeError, ValueError):
+                    pass
+        return used
+    except Exception:
+        return None
+
+
+async def handle_marzban_create_inbound_flow(
+    state: str, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """
+    ویزارد ساخت اینباند مرزبان از لینک:
+      1) لینک (vless/vmess/trojan/ss) → پارس و نمایش خلاصه
+      2) اگر REALITY بود → گرفتن privateKey
+      3) پورت → ساخت اینباند و تزریق در کانفیگ هسته (PUT /api/core/config)
+    """
+    from Shared import marzban_api
+
+    message = update.message
+    if not message:
+        return
+    text = (message.text or "").strip()
+
+    server_id = int(context.user_data.get("create_inbound_server_id") or 0)
+    server = database.get_server_by_id(server_id)
+    if not server or str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
+        context.user_data.pop("state", None)
+        context.user_data.pop("create_inbound_server_id", None)
+        context.user_data.pop("create_inbound_link", None)
+        context.user_data.pop("create_inbound_private_key", None)
+        await message.reply_text("❌ سرور پیدا نشد.", reply_markup=admin_main_keyboard())
+        return
+
+    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]])
+
+    if _is_cancel_text(text):
+        for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
+            context.user_data.pop(k, None)
+        await message.reply_text("❌ ساخت اینباند لغو شد.", reply_markup=admin_main_keyboard())
+        return
+
+    # ---------- مرحله ۱: لینک ----------
+    if state == MARZBAN_CREATE_INBOUND_LINK:
+        link = ""
+        for line in text.splitlines():
+            line = line.strip()
+            if line.lower().startswith(("vless://", "vmess://", "trojan://", "ss://")):
+                link = line
+                break
+        if not link:
+            await message.reply_text(
+                "❌ لینک نامعتبر است. یک لینک vless / vmess / trojan / ss بفرستید.\n"
+                "(hysteria2 روی مرزبان پشتیبانی نمی‌شود)",
+                reply_markup=back_kb,
+            )
+            return
+
+        try:
+            parsed = marzban_api.build_inbound_from_link(link)
+        except ValueError as e:
+            if "privateKey" in str(e) or "REALITY" in str(e):
+                # لینک REALITY → گرفتن کلید خصوصی
+                context.user_data["create_inbound_link"] = link
+                context.user_data["create_inbound_port"] = None
+                context.user_data["state"] = MARZBAN_CREATE_INBOUND_REALITY_KEY
+                await message.reply_text(
+                    "🔐 این لینک REALITY است.\n"
+                    "لطفاً «کلید خصوصی» (privateKey) سرور را بفرستید:\n"
+                    "(خروجی `xray x25519` → مقدار PRIVATE key)",
+                    reply_markup=back_kb,
+                )
+                return
+            await message.reply_text(f"❌ خطا در پارس لینک:\n{e}", reply_markup=back_kb)
+            return
+
+        context.user_data["create_inbound_link"] = link
+        context.user_data["create_inbound_private_key"] = None
+
+        # پیشنهاد پورت آزاد
+        used = await _marzban_core_used_ports(server)
+        orig_port = int(parsed.get("port") or 0)
+        suggest = orig_port
+        if used:
+            while suggest in used and suggest < 65535:
+                suggest += 1
+        port_msg = f"🔌 پورت داخل لینک: `{orig_port}`\n"
+        if used and suggest != orig_port:
+            port_msg += f"⚠️ این پورت قبلاً استفاده شده، پیشنهاد: `{suggest}`\n"
+        port_msg += f"\nروی کدام پورت بسازم؟ عدد بفرستید (مثلاً `{suggest}`) یا `0` برای همان `{orig_port}`"
+
+        sec = (parsed.get("streamSettings") or {}).get("security") or "none"
+        net = (parsed.get("streamSettings") or {}).get("network") or "tcp"
+        await message.reply_text(
+            f"🔍 لینک تشخیص داده شد:\n"
+            f"🔧 پروتکل: `{parsed.get('protocol')}`\n"
+            f"🌐 شبکه: `{net}` | امنیت: `{sec}`\n"
+            f"🏷 تگ: `{parsed.get('tag')}`\n\n{port_msg}",
+            parse_mode="Markdown",
+            reply_markup=back_kb,
+        )
+        context.user_data["state"] = MARZBAN_CREATE_INBOUND_PORT
+        return
+
+    # ---------- مرحله ۲: privateKey (فقط REALITY) ----------
+    if state == MARZBAN_CREATE_INBOUND_REALITY_KEY:
+        key = text.strip()
+        if not key or " " in key:
+            await message.reply_text(
+                "❌ privateKey نامعتبر است. مقدار خروجی `xray x25519` (PRIVATE) را بفرستید:",
+                reply_markup=back_kb,
+            )
+            return
+        context.user_data["create_inbound_private_key"] = key
+        # ادامه به مرحله پورت
+        context.user_data["state"] = MARZBAN_CREATE_INBOUND_PORT
+        used = await _marzban_core_used_ports(server)
+        try:
+            parsed = marzban_api.build_inbound_from_link(
+                str(context.user_data.get("create_inbound_link") or ""), private_key=key
+            )
+            orig_port = int(parsed.get("port") or 0)
+        except Exception:
+            orig_port = 0
+        suggest = orig_port
+        if used:
+            while suggest in used and suggest < 65535:
+                suggest += 1
+        await message.reply_text(
+            f"✅ کلید ثبت شد.\n\nروی کدام پورت بسازم؟\nعدد بفرستید (مثلاً `{suggest}`) یا `0`",
+            parse_mode="Markdown",
+            reply_markup=back_kb,
+        )
+        return
+
+    # ---------- مرحله ۳: پورت + ساخت ----------
+    if state == MARZBAN_CREATE_INBOUND_PORT:
+        raw = text.strip().lower()
+        port_override = None
+        if raw not in {"0", "skip", "-", ""}:
+            try:
+                port_override = int(raw)
+                if not (1 <= port_override <= 65535):
+                    raise ValueError
+            except ValueError:
+                await message.reply_text(
+                    "❌ پورت نامعتبر است. عدد 1 تا 65535 بفرستید یا `0` برای همان پورت لینک.",
+                    reply_markup=back_kb,
+                )
+                return
+
+        link = str(context.user_data.get("create_inbound_link") or "")
+        private_key = str(context.user_data.get("create_inbound_private_key") or "")
+        if not link:
+            context.user_data.pop("state", None)
+            await message.reply_text("❌ اطلاعات ناقص است. دوباره از منوی سرور شروع کنید.", reply_markup=admin_main_keyboard())
+            return
+
+        await message.reply_text("⏳ در حال ساخت اینباند...")
+        try:
+            inbound = marzban_api.build_inbound_from_link(link, port=port_override, private_key=private_key)
+            panel_mod = multi_panel.panel_api(server)
+            cfg = await panel_mod.get_core_config(server)
+            marzban_api.add_inbound_to_core_config(cfg, inbound)
+            await panel_mod.update_core_config(server, cfg)
+        except ValueError as e:
+            err = str(e)
+            if "پورت" in err and "استفاده شده" in err:
+                # پورت اشغال → دوباره بپرس
+                await message.reply_text(f"❌ {err}\n\nپورت دیگری بفرستید یا `لغو`:", reply_markup=back_kb)
+                return
+            for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
+                context.user_data.pop(k, None)
+            await message.reply_text(f"❌ خطا:\n{err}", reply_markup=admin_main_keyboard())
+            return
+        except Exception as e:
+            for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
+                context.user_data.pop(k, None)
+            err = str(e)
+            if len(err) > 700:
+                err = err[:700] + "..."
+            if "403" in err or "sudo" in err.lower() or "not allowed" in err.lower():
+                err = "ادمین مرزبان باید دسترسی sudo داشته باشد (PUT /api/core/config فقط برای sudo).\n\n" + err
+            await message.reply_text(f"❌ خطا در ساخت اینباند:\n{err}", reply_markup=admin_main_keyboard())
+            return
+
+        final_port = port_override or int(inbound.get("port") or 0)
+        for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
+            context.user_data.pop(k, None)
+        await message.reply_text(
+            "✅ اینباند با موفقیت در مرزبان ساخته شد.\n\n"
+            f"🔧 پروتکل: {inbound.get('protocol')}\n"
+            f"🔌 پورت: {final_port}\n"
+            f"🏷 تگ: `{inbound.get('tag')}`\n"
+            "🔄 هسته xray ری‌استارت شد (چند ثانیه قطعی طبیعی است).\n\n"
+            f"⚠️ لینک کانفیگ همان کاربر فقط وقتی کار می‌کند که دامنه/آدرس پشت آن به این سرور اشاره کند.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🔙 بازگشت به سرور", callback_data=f"server:{server_id}")]]
+            ),
+        )
+        return
 
 
 # ===============================
@@ -7216,6 +7441,27 @@ async def handle_server_inline_callback(
                 await msg.edit_text(text, reply_markup=kb)
             except Exception:
                 await context.bot.send_message(chat_id, text, reply_markup=kb)
+            return
+
+        if action == "marzban_create_inbound":
+            server = database.get_server_by_id(server_id)
+            if not server:
+                await msg.edit_text("❌ سرور پیدا نشد.")
+                return
+            if str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
+                await msg.edit_text("❌ این سرور از نوع مرزبان/پاسارگارد نیست.")
+                return
+            context.user_data["state"] = MARZBAN_CREATE_INBOUND_LINK
+            context.user_data["create_inbound_server_id"] = server_id
+            await msg.edit_text(
+                "➕ ساخت اینباند از لینک (مرزبان)\n\n"
+                "لینک کانفیگ را بفرست (vless / vmess / trojan / ss):\n"
+                "⚠️ hysteria2 روی مرزبان (xray) پشتیبانی نمی‌شود.\n\n"
+                "اینباند با همان UUID/پسورد و تنظیمات لینک ساخته می‌شود تا لینک همان کاربر کار کند.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]
+                ),
+            )
             return
 
         if action == "useruuid" and len(parts) >= 4:
