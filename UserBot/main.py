@@ -182,6 +182,27 @@ try:
         user_tickets_list_keyboard, user_ticket_detail_keyboard,
         language_keyboard,
     )
+    from UserBot.utils.helpers import (  # noqa: F401
+        _build_panel_user_comment,
+        _calc_dynamic_price,
+        _days_left_from_panel_user,
+        _expected_server_price,
+        _extract_start_payload,
+        _extract_uuid_from_comment,
+        _extract_uuid_from_user_input,
+        _generate_order_id,
+        _generate_service_code,
+        _is_back_or_cancel_text,
+        _is_user_missing_error,
+        _normalize_action_text,
+        _optional_int_from_any,
+        _parse_panel_datetime,
+        _parse_service_comment,
+        _sort_plans,
+        _to_float,
+        _to_int,
+        _usage_limit_from_panel_user,
+    )
 
     # Validate internal modules
     validation_errors = _validate_internal_modules()
@@ -345,24 +366,8 @@ DIRECT_DELIVERY_MAX_RETRIES = int(os.getenv("USERBOT_DIRECT_DELIVERY_MAX_RETRIES
 DIRECT_DELIVERY_RETRY_DELAY_SECONDS = float(os.getenv("USERBOT_DIRECT_DELIVERY_RETRY_DELAY_SECONDS", "60") or "60")
 
 
-def _normalize_action_text(text: str) -> str:
-    t = (text or "").strip()
-    for ch in ("\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u2066", "\u2067", "\u2068", "\u2069"):
-        t = t.replace(ch, "")
-    return " ".join(t.split())
 
 
-def _is_back_or_cancel_text(text: str) -> bool:
-    t = _normalize_action_text(text)
-    return t in {
-        "بازگشت",
-        "🔙بازگشت",
-        "🔙 بازگشت",
-        "لغو",
-        "❌لغو",
-        "❌ لغو",
-        "/cancel",
-    }
 
 
 async def _gather_with_limit(items: list[Any], worker, limit: int = 6) -> list[Any]:
@@ -790,15 +795,6 @@ def _apply_random_tx_marker(amount_toman: int, tx_settings: Optional[dict] = Non
     return base_amount + marker, marker
 
 
-def _extract_start_payload(update: Update) -> str:
-    try:
-        txt = str((update.message.text if update and update.message else "") or "").strip()
-    except Exception:
-        return ""
-    if not txt.startswith("/start"):
-        return ""
-    parts = txt.split(maxsplit=1)
-    return str(parts[1]).strip() if len(parts) > 1 else ""
 
 
 USER_TICKET_SHOT_START_PREFIX = "tshotu"
@@ -1183,31 +1179,6 @@ async def _notify_admin_ticket_reply(ticket: Dict[str, Any]) -> None:
         logger.warning("Failed to notify admin on ticket reply: %s", e)
 
 
-def _sort_plans(plans: list[dict], txp: dict) -> list[dict]:
-    mode = str(txp.get("plan_sort_mode") or "price").strip().lower()
-    desc = bool(txp.get("plan_sort_desc", False))
-    key_name = "price" if mode == "price" else ("gb" if mode == "gb" else "days")
-
-    def _to_number(v: Any) -> float:
-        # مقدار ممکن است عدد، رشته‌ی ساده یا رشته‌ی تزئینی مثل "70,000 تومان" باشد.
-        if isinstance(v, (int, float)):
-            return float(v)
-        s = str(v or "").strip()
-        if not s:
-            return 0.0
-        s = s.replace(",", "").replace("،", "")
-        m = re.search(r"-?\d+(?:\.\d+)?", s)
-        if not m:
-            return 0.0
-        try:
-            return float(m.group(0))
-        except Exception:
-            return 0.0
-
-    def _key(p: dict):
-        return _to_number(p.get(key_name))
-
-    return sorted(list(plans or []), key=_key, reverse=desc)
 
 
 def _is_unlimited_volume(limit_gb: float) -> bool:
@@ -1447,166 +1418,16 @@ def _get_location_servers() -> list:
         random.shuffle(servers)
     return servers
 
-def _to_float(value, default=0.0):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
 
 
-def _to_int(value, default=0) -> int:
-    try:
-        if value is None:
-            return int(default)
-        if isinstance(value, str):
-            value = value.replace(",", "").strip()
-        return int(float(value))
-    except (TypeError, ValueError):
-        return int(default)
 
 
-def _calc_dynamic_price(gb: int, months: int, dyn_settings: Optional[Dict[str, Any]]) -> tuple[int, int]:
-    """
-    Calculate dynamic plan final price and applied discount percent.
-    Discount model:
-      discount_tiers uses the highest threshold reached.
-      Legacy fallback: floor(gb / discount_step_gb) * discount_percent_step,
-      capped by discount_percent_max.
-    """
-    settings = dyn_settings or {}
-
-    gb_val = max(0, _to_int(gb, 0))
-    months_val = max(0, _to_int(months, 0))
-    price_per_gb = max(0, _to_int(settings.get("price_per_gb"), 2000))
-    price_per_month = max(0, _to_int(settings.get("price_per_month"), 30000))
-
-    base_price = (gb_val * price_per_gb) + (months_val * price_per_month)
-
-    discount_step_gb = max(0, _to_int(settings.get("discount_step_gb"), 0))
-    discount_percent_step = max(0, _to_int(settings.get("discount_percent_step"), 0))
-    discount_percent_max = max(0, _to_int(settings.get("discount_percent_max"), 0))
-
-    off_percent = 0
-    discount_tiered_enabled = bool(settings.get("discount_tiered_enabled", False))
-    discount_simple_enabled = plans_storage.is_simple_discount_active(settings)
-    discount_tiers = plans_storage.normalize_discount_tiers(settings.get("discount_tiers", []))
-    
-    # محاسبه تخفیف پلاکانی اگر فعال باشد
-    tiered_off = 0
-    if discount_tiered_enabled and discount_tiers:
-        for tier in discount_tiers:
-            if gb_val >= int(tier["gb"]):
-                tiered_off = int(tier["percent"])
-            else:
-                break
-        tiered_off = max(0, min(tiered_off, 100))
-    
-    # محاسبه تخفیف حجمی ساده اگر فعال باشد
-    simple_off = 0
-    if discount_simple_enabled and discount_step_gb > 0 and discount_percent_step > 0 and gb_val >= discount_step_gb:
-        stages = gb_val // discount_step_gb
-        simple_off = stages * discount_percent_step
-        if discount_percent_max > 0:
-            simple_off = min(simple_off, discount_percent_max)
-        simple_off = max(0, min(simple_off, 100))
-    
-    # انتخاب بهترین (بیشترین) تخفیف
-    off_percent = max(tiered_off, simple_off)
-
-    final_price = int(round(base_price * (100 - off_percent) / 100))
-    final_price = max(0, final_price)
-    return final_price, off_percent
-
-def _expected_server_price(sid: int, gb: int, days: int, plan_id: int) -> Optional[int]:
-    """قیمت واقعی سمت سرور برای یک خرید — ضد دستکاری callback data.
-
-    ترتیب تشخیص: پلن ثابت با plan_id → پلن ثابت با تطبیق gb/days (دکمه‌های قدیمی)
-    → قیمت پویا. اگر هیچ‌کدام قابل تشخیص نبود None برمی‌گردد (درخواست باید رد شود).
-    """
-    try:
-        server_block = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {})
-        if plan_id > 0:
-            plan = next(
-                (p for p in server_block.get("plans", []) if int(p.get("id") or 0) == int(plan_id)),
-                None,
-            )
-            if not plan:
-                return None
-            return max(0, int(plan.get("price") or 0))
-        matches = [
-            p for p in server_block.get("plans", [])
-            if int(float(p.get("gb") or 0)) == int(gb) and int(p.get("days") or 0) == int(days)
-        ]
-        if matches:
-            prices = {max(0, int(p.get("price") or 0)) for p in matches}
-            if len(prices) == 1:
-                return prices.pop()
-            return None
-        if int(gb) > 0 and int(days) > 0 and int(days) % 30 == 0:
-            dyn_settings = server_block.get("dynamic_settings", {})
-            price, _off = _calc_dynamic_price(int(gb), int(days) // 30, dyn_settings)
-            return max(0, int(price or 0))
-        return None
-    except Exception:
-        return None
-
-def _generate_order_id() -> int:
-    """Generate unique order_id for userbot_orders table."""
-    conn = userbot_db._get_conn()
-    cur = conn.cursor()
-    try:
-        for _ in range(50):
-            oid = random.randint(1000000, 9999999)
-            cur.execute("SELECT 1 FROM userbot_orders WHERE order_id = ? LIMIT 1", (oid,))
-            if not cur.fetchone():
-                return oid
-        return random.randint(1000000, 9999999)
-    finally:
-        conn.close()
-
-def _generate_service_code() -> str:
-    """Generate a 7-digit service code (best-effort unique)."""
-    conn = userbot_db._get_conn()
-    cur = conn.cursor()
-    try:
-        for _ in range(50):
-            code = f"{random.randint(0, 9999999):07d}"
-            cur.execute(
-                "SELECT 1 FROM userbot_services WHERE comment LIKE ? LIMIT 1",
-                (f"%code:{code}%",),
-            )
-            if not cur.fetchone():
-                return code
-        return f"{random.randint(0, 9999999):07d}"
-    finally:
-        conn.close()
-
-def _parse_service_comment(comment: str) -> dict:
-    """
-    Parse service comment stored as key:value pairs separated by '|',
-    e.g. "uuid:...|code:1234567".
-    """
-    parsed = {}
-    raw = (comment or "").strip()
-    if not raw:
-        return parsed
-    for part in raw.split("|"):
-        part = part.strip()
-        if ":" not in part:
-            continue
-        k, v = part.split(":", 1)
-        k = k.strip().lower()
-        v = v.strip()
-        if k and v:
-            parsed[k] = v
-    return parsed
 
 
-def _build_panel_user_comment(user_id: int, *, is_test: bool = False) -> str:
-    base = f"HiddifyBot:{int(user_id)}"
-    if is_test:
-        return f"{base}|test"
-    return base
+
+
+
+
 
 
 def _resolve_live_server_title(service: dict, default: str = "نامشخص") -> str:
@@ -1682,22 +1503,8 @@ def _build_subscription_status_text(service):
     return "\n".join(lines)
 
 
-def _extract_uuid_from_comment(comment: str) -> Optional[str]:
-    return _parse_service_comment(comment).get("uuid")
 
 
-def _extract_uuid_from_user_input(raw: str) -> Optional[str]:
-    text = str(raw or "").strip()
-    if not text:
-        return None
-    # Plain UUID or UUID embedded in link/config text
-    m = re.search(
-        r"\b([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b",
-        text,
-    )
-    if not m:
-        return None
-    return m.group(1).lower()
 
 
 def _is_connected_service(service: dict) -> bool:
@@ -1864,89 +1671,14 @@ def _renew_not_allowed_text() -> str:
     )
 
 
-def _is_user_missing_error(exc: Exception) -> bool:
-    text = str(exc or "").lower()
-    return ("http 404" in text) or ("not found" in text) or (" پیدا نشد" in text)
 
 
-def _parse_panel_datetime(value: Any) -> Optional[datetime]:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-
-    # ISO handling (with timezone / microseconds / trailing Z)
-    try:
-        iso_raw = raw.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(iso_raw)
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-        return dt
-    except Exception:
-        pass
-
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            continue
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f",):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            continue
-    if raw.endswith("Z"):
-        trimmed = raw[:-1]
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
-            try:
-                return datetime.strptime(trimmed, fmt)
-            except ValueError:
-                continue
-    return None
 
 
-def _optional_int_from_any(value: Any) -> Optional[int]:
-    raw = str(value or "").replace(",", "").strip()
-    if not raw:
-        return None
-    try:
-        return int(float(raw))
-    except Exception:
-        return None
 
 
-def _usage_limit_from_panel_user(user: dict) -> Optional[float]:
-    for key in ("usage_limit_GB", "usage_limit_gb", "usage_limit", "package_traffic"):
-        if key not in user:
-            continue
-        raw = user.get(key)
-        if raw is None or str(raw).strip() == "":
-            continue
-        val = _to_float(raw, -1.0)
-        if val >= 0:
-            return float(val)
-    return None
 
 
-def _days_left_from_panel_user(user: dict) -> Optional[int]:
-    for key in ("remaining_days", "remaining_day", "days_left"):
-        v = _optional_int_from_any(user.get(key))
-        if v is not None:
-            return v
-
-    start_dt = _parse_panel_datetime(user.get("start_date"))
-    package_days = user.get("package_days")
-    if start_dt and package_days:
-        try:
-            end_dt = start_dt + timedelta(days=int(package_days))
-            return (end_dt.date() - datetime.now(timezone.utc).replace(tzinfo=None).date()).days
-        except Exception:
-            pass
-
-    for key in ("expire", "expire_date", "end_date", "expiration_date", "expires_at"):
-        end_dt = _parse_panel_datetime(user.get(key))
-        if end_dt:
-            return (end_dt.date() - datetime.now(timezone.utc).replace(tzinfo=None).date()).days
-    return None
 
 
 def _get_service_panel_targets(service: dict) -> list[tuple[dict, str]]:
@@ -6285,27 +6017,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- تغییر زبان رابط کاربری (چندزبانه) ---
     if data.startswith("lang:set:"):
-        new_lang = data.split(":")[2].strip().lower()
-        if not i18n.is_supported(new_lang):
-            new_lang = "fa"
-        try:
-            userbot_db.set_user_language(user_id, new_lang)
-        except Exception as e:
-            logger.warning("set_user_language failed user=%s: %s", user_id, e)
-        try:
-            await query.answer()
-        except Exception:
-            pass
-        lang_name = i18n.lang_display_name(new_lang)
-        try:
-            await query.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=i18n.t("lang_changed", new_lang, lang_name=lang_name),
-            reply_markup=_main_menu_keyboard(lang=new_lang),
-        )
+        await _cb_lang_set(update, context, query, data, user_id)
         return
     br = _get_buy_renew_settings()
     text_settings = _get_text_settings()
@@ -6371,1210 +6083,53 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- راهنما (انتخاب سیستم‌عامل) ---
     if data.startswith("guide:"):
-        await query.answer()
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ""
-        back_token = parts[2] if len(parts) > 2 else "m"
-
-        if action == "back":
-            if back_token.startswith("s") and back_token[1:].isdigit():
-                service_id = int(back_token[1:])
-                service = userbot_db.get_service_by_id(service_id)
-                settings = _get_subscription_settings()
-                if not service:
-                    await _safe_edit_message_text(query, "❌ سرویس موردنظر یافت نشد یا حذف شده است.")
-                    return
-                service = await _sync_service_runtime_from_panels(service)
-                await _safe_edit_message_text(
-                    query,
-                    _build_subscription_status_text(service),
-                    parse_mode="Markdown",
-                    reply_markup=subscription_status_keyboard(
-                        service_id,
-                        show_direct_config=settings.get("show_direct_config", True),
-                        show_sub_link=settings.get("show_sub_link", True),
-                        show_configs=_should_show_configs_button(settings),
-                        show_detach=_is_connected_service(service),
-                    ),
-                )
-                return
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            return
-
-        if action in {"android", "ios", "windows", "mac", "linux"}:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=_guide_platform_text(action, text_settings),
-            )
-            return
-
-        await query.answer("گزینه نامعتبر است.", show_alert=True)
+        await _cb_guide(update, context, query, data, user_id, text_settings)
         return
 
     if data.startswith("invite:"):
-        await query.answer()
-        action = data.split(":", 1)[1].strip().lower() if ":" in data else ""
-        u_db = userbot_db.get_user_by_telegram_id(user_id) or {}
-        internal_uid = int(u_db.get("id") or 0)
-
-        if action == "get_banner":
-            bot_username = await _get_user_bot_username(context)
-            code = ""
-            try:
-                code = userbot_db.get_or_create_user_referral_code(internal_uid)
-            except Exception:
-                code = ""
-            invite_link = (
-                f"https://t.me/{bot_username}?start=ref_{code}"
-                if bot_username and code
-                else "لینک دعوت هنوز تنظیم نشده است."
-            )
-            banner_text = _format_text_template(
-                text_settings.get("invite_banner_text")
-                or "🎁 بنر دعوت اختصاصی شما\n\n🔗 لینک دعوت شما:\n{invite_link}",
-                invite_link=invite_link,
-            )
-            photo_id = str(text_settings.get("invite_banner_photo_id") or "").strip()
-            if photo_id:
-                try:
-                    await context.bot.send_photo(
-                        chat_id=user_id,
-                        photo=photo_id,
-                        caption=banner_text,
-                    )
-                    return
-                except Exception:
-                    pass
-            await context.bot.send_message(chat_id=user_id, text=banner_text)
-            return
-
-        if action == "rewards":
-            try:
-                stats = userbot_db.get_referral_user_stats(internal_uid)
-            except Exception:
-                stats = {}
-            settings = userbot_db.get_referral_settings()
-            text = (
-                "🎁 جوایز من\n"
-                "❖ ◈━━━━━━━━━━━━━━━◈ ❖\n"
-                f"🤝 پاداش تست: {int(settings.get('trial_reward_amount') or 0):,} تومان\n"
-                f"🛒 پاداش خرید اول: {int(settings.get('purchase_reward_amount') or 0):,} تومان\n"
-                f"🎯 جوایز دریافتی: {int(stats.get('paid_rewards_count') or 0)}\n"
-                f"💰 مجموع پاداش‌ها: {int(stats.get('total_rewards') or 0):,} تومان\n"
-            )
-            await context.bot.send_message(chat_id=user_id, text=text)
-            return
-
-        if action == "list":
-            try:
-                refs, total = userbot_db.list_referrals(limit=20, inviter_id=internal_uid)
-            except Exception:
-                refs, total = [], 0
-            if not refs:
-                await context.bot.send_message(chat_id=user_id, text="👥 هنوز کسی را دعوت نکرده‌اید.")
-                return
-            lines = [f"👥 دعوت‌های من ({total} نفر)\n❖ ◈━━━━━━━━━━━━━━━◈ ❖"]
-            for idx, ref in enumerate(refs, start=1):
-                invitee_name = str(ref.get("invitee_full_name") or ref.get("invitee_username") or "—").strip()
-                status_icon = "✅" if str(ref.get("status") or "") == "active" else "❌"
-                lines.append(f"{idx}. {invitee_name} | {status_icon}")
-            await context.bot.send_message(chat_id=user_id, text="\n".join(lines))
-            return
-
-        if action == "stats":
-            try:
-                stats = userbot_db.get_referral_user_stats(internal_uid)
-            except Exception:
-                stats = {}
-            text = (
-                "📊 آمار دعوت\n"
-                "❖ ◈━━━━━━━━━━━━━━━◈ ❖\n"
-                f"👥 کل دعوت‌ها: {int(stats.get('total_referrals') or 0)}\n"
-                f"✅ دعوت‌های موفق: {int(stats.get('successful_referrals') or 0)}\n"
-                f"⏳ در انتظار خرید: {int(stats.get('pending_purchase') or 0)}\n"
-                f"🧪 پاداش‌های تست: {int(stats.get('trial_rewards_count') or 0)}\n"
-                f"🛒 پاداش‌های خرید: {int(stats.get('purchase_rewards_count') or 0)}\n"
-            )
-            await context.bot.send_message(chat_id=user_id, text=text)
-            return
-
-        if action == "history":
-            try:
-                rewards, total = userbot_db.list_referral_rewards(limit=20, inviter_id=internal_uid)
-            except Exception:
-                rewards, total = [], 0
-            if not rewards:
-                await context.bot.send_message(chat_id=user_id, text="📜 هنوز پاداشی دریافت نکرده‌اید.")
-                return
-            labels = userbot_db.REFERRAL_REWARD_LABELS
-            lines = [f"📜 تاریخچه جوایز ({total} مورد)\n❖ ◈━━━━━━━━━━━━━━━◈ ❖"]
-            for idx, rw in enumerate(rewards, start=1):
-                rtype = str(rw.get("reward_type") or "")
-                label = labels.get(rtype, rtype)
-                amount = int(rw.get("amount_toman") or 0)
-                status_icon = "✅" if str(rw.get("status") or "") == "paid" else "❌"
-                created = str(rw.get("created_at") or "")[:10]
-                lines.append(f"{idx}. {label} | {amount:,} تومان | {status_icon} {created}")
-            await context.bot.send_message(chat_id=user_id, text="\n".join(lines))
-            return
+        await _cb_invite(update, context, query, data, user_id, text_settings)
         return
 
     if data.startswith("support:"):
-        await query.answer()
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ""
-
-        if action == "noop":
-            return
-
-        if action == "adminmsg":
-            sub = parts[2] if len(parts) > 2 else ""
-            if sub == "reply":
-                set_user_step(context, user_id, "WAIT_ADMIN_DIRECT_REPLY_TEXT")
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="📩 لطفا پاسخ خود را ارسال کنید:",
-                )
-                return
-            await query.answer("گزینه نامعتبر است.", show_alert=True)
-            return
-
-        if action == "back_main":
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="🏠 منوی اصلی",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        if action == "menu":
-            await _send_support_panel(context=context, user_id=user_id, message=query.message, text_settings=text_settings)
-            return
-
-        if action == "faq":
-            faq_text = str(text_settings.get("faq_text") or "").strip()
-            if (not faq_text) or ("به‌زودی تکمیل می‌شود" in faq_text) or ("به زودی تکمیل می شود" in faq_text):
-                faq_text = _default_faq_text()
-            try:
-                await query.message.edit_text(faq_text, reply_markup=support_panel_keyboard())
-            except Exception:
-                await context.bot.send_message(chat_id=user_id, text=faq_text, reply_markup=support_panel_keyboard())
-            return
-
-        if action == "new" and len(parts) == 2:
-            set_user_step(context, user_id, "WAIT_TICKET_TITLE")
-            context.user_data[f"pending_ticket_{user_id}"] = {}
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="✍️ لطفا موضوع درخواست خود را ارسال نمایید:",
-                reply_markup=_ticket_text_cancel_keyboard(),
-            )
-            return
-
-        if action == "my":
-            try:
-                page = int(parts[2]) if len(parts) > 2 else 1
-            except Exception:
-                page = 1
-            page = max(1, page)
-            user_row = userbot_db.get_user_by_telegram_id(user_id)
-            if not user_row:
-                uid = userbot_db.upsert_user(user_id, query.from_user.username, query.from_user.full_name)
-                user_row = userbot_db.get_user_by_id(uid) or {}
-            internal_uid = int((user_row or {}).get("id") or 0)
-            tickets, total = userbot_db.get_tickets_for_user(internal_uid, page=page, page_size=18)
-            total_pages = max(1, (int(total) + 17) // 18)
-            if page > total_pages:
-                page = total_pages
-                tickets, total = userbot_db.get_tickets_for_user(internal_uid, page=page, page_size=18)
-            header = (
-                "📬 تیکت‌های من\n"
-                f"🔸 تعداد کل تیکت‌ها: {int(total)}\n"
-                "شماره تیکت موردنظر را انتخاب کنید:"
-            )
-            kb = user_tickets_list_keyboard(tickets, page, total_pages)
-            try:
-                await query.message.edit_text(header, reply_markup=kb)
-            except Exception:
-                await context.bot.send_message(chat_id=user_id, text=header, reply_markup=kb)
-            return
-
-        if action == "view":
-            code = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
-            if code <= 0:
-                await query.answer("تیکت نامعتبر است.", show_alert=True)
-                return
-            user_row = userbot_db.get_user_by_telegram_id(user_id)
-            internal_uid = int((user_row or {}).get("id") or 0)
-            ticket = userbot_db.get_user_ticket_by_code(internal_uid, code)
-            if not ticket:
-                await query.answer("تیکت یافت نشد.", show_alert=True)
-                return
-            messages = userbot_db.get_ticket_messages(code)
-            shot_links = await _build_user_ticket_screenshot_links(context, code, messages)
-            text = _ticket_detail_text(ticket, messages, screenshot_links=shot_links)
-            is_closed = str(ticket.get("status") or "").strip().lower() == "closed"
-            can_reply = not is_closed
-            try:
-                await query.message.edit_text(
-                    text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            return
-
-        if action == "reopen":
-            await query.answer("⛔️ این تیکت توسط شما بسته شده و قابل بازکردن نیست.", show_alert=True)
-            return
-
-        if action == "close":
-            code = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 0
-            if code <= 0:
-                await query.answer("تیکت نامعتبر است.", show_alert=True)
-                return
-            user_row = userbot_db.get_user_by_telegram_id(user_id)
-            internal_uid = int((user_row or {}).get("id") or 0)
-            ticket = userbot_db.get_user_ticket_by_code(internal_uid, code)
-            if not ticket:
-                await query.answer("تیکت یافت نشد.", show_alert=True)
-                return
-            current_status = str(ticket.get("status") or "").strip().lower()
-            if current_status == "closed":
-                await query.answer("این تیکت قبلا بسته شده است.")
-                return
-            ok = userbot_db.set_ticket_status(code, "closed")
-            if not ok:
-                await query.answer("تغییر وضعیت انجام نشد.", show_alert=True)
-                return
-            fresh = userbot_db.get_user_ticket_by_code(internal_uid, code) or ticket
-            messages = userbot_db.get_ticket_messages(code)
-            shot_links = await _build_user_ticket_screenshot_links(context, code, messages)
-            detail_text = _ticket_detail_text(fresh, messages, screenshot_links=shot_links)
-            is_closed = str(fresh.get("status") or "").strip().lower() == "closed"
-            can_reply = not is_closed
-            notice = "✅ تیکت بسته شد."
-            try:
-                await query.answer(notice)
-            except Exception:
-                pass
-            try:
-                await query.message.edit_text(
-                    detail_text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=detail_text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-            return
-
-        if action == "reply":
-            reply_key = f"ticket_reply_{user_id}"
-            sub = parts[2] if len(parts) > 2 else ""
-
-            if str(sub).isdigit():
-                code = int(sub)
-                if code <= 0:
-                    await query.answer("تیکت نامعتبر است.", show_alert=True)
-                    return
-                user_row = userbot_db.get_user_by_telegram_id(user_id)
-                internal_uid = int((user_row or {}).get("id") or 0)
-                ticket = userbot_db.get_user_ticket_by_code(internal_uid, code)
-                if not ticket:
-                    await query.answer("تیکت یافت نشد.", show_alert=True)
-                    return
-                if str(ticket.get("status") or "").strip().lower() == "closed":
-                    await query.answer("این تیکت بسته شده است.", show_alert=True)
-                    return
-                set_user_step(context, user_id, "WAIT_TICKET_REPLY_TEXT")
-                context.user_data[reply_key] = {
-                    "ticket_code": code,
-                    "reply_text": "",
-                    "receipt_photo_id": "",
-                }
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="✍️ لطفا پاسخ خود را به صورت کامل ارسال نمایید:",
-                    reply_markup=_ticket_text_cancel_keyboard("reply"),
-                )
-                return
-
-            state = context.user_data.get(reply_key) or {}
-            ticket_code = int(state.get("ticket_code") or 0)
-
-            if sub == "cancel":
-                context.user_data.pop(reply_key, None)
-                set_user_step(context, user_id, None)
-                await _send_support_panel(context=context, user_id=user_id, message=query.message, text_settings=text_settings)
-                return
-
-            if ticket_code <= 0:
-                await query.answer("اطلاعات تیکت نامعتبر است.", show_alert=True)
-                return
-
-            if sub == "edit":
-                state["reply_text"] = ""
-                state["receipt_photo_id"] = ""
-                context.user_data[reply_key] = state
-                set_user_step(context, user_id, "WAIT_TICKET_REPLY_TEXT")
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="✍️ لطفا پاسخ خود را به صورت کامل ارسال نمایید:",
-                    reply_markup=_ticket_text_cancel_keyboard("reply"),
-                )
-                return
-
-            if sub == "skip":
-                if get_user_step(context, user_id) != "WAIT_TICKET_REPLY_SCREENSHOT":
-                    await query.answer("در این مرحله قابل استفاده نیست.", show_alert=True)
-                    return
-                state["receipt_photo_id"] = ""
-                context.user_data[reply_key] = state
-                set_user_step(context, user_id, "WAIT_TICKET_REPLY_CONFIRM")
-                preview_text = _ticket_reply_preview_text(state)
-                try:
-                    await query.message.edit_text(
-                        preview_text,
-                        reply_markup=ticket_confirm_keyboard("reply"),
-                    )
-                except Exception:
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=preview_text,
-                        reply_markup=ticket_confirm_keyboard("reply"),
-                    )
-                return
-
-            if sub == "send":
-                if get_user_step(context, user_id) != "WAIT_TICKET_REPLY_CONFIRM":
-                    await query.answer("ابتدا مراحل ارسال پاسخ را کامل کنید.", show_alert=True)
-                    return
-                reply_text = str(state.get("reply_text") or "").strip()
-                photo_file_id = str(state.get("receipt_photo_id") or "").strip()
-                if not reply_text:
-                    await query.answer("متن پاسخ خالی است.", show_alert=True)
-                    return
-
-                user_row = userbot_db.get_user_by_telegram_id(user_id)
-                internal_uid = int((user_row or {}).get("id") or 0)
-                ticket = userbot_db.get_user_ticket_by_code(internal_uid, ticket_code)
-                if not ticket:
-                    context.user_data.pop(reply_key, None)
-                    set_user_step(context, user_id, None)
-                    await query.answer("تیکت موردنظر یافت نشد.", show_alert=True)
-                    return
-                if str(ticket.get("status") or "").strip().lower() == "closed":
-                    await query.answer("این تیکت بسته شده است.", show_alert=True)
-                    return
-
-                sender_name = str(query.from_user.full_name or query.from_user.username or user_id)
-                ok = userbot_db.add_ticket_message(
-                    ticket_code,
-                    sender_type="user",
-                    sender_name=sender_name,
-                    message_text=reply_text,
-                    photo_file_id=photo_file_id,
-                )
-                if not ok:
-                    await query.answer("ثبت پاسخ انجام نشد.", show_alert=True)
-                    return
-                userbot_db.set_ticket_status(ticket_code, "open")
-                set_user_step(context, user_id, None)
-                context.user_data.pop(reply_key, None)
-                fresh_ticket = userbot_db.get_ticket_by_code(ticket_code) or ticket
-                await _notify_admin_ticket_reply(fresh_ticket)
-
-                detail_messages = userbot_db.get_ticket_messages(ticket_code)
-                detail_links = await _build_user_ticket_screenshot_links(context, ticket_code, detail_messages)
-                detail = _ticket_detail_text(fresh_ticket, detail_messages, screenshot_links=detail_links)
-                out_text = "✅ پاسخ شما ثبت شد.\n\n" + detail
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=out_text,
-                    reply_markup=user_ticket_detail_keyboard(ticket_code, can_reply=True, is_closed=False),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-                return
-
-            await query.answer("گزینه نامعتبر است.", show_alert=True)
-            return
-
-        if action == "new" and len(parts) > 2:
-            sub = parts[2]
-            pending_key = f"pending_ticket_{user_id}"
-            if sub == "cancel":
-                context.user_data.pop(pending_key, None)
-                set_user_step(context, user_id, None)
-                await _send_support_panel(context=context, user_id=user_id, message=query.message, text_settings=text_settings)
-                return
-            if sub == "edit":
-                set_user_step(context, user_id, "WAIT_TICKET_TITLE")
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="✍️ لطفا موضوع درخواست خود را ارسال نمایید:",
-                    reply_markup=_ticket_text_cancel_keyboard(),
-                )
-                return
-            if sub == "skip":
-                if get_user_step(context, user_id) != "WAIT_TICKET_SCREENSHOT":
-                    await query.answer("در این مرحله قابل استفاده نیست.", show_alert=True)
-                    return
-                pending = context.user_data.get(pending_key) or {}
-                pending["receipt_photo_id"] = ""
-                context.user_data[pending_key] = pending
-                set_user_step(context, user_id, "WAIT_TICKET_CONFIRM")
-                try:
-                    await query.message.edit_text(
-                        _ticket_compose_preview_text(pending),
-                        reply_markup=ticket_confirm_keyboard(),
-                    )
-                except Exception:
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=_ticket_compose_preview_text(pending),
-                        reply_markup=ticket_confirm_keyboard(),
-                    )
-                return
-            if sub == "send":
-                pending = context.user_data.get(pending_key) or {}
-                title = str(pending.get("title") or "").strip()
-                question = str(pending.get("question") or "").strip()
-                receipt_photo_id = str(pending.get("receipt_photo_id") or "").strip()
-                if not title or not question:
-                    await query.answer("اطلاعات تیکت ناقص است.", show_alert=True)
-                    return
-                user_row = userbot_db.get_user_by_telegram_id(user_id)
-                if not user_row:
-                    uid = userbot_db.upsert_user(user_id, query.from_user.username, query.from_user.full_name)
-                    user_row = userbot_db.get_user_by_id(uid) or {}
-                internal_uid = int((user_row or {}).get("id") or 0)
-                if internal_uid <= 0:
-                    await query.answer("خطا در شناسایی کاربر.", show_alert=True)
-                    return
-                ticket = userbot_db.create_ticket(
-                    user_id=internal_uid,
-                    telegram_id=int(user_id),
-                    username=str(query.from_user.username or ""),
-                    full_name=str(query.from_user.full_name or ""),
-                    title=title,
-                    question=question,
-                    receipt_photo_id=receipt_photo_id,
-                )
-                context.user_data.pop(pending_key, None)
-                set_user_step(context, user_id, None)
-                code = int(ticket.get("ticket_code") or 0)
-                await _notify_admin_new_ticket(ticket)
-                if code > 0:
-                    detail_messages = userbot_db.get_ticket_messages(code)
-                    detail_links = await _build_user_ticket_screenshot_links(context, code, detail_messages)
-                    detail = (
-                        "✅ تیکت شما با موفقیت ثبت شد.\n\n"
-                        "به زودی پاسخ داده می‌شود\n\n"
-                        + _ticket_detail_text(ticket, detail_messages, screenshot_links=detail_links)
-                    )
-                    try:
-                        await query.message.edit_text(
-                            detail,
-                            reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
-                    except Exception:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=detail,
-                            reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                        )
-                else:
-                    try:
-                        await query.message.edit_text(
-                            "✅ تیکت شما با موفقیت ثبت شد.",
-                            reply_markup=InlineKeyboardMarkup(
-                                [[InlineKeyboardButton("📬 تیکت‌های من", callback_data="support:my:1")]]
-                            ),
-                        )
-                    except Exception:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text="✅ تیکت شما با موفقیت ثبت شد.",
-                            reply_markup=InlineKeyboardMarkup(
-                                [[InlineKeyboardButton("📬 تیکت‌های من", callback_data="support:my:1")]]
-                            ),
-                        )
-                return
-
-        await query.answer("گزینه نامعتبر است.", show_alert=True)
+        await _cb_support(update, context, query, data, user_id, text_settings)
         return
 
     # --- وضعیت اشتراک ---
     if data.startswith("status:"):
-        await query.answer()
-        parts = data.split(":")
-        if len(parts) < 3:
-            return
-
-        action = parts[1]
-
-        if action == "list_back":
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="🏠 منوی اصلی",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        if action == "list":
-            service_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
-            service = userbot_db.get_service_by_id(service_id) if service_id else None
-            if not service:
-                await context.bot.send_message(chat_id=user_id, text="❌ اشتراک انتخاب‌شده یافت نشد.", reply_markup=_main_menu_keyboard())
-                return
-            service = await _sync_service_runtime_from_panels(service)
-            settings = _get_subscription_settings()
-            # لیست انتخاب اشتراک باید باقی بماند؛ جزئیات را به‌صورت پیام جدید ارسال می‌کنیم.
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=_build_subscription_status_text(service),
-                parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
-            )
-            return
-
-        service_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
-        settings = _get_subscription_settings()
-        service = userbot_db.get_service_by_id(service_id) if service_id else None
-
-        if not service:
-            await _safe_edit_message_text(
-                query,
-                "❌ سرویس موردنظر یافت نشد یا حذف شده است.",
-            )
-            return
-
-        probe_state = await _service_probe_state(service)
-        if probe_state != "exists":
-            if probe_state == "unreachable":
-                await _safe_edit_message_text(
-                    query,
-                    "⏳ این اشتراک موقتاً در دسترس نیست.\nپس از رفع مشکل سرور دوباره در لیست نمایش داده می‌شود.",
-                )
-                return
-            sid = int(service.get("id") or 0)
-            missing_info = {"missing_streak": 1, "first_missing_at": "", "last_missing_at": ""}
-            try:
-                missing_info = userbot_db.mark_service_missing(sid)
-            except Exception:
-                missing_info = {"missing_streak": 1, "first_missing_at": "", "last_missing_at": ""}
-
-            if _older_than_days(
-                str(missing_info.get("first_missing_at") or ""),
-                USERBOT_MISSING_SERVICE_DELETE_DAYS,
-            ):
-                try:
-                    userbot_db.delete_service(sid)
-                except Exception as e:
-                    logger.warning("Failed deleting stale service id=%s from callback: %s", service.get("id"), e)
-            await _safe_edit_message_text(
-                query,
-                "❌ اشتراک وجود ندارد.",
-            )
-            return
-        try:
-            userbot_db.mark_service_seen(int(service.get("id") or 0))
-        except Exception:
-            pass
-
-        if action in {"configs", "direct", "directcfg", "sub_link", "auto_sub", "sub_b64", "multi", "multi_b64"}:
-            service, lock_reason = await _resolve_service_access_lock(service)
-            if lock_reason:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=_service_local_lock_text(lock_reason),
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-
-        if action in {"menu", "refresh"}:
-            service = await _sync_service_runtime_from_panels(service)
-            await _safe_edit_message_text(
-                query,
-                _build_subscription_status_text(service),
-                parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
-            )
-            return
-
-        if action == "rename":
-            context.user_data[f"pending_rename_service_{user_id}"] = {
-                "service_id": int(service_id or 0),
-            }
-            set_user_step(context, user_id, "WAIT_RENAME_SERVICE_NAME")
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    "✍️ لطفاً نام جدید اشتراک را ارسال کنید:\n"
-                    "• حداقل 3 و حداکثر 64 کاراکتر\n"
-                    "برای انصراف، روی دکمه «بازگشت» بزنید."
-                ),
-                reply_markup=cancel_keyboard(),
-            )
-            return
-
-        if action == "replace_link":
-            confirmed = len(parts) > 3 and parts[3] == "confirm"
-            if not confirmed:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=(
-                        "⚠️ هشدار تغییر لینک اشتراک\n\n"
-                        "با تغییر لینک اشتراک، لینک و کانفیگ قبلی از کار می‌افتد و باید لینک جدید را دوباره در برنامه وارد کنید.\n\n"
-                        "اگر مطمئن هستید، تایید تغییر لینک را بزنید."
-                    ),
-                    reply_markup=replace_subscription_link_confirm_keyboard(service_id),
-                )
-                return
-
-            await context.bot.send_message(chat_id=user_id, text="⏳ در حال تغییر لینک اشتراک...")
-            ok, result_text, new_uuid = await _regenerate_service_uuid_for_service(service)
-            if not ok:
-                await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
-                return
-
-            refreshed = userbot_db.get_service_by_id(service_id) or service
-            refreshed = await _sync_service_runtime_from_panels(refreshed)
-            settings = _get_subscription_settings()
-            await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=_build_subscription_status_text(refreshed),
-                parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(refreshed),
-                ),
-            )
-            return
-
-        if action == "copy_id":
-            comment_meta = _parse_service_comment(service.get("comment") or "")
-            service_code = str(comment_meta.get("code") or service.get("id") or "").strip()
-            if not service_code:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ شناسه اشتراک پیدا نشد.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"📋 شناسه اشتراک شما:\n`{service_code}`",
-                parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
-            )
-            return
-
-        if action == "configs":
-            await _safe_edit_message_reply_markup(
-                query,
-                reply_markup=subscription_configs_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_auto_sub_link=settings.get("show_auto_sub_link", False),
-                    show_sub_link_b64=settings.get("show_sub_link_b64", False),
-                    show_multi_server=settings.get("show_multi_server", False),
-                    show_multi_server_b64=settings.get("show_multi_server_b64", False),
-                ),
-            )
-            return
-
-        if action == "back":
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="🏠 منوی اصلی",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        if action == "direct":
-            await _send_service_direct_configs_shell(
-                context,
-                user_id=user_id,
-                service_id=int(service_id or 0),
-                service=service,
-            )
-            return
-
-        if action in {"sub_link", "auto_sub", "sub_b64", "multi", "multi_b64"}:
-            base_urls = _get_service_node_base_urls(service)
-            if not base_urls:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ برای این سرویس لینک کانفیگ در دسترس نیست.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-
-            base_url = base_urls[0]
-
-            config_items = []
-            if action == "sub_link":
-                if not settings.get("show_sub_link", True):
-                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک خاموش است.", reply_markup=_main_menu_keyboard())
-                    return
-                config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
-            elif action == "auto_sub":
-                if not settings.get("show_auto_sub_link", False):
-                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش اشتراک خودکار خاموش است.", reply_markup=_main_menu_keyboard())
-                    return
-                config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
-            elif action == "sub_b64":
-                if not settings.get("show_sub_link_b64", False):
-                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک b64 خاموش است.", reply_markup=_main_menu_keyboard())
-                    return
-                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
-            elif action == "multi":
-                if not settings.get("show_multi_server", False):
-                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک هوشمند خاموش است.", reply_markup=_main_menu_keyboard())
-                    return
-                managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
-                config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
-            elif action == "multi_b64":
-                if not settings.get("show_multi_server_b64", False):
-                    await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک هوشمند b64 خاموش است.", reply_markup=_main_menu_keyboard())
-                    return
-                _, managed_link_b64 = _get_or_create_bot_sub_links(int(service_id), service=service)
-                config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
-
-            if not config_items:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ در حال حاضر هیچ لینکی برای نمایش فعال نیست.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-
-            primary_link = config_items[0][1]
-            qr_image = make_qr_image(primary_link)
-            qr_caption = (
-                "📄 جهت کپی شدن لینک اشتراک کافیست یک بار لینک زیر را لمس کنید 👇\n\n"
-                f"<code>{escape(primary_link)}</code>"
-            )
-            try:
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=qr_image,
-                    caption=qr_caption,
-                    parse_mode="HTML",
-                    reply_markup=subscription_links_keyboard(service_id),
-                )
-            except Exception:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=qr_caption,
-                    parse_mode="HTML",
-                    reply_markup=subscription_links_keyboard(service_id),
-                    disable_web_page_preview=True,
-                )
-
-            config_text_lines = ["📝 لینک‌های اشتراک", ""]
-            for title, value in config_items:
-                config_text_lines.append(title)
-                config_text_lines.append(f"<code>{escape(value)}</code>")
-                config_text_lines.append("")
-
-            if len(config_items) > 1:
-                await _send_long_message(
-                    context,
-                    user_id,
-                    "\n".join(config_text_lines).strip(),
-                    parse_mode="HTML",
-                )
-            return
-
-        if action == "guide":
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=text_settings.get("guide_text") or _default_guide_intro_text(),
-                reply_markup=guide_os_keyboard("m"),
-            )
-            return
-
-        if action == "directcfg":
-            # Backward compatibility for old/stale protocol buttons in old messages.
-            await _send_service_direct_configs_shell(
-                context,
-                user_id=user_id,
-                service_id=int(service_id or 0),
-                service=service,
-            )
-            return
-
-        if action == "renew":
-            if not bool(br.get("enable_renew", True)):
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="🚫 تمدید اشتراک در حال حاضر غیرفعال است.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            if not await _service_is_renewable_live(service):
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=_renew_not_allowed_text(),
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            try:
-                renew_sid = int(service.get("server_id") or 0)
-            except (TypeError, ValueError):
-                renew_sid = 0
-            if renew_sid <= 0:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ سرور این اشتراک نامعتبر است.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            context.user_data[f"renew_target_{user_id}"] = int(service_id)
-            await _send_buy_flow_for_server(user_id, renew_sid, user_id, context, is_renew=True)
-            return
-
-        if action == "detach":
-            if not _is_connected_service(service):
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="⛔ این اشتراک قابل جداسازی نیست.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            userbot_db.delete_service(int(service_id))
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="✅اشتراک از ربات جداسازی شد",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
+        await _cb_status(update, context, query, data, user_id, br, text_settings)
         return
 
     if data.startswith("renew:"):
-        await query.answer()
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ""
-
-        if action == "back":
-            context.user_data.pop(f"renew_target_{user_id}", None)
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=user_id, text="🏠 منوی اصلی", reply_markup=_main_menu_keyboard())
-            return
-
-        if action == "svc":
-            service_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
-            service = userbot_db.get_service_by_id(service_id) if service_id > 0 else None
-            if not service:
-                await context.bot.send_message(chat_id=user_id, text="❌ اشتراک انتخاب‌شده یافت نشد.", reply_markup=_main_menu_keyboard())
-                return
-            if not await _service_is_renewable_live(service):
-                await context.bot.send_message(chat_id=user_id, text=_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
-                return
-            try:
-                renew_sid = int(service.get("server_id") or 0)
-            except (TypeError, ValueError):
-                renew_sid = 0
-            if renew_sid <= 0:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ سرور این اشتراک نامعتبر است.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            context.user_data[f"renew_target_{user_id}"] = int(service_id)
-            await _send_buy_flow_for_server(user_id, renew_sid, user_id, context, is_renew=True)
-            return
-
+        await _cb_renew(update, context, query, data, user_id)
         return
 
     # --- کیف پول (Inline) ---
     if data.startswith("wallet:"):
-        await query.answer()
-        action = data.split(":", 1)[1]
-        if action == "back":
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=user_id, text="🏠 منوی اصلی", reply_markup=_main_menu_keyboard())
-            return
-        if action == "card":
-            pay_settings = _get_payment_settings()
-            if not bool(pay_settings.get("enable_card_to_card", True)):
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="🚫 کارت به کارت در حال حاضر غیرفعال است.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            set_user_step(context, user_id, "WAIT_WALLET_TOPUP_AMOUNT")
-            context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="🔻 لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید:",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-        if action == "zarinpal":
-            pay_settings = _get_payment_settings()
-            if not bool(pay_settings.get("enable_zarinpal", False)):
-                await context.bot.send_message(chat_id=user_id, text="🚫 زرین پال غیرفعال است.", reply_markup=_main_menu_keyboard())
-                return
-            text_settings = _get_text_settings()
-            ztxt = str(text_settings.get("zarinpal_pro_text") or "").strip()
-            if ztxt.lower() in {"none", "null"}:
-                ztxt = ""
-            if not ztxt or ztxt == "0":
-                ztxt = _default_zarinpal_text()
-            vouchers = userbot_db.list_active_zarin_vouchers(limit=20)
-            if not vouchers:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"{ztxt}\n\n❌ در حال حاضر لینک پرداخت فعالی ثبت نشده است.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=ztxt,
-                reply_markup=_build_zarinpal_links_keyboard(vouchers),
-                disable_web_page_preview=True,
-            )
-            return
-        if action == "perfect":
-            pay_settings = _get_payment_settings()
-            if not bool(pay_settings.get("enable_perfect_money", False)):
-                await context.bot.send_message(chat_id=user_id, text="🚫 پرفکت مانی غیرفعال است.", reply_markup=_main_menu_keyboard())
-                return
-            await context.bot.send_message(chat_id=user_id, text="🧰 پرداخت پرفکت مانی به‌زودی فعال می‌شود.", reply_markup=_main_menu_keyboard())
-            return
-        if action == "crypto":
-            pay_settings = _get_payment_settings()
-            if not bool(pay_settings.get("enable_crypto", False)):
-                await context.bot.send_message(chat_id=user_id, text="🚫 پرداخت ارز دیجیتال غیرفعال است.", reply_markup=_main_menu_keyboard())
-                return
-            await context.bot.send_message(chat_id=user_id, text="🔗 پرداخت ارز دیجیتال به‌زودی فعال می‌شود.", reply_markup=_main_menu_keyboard())
-            return
-        if action == "coupon":
-            mkt = _get_marketing_settings()
-            if not (
-                bool(mkt.get("enable_discount_code", False))
-                or bool(mkt.get("enable_increase_code", False))
-            ):
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="🚫 استفاده از کد هدیه در حال حاضر غیرفعال است.",
-                    reply_markup=_main_menu_keyboard(),
-                )
-                return
-            set_user_step(context, user_id, "WAIT_COUPON_CODE")
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="⬇️ لطفا کد کوپن خود را ارسال کنید:",
-                reply_markup=cancel_keyboard(),
-            )
-            return
+        await _cb_wallet(update, context, query, data, user_id)
         return
 
     # --- پرداخت کارت به کارت (Inline) ---
     if data.startswith("pay:"):
-        await query.answer()
-        action = data.split(":", 1)[1]
-        if action == "cancel":
-            set_user_step(context, user_id, None)
-            context.user_data.pop(f"pending_pay_{user_id}", None)
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=user_id, text="عملیات لغو شد.", reply_markup=_main_menu_keyboard())
-            return
-
-        if action == "receipt_done":
-            set_user_step(context, user_id, "WAIT_RECEIPT_IMAGE")
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:",
-                reply_markup=receipt_cancel_keyboard(),
-            )
-            return
+        await _cb_pay(update, context, query, data, user_id)
         return
 
     # --- تست رایگان ---
     if data == "trial:back":
-        await query.answer()
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(chat_id=user_id, text="🏠 منوی اصلی", reply_markup=_main_menu_keyboard())
+        await _cb_trial_back(update, context, query, data, user_id)
         return
 
     if data.startswith("trial:loc:"):
-        await query.answer()
-        try:
-            sid = int(data.split(":")[2])
-        except Exception:
-            await query.answer("❌ داده نامعتبر است.", show_alert=True)
-            return
-
-        u_db = userbot_db.get_user_by_telegram_id(user_id)
-        if not u_db:
-            internal_user_id = userbot_db.upsert_user(
-                query.from_user.id,
-                query.from_user.username,
-                query.from_user.full_name,
-            )
-            u_db = userbot_db.get_user_by_id(internal_user_id) or {}
-
-        if int(u_db.get("got_free_trial") or 0) == 1:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="🚫 شما قبلا اکانت تست رایگان خود را دریافت نموده‌اید!",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        trial_settings = userbot_db.get_trial_spec_settings()
-        if not bool(trial_settings.get("enabled", True)):
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="🚫 دریافت تست رایگان در حال حاضر غیرفعال است.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        context.user_data[f"pending_trial_{user_id}"] = {
-            "sid": sid,
-            "internal_user_id": int(u_db.get("id") or 0),
-        }
-        set_user_step(context, user_id, "WAIT_TRIAL_SERVICE_NAME")
-
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="⬇️ لطفا نام خود را ارسال کنید:",
-            reply_markup=cancel_keyboard(),
-        )
+        await _cb_trial_loc(update, context, query, data, user_id)
         return
     
     # بازگشت به لیست سرورها (از صفحات داخلی خرید)
     if data == "buy:back_main":
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        context.user_data.pop(f"buy_menu_open_until_{user_id}", None)
-        servers = _get_location_servers()
-        server_columns = int(br.get("server_columns") or 1)
-        await _safe_edit_message_text(
-            query,
-            text_settings.get("servers_list_text") or "📡 **لیست سرورها**\nلطفاً لوکیشن مورد نظر خود را انتخاب کنید:",
-            parse_mode="Markdown",
-            reply_markup=location_keyboard(servers, columns=server_columns)
-        )
+        await _cb_buy_back_main(update, context, query, data, user_id, br, text_settings)
         return
 
     # خروج از خودِ لیست سرورها به منوی اصلی
     if data == "buy:exit_main":
-        await query.answer()
-        context.user_data.pop(f"buy_menu_open_until_{user_id}", None)
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        # بدون ارسال پیام اضافه؛ فقط خروج از جریان خرید
+        await _cb_buy_exit_main(update, context, query, data, user_id)
         return
 
     # انتخاب لوکیشن -> هدایت بر اساس حالت نمایش سرور
@@ -9440,6 +7995,57 @@ def main():
         except Exception as e:
             logger.error("Polling crashed: %s | retry in 5s", e, exc_info=True)
             time.sleep(5)
+
+
+# --- extracted inline_handler branches (verbatim bodies in UserBot/callback_branches.py) ---
+from UserBot import callback_branches as _cb_branches
+from UserBot.callback_branches import _cb_lang_set, _cb_guide, _cb_invite, _cb_support, _cb_status, _cb_renew, _cb_wallet, _cb_pay, _cb_trial_back, _cb_trial_loc, _cb_buy_back_main, _cb_buy_exit_main
+
+_cb_branches.bind_main_namespace({
+    "USERBOT_MISSING_SERVICE_DELETE_DAYS": USERBOT_MISSING_SERVICE_DELETE_DAYS,
+    "_build_subscription_status_text": _build_subscription_status_text,
+    "_build_user_ticket_screenshot_links": _build_user_ticket_screenshot_links,
+    "_build_zarinpal_links_keyboard": _build_zarinpal_links_keyboard,
+    "_default_faq_text": _default_faq_text,
+    "_default_guide_intro_text": _default_guide_intro_text,
+    "_default_zarinpal_text": _default_zarinpal_text,
+    "_format_text_template": _format_text_template,
+    "_get_location_servers": _get_location_servers,
+    "_get_marketing_settings": _get_marketing_settings,
+    "_get_or_create_bot_sub_links": _get_or_create_bot_sub_links,
+    "_get_payment_settings": _get_payment_settings,
+    "_get_service_node_base_urls": _get_service_node_base_urls,
+    "_get_subscription_settings": _get_subscription_settings,
+    "_get_text_settings": _get_text_settings,
+    "_get_user_bot_username": _get_user_bot_username,
+    "_guide_platform_text": _guide_platform_text,
+    "_is_connected_service": _is_connected_service,
+    "_main_menu_keyboard": _main_menu_keyboard,
+    "_notify_admin_new_ticket": _notify_admin_new_ticket,
+    "_notify_admin_ticket_reply": _notify_admin_ticket_reply,
+    "_older_than_days": _older_than_days,
+    "_regenerate_service_uuid_for_service": _regenerate_service_uuid_for_service,
+    "_renew_not_allowed_text": _renew_not_allowed_text,
+    "_resolve_service_access_lock": _resolve_service_access_lock,
+    "_safe_edit_message_reply_markup": _safe_edit_message_reply_markup,
+    "_safe_edit_message_text": _safe_edit_message_text,
+    "_send_buy_flow_for_server": _send_buy_flow_for_server,
+    "_send_long_message": _send_long_message,
+    "_send_service_direct_configs_shell": _send_service_direct_configs_shell,
+    "_send_support_panel": _send_support_panel,
+    "_service_is_renewable_live": _service_is_renewable_live,
+    "_service_local_lock_text": _service_local_lock_text,
+    "_service_probe_state": _service_probe_state,
+    "_should_show_configs_button": _should_show_configs_button,
+    "_sync_service_runtime_from_panels": _sync_service_runtime_from_panels,
+    "_ticket_compose_preview_text": _ticket_compose_preview_text,
+    "_ticket_detail_text": _ticket_detail_text,
+    "_ticket_reply_preview_text": _ticket_reply_preview_text,
+    "_ticket_text_cancel_keyboard": _ticket_text_cancel_keyboard,
+    "get_user_step": get_user_step,
+    "logger": logger,
+    "set_user_step": set_user_step,
+})
 
 if __name__ == '__main__':
     main()
