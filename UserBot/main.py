@@ -6133,425 +6133,8 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # انتخاب لوکیشن -> هدایت بر اساس حالت نمایش سرور
-    if data.startswith("buy:loc:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        context.user_data.pop(f"buy_menu_open_until_{user_id}", None)
-        sid = int(data.split(":")[2])
-        data_plans = plans_storage._load_all_plans()
-        server_block = data_plans.get("servers", {}).get(str(sid), {})
-        
-        display_mode = _resolve_plan_display_mode(server_block)
-        
-        if display_mode == "mixed":
-            # نمایش صفحه اصلی خرید با ویزارد و دکمه پلن‌های آماده
-            await show_main_buy_menu(query, sid, server_block, user_id, context)
-        elif display_mode == "dynamic":
-            await start_dynamic_wizard(query, context, sid, user_id, server_block)
-        else:
-            await show_fixed_categories(query, sid, server_block)
-
-    # انتخاب‌های حالت ترکیبی
-    elif data.startswith("buy:mixed:fixed:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        sid = int(data.split(":")[3])
-        server_block = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {})
-        await show_fixed_categories(query, sid, server_block)
-
-    elif data.startswith("buy:mixed:dyn:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        sid = int(data.split(":")[3])
-        server_block = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {})
-        await start_dynamic_wizard(query, context, sid, user_id, server_block)
-
-    # دسته‌بندی و پلن‌های ثابت
-    elif data.startswith("buy:cat:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        parts = data.split(":")
-        sid, cat_id = int(parts[2]), int(parts[3])
-        server_block = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {})
-        plans = [p for p in server_block.get("plans", []) if p.get("category_id") == cat_id]
-        txp = _get_tx_plans_settings()
-        plans = _sort_plans(plans, txp)
-        plan_columns = int(br.get("plan_columns") or 1)
-        uv = bool(br.get("renew_unlimited_volume", False))
-        ut = bool(br.get("renew_unlimited_time", False))
-        uv_from = int(br.get("renew_unlimited_volume_from_gb") or 1000)
-        ut_from = int(br.get("renew_unlimited_time_from_days") or 365)
-        
-        await _safe_edit_message_text(
-            query,
-            text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**", parse_mode="Markdown",
-            reply_markup=plans_keyboard(
-                plans,
-                sid,
-                cat_id,
-                columns=plan_columns,
-                unlimited_volume=uv,
-                unlimited_volume_from=uv_from,
-                unlimited_time=ut,
-                unlimited_time_from=ut_from,
-                sort_by_priority=False,
-                rtl_rows=bool(txp.get("plan_sort_desc", False)),
-            )
-        )
-
-    elif data.startswith("buy:plan:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        parts = data.split(":")
-        sid, plan_id = int(parts[2]), int(parts[3])
-        server_block = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {})
-        plan = next((p for p in server_block.get("plans", []) if p.get("id") == plan_id), None)
-        
-        if not plan: return
-        # نمایش اطلاعات پلن انتخاب شده (طبق اسکرین‌شات)
-        plan_gb = float(plan["gb"])
-        plan_days = int(plan["days"])
-        plan_gb_text = "نامحدود" if _is_unlimited_volume(plan_gb) else f"{plan_gb:g} گیگ"
-        plan_days_text = "نامحدود" if _is_unlimited_time(plan_days) else f"{plan_days} روز"
-        text = (
-            "📄 اطلاعات پلن انتخاب شده\n\n"
-            f"📊 حجم: {plan_gb_text}\n"
-            f"⏳ زمان: {plan_days_text}\n"
-            f"💰 قیمت: {plan['price']:,} تومان"
-        )
-        await _safe_edit_message_text(
-            query,
-            text,
-            reply_markup=selected_plan_keyboard(sid, int(plan['gb']), int(plan['days']), int(plan['price']), plan_id=int(plan.get('id') or 0))
-        )
-
-    # ویزارد پویا (دکمه‌های مثبت و منفی)
-    elif data.startswith("wiz:"):
-        async with _USER_WIZARD_LOCKS[user_id]:
-            parts = data.split(":")
-            sid, action = int(parts[1]), parts[2]
-
-            wiz_data = context.user_data.get(f"wiz_{user_id}")
-            if not wiz_data:
-                data_plans = plans_storage._load_all_plans()
-                server_block = data_plans.get("servers", {}).get(str(sid), {})
-                dyn_settings = server_block.get("dynamic_settings", {})
-                default_gb = dyn_settings.get("min_gb", 20)
-                default_months = dyn_settings.get("min_month", 1)
-                wiz_data = {"gb": default_gb, "months": default_months}
-                context.user_data[f"wiz_{user_id}"] = wiz_data
-
-            data_plans = plans_storage._load_all_plans()
-            server_block = data_plans.get("servers", {}).get(str(sid), {})
-            dyn_settings = server_block.get("dynamic_settings", {})
-            display_mode = _resolve_plan_display_mode(server_block)
-            gb, months = wiz_data['gb'], wiz_data['months']
-
-            min_gb = max(1, int(dyn_settings.get('min_gb', 10) or 10))
-            max_gb = max(min_gb, int(dyn_settings.get('max_gb', 500) or 500))
-            min_month = max(1, int(dyn_settings.get('min_month', 1) or 1))
-            max_month = max(min_month, int(dyn_settings.get('max_month', 12) or 12))
-            step_gb = max(1, int(dyn_settings.get('step_gb', 10) or 10))
-            step_month = max(1, int(dyn_settings.get('step_month', 1) or 1))
-
-            if action == "gb_inc":
-                if gb >= max_gb:
-                    await query.answer(f"حداکثر حجم {max_gb} گیگابایت می‌باشد.", show_alert=True)
-                    return
-                gb = min(max_gb, gb + step_gb)
-            elif action == "gb_dec":
-                if gb <= min_gb:
-                    await query.answer(f"حداقل حجم {min_gb} گیگابایت می‌باشد.", show_alert=True)
-                    return
-                gb = max(min_gb, gb - step_gb)
-            elif action == "month_inc":
-                if months >= max_month:
-                    await query.answer(f"حداکثر دوره {max_month} ماه می‌باشد.", show_alert=True)
-                    return
-                months = min(max_month, months + step_month)
-            elif action == "month_dec":
-                if months <= min_month:
-                    await query.answer(f"حداقل دوره {min_month} ماه می‌باشد.", show_alert=True)
-                    return
-                months = max(min_month, months - step_month)
-            elif action == "show_fixed":
-                if display_mode != "mixed":
-                    await query.answer("این گزینه فقط در حالت ترکیبی فعال است.", show_alert=True)
-                    return
-                plans = server_block.get("plans", [])
-                if not plans:
-                    await query.answer("❌ پلن آماده‌ای برای این سرور وجود ندارد.", show_alert=True)
-                    return
-                txp = _get_tx_plans_settings()
-                ordered = _sort_plans(plans, txp)
-                plan_columns = int(br.get("plan_columns") or 1)
-                uv = bool(br.get("renew_unlimited_volume", False))
-                ut = bool(br.get("renew_unlimited_time", False))
-                uv_from = int(br.get("renew_unlimited_volume_from_gb") or 1000)
-                ut_from = int(br.get("renew_unlimited_time_from_days") or 365)
-                await _safe_edit_message_text(
-                    query,
-                    text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
-                    parse_mode="Markdown",
-                    reply_markup=plans_keyboard(
-                        ordered,
-                        sid,
-                        0,
-                        columns=plan_columns,
-                        unlimited_volume=uv,
-                        unlimited_volume_from=uv_from,
-                        unlimited_time=ut,
-                        unlimited_time_from=ut_from,
-                        sort_by_priority=False,
-                        back_to_categories=False,
-                        rtl_rows=bool(txp.get("plan_sort_desc", False)),
-                    ),
-                )
-                return
-
-            wiz_data['gb'], wiz_data['months'] = gb, months
-            context.user_data[f"wiz_{user_id}"] = wiz_data
-
-            price, off_percent = _calc_dynamic_price(gb, months, dyn_settings)
-            if display_mode == "mixed":
-                markup = mixed_buy_keyboard(sid, gb, months, price, off_percent=off_percent)
-            else:
-                markup = buy_wizard_keyboard(sid, gb, months, price, off_percent=off_percent)
-            await _safe_edit_message_reply_markup(query, reply_markup=markup)
-
-    # تایید نهایی و هدایت به پرداخت
-    elif data.startswith("buy:confirm_dyn:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        # نمایش اطلاعات پلن انتخاب شده بعد از خرید بسته دلخواه
-        parts = data.split(":")
-        sid = int(parts[2])
-        wiz_data = context.user_data.get(f"wiz_{user_id}")
-        if not wiz_data:
-            await query.answer("❌ زمان نشست تمام شده، لطفا دوباره تلاش کنید.", show_alert=True)
-            return
-        gb = int(wiz_data.get('gb') or 0)
-        days = int(wiz_data.get('months') or 0) * 30
-        dyn_settings = plans_storage._load_all_plans().get("servers", {}).get(str(sid), {}).get("dynamic_settings", {})
-        price, off_percent = _calc_dynamic_price(gb, wiz_data.get("months"), dyn_settings)
-
-        text = (
-            "📄 اطلاعات پلن انتخاب شده\n\n"
-            f"📊 حجم: {gb} گیگ\n"
-            f"⏳ زمان: {days} روز\n"
-            f"💰 قیمت: {price:,} تومان"
-        )
-        if off_percent > 0:
-            text += f"\n🏷 تخفیف حجمی: {off_percent}٪"
-        await _safe_edit_message_text(query, text, reply_markup=selected_plan_keyboard(sid, gb, days, price))
-        return
-
-    elif data.startswith("buy:pay_wallet:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        # پرداخت از کیف پول (طبق اسکرین‌شات)
-        await query.answer()
-        parts = data.split(":")
-        sid = int(parts[2])
-        gb = int(parts[3])
-        days = int(parts[4])
-        price = int(parts[5])
-        plan_id = int(parts[6]) if len(parts) > 6 else 0
-        # قیمت همیشه سمت سرور دوباره محاسبه می‌شود — ضد دستکاری callback data
-        expected_price = _expected_server_price(sid, gb, days, plan_id)
-        if expected_price is None:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً خرید را از نو انجام دهید.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-        price = expected_price
-
-        u_db = userbot_db.get_user_by_telegram_id(user_id)
-        balance = int((u_db or {}).get('wallet_balance') or 0)
-        internal_user_id = (u_db or {}).get('id')
-        renew_target_service_id = int(context.user_data.get(f"renew_target_{user_id}") or 0)
-
-        if balance >= price:
-            context.user_data[f"pending_wallet_{user_id}"] = {
-                "internal_user_id": internal_user_id,
-                "amount": price,
-                "sid": sid,
-                "gb": gb,
-                "days": days,
-                "renew_service_id": renew_target_service_id,
-            }
-
-            # در تمدید: نام سرویس قبلی حفظ می‌شود و نباید دوباره از کاربر پرسیده شود.
-            if renew_target_service_id > 0:
-                renew_service = userbot_db.get_service_by_id(renew_target_service_id) or {}
-                service_name = (renew_service.get("name") or "").strip() or "سرویس"
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                ok = await _process_wallet_purchase(
-                    context=context,
-                    user_id=user_id,
-                    tg_user=query.from_user,
-                    chat_id=user_id,
-                    pending_wallet=context.user_data.get(f"pending_wallet_{user_id}") or {},
-                    service_name=service_name,
-                )
-                context.user_data.pop(f"pending_wallet_{user_id}", None)
-                context.user_data.pop(f"renew_target_{user_id}", None)
-                set_user_step(context, user_id, None)
-                if not ok:
-                    await context.bot.send_message(chat_id=user_id, text="❌ عملیات تمدید انجام نشد.", reply_markup=_main_menu_keyboard())
-                return
-
-            # در خرید عادی: نام سرویس از کاربر گرفته می‌شود.
-            set_user_step(context, user_id, "WAIT_SERVICE_NAME")
-            await query.message.delete()
-            await context.bot.send_message(chat_id=user_id, text="✍️ لطفا نام سرویس خود را ارسال کنید:", reply_markup=cancel_keyboard())
-            return
-
-        # موجودی کافی نیست -> کارت به کارت
-        pay_settings = _get_payment_settings()
-        if not bool(pay_settings.get("enable_card_to_card", True)):
-            await query.message.delete()
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="❌ موجودی کیف پول کافی نیست و روش کارت به کارت نیز غیرفعال است.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-        try:
-            card_info = database.get_next_card()
-        except Exception:
-            card_info = None
-        if not card_info:
-            try:
-                card_info = database.get_random_card()
-            except Exception:
-                card_info = None
-        card_number = (card_info or {}).get('number') or "-"
-        card_owner = (card_info or {}).get('owner') or "-"
-        card_bank = (card_info or {}).get('bank') or ""
-
-        pay_amount_toman, tx_marker = _apply_random_tx_marker(price, _get_tx_plans_settings())
-        msg = _build_card_to_card_payment_text(
-            amount_toman=pay_amount_toman,
-            card_number=card_number,
-            card_owner=card_owner,
-            card_bank=card_bank,
-            text_settings=text_settings,
-        )
-        if tx_marker > 0:
-            msg = f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker:,} تومان\n\n{msg}"
-
-        context.user_data[f"pending_pay_{user_id}"] = {
-            "amount": pay_amount_toman,
-            "sid": sid,
-            "gb": gb,
-            "days": days,
-            "plan_id": None,
-            "renew_service_id": renew_target_service_id,
-            "base_amount": price,
-            "tx_marker": tx_marker,
-        }
-        set_user_step(context, user_id, "WAIT_RECEIPT_CONFIRM")
-        await query.message.delete()
-        await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="HTML", reply_markup=confirm_payment_inline_keyboard())
-        return
-
-    elif data.startswith("buy:pay_direct:"):
-        if not bool(br.get("enable_buy", True)):
-            await query.answer("🚫 خرید غیرفعال است.", show_alert=True)
-            return
-        await query.answer()
-        parts = data.split(":")
-        sid = int(parts[2])
-        gb = int(parts[3])
-        days = int(parts[4])
-        price = int(parts[5])
-        plan_id = int(parts[6]) if len(parts) > 6 else 0
-        # قیمت همیشه سمت سرور دوباره محاسبه می‌شود — ضد دستکاری callback data
-        expected_price = _expected_server_price(sid, gb, days, plan_id)
-        if expected_price is None:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً خرید را از نو انجام دهید.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-        price = expected_price
-
-        pay_settings = _get_payment_settings()
-        if not bool(pay_settings.get("enable_card_to_card", True)):
-            await query.message.delete()
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="❌ روش پرداخت مستقیم (کارت به کارت) در حال حاضر غیرفعال است.",
-                reply_markup=_main_menu_keyboard(),
-            )
-            return
-
-        renew_target_service_id = int(context.user_data.get(f"renew_target_{user_id}") or 0)
-        if renew_target_service_id > 0:
-            renew_service = userbot_db.get_service_by_id(renew_target_service_id) or {}
-            direct_service_name = (renew_service.get("name") or "").strip() or _generate_random_service_name()
-        else:
-            direct_service_name = _generate_random_service_name()
-
-        try:
-            card_info = database.get_next_card()
-        except Exception:
-            card_info = None
-        if not card_info:
-            try:
-                card_info = database.get_random_card()
-            except Exception:
-                card_info = None
-        card_number = (card_info or {}).get("number") or "-"
-        card_owner = (card_info or {}).get("owner") or "-"
-        card_bank = (card_info or {}).get("bank") or ""
-
-        pay_amount_toman, tx_marker = _apply_random_tx_marker(price, _get_tx_plans_settings())
-        msg = _build_card_to_card_payment_text(
-            amount_toman=pay_amount_toman,
-            card_number=card_number,
-            card_owner=card_owner,
-            card_bank=card_bank,
-            text_settings=text_settings,
-        )
-        if tx_marker > 0:
-            msg = f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker:,} تومان\n\n{msg}"
-        msg += "\n\n⚡ پس از تایید پرداخت، اشتراک شما به‌صورت خودکار ساخته و ارسال می‌شود."
-
-        context.user_data[f"pending_pay_{user_id}"] = {
-            "amount": pay_amount_toman,
-            "sid": sid,
-            "gb": gb,
-            "days": days,
-            "plan_id": None,
-            "renew_service_id": renew_target_service_id,
-            "base_amount": price,
-            "tx_marker": tx_marker,
-            "direct_buy": True,
-            "direct_service_name": direct_service_name,
-        }
-        set_user_step(context, user_id, "WAIT_RECEIPT_CONFIRM")
-        await query.message.delete()
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=msg,
-            parse_mode="HTML",
-            reply_markup=confirm_payment_inline_keyboard(),
-        )
+    if data.startswith(("buy:", "wiz:")):
+        await _cb_buy_router(update, context, query, data, user_id, br, text_settings)
         return
 
 # --- 8. هندلر ارسال عکس فیش پرداخت ---
@@ -7999,17 +7582,23 @@ def main():
 
 # --- extracted inline_handler branches (verbatim bodies in UserBot/callback_branches.py) ---
 from UserBot import callback_branches as _cb_branches
-from UserBot.callback_branches import _cb_lang_set, _cb_guide, _cb_invite, _cb_support, _cb_status, _cb_renew, _cb_wallet, _cb_pay, _cb_trial_back, _cb_trial_loc, _cb_buy_back_main, _cb_buy_exit_main
+from UserBot.callback_branches import _cb_buy_back_main, _cb_buy_exit_main, _cb_buy_router, _cb_guide, _cb_invite, _cb_lang_set, _cb_pay, _cb_renew, _cb_status, _cb_support, _cb_trial_back, _cb_trial_loc, _cb_wallet
 
 _cb_branches.bind_main_namespace({
     "USERBOT_MISSING_SERVICE_DELETE_DAYS": USERBOT_MISSING_SERVICE_DELETE_DAYS,
+    "_USER_WIZARD_LOCKS": _USER_WIZARD_LOCKS,
+    "_apply_random_tx_marker": _apply_random_tx_marker,
+    "_build_card_to_card_payment_text": _build_card_to_card_payment_text,
     "_build_subscription_status_text": _build_subscription_status_text,
     "_build_user_ticket_screenshot_links": _build_user_ticket_screenshot_links,
     "_build_zarinpal_links_keyboard": _build_zarinpal_links_keyboard,
+    "_calc_dynamic_price": _calc_dynamic_price,
     "_default_faq_text": _default_faq_text,
     "_default_guide_intro_text": _default_guide_intro_text,
     "_default_zarinpal_text": _default_zarinpal_text,
+    "_expected_server_price": _expected_server_price,
     "_format_text_template": _format_text_template,
+    "_generate_random_service_name": _generate_random_service_name,
     "_get_location_servers": _get_location_servers,
     "_get_marketing_settings": _get_marketing_settings,
     "_get_or_create_bot_sub_links": _get_or_create_bot_sub_links,
@@ -8017,15 +7606,20 @@ _cb_branches.bind_main_namespace({
     "_get_service_node_base_urls": _get_service_node_base_urls,
     "_get_subscription_settings": _get_subscription_settings,
     "_get_text_settings": _get_text_settings,
+    "_get_tx_plans_settings": _get_tx_plans_settings,
     "_get_user_bot_username": _get_user_bot_username,
     "_guide_platform_text": _guide_platform_text,
     "_is_connected_service": _is_connected_service,
+    "_is_unlimited_time": _is_unlimited_time,
+    "_is_unlimited_volume": _is_unlimited_volume,
     "_main_menu_keyboard": _main_menu_keyboard,
     "_notify_admin_new_ticket": _notify_admin_new_ticket,
     "_notify_admin_ticket_reply": _notify_admin_ticket_reply,
     "_older_than_days": _older_than_days,
+    "_process_wallet_purchase": _process_wallet_purchase,
     "_regenerate_service_uuid_for_service": _regenerate_service_uuid_for_service,
     "_renew_not_allowed_text": _renew_not_allowed_text,
+    "_resolve_plan_display_mode": _resolve_plan_display_mode,
     "_resolve_service_access_lock": _resolve_service_access_lock,
     "_safe_edit_message_reply_markup": _safe_edit_message_reply_markup,
     "_safe_edit_message_text": _safe_edit_message_text,
@@ -8037,14 +7631,25 @@ _cb_branches.bind_main_namespace({
     "_service_local_lock_text": _service_local_lock_text,
     "_service_probe_state": _service_probe_state,
     "_should_show_configs_button": _should_show_configs_button,
+    "_sort_plans": _sort_plans,
     "_sync_service_runtime_from_panels": _sync_service_runtime_from_panels,
     "_ticket_compose_preview_text": _ticket_compose_preview_text,
     "_ticket_detail_text": _ticket_detail_text,
     "_ticket_reply_preview_text": _ticket_reply_preview_text,
     "_ticket_text_cancel_keyboard": _ticket_text_cancel_keyboard,
+    "buy_wizard_keyboard": buy_wizard_keyboard,
+    "confirm_payment_inline_keyboard": confirm_payment_inline_keyboard,
+    "database": database,
     "get_user_step": get_user_step,
     "logger": logger,
+    "mixed_buy_keyboard": mixed_buy_keyboard,
+    "plans_keyboard": plans_keyboard,
+    "plans_storage": plans_storage,
+    "selected_plan_keyboard": selected_plan_keyboard,
     "set_user_step": set_user_step,
+    "show_fixed_categories": show_fixed_categories,
+    "show_main_buy_menu": show_main_buy_menu,
+    "start_dynamic_wizard": start_dynamic_wizard,
 })
 
 if __name__ == '__main__':
