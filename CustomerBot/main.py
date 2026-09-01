@@ -21,6 +21,7 @@ from telegram.ext import (
 from Shared.agent_db import get_all_active_customer_bots
 from CustomerBot.database import init_db as init_customer_db, get_force_join_settings, get_user
 from Shared import agent_reminder
+from Shared import i18n
 from CustomerBot.handlers.start import start_command
 from CustomerBot.handlers.menu import menu_handler
 from CustomerBot.handlers.callback import callback_handler
@@ -113,11 +114,31 @@ async def force_join_middleware(update: Update, context) -> None:
         raise ApplicationHandlerStop
 
 
+async def language_command(update: Update, context) -> None:
+    """دستور /language — تغییر زبان رابط کاربری مشتری."""
+    user = update.effective_user
+    if not user or not update.message:
+        return
+    from CustomerBot.handlers.menu import _menu_lang
+    from CustomerBot.keyboards import language_keyboard
+    agent_id = context.bot_data.get("agent_id", 0)
+    lang = _menu_lang(agent_id, user.id)
+    await update.message.reply_text(
+        i18n.t("lang_choose", lang),
+        reply_markup=language_keyboard(),
+    )
+
+
 async def _post_init(app: Application) -> None:
+    def _cmds(lang: str):
+        return [
+            BotCommand("start", i18n.t("cmd_start", lang)),
+            BotCommand("language", i18n.t("cmd_language", lang)),
+        ]
     try:
-        await app.bot.set_my_commands([
-            BotCommand("start", "راه‌اندازی ربات"),
-        ])
+        await app.bot.set_my_commands(_cmds("fa"))
+        await app.bot.set_my_commands(_cmds("en"), language_code="en")
+        await app.bot.set_my_commands(_cmds("ru"), language_code="ru")
     except Exception as e:
         logger.warning("Failed to set customer bot commands: %s", e)
 
@@ -136,6 +157,7 @@ async def run_single_bot(token: str, agent_id: int):
     app.add_handler(CallbackQueryHandler(force_join_middleware), group=-1)
 
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("language", language_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT, menu_handler))
     app.add_handler(MessageHandler(filters.PHOTO, menu_handler))

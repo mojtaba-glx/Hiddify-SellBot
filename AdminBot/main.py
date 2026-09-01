@@ -355,20 +355,25 @@ def _build_debug_report(context: ContextTypes.DEFAULT_TYPE) -> str:
 
 
 async def _set_admin_commands(application) -> None:
-    commands = [
-        BotCommand("start", "منوی اصلی ادمین"),
-        BotCommand("debug", "گزارش اشکال‌زدایی کامل"),
-        BotCommand("enforce_now", "اجرای فوری کنترل مصرف"),
-        BotCommand("agent_enforce", "اجرای فوری کنترل مصرف نمایندگی"),
-        BotCommand("nodes_health", "بررسی سلامت نودها"),
-    ]
+    def _commands(lang: str):
+        from Shared.i18n import t as _t
+        return [
+            BotCommand("start", _t("cmd_start", lang)),
+            BotCommand("language", _t("cmd_language", lang)),
+            BotCommand("debug", _t("cmd_debug", lang)),
+            BotCommand("enforce_now", _t("cmd_enforce_now", lang)),
+            BotCommand("agent_enforce", _t("cmd_agent_enforce", lang)),
+            BotCommand("nodes_health", _t("cmd_nodes_health", lang)),
+        ]
     try:
-        await application.bot.set_my_commands(commands)
+        await application.bot.set_my_commands(_commands("fa"))
+        await application.bot.set_my_commands(_commands("en"), language_code="en")
+        await application.bot.set_my_commands(_commands("ru"), language_code="ru")
     except Exception as e:
         logger.warning("Failed setting global bot commands: %s", e)
     if ADMIN_ID > 0:
         try:
-            await application.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+            await application.bot.set_my_commands(_commands("fa"), scope=BotCommandScopeChat(chat_id=ADMIN_ID))
         except Exception as e:
             logger.warning("Failed setting admin-scope commands: %s", e)
 

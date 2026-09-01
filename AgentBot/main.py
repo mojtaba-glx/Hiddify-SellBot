@@ -14,8 +14,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from AgentBot.handlers.main_menu import handle_start, handle_main_menu_callback, handle_agent_text
+from AgentBot.handlers.main_menu import handle_start, handle_main_menu_callback, handle_agent_text, handle_language_command
 from AgentBot.database import init_db as init_agent_db
+from Shared import i18n as _i18n
 
 load_dotenv()
 AGENT_BOT_TOKEN = os.getenv("AGENT_BOT_TOKEN")
@@ -46,12 +47,16 @@ async def _sms_webhook_queue_worker(application) -> None:
 
 
 async def _post_init(application) -> None:
-    commands = [
-        BotCommand("start", "Agent panel"),
-        BotCommand("cancel", "Cancel current operation"),
-    ]
+    def _cmds(lang: str):
+        return [
+            BotCommand("start", _i18n.t("cmd_start", lang)),
+            BotCommand("language", _i18n.t("cmd_language", lang)),
+            BotCommand("cancel", _i18n.t("cmd_cancel", lang)),
+        ]
     try:
-        await application.bot.set_my_commands(commands)
+        await application.bot.set_my_commands(_cmds("fa"))
+        await application.bot.set_my_commands(_cmds("en"), language_code="en")
+        await application.bot.set_my_commands(_cmds("ru"), language_code="ru")
     except Exception as e:
         logger.warning("Failed setting bot commands: %s", e)
     try:
@@ -96,6 +101,7 @@ def main() -> None:
         )
 
         application.add_handler(CommandHandler("start", handle_start))
+        application.add_handler(CommandHandler("language", handle_language_command))
         application.add_handler(CommandHandler("cancel", handle_agent_text))
         application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_agent_text))
         application.add_handler(CallbackQueryHandler(handle_main_menu_callback))

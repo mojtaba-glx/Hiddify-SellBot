@@ -5890,6 +5890,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg_obj.reply_text(f"⚠️ {result_text}")
 
 # --- 6. هندلر منوی اصلی (دکمه‌های پایین صفحه) ---
+async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /language — تغییر زبان رابط کاربری هر کاربر."""
+    user_id = update.effective_user.id if update.effective_user else 0
+    if not user_id:
+        return
+    _lg = i18n.get_user_lang(user_id)
+    await update.message.reply_text(
+        i18n.t("lang_choose", _lg),
+        reply_markup=language_keyboard(),
+    )
+
+
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     user_id = update.effective_user.id
@@ -9132,11 +9144,18 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def _post_init_set_menu(application):
-    """Set Telegram command menu to only /start."""
+    """Set Telegram command menu (localized per app language)."""
+    def _cmds(lang: str):
+        return [
+            BotCommand("start", i18n.t("cmd_start", lang)),
+            BotCommand("language", i18n.t("cmd_language", lang)),
+        ]
     try:
-        await application.bot.set_my_commands([BotCommand("start", "شروع ربات")])
+        await application.bot.set_my_commands(_cmds("fa"))
+        await application.bot.set_my_commands(_cmds("en"), language_code="en")
+        await application.bot.set_my_commands(_cmds("ru"), language_code="ru")
         await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-        logger.info("Bot command menu configured: /start")
+        logger.info("Bot command menu configured: /start, /language (fa/en/ru)")
     except Exception as e:
         logger.warning(f"Failed to configure bot command menu: {e}")
 
@@ -9254,6 +9273,7 @@ async def _userbot_error_handler(update: object, context: ContextTypes.DEFAULT_T
 
 def _attach_userbot_handlers(app) -> None:
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("language", language_command))
 
     # هندلرهای منوی متنی پایین صفحه
     app.add_handler(MessageHandler(filters.Regex("خرید اشتراک"), menu_handler))

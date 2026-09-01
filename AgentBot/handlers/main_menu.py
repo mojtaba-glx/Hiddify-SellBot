@@ -53,6 +53,26 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def handle_language_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """دستور /language — تغییر زبان رابط کاربری نماینده."""
+    from Shared import i18n as _i18n
+    from Shared import agent_db as _adb
+    if not update.message or not update.effective_user:
+        return
+    try:
+        agent = _adb.get_agent_by_telegram_id(int(update.effective_user.id) or 0)
+    except Exception:
+        agent = None
+    if not agent:
+        await update.message.reply_text("⚠️ لطفاً ابتدا با /start وارد شوید.")
+        return
+    _lg = _i18n.get_agent_lang(int(agent.get("id") or 0))
+    await update.message.reply_text(
+        _i18n.t("lang_choose", _lg),
+        reply_markup=language_keyboard(),
+    )
+
+
 async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
