@@ -250,9 +250,10 @@ def _format_server_location_title(title: str) -> str:
     Normalize server title to look like: «لوکیشن 🇩🇪 آلمان»
     while avoiding duplicate location word/flag.
     """
+    _lg = _admin_bot_lang()
     raw = str(title or "").strip()
     if not raw:
-        return "لوکیشن نامشخص"
+        return _T(_lg, "adm_loc_unknown")
 
     flag = ""
     if "ترکیه" in raw:
@@ -274,8 +275,8 @@ def _format_server_location_title(title: str) -> str:
         return f"{raw} {flag}".strip()
 
     if flag:
-        return f"لوکیشن {flag} {raw}".strip()
-    return f"لوکیشن {raw}".strip()
+        return _T(_lg, "adm_loc_flag", flag=flag, title=raw).strip()
+    return _T(_lg, "adm_loc_plain", title=raw).strip()
 
 
 def _build_full_backup_zip(
@@ -349,17 +350,18 @@ def _build_full_backup_zip(
 
 
 async def send_admin_full_backup(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    _lg = _admin_bot_lang()
     if message:
-        await message.reply_text("⏳ در حال تهیه بکاپ کامل (ربات + سرورها/نودها)...")
+        await message.reply_text(_T(_lg, "adm_bk_preparing"))
     else:
-        await context.bot.send_message(chat_id, "⏳ در حال تهیه بکاپ کامل (ربات + سرورها/نودها)...")
+        await context.bot.send_message(chat_id, _T(_lg, "adm_bk_preparing"))
 
     bot_backup_path: Optional[Path] = None
     full_backup_path: Optional[Path] = None
     try:
         bot_backup_path = await asyncio.to_thread(make_bot_backup_zip)
     except Exception as e:
-        await context.bot.send_message(chat_id, f"❌ خطا در ساخت بکاپ ربات:\n{e}")
+        await context.bot.send_message(chat_id, _T(_lg, "adm_bk_bot_err", err=e))
         return
 
     servers = database.get_servers() or []
@@ -392,14 +394,14 @@ async def send_admin_full_backup(chat_id: int, context: ContextTypes.DEFAULT_TYP
         )
         await asyncio.to_thread(prune_full_backup_files, 50)
     except Exception as e:
-        await context.bot.send_message(chat_id, f"❌ خطا در ساخت فایل بکاپ نهایی:\n{e}")
+        await context.bot.send_message(chat_id, _T(_lg, "adm_bk_zip_err", err=e))
         return
 
     caption = (
-        "📬 فایل بکاپ کامل آماده شد\n"
-        f"🤖 بکاپ ربات: ✅\n"
-        f"🖥️ بکاپ سرورها/نودها: {len(panel_backups)} مورد\n"
-        f"⚠️ خطاها: {len(panel_errors)} مورد"
+        _T(_lg, "adm_bk_ready") + "\n"
+        + _T(_lg, "adm_bk_bot_ok") + "\n"
+        + _T(_lg, "adm_bk_panels_line", n=len(panel_backups)) + "\n"
+        + _T(_lg, "adm_bk_errors_line", n=len(panel_errors))
     )
     try:
         with full_backup_path.open("rb") as fh:
@@ -410,7 +412,7 @@ async def send_admin_full_backup(chat_id: int, context: ContextTypes.DEFAULT_TYP
                 caption=caption,
             )
     except Exception as e:
-        await context.bot.send_message(chat_id, f"❌ خطا در ارسال بکاپ:\n{e}")
+        await context.bot.send_message(chat_id, _T(_lg, "adm_bk_send_err", err=e))
         return
     finally:
         # فایل واسط Backup_Bot فقط برای ساخت Backup_All است و بعد از اتمام باید حذف شود
@@ -424,10 +426,10 @@ async def send_admin_full_backup(chat_id: int, context: ContextTypes.DEFAULT_TYP
         preview = "\n".join(panel_errors[:10])
         more = ""
         if len(panel_errors) > 10:
-            more = f"\n... و {len(panel_errors) - 10} خطای دیگر"
+            more = "\n" + _T(_lg, "adm_bk_more_errors", n=len(panel_errors) - 10)
         await context.bot.send_message(
             chat_id,
-            "⚠️ برخی بکاپ‌های پنل دریافت نشدند:\n" + preview + more,
+            _T(_lg, "adm_bk_panel_warn") + "\n" + preview + more,
         )
 
 # --- state ها برای ماشین حالت‌ها ---
@@ -453,14 +455,15 @@ MARZBAN_PANEL_TYPES = {"marzban", "pasarguard"}
 
 
 def _panel_type_label(panel_type: str) -> str:
+    _lg = _admin_bot_lang()
     pt = str(panel_type or "").strip().lower()
     if pt in {"xui", "x-ui"}:
         return "X-UI"
     if pt == "marzban":
-        return "مرزبان (Marzban)"
+        return _T(_lg, "adm_panel_marzban")
     if pt == "pasarguard":
-        return "پاسارگارد (PasarGuard)"
-    return "هیدیفای"
+        return _T(_lg, "adm_panel_pasarguard")
+    return _T(_lg, "adm_panel_hiddify")
 ADD_STATE_XUI_TOKEN = "add_server_xui_token"
 ADD_STATE_XUI_SUB_DOMAIN = "add_server_xui_sub_domain"
 ADD_STATE_XUI_INBOUND = "add_server_xui_inbound"
@@ -576,7 +579,7 @@ def _compute_package_info(user: Dict[str, Any]):
 
 def format_gb(value: Any) -> str:
     if value is None:
-        return "نامشخص"
+        return _T(_admin_bot_lang(), "adm_val_unknown")
     try:
         v = float(value)
     except (TypeError, ValueError):
@@ -590,7 +593,7 @@ def _format_usage_current(value: Any) -> str:
     try:
         v = float(value)
     except (TypeError, ValueError):
-        return "نامشخص"
+        return _T(_admin_bot_lang(), "adm_val_unknown")
     text = f"{v:.2f}"
     if text.endswith("00"):
         return f"{v:.1f}"
@@ -637,6 +640,7 @@ def _parse_positive_int(raw: str) -> Optional[int]:
 
 
 def _parse_bulk_users_text(raw_text: str) -> tuple[List[Dict[str, Any]], List[str]]:
+    _lg = _admin_bot_lang()
     entries: List[Dict[str, Any]] = []
     errors: List[str] = []
     lines = [ln.strip() for ln in str(raw_text or "").splitlines() if ln.strip()]
@@ -657,17 +661,17 @@ def _parse_bulk_users_text(raw_text: str) -> tuple[List[Dict[str, Any]], List[st
                 days_raw = tokens[-1]
 
         if not name:
-            errors.append(f"خط {idx}: نام کاربر نامعتبر است.")
+            errors.append(_T(_lg, "adm_addusr_bulk_err_name", i=idx))
             continue
 
         gb = _parse_positive_float(gb_raw)
         if gb is None:
-            errors.append(f"خط {idx}: حجم نامعتبر است («{gb_raw}»).")
+            errors.append(_T(_lg, "adm_addusr_bulk_err_gb", i=idx, val=gb_raw))
             continue
 
         days = _parse_positive_int(days_raw)
         if days is None:
-            errors.append(f"خط {idx}: روز نامعتبر است («{days_raw}»).")
+            errors.append(_T(_lg, "adm_addusr_bulk_err_days", i=idx, val=days_raw))
             continue
 
         entries.append(
@@ -679,7 +683,7 @@ def _parse_bulk_users_text(raw_text: str) -> tuple[List[Dict[str, Any]], List[st
         )
 
     if not entries and not errors:
-        errors.append("هیچ خط معتبری دریافت نشد.")
+        errors.append(_T(_lg, "adm_addusr_bulk_err_empty"))
     return entries, errors
 
 
@@ -687,7 +691,7 @@ def _format_usage_limit(value: Any) -> str:
     try:
         v = float(value)
     except (TypeError, ValueError):
-        return "نامشخص"
+        return _T(_admin_bot_lang(), "adm_val_unknown")
     return f"{v:.1f}"
 
 
@@ -749,7 +753,7 @@ def _owner_button_title(owner: Dict[str, Any]) -> str:
     if username:
         return username
     telegram_id = owner.get("telegram_id")
-    return str(telegram_id) if telegram_id is not None else "پروفایل کاربر"
+    return str(telegram_id) if telegram_id is not None else _T(_admin_bot_lang(), "adm_usr_profile_plain")
 
 
 async def _resolve_panel_user_uuid(
@@ -812,7 +816,7 @@ async def _set_user_active_state_on_related_servers(
     """
     server = database.get_server_by_id(server_id)
     if not server:
-        return str(user_uuid or "").strip(), 0, 0, ["سرور اصلی پیدا نشد"]
+        return str(user_uuid or "").strip(), 0, 0, [_T(_admin_bot_lang(), "adm_err_main_server_not_found")]
 
     resolved_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
     targets = _get_related_server_targets(server_id)
@@ -826,7 +830,7 @@ async def _set_user_active_state_on_related_servers(
             tid = int(target.get("id") or 0)
         except (TypeError, ValueError):
             tid = 0
-        title = (target.get("title") or f"سرور #{tid or '?'}").strip()
+        title = (target.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=tid or "?")).strip()
         try:
             if active:
                 await hiddify_api.enable_user(target, resolved_uuid)
@@ -858,7 +862,7 @@ async def _patch_user_on_related_servers(
     """
     server = database.get_server_by_id(server_id)
     if not server:
-        return str(user_uuid or "").strip(), 0, 0, ["سرور اصلی پیدا نشد"]
+        return str(user_uuid or "").strip(), 0, 0, [_T(_admin_bot_lang(), "adm_err_main_server_not_found")]
 
     resolved_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
     targets = _get_related_server_targets(server_id)
@@ -872,7 +876,7 @@ async def _patch_user_on_related_servers(
             tid = int(target.get("id") or 0)
         except (TypeError, ValueError):
             tid = 0
-        title = (target.get("title") or f"سرور #{tid or '?'}").strip()
+        title = (target.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=tid or "?")).strip()
 
         target_uuid = resolved_uuid
         if tid > 0:
@@ -1035,9 +1039,10 @@ def classify_user_status(user: Dict[str, Any]) -> str:
 
 
 def _last_online_line(user_data: Dict[str, Any]) -> str:
+    _lg = _admin_bot_lang()
     forced_status = str(user_data.get("_user_list_status") or "").lower()
     if forced_status == "online" or classify_user_status(user_data) == "online":
-        return "📶آخرین اتصال: آنلاین"
+        return _T(_lg, "adm_lo_online")
 
     last_dt = _parse_dt(user_data.get("last_online"))
     if not last_dt:
@@ -1045,36 +1050,36 @@ def _last_online_line(user_data: Dict[str, Any]) -> str:
         if str((user_data or {}).get("_source") or "").strip().lower() == "xui":
             # show offline instead of نامشخص for X-UI, more accurate
             if classify_user_status(user_data) == "offline":
-                return "📶آخرین اتصال: آفلاین"
-        return "📶آخرین اتصال: نامشخص"
+                return _T(_lg, "adm_lo_offline")
+        return _T(_lg, "adm_lo_unknown")
 
     delta = datetime.now() - last_dt
     seconds_total = delta.total_seconds()
     is_xui = str((user_data or {}).get("_source") or "").strip().lower() == "xui"
     window = 90 if is_xui else ONLINE_WINDOW_SECONDS
     if -CLOCK_SKEW_TOLERANCE <= seconds_total <= window:
-        return "📶آخرین اتصال: آنلاین"
+        return _T(_lg, "adm_lo_online")
 
     if seconds_total < 0:
-        rel = "چند ثانیه پیش"
+        rel = _T(_lg, "adm_lo_secs_ago")
     else:
         days = delta.days
         seconds = delta.seconds
         if days <= 0:
             if seconds < 60:
-                rel = "چند ثانیه پیش"
+                rel = _T(_lg, "adm_lo_secs_ago")
             elif seconds < 3600:
-                rel = f"{seconds // 60} دقیقه پیش"
+                rel = _T(_lg, "adm_lo_mins_ago", m=seconds // 60)
             else:
-                rel = f"{seconds // 3600} ساعت پیش"
+                rel = _T(_lg, "adm_lo_hours_ago", h=seconds // 3600)
         elif days < 30:
-            rel = f"{days} روز پیش"
+            rel = _T(_lg, "adm_lo_days_ago", d=days)
         elif days < 365:
-            rel = f"{days // 30} ماه پیش"
+            rel = _T(_lg, "adm_lo_months_ago", m=days // 30)
         else:
-            rel = f"{days // 365} سال پیش"
+            rel = _T(_lg, "adm_lo_years_ago", y=days // 365)
 
-    return f"📶آخرین اتصال: {rel}"
+    return _T(_lg, "adm_lo_line", rel=rel)
 
 
 def _merge_user_list_snapshot(
@@ -1437,9 +1442,10 @@ def _panel_user_uuid(user: Dict[str, Any]) -> str:
 
 
 def _node_sync_targets(server_id: int) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    _lg = _admin_bot_lang()
     source = database.get_server_by_id(server_id)
     if not source:
-        return None, [], ["سرور اصلی پیدا نشد."]
+        return None, [], [_T(_lg, "adm_err_main_server_not_found") + "."]
 
     targets: List[Dict[str, Any]] = []
     warnings: List[str] = []
@@ -1451,15 +1457,15 @@ def _node_sync_targets(server_id: int) -> tuple[Optional[Dict[str, Any]], List[D
             target_sid = int(node.get("target_server_id") or 0)
         except (TypeError, ValueError):
             target_sid = 0
-        title = str(node.get("title") or node.get("host") or f"نود #{node.get('id') or '?'}").strip()
+        title = str(node.get("title") or node.get("host") or _T(_lg, "adm_node_fallback_title", nid=node.get('id') or '?')).strip()
         if target_sid <= 0:
-            warnings.append(f"{title}: سرور مقصد وصل نشده است.")
+            warnings.append(_T(_lg, "adm_sync_warn_no_target", title=title))
             continue
         if target_sid in seen:
             continue
         target = database.get_server_by_id(target_sid)
         if not target:
-            warnings.append(f"{title}: سرور مقصد #{target_sid} پیدا نشد.")
+            warnings.append(_T(_lg, "adm_sync_warn_target_missing", title=title, sid=target_sid))
             continue
         targets.append(target)
         seen.add(target_sid)
@@ -1545,7 +1551,7 @@ async def _auto_propagate_user_to_nodes(
             logger.warning("Failed to record source server mapping for %s: %s", user_uuid, src_err)
 
     for target in targets:
-        node_title = str(target.get("title") or f"سرور #{target.get('id')}")
+        node_title = str(target.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=target.get('id')))
         try:
             created, action = await _create_or_patch_user_on_node(
                 target, user_uuid, payload
@@ -1582,7 +1588,7 @@ async def _auto_propagate_user_to_nodes(
                             panel_user_uuid=user_uuid,
                             name=user_name or f"admin-{user_uuid[:8]}",
                             server_id=target_sid,
-                            server_title=str(target.get("title") or f"سرور #{target_sid}"),
+                            server_title=str(target.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=target_sid)),
                             usage_limit=int(usage_limit_GB),
                             days=package_days,
                         )
@@ -1598,16 +1604,17 @@ async def _auto_propagate_user_to_nodes(
                 except Exception as map_err:
                     logger.warning("Failed to create admin service record for %s: %s", node_title, map_err)
         except Exception as e:
-            err_msg = str(e).strip().splitlines()[0] if str(e).strip() else "خطای نامشخص"
+            err_msg = str(e).strip().splitlines()[0] if str(e).strip() else _T(_admin_bot_lang(), "adm_err_unknown")
             failed_nodes.append(f"{node_title}: {err_msg}")
 
+    _lg = _admin_bot_lang()
     parts: List[str] = []
     if success_nodes:
-        parts.append(f"✅ ساخته شد روی نودها: {', '.join(success_nodes)}")
+        parts.append(_T(_lg, "adm_sync_created_nodes", nodes=', '.join(success_nodes)))
     if updated_nodes:
-        parts.append(f"🔁 به‌روز شد (موجود بود) روی نودها: {', '.join(updated_nodes)}")
+        parts.append(_T(_lg, "adm_sync_updated_nodes", nodes=', '.join(updated_nodes)))
     if failed_nodes:
-        parts.append("❌ خطا روی نودها:\n" + "\n".join(f"  • {f}" for f in failed_nodes))
+        parts.append(_T(_lg, "adm_sync_failed_nodes") + "\n" + "\n".join(f"  • {f}" for f in failed_nodes))
     return "\n".join(parts) if parts else ""
 
 
@@ -1656,15 +1663,16 @@ async def _create_or_patch_user_on_node(
 
 
 def build_node_sync_menu_keyboard(server_id: int) -> InlineKeyboardMarkup:
+    _lg = _admin_bot_lang()
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📊 فقط بررسی و گزارش", callback_data=f"server:{server_id}:sync_nodes_report")],
-            [InlineKeyboardButton("🧩 ساخت کاربران جاافتاده", callback_data=f"server:{server_id}:sync_nodes_missing")],
-            [InlineKeyboardButton("🔁 همسان‌سازی مشخصات موجودها", callback_data=f"server:{server_id}:sync_nodes_details")],
-            [InlineKeyboardButton("✅ اجرای کامل امن", callback_data=f"server:{server_id}:sync_nodes_full")],
-            [InlineKeyboardButton("👁 نمایش کاربران اضافی", callback_data=f"server:{server_id}:sync_nodes_extra")],
-            [InlineKeyboardButton("🔄 ثبت سرویس کاربران قدیمی ادمین", callback_data=f"server:{server_id}:sync_nodes_migrate_users")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")],
+            [InlineKeyboardButton(_T(_lg, "adm_sync_btn_report"), callback_data=f"server:{server_id}:sync_nodes_report")],
+            [InlineKeyboardButton(_T(_lg, "adm_sync_btn_missing"), callback_data=f"server:{server_id}:sync_nodes_missing")],
+            [InlineKeyboardButton(_T(_lg, "adm_sync_btn_details"), callback_data=f"server:{server_id}:sync_nodes_details")],
+            [InlineKeyboardButton(_T(_lg, "adm_sync_btn_full"), callback_data=f"server:{server_id}:sync_nodes_full")],
+            [InlineKeyboardButton(_T(_lg, "adm_sync_btn_extra"), callback_data=f"server:{server_id}:sync_nodes_extra")],
+            [InlineKeyboardButton(_T(_lg, "adm_sync_btn_migrate"), callback_data=f"server:{server_id}:sync_nodes_migrate_users")],
+            [InlineKeyboardButton(_T(_lg, "back"), callback_data=f"server:{server_id}")],
         ]
     )
 
@@ -1740,7 +1748,7 @@ def _record_node_sync_mapping(
     userbot_db.add_service_node(
         service_id=service_id,
         server_id=target_sid,
-        server_title=str(target.get("title") or f"سرور #{target_sid}"),
+        server_title=str(target.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=target_sid)),
         panel_user_uuid=target_uuid,
         panel_user_id=(str(target_user_id).strip() if target_user_id is not None else None),
         is_active=1 if is_active else 0,
@@ -1756,7 +1764,7 @@ async def _run_node_sync(
 ) -> Dict[str, Any]:
     source, targets, warnings = _node_sync_targets(server_id)
     result: Dict[str, Any] = {
-        "source_title": str((source or {}).get("title") or f"سرور #{server_id}"),
+        "source_title": str((source or {}).get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=server_id)),
         "source_count": 0,
         "targets": [],
         "warnings": list(warnings),
@@ -1780,7 +1788,7 @@ async def _run_node_sync(
     if not source:
         return result
     if not targets:
-        result["warnings"].append("برای این سرور هیچ نود متصل‌شده‌ای پیدا نشد.")
+        result["warnings"].append(_T(_admin_bot_lang(), "adm_sync_warn_no_nodes"))
         return result
 
     try:
@@ -1802,7 +1810,7 @@ async def _run_node_sync(
 
     for target in targets:
         target_sid = int(target.get("id") or 0)
-        target_title = str(target.get("title") or f"سرور #{target_sid or '?'}")
+        target_title = str(target.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=target_sid or '?'))
         target_summary = {
             "title": target_title,
             "total": 0,
@@ -1992,72 +2000,74 @@ async def _run_admin_user_migration(server_id: int) -> Dict[str, Any]:
 
 
 def _format_node_sync_report(summary: Dict[str, Any]) -> str:
+    _lg = _admin_bot_lang()
     mode_titles = {
-        "report": "📊 گزارش همگام‌سازی نودها",
-        "missing": "🧩 نتیجه ساخت کاربران جاافتاده",
-        "details": "🔁 نتیجه همسان‌سازی مشخصات",
-        "full": "✅ نتیجه اجرای کامل امن",
+        "report": _T(_lg, "adm_sync_rpt_report"),
+        "missing": _T(_lg, "adm_sync_rpt_missing"),
+        "details": _T(_lg, "adm_sync_rpt_details"),
+        "full": _T(_lg, "adm_sync_rpt_full"),
     }
     mode = str(summary.get("mode") or "report")
     lines = [
-        mode_titles.get(mode, "🔄 همگام‌سازی نودها"),
+        mode_titles.get(mode, _T(_lg, "adm_sync_rpt_default")),
         "❖⬩──────────────⬩❖",
-        f"🖥 سرور اصلی: {summary.get('source_title')}",
-        f"👤 کاربران سرور اصلی: {int(summary.get('source_count') or 0)}",
+        _T(_lg, "adm_sync_rpt_source", title=summary.get('source_title')),
+        _T(_lg, "adm_sync_rpt_source_count", n=int(summary.get('source_count') or 0)),
         "",
-        "نکته: مصرف فعلی روی نود جدید از صفر شروع می‌شود تا مصرف کل دوبار حساب نشود.",
+        _T(_lg, "adm_sync_rpt_note"),
         "",
     ]
     warnings = summary.get("warnings") or []
     if warnings:
-        lines.append("⚠️ هشدارها:")
+        lines.append(_T(_lg, "adm_sync_rpt_warnings"))
         for item in warnings[:5]:
             lines.append(f"- {item}")
         lines.append("")
 
     targets = summary.get("targets") or []
     if not targets:
-        lines.append("❌ هیچ نودی برای بررسی پیدا نشد.")
+        lines.append(_T(_lg, "adm_sync_rpt_no_targets"))
     else:
-        lines.append("📡 وضعیت نودها:")
+        lines.append(_T(_lg, "adm_sync_rpt_nodes_status"))
         for target in targets:
             lines.append(
-                f"• {target.get('title')}: "
-                f"موجود={int(target.get('existing') or 0)} | "
-                f"جاافتاده={int(target.get('missing') or 0)} | "
-                f"اضافی={int(target.get('extra') or 0)}"
+                _T(_lg, "adm_sync_rpt_node_line",
+                   title=target.get('title'),
+                   ex=int(target.get('existing') or 0),
+                   ms=int(target.get('missing') or 0),
+                   extra=int(target.get('extra') or 0))
             )
             if mode != "report":
                 created = int(target.get("created") or 0)
                 patched = int(target.get("patched") or 0)
                 mapped = int(target.get("mapped") or 0)
-                lines.append(f"  انجام‌شده: ساخت={created} | بروزرسانی={patched} | نگاشت={mapped}")
+                lines.append(_T(_lg, "adm_sync_rpt_node_done", c=created, p=patched, m=mapped))
             errors = target.get("errors") or []
             if errors:
-                lines.append(f"  ❌ خطا: {len(errors)} مورد")
+                lines.append(_T(_lg, "adm_sync_rpt_node_errors", n=len(errors)))
 
     lines.extend(
         [
             "",
-            "جمع کل:",
-            f"🧩 کاربران جاافتاده: {int(summary.get('missing') or 0)}",
-            f"🔁 کاربران موجود: {int(summary.get('existing') or 0)}",
-            f"🧹 کاربران اضافه روی نودها: {int(summary.get('extra') or 0)}",
+            _T(_lg, "adm_sync_rpt_totals"),
+            _T(_lg, "adm_sync_rpt_t_missing", n=int(summary.get('missing') or 0)),
+            _T(_lg, "adm_sync_rpt_t_existing", n=int(summary.get('existing') or 0)),
+            _T(_lg, "adm_sync_rpt_t_extra", n=int(summary.get('extra') or 0)),
         ]
     )
     if mode != "report":
         lines.extend(
             [
-                f"✅ ساخته‌شده: {int(summary.get('created') or 0)}",
-                f"🔄 بروزرسانی‌شده: {int(summary.get('patched') or 0)}",
-                f"🧷 نگاشت دیتابیس: {int(summary.get('mapped') or 0)}",
+                _T(_lg, "adm_sync_rpt_t_created", n=int(summary.get('created') or 0)),
+                _T(_lg, "adm_sync_rpt_t_patched", n=int(summary.get('patched') or 0)),
+                _T(_lg, "adm_sync_rpt_t_mapped", n=int(summary.get('mapped') or 0)),
             ]
         )
 
     errors = summary.get("errors") or []
     if errors:
         lines.append("")
-        lines.append("نمونه خطاها:")
+        lines.append(_T(_lg, "adm_sync_rpt_err_sample"))
         for err in errors[:5]:
             lines.append(f"- {err}")
 
@@ -2081,7 +2091,7 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
             continue
         if sid_int in child_ids:
             continue
-        title = (s.get("title", f"سرور #{sid}") or "").strip()
+        title = (s.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=sid) or "").strip()
         flag = ""
         if "ترکیه" in title:
             flag = "🇹🇷"
@@ -2097,7 +2107,7 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
         if "لوکیشن" in title:
             btn_text = title
         else:
-            btn_text = f"لوکیشن {flag} {title}".strip()
+            btn_text = _T(_admin_bot_lang(), "adm_loc_flag", flag=flag, title=title).strip()
 
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")])
 
@@ -2149,7 +2159,8 @@ def build_server_detail_text(
     users_count_override: Optional[int] = None,
     plans_count_override: Optional[int] = None,
 ) -> str:
-    title = server.get("title", f"سرور #{server.get('id')}")
+    _lg = _admin_bot_lang()
+    title = server.get("title") or _T(_lg, "adm_srv_fallback_title", sid=server.get('id'))
     panel_url = (server.get("panel_url") or "").strip()
     admin_proxy = (server.get("admin_proxy_path") or "").strip().strip("/")
     admin_uuid = (server.get("admin_uuid") or server.get("api_key") or "").strip().strip("/")
@@ -2197,9 +2208,9 @@ def build_server_detail_text(
     safe_title = escape(str(title))
 
     if admin_panel_url:
-        title_line = f'<a href="{escape(admin_panel_url, quote=True)}">🖥 سرور: {safe_title}</a>'
+        title_line = f'<a href="{escape(admin_panel_url, quote=True)}">' + _T(_lg, "adm_srv_detail", title=safe_title) + "</a>"
     else:
-        title_line = f"🖥 سرور: {safe_title}"
+        title_line = _T(_lg, "adm_srv_detail", title=safe_title)
 
     if is_xui:
         # برای X-UI اطلاعات اضافی
@@ -2207,21 +2218,21 @@ def build_server_detail_text(
         try:
             xui_user = (server.get("xui_username") or "").strip()
             if xui_user:
-                xui_info += f"\n👤 یوزر پنل: {escape(xui_user)}"
+                xui_info += "\n" + _T(_lg, "adm_srv_panel_user", user=escape(xui_user))
             inbound_info = str(server.get("xui_inbound_id") or "").strip()
             if inbound_info == "0":
-                xui_info += f"\n🧩 اینباند: همه (0)"
+                xui_info += "\n" + _T(_lg, "adm_srv_inbound_all")
             elif inbound_info:
-                xui_info += f"\n🧩 اینباند: {escape(inbound_info)}"
+                xui_info += "\n" + _T(_lg, "adm_srv_inbound", val=escape(inbound_info))
         except Exception:
             pass
         return (
             f"{title_line}\n"
             "❖ • -------------------------- • ❖\n"
-            f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-            f"📋 تعداد پلن ها: {plans_count}\n"
-            f"🟩 اولویت: {priority}\n"
-            f"📦 پنل: {escape(version_text)}{xui_info}"
+            + _T(_lg, "adm_srv_users_line", n=users_count, limit=users_limit) + "\n"
+            + _T(_lg, "adm_srv_plans_line", n=plans_count) + "\n"
+            + _T(_lg, "adm_srv_priority_line", n=priority) + "\n"
+            + _T(_lg, "adm_srv_panel_line", panel=escape(version_text)) + xui_info
         )
 
     if is_marzban:
@@ -2229,25 +2240,25 @@ def build_server_detail_text(
         try:
             mb_user = (server.get("marzban_admin_username") or "").strip()
             if mb_user:
-                marzban_info += f"\n👤 ادمین مرزبان: {escape(mb_user)}"
+                marzban_info += "\n" + _T(_lg, "adm_srv_marzban_admin", user=escape(mb_user))
         except Exception:
             pass
         return (
             f"{title_line}\n"
             "❖ • -------------------------- • ❖\n"
-            f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-            f"📋 تعداد پلن ها: {plans_count}\n"
-            f"🟩 اولویت: {priority}\n"
-            f"📦 پنل: {escape(version_text)}{marzban_info}"
+            + _T(_lg, "adm_srv_users_line", n=users_count, limit=users_limit) + "\n"
+            + _T(_lg, "adm_srv_plans_line", n=plans_count) + "\n"
+            + _T(_lg, "adm_srv_priority_line", n=priority) + "\n"
+            + _T(_lg, "adm_srv_panel_line", panel=escape(version_text)) + marzban_info
         )
 
     return (
         f"{title_line}\n"
         "❖ • -------------------------- • ❖\n"
-        f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-        f"📋 تعداد پلن ها: {plans_count}\n"
-        f"🟩 اولویت: {priority}\n"
-        f"📦 نسخه: {escape(version_text)}"
+        + _T(_lg, "adm_srv_users_line", n=users_count, limit=users_limit) + "\n"
+        + _T(_lg, "adm_srv_plans_line", n=plans_count) + "\n"
+        + _T(_lg, "adm_srv_priority_line", n=priority) + "\n"
+        + _T(_lg, "adm_srv_version_line", ver=escape(version_text))
     )
 
 
@@ -2277,34 +2288,35 @@ async def build_server_detail_text_live(server: Dict[str, Any]) -> str:
 
 
 def build_user_ops_keyboard(server_id: int) -> InlineKeyboardMarkup:
+    _lg = _admin_bot_lang()
     keyboard = [
         [
             InlineKeyboardButton(
-                "افزودن کاربر➕",
+                _T(_lg, "adm_usr_add_btn"),
                 callback_data=f"userops:{server_id}:add",
             )
         ],
         [
             InlineKeyboardButton(
-                "افزودن چندین کاربر➕",
+                _T(_lg, "adm_usr_add_multi_btn"),
                 callback_data=f"userops:{server_id}:add_multi",
             )
         ],
         [
             InlineKeyboardButton(
-                "افزودن کاربر با پلن➕",
+                _T(_lg, "adm_usr_add_with_plan_btn"),
                 callback_data=f"userops:{server_id}:add_with_plan",
             )
         ],
         [
             InlineKeyboardButton(
-                "جستجوی کاربر🔍",
+                _T(_lg, "adm_usr_search_btn"),
                 callback_data=f"userops:{server_id}:search",
             )
         ],
         [
             InlineKeyboardButton(
-                "بازگشت🔙",
+                _T(_lg, "adm_btn_back_emoji"),
                 callback_data=f"server:{server_id}",
             )
         ],
@@ -2313,6 +2325,7 @@ def build_user_ops_keyboard(server_id: int) -> InlineKeyboardMarkup:
 
 
 def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
+    _lg = _admin_bot_lang()
     # برای X-UI دکمه ساخت اینباند از لینک را اضافه کن
     try:
         srv = database.get_server_by_id(server_id)
@@ -2322,36 +2335,36 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
         is_xui = False
         is_marzban = False
     keyboard = [
-        [InlineKeyboardButton("👤لیست کاربران", callback_data=f"server:{server_id}:users")],
-        [InlineKeyboardButton("🛡️عملیات کاربری", callback_data=f"server:{server_id}:user_ops")],
-        [InlineKeyboardButton("📋پلن ها", callback_data=f"server:{server_id}:plans")],
-        [InlineKeyboardButton("🔗لیست دامنه‌ها", callback_data=f"server:{server_id}:domains")],
-        [InlineKeyboardButton("✏️ویرایش سرور", callback_data=f"server:{server_id}:edit")],
-        [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
-        [InlineKeyboardButton("⚙️لیست نودها", callback_data=f"server:{server_id}:nodes")],
-        [InlineKeyboardButton("🔄همگام سازی نودها", callback_data=f"server:{server_id}:sync_nodes")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_users_list_btn"), callback_data=f"server:{server_id}:users")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_user_ops_btn"), callback_data=f"server:{server_id}:user_ops")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_plans_btn"), callback_data=f"server:{server_id}:plans")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_domains_btn"), callback_data=f"server:{server_id}:domains")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_edit_btn"), callback_data=f"server:{server_id}:edit")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_delete_btn"), callback_data=f"serverdel:{server_id}")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_nodes_btn"), callback_data=f"server:{server_id}:nodes")],
+        [InlineKeyboardButton(_T(_lg, "adm_srv_sync_nodes_btn"), callback_data=f"server:{server_id}:sync_nodes")],
     ]
     if is_xui:
-        keyboard.insert(4, [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:create_inbound_from_link")])
-        keyboard.insert(5, [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{server_id}:sync_inbounds")])
+        keyboard.insert(4, [InlineKeyboardButton(_T(_lg, "adm_srv_inbound_from_link_btn"), callback_data=f"server:{server_id}:create_inbound_from_link")])
+        keyboard.insert(5, [InlineKeyboardButton(_T(_lg, "adm_srv_sync_inbounds_btn"), callback_data=f"server:{server_id}:sync_inbounds")])
     if is_marzban:
         keyboard.insert(
             4,
-            [InlineKeyboardButton("📡 آمار زنده پنل مرزبان", callback_data=f"server:{server_id}:marzban_stats")],
+            [InlineKeyboardButton(_T(_lg, "adm_mb_live_stats_btn"), callback_data=f"server:{server_id}:marzban_stats")],
         )
         keyboard.insert(
             5,
-            [InlineKeyboardButton("🧩 لیست اینباندهای مرزبان", callback_data=f"server:{server_id}:marzban_inbounds")],
+            [InlineKeyboardButton(_T(_lg, "adm_mb_inbounds_list_btn"), callback_data=f"server:{server_id}:marzban_inbounds")],
         )
         keyboard.insert(
             6,
-            [InlineKeyboardButton("🛰 نودهای مرزبان", callback_data=f"server:{server_id}:marzban_nodes")],
+            [InlineKeyboardButton(_T(_lg, "adm_mb_nodes_btn"), callback_data=f"server:{server_id}:marzban_nodes")],
         )
         keyboard.insert(
             7,
-            [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:marzban_create_inbound")],
+            [InlineKeyboardButton(_T(_lg, "adm_srv_inbound_from_link_btn"), callback_data=f"server:{server_id}:marzban_create_inbound")],
         )
-    keyboard.append([InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")])
+    keyboard.append([InlineKeyboardButton(_T(_lg, "adm_btn_back_arrow"), callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -2366,9 +2379,11 @@ async def send_domains_menu(
     message=None,
 ) -> None:
     """منوی اصلی لیست دامنه‌های یک سرور"""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _t("adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -2398,18 +2413,18 @@ async def send_domains_menu(
         return escape(value or "—")
 
     lines = [
-        "🔗 مدیریت دامنه‌ها",
+        _t("adm_dom_title"),
         "❖ • -------------------------- • ❖",
-        "دامنه‌هایی که اینجا ثبت می‌کنی برای لینک‌های اشتراک و کانفیگ‌ها استفاده می‌شوند.",
+        _t("adm_dom_hint"),
         "",
     ]
 
     if not domains:
-        lines.append("در حال حاضر هیچ دامنه‌ای ثبت نشده است.")
+        lines.append(_t("adm_dom_empty"))
     else:
-        lines.append("📌 دامنه‌های ثبت‌شده:")
+        lines.append(_t("adm_dom_list_header"))
         for idx, d in enumerate(domains, start=1):
-            title = escape(str(d.get("title") or f"دامنه {idx}"))
+            title = escape(str(d.get("title") or _t("adm_dom_fallback", n=idx)))
             domain = _plain_domain(d.get("domain"))
             lines.append(f"{idx}) {title}")
             lines.append(f"   🌐 {domain}")
@@ -2428,16 +2443,16 @@ async def send_domains_menu(
         )
 
     keyboard_rows.append(
-        [InlineKeyboardButton("➕ افزودن دامنه", callback_data=f"domains:{server_id}:add")]
+        [InlineKeyboardButton(_t("adm_dom_add_btn"), callback_data=f"domains:{server_id}:add")]
     )
 
     if domains:
         keyboard_rows.append(
-            [InlineKeyboardButton("🗑 حذف دامنه", callback_data=f"domains:{server_id}:remove")]
+            [InlineKeyboardButton(_t("adm_dom_delete_btn"), callback_data=f"domains:{server_id}:remove")]
         )
 
     keyboard_rows.append(
-        [InlineKeyboardButton("بازگشت🔙", callback_data=f"server:{server_id}")]
+        [InlineKeyboardButton(_t("adm_btn_back_emoji"), callback_data=f"server:{server_id}")]
     )
 
     kb = InlineKeyboardMarkup(keyboard_rows)
@@ -2467,9 +2482,11 @@ async def send_domains_delete_menu(
     message=None,
 ) -> None:
     """نمایش لیست دامنه‌ها برای حذف"""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _t("adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -2493,9 +2510,9 @@ async def send_domains_delete_menu(
             domains.append({"id": idx, "title": title, "domain": dom})
 
     if not domains:
-        text = "هیچ دامنه‌ای برای حذف وجود ندارد."
+        text = _t("adm_dom_nothing_to_delete")
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("بازگشت🔙", callback_data=f"domains:{server_id}:back")]]
+            [[InlineKeyboardButton(_t("adm_btn_back_emoji"), callback_data=f"domains:{server_id}:back")]]
         )
         if message is not None:
             await message.edit_text(text, reply_markup=kb)
@@ -2509,15 +2526,15 @@ async def send_domains_delete_menu(
         return escape(value or "—")
 
     lines = [
-        "🗑 حذف دامنه",
+        _t("adm_dom_delete_title"),
         "❖ • -------------------------- • ❖",
-        "یکی از دامنه‌های زیر را برای حذف انتخاب کنید:",
+        _t("adm_dom_delete_hint"),
         "",
     ]
 
     rows: List[List[InlineKeyboardButton]] = []
     for d in domains:
-        title = escape(str(d.get("title") or f"دامنه {d.get('id')}"))
+        title = escape(str(d.get("title") or _t("adm_dom_fallback", n=d.get('id'))))
         lines.append(f"• {title} — {_plain_domain(d.get('domain'))}")
         rows.append(
             [
@@ -2529,7 +2546,7 @@ async def send_domains_delete_menu(
         )
 
     rows.append(
-        [InlineKeyboardButton("بازگشت🔙", callback_data=f"domains:{server_id}:back")]
+        [InlineKeyboardButton(_t("adm_btn_back_emoji"), callback_data=f"domains:{server_id}:back")]
     )
 
     kb = InlineKeyboardMarkup(rows)
@@ -2566,7 +2583,7 @@ async def send_user_list(
 ) -> None:
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -2625,16 +2642,17 @@ async def send_user_list(
     context.user_data[f"user_list_snapshot:{server_id}"] = user_snapshot
 
     if total_users == 0:
+        _lg = _admin_bot_lang()
         text = (
-            "[📋 لیست کاربران]\n"
-            "هنوز هیچ کاربری برای این سرور ثبت نشده است.\n\n"
-            f"👥 تعداد کاربران: {total_users}\n"
-            f"🔵 آنلاین: {online_users}\n"
-            f"🟡 آفلاین: {offline_users}\n"
-            f"🔴 منقضی شده: {expired_users}"
+            _T(_lg, "adm_usr_list_title") + "\n"
+            + _T(_lg, "adm_usr_list_empty") + "\n\n"
+            + _T(_lg, "adm_usr_list_count", n=total_users) + "\n"
+            + _T(_lg, "adm_usr_list_online", n=online_users) + "\n"
+            + _T(_lg, "adm_usr_list_offline", n=offline_users) + "\n"
+            + _T(_lg, "adm_usr_list_expired", n=expired_users)
         )
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("بازگشت", callback_data=back_callback)]]
+            [[InlineKeyboardButton(_T(_lg, "btn_back"), callback_data=back_callback)]]
         )
         if message is not None:
             await message.edit_text(text, reply_markup=kb)
@@ -2698,24 +2716,24 @@ async def send_user_list(
     keyboard_rows.append(nav_row)
 
     keyboard_rows.append(
-        [InlineKeyboardButton("بازگشت", callback_data=back_callback)]
+        [InlineKeyboardButton(_T(_admin_bot_lang(), "btn_back"), callback_data=back_callback)]
     )
 
     extra = ""
     if source == "local":
-        extra = "\n\n⚠️ اتصال به Hiddify API انجام نشد، لیست از دیتابیس محلی خوانده شد."
+        extra = "\n\n" + _T(_admin_bot_lang(), "adm_usr_list_local_source")
 
     frozen_users = sum(1 for _, _, uid in items if str(uid).strip() in frozen_uuids)
     text = (
-        "[📋 لیست کاربران]\n"
-        "❕ شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید.\n"
-        f"📄 صفحه: {page}/{total_pages}\n"
-        f"👥 تعداد کاربران: {total_users}\n"
-        f"🔵 آنلاین: {online_users}\n"
-        f"🟡 آفلاین: {offline_users}\n"
-        f"🔴 منقضی شده: {expired_users}\n"
-        f"❄️ یخ‌زده (نود قطع): {frozen_users}"
-        f"{extra}"
+        _T(_admin_bot_lang(), "adm_usr_list_title") + "\n"
+        + _T(_admin_bot_lang(), "adm_usr_list_hint") + "\n"
+        + _T(_admin_bot_lang(), "adm_usr_list_page", page=page, pages=total_pages) + "\n"
+        + _T(_admin_bot_lang(), "adm_usr_list_count", n=total_users) + "\n"
+        + _T(_admin_bot_lang(), "adm_usr_list_online", n=online_users) + "\n"
+        + _T(_admin_bot_lang(), "adm_usr_list_offline", n=offline_users) + "\n"
+        + _T(_admin_bot_lang(), "adm_usr_list_expired", n=expired_users) + "\n"
+        + _T(_admin_bot_lang(), "adm_usr_list_frozen", n=frozen_users)
+        + f"{extra}"
     )
     kb = InlineKeyboardMarkup(keyboard_rows)
     if message is not None:
@@ -2733,9 +2751,10 @@ def build_user_detail_text(
     user_data: Dict[str, Any],
     source: str = "api",
 ) -> str:
+    _lg = _admin_bot_lang()
     user_uuid = user_data.get("uuid") or user_data.get("id")
     name = user_data.get("name") or user_data.get("username") or f"User_{user_uuid}"
-    server_title = server.get("title", "نامشخص")
+    server_title = server.get("title") or _T(_lg, "adm_val_unknown")
 
     usage_current = user_data.get("current_usage_GB")
     usage_limit = user_data.get("usage_limit_GB")
@@ -2744,27 +2763,24 @@ def build_user_detail_text(
     _, _, days_left = _compute_package_info(user_data)
 
     if usage_current is None:
-        usage_line = "📊مصرف: نامشخص"
+        usage_line = _T(_lg, "adm_usr_usage_unknown")
     elif usage_limit is None:
-        usage_line = f"📊مصرف: {format_gb(usage_current)} گیگابایت (نامحدود)"
+        usage_line = _T(_lg, "adm_usr_usage_unlimited", gb=format_gb(usage_current))
     else:
-        usage_line = (
-            f"📊مصرف: {_format_usage_current(usage_current)} از "
-            f"{_format_usage_limit(usage_limit)} گیگابایت"
-        )
+        usage_line = _T(_lg, "adm_usr_usage_line", cur=_format_usage_current(usage_current), lim=_format_usage_limit(usage_limit))
 
     if days_left is None:
-        expire_line = "📆انقضا: نامشخص"
+        expire_line = _T(_lg, "adm_usr_expire_unknown")
     elif days_left < 0:
-        expire_line = f"📆انقضا: منقضی شده ({abs(days_left)} روز پیش)"
+        expire_line = _T(_lg, "adm_usr_expire_past", d=abs(days_left))
     else:
-        expire_line = f"📆انقضا: {days_left} روز دیگر"
+        expire_line = _T(_lg, "adm_usr_expire_future", d=days_left)
 
     last_online_line = _last_online_line(user_data)
 
-    header_line = f"👤 کاربر:  {name}"
+    header_line = _T(_lg, "adm_usr_header", name=name)
     sep_line = "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"
-    server_line = f"⬖ سرور:  {server_title}"
+    server_line = _T(_lg, "adm_usr_server_line", srv=server_title)
 
     text_lines = [
         header_line,
@@ -2773,11 +2789,11 @@ def build_user_detail_text(
         usage_line,
         expire_line,
         last_online_line,
-        f"📝یادداشت: {comment}",
+        _T(_lg, "adm_usr_note_line", note=comment),
     ]
     if source == "local":
         text_lines.append(
-            "\n⚠️ اطلاعات این کاربر از دیتابیس محلی خوانده شده است (نه از API)."
+            "\n" + _T(_lg, "adm_usr_local_source")
         )
     return "\n".join(text_lines)
 
@@ -2789,9 +2805,10 @@ def build_user_detail_html_text(
     *,
     user_name_link: Optional[str] = None,
 ) -> str:
+    _lg = _admin_bot_lang()
     user_uuid = user_data.get("uuid") or user_data.get("id")
     name = user_data.get("name") or user_data.get("username") or f"User_{user_uuid}"
-    server_title = server.get("title", "نامشخص")
+    server_title = server.get("title") or _T(_lg, "adm_val_unknown")
 
     usage_current = user_data.get("current_usage_GB")
     usage_limit = user_data.get("usage_limit_GB")
@@ -2800,43 +2817,40 @@ def build_user_detail_html_text(
     _, _, days_left = _compute_package_info(user_data)
 
     if usage_current is None:
-        usage_line = "📊مصرف: نامشخص"
+        usage_line = _T(_lg, "adm_usr_usage_unknown")
     elif usage_limit is None:
-        usage_line = f"📊مصرف: {format_gb(usage_current)} گیگابایت (نامحدود)"
+        usage_line = _T(_lg, "adm_usr_usage_unlimited", gb=format_gb(usage_current))
     else:
-        usage_line = (
-            f"📊مصرف: {_format_usage_current(usage_current)} از "
-            f"{_format_usage_limit(usage_limit)} گیگابایت"
-        )
+        usage_line = _T(_lg, "adm_usr_usage_line", cur=_format_usage_current(usage_current), lim=_format_usage_limit(usage_limit))
 
     if days_left is None:
-        expire_line = "📆انقضا: نامشخص"
+        expire_line = _T(_lg, "adm_usr_expire_unknown")
     elif days_left < 0:
-        expire_line = f"📆انقضا: منقضی شده ({abs(days_left)} روز پیش)"
+        expire_line = _T(_lg, "adm_usr_expire_past", d=abs(days_left))
     else:
-        expire_line = f"📆انقضا: {days_left} روز دیگر"
+        expire_line = _T(_lg, "adm_usr_expire_future", d=days_left)
 
     last_online_line = _last_online_line(user_data)
 
     safe_name = escape(str(name))
     if user_name_link:
         safe_link = escape(user_name_link, quote=True)
-        header_line = f'👤 کاربر:  <a href="{safe_link}">{safe_name}</a>'
+        header_line = _T(_lg, "adm_usr_header_link", name=safe_name, link=safe_link)
     else:
-        header_line = f"👤 کاربر:  {safe_name}"
+        header_line = _T(_lg, "adm_usr_header", name=safe_name)
 
     text_lines = [
         header_line,
         "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",
-        f"⬖ سرور:  {escape(str(server_title))}",
+        _T(_lg, "adm_usr_server_line", srv=escape(str(server_title))),
         escape(usage_line),
         escape(expire_line),
         escape(last_online_line),
-        f"📝یادداشت: {escape(comment)}",
+        _T(_lg, "adm_usr_note_line", note=escape(comment)),
     ]
     if source == "local":
         text_lines.append(
-            "\n⚠️ اطلاعات این کاربر از دیتابیس محلی خوانده شده است (نه از API)."
+            "\n" + _T(_lg, "adm_usr_local_source")
         )
     return "\n".join(text_lines)
 
@@ -2848,28 +2862,29 @@ def build_expired_user_detail_keyboard(
 ) -> InlineKeyboardMarkup:
     if owner is None:
         owner = userbot_db.get_service_owner_by_panel_uuid(str(user_uuid))
+    _lg = _admin_bot_lang()
     rows: List[List[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                "کانفیگ ها📄",
+                _T(_lg, "adm_usr_configs_btn"),
                 callback_data=f"server:{server_id}:usercfg:{user_uuid}",
             )
         ],
         [
             InlineKeyboardButton(
-                "ویرایش کاربر✏️",
+                _T(_lg, "adm_usr_edit_btn"),
                 callback_data=f"server:{server_id}:useredit:{user_uuid}",
             )
         ],
         [
             InlineKeyboardButton(
-                "تمدید اشتراک♾️",
+                _T(_lg, "adm_usr_renew_btn"),
                 callback_data=f"server:{server_id}:userextend:{user_uuid}",
             )
         ],
         [
             InlineKeyboardButton(
-                "حذف کاربر🗑️",
+                _T(_lg, "adm_usr_delete_btn"),
                 callback_data=f"server:{server_id}:userdel:{user_uuid}",
             )
         ],
@@ -2886,7 +2901,7 @@ def build_expired_user_detail_keyboard(
             ]
         )
     else:
-        rows.append([InlineKeyboardButton("پروفایل کاربر👤", callback_data="userbot:users_menu")])
+        rows.append([InlineKeyboardButton(_T(_lg, "adm_usr_profile_emoji_btn"), callback_data="userbot:users_menu")])
 
     return InlineKeyboardMarkup(rows)
 
@@ -2901,7 +2916,7 @@ async def send_expired_user_detail(
     context.user_data["userdel_source"] = "expired"
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -2976,7 +2991,7 @@ async def send_user_detail(
     context.user_data["userdel_source"] = "users"
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -2998,7 +3013,7 @@ async def send_user_detail(
             source = "local"
 
     if not user_data:
-        text = "❌ کاربر پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_user_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -3022,35 +3037,36 @@ async def send_user_detail(
     )
 
     action_user_uuid = panel_user_uuid
+    _lg = _admin_bot_lang()
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "کانفیگ ها📄",
+                    _T(_lg, "adm_usr_configs_btn"),
                     callback_data=f"server:{server_id}:usercfg:{action_user_uuid}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "ویرایش کاربر✏️",
+                    _T(_lg, "adm_usr_edit_btn"),
                     callback_data=f"server:{server_id}:useredit:{action_user_uuid}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "تمدید اشتراک♾️",
+                    _T(_lg, "adm_usr_renew_btn"),
                     callback_data=f"server:{server_id}:userextend:{action_user_uuid}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "حذف کاربر🗑️",
+                    _T(_lg, "adm_usr_delete_btn"),
                     callback_data=f"server:{server_id}:userdel:{action_user_uuid}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت به لیست کاربران",
+                    _T(_lg, "adm_usr_back_to_list_btn"),
                     callback_data=f"server:{server_id}:users",
                 )
             ],
@@ -3090,9 +3106,11 @@ async def send_user_configs_menu(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_server_not_found")
         if message is not None and message.text:
             await message.edit_text(text)
         else:
@@ -3139,21 +3157,21 @@ async def send_user_configs_menu(
             [
                 [
                     InlineKeyboardButton(
-                        "🔗 لینک اشتراک مرزبان",
+                        _t("adm_cfg_mb_sub_btn"),
                         callback_data=f"server:{server_id}:usercfg:{user_uuid}:marzban_sub",
                         style="success",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        "📄 کانفیگ‌های مستقیم",
+                        _t("adm_cfg_direct_btn"),
                         callback_data=f"server:{server_id}:usercfg:{user_uuid}:direct",
                         style="primary",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        "🔙 برگشت به جزئیات کاربر",
+                        _t("adm_cfg_back_to_user_btn"),
                         callback_data=f"server:{server_id}:useruuid:{user_uuid}",
                         style="primary",
                     )
@@ -3181,42 +3199,42 @@ async def send_user_configs_menu(
         [
             [
                 InlineKeyboardButton(
-                    "📄 کانفیگ‌های مستقیم",
+                    _t("adm_cfg_direct_btn"),
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:direct",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🔄 اشتراک خودکار",
+                    _t("adm_cfg_auto_sub_btn"),
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:auto_sub",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🔗 لینک اشتراک اصلی",
+                    _t("adm_cfg_main_sub_btn"),
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🧬 لینک اشتراک Base64",
+                    _t("adm_cfg_b64_sub_btn"),
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub_b64",
                     style="primary",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🌐 اشتراک هوشمند",
+                    _t("adm_cfg_smart_sub_btn"),
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi",
                     style="success",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🌐 اشتراک هوشمند Base64",
+                    _t("adm_cfg_smart_b64_sub_btn"),
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi_b64",
                     style="success",
                 )
@@ -3224,13 +3242,13 @@ async def send_user_configs_menu(
             [
                 (
                     InlineKeyboardButton(
-                        "🚪 ورود به پنل کاربر",
+                        _t("adm_cfg_panel_login_btn"),
                         url=panel_user_link,
                         style="success",
                     )
                     if panel_user_link
                     else InlineKeyboardButton(
-                        "🚪 ورود به پنل کاربر",
+                        _t("adm_cfg_panel_login_btn"),
                         callback_data=f"server:{server_id}:usercfg:{user_uuid}:bot_link",
                         style="success",
                     )
@@ -3238,7 +3256,7 @@ async def send_user_configs_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "🔙 برگشت به جزئیات کاربر",
+                    _t("adm_cfg_back_to_user_btn"),
                     callback_data=f"server:{server_id}:useruuid:{user_uuid}",
                     style="primary",
                 )
@@ -3270,9 +3288,11 @@ async def send_direct_config_menu(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _t("adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -3290,10 +3310,10 @@ async def send_direct_config_menu(
     ) or f"User_{user_uuid}"
 
     text = (
-        "📄 کانفیگ مستقیم\n"
-        f"👤 کاربر: {name}\n"
-        "━━━━━━━━━━━━━━\n"
-        "پروتکل موردنظر را انتخاب کنید:"
+        _t("adm_cfg_direct_title") + "\n"
+        + _t("adm_usr_header_short", name=name) + "\n"
+        + "━━━━━━━━━━━━━━\n"
+        + _t("adm_cfg_choose_protocol")
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -3318,7 +3338,7 @@ async def send_direct_config_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "🔙 بازگشت",
+                    _t("back"),
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}",
                 )
             ],
@@ -3344,7 +3364,7 @@ async def send_user_extend_menu(
 ) -> None:
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -3360,24 +3380,25 @@ async def send_user_extend_menu(
 # ===============================
 
 def _extend_dyn_keyboard(server_id: int, user_uuid: str, gb: int, months: int):
+    _lg = _admin_bot_lang()
     rows = [
-        [InlineKeyboardButton("\U0001f4ca حجم تمدید", callback_data="noop")],
+        [InlineKeyboardButton(_T(_lg, "adm_ext_gb_header"), callback_data="noop")],
         [
             InlineKeyboardButton("➖10", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_dec10"),
             InlineKeyboardButton("➖", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_dec"),
             InlineKeyboardButton("➕", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc"),
             InlineKeyboardButton("➕10", callback_data=f"extdyn:{server_id}:{user_uuid}:gb_inc10"),
         ],
-        [InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop")],
-        [InlineKeyboardButton("📦 حجم: ریست | ⏳ زمان: ریست", callback_data=f"extdyn:{server_id}:{user_uuid}:reset")],
-        [InlineKeyboardButton("\u23f3 مدت تمدید", callback_data="noop")],
+        [InlineKeyboardButton(_T(_lg, "adm_ext_gb_value", gb=gb), callback_data="noop")],
+        [InlineKeyboardButton(_T(_lg, "adm_ext_reset_both"), callback_data=f"extdyn:{server_id}:{user_uuid}:reset")],
+        [InlineKeyboardButton(_T(_lg, "adm_ext_months_header"), callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"extdyn:{server_id}:{user_uuid}:month_dec"),
-            InlineKeyboardButton(f"{months} ماه", callback_data="noop"),
+            InlineKeyboardButton(_T(_lg, "adm_ext_months_value", m=months), callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"extdyn:{server_id}:{user_uuid}:month_inc"),
         ],
-        [InlineKeyboardButton("✅ اعمال و تمدید", callback_data=f"extdyn:{server_id}:{user_uuid}:confirm")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}:useruuid:{user_uuid}")],
+        [InlineKeyboardButton(_T(_lg, "adm_ext_apply_btn"), callback_data=f"extdyn:{server_id}:{user_uuid}:confirm")],
+        [InlineKeyboardButton(_T(_lg, "back"), callback_data=f"server:{server_id}:useruuid:{user_uuid}")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -3398,9 +3419,10 @@ def _extend_dyn_defaults(server_id: int) -> tuple:
 
 async def _send_dynamic_extend(server_id: int, user_uuid: str, chat_id: int, context, message=None):
     """نمایش ویزارد پویای تمدید اشتراک."""
+    _lg = _admin_bot_lang()
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _T(_lg, "adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -3411,8 +3433,8 @@ async def _send_dynamic_extend(server_id: int, user_uuid: str, chat_id: int, con
     context.user_data[state_key] = {"gb": gb, "months": months}
     kb = _extend_dyn_keyboard(server_id, user_uuid, gb, months)
     text = (
-        "🎛 <b>تمدید اشتراک با پلن پویا</b>\n\n"
-        "حجم و مدت دلخواه تمدید را انتخاب کنید، سپس «✅ اعمال و تمدید» را بزنید."
+        _T(_lg, "adm_ext_wizard_title") + "\n\n"
+        + _T(_lg, "adm_ext_wizard_hint")
     )
     if message is not None:
         try:
@@ -3438,7 +3460,7 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
     """
     server = database.get_server_by_id(server_id)
     if not server:
-        await context.bot.send_message(chat_id, "❌ سرور پیدا نشد.")
+        await context.bot.send_message(chat_id, _T(_admin_bot_lang(), "adm_err_server_not_found"))
         return
 
     new_days = months * 30
@@ -3466,8 +3488,9 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
         changed, total, failed = 0, 0, []
 
     if changed <= 0:
-        detail = f"\n⚠️ سرورهای خطادار: {', '.join(failed[:3])}" if failed else ""
-        await context.bot.send_message(chat_id, f"❌ خطا در اعمال تمدید پویا.{detail}")
+        _lg = _admin_bot_lang()
+        detail = "\n" + _T(_lg, "adm_ext_failed_servers", servers=', '.join(failed[:3])) if failed else ""
+        await context.bot.send_message(chat_id, _T(_lg, "adm_ext_apply_error") + detail)
         return
 
     # فعال‌سازی اشتراک (تیک فعال شدن) روی کل خوشه
@@ -3476,13 +3499,14 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
     except Exception as e:
         logger.warning("Failed to activate user after dynamic extend: %s", e)
 
-    node_note = f"\n⚠️ {len(failed)} نود اعمال نشد: {', '.join(failed[:3])}" if failed else ""
+    _lg = _admin_bot_lang()
+    node_note = "\n" + _T(_lg, "adm_ext_nodes_failed", n=len(failed), servers=', '.join(failed[:3])) if failed else ""
     await context.bot.send_message(
         chat_id,
-        f"✅ اشتراک با پلن پویا تمدید و فعال شد ({changed}/{total} سرور)!\n"
-        f"حجم: {format_gb(gb)}GB (ریست کامل - حجم قبلی صفر شد)\n"
-        f"زمان: {int(new_days)} روز (ریست کامل - زمان قبلی صفر شد)"
-        f"{node_note}",
+        _T(_lg, "adm_ext_success", changed=changed, total=total) + "\n"
+        + _T(_lg, "adm_ext_gb_line", gb=format_gb(gb)) + "\n"
+        + _T(_lg, "adm_ext_days_line", d=int(new_days))
+        + f"{node_note}",
     )
     await send_user_detail(server_id, target_uuid, chat_id, context)
 
@@ -3507,7 +3531,7 @@ async def send_user_edit_menu(
 ) -> None:
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_server_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -3529,7 +3553,7 @@ async def send_user_edit_menu(
             source = "local"
 
     if not user_data:
-        text = "❌ کاربر پیدا نشد."
+        text = _T(_admin_bot_lang(), "adm_err_user_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -3538,8 +3562,9 @@ async def send_user_edit_menu(
 
     text = build_user_detail_text(server, user_data, source)
 
+    _lg = _admin_bot_lang()
     is_active_now = _panel_user_is_active(user_data if isinstance(user_data, dict) else {})
-    toggle_label = "کاربر فعال 🟢" if is_active_now else "کاربر غیرفعال 🔴"
+    toggle_label = _T(_lg, "adm_editusr_active_label") if is_active_now else _T(_lg, "adm_editusr_inactive_label")
 
     keyboard = InlineKeyboardMarkup(
         [
@@ -3551,39 +3576,39 @@ async def send_user_edit_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "بازنشانی حجم🔄",
+                    _T(_lg, "adm_editusr_reset_usage_btn"),
                     callback_data=f"ued:{server_id}:{user_uuid}:reset_usage",
                 ),
                 InlineKeyboardButton(
-                    "ویرایش حجم📊",
+                    _T(_lg, "adm_editusr_edit_usage_btn"),
                     callback_data=f"ued:{server_id}:{user_uuid}:usage",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    "بازنشانی مدت🔄",
+                    _T(_lg, "adm_editusr_reset_days_btn"),
                     callback_data=f"ued:{server_id}:{user_uuid}:reset_days",
                 ),
                 InlineKeyboardButton(
-                    "ویرایش مدت📅",
+                    _T(_lg, "adm_editusr_edit_days_btn"),
                     callback_data=f"ued:{server_id}:{user_uuid}:days",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    "ویرایش یادداشت📝",
+                    _T(_lg, "adm_editusr_edit_note_btn"),
                     callback_data=f"ued:{server_id}:{user_uuid}:comment",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "تغییرنام اشتراک✏️",
+                    _T(_lg, "adm_editusr_rename_btn"),
                     callback_data=f"ued:{server_id}:{user_uuid}:rename_sub",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _T(_lg, "adm_btn_back_emoji"),
                     callback_data=f"server:{server_id}:useruuid:{user_uuid}",
                 )
             ],
@@ -3670,6 +3695,7 @@ def _build_smart_search_results_keyboard(
     page: int,
     total_pages: int,
 ) -> InlineKeyboardMarkup:
+    _lg = _admin_bot_lang()
     start = (page - 1) * SEARCH_RESULTS_PAGE_SIZE
     end = start + SEARCH_RESULTS_PAGE_SIZE
     page_items = results[start:end]
@@ -3677,7 +3703,7 @@ def _build_smart_search_results_keyboard(
     rows: List[List[InlineKeyboardButton]] = []
     page_buttons: List[InlineKeyboardButton] = []
     for item in page_items:
-        name = str(item.get("name") or "").strip() or "کاربر"
+        name = str(item.get("name") or "").strip() or _T(_lg, "adm_search_user_word")
         name_short = name[:20]
         emoji = _smart_status_emoji(str(item.get("status") or ""))
         page_buttons.append(
@@ -3710,7 +3736,7 @@ def _build_smart_search_results_keyboard(
             )
         rows.append(nav)
 
-    rows.append([InlineKeyboardButton("بازگشت🔙", callback_data="search:back")])
+    rows.append([InlineKeyboardButton(_T(_lg, "adm_btn_back_emoji"), callback_data="search:back")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -3721,9 +3747,10 @@ async def send_smart_search_results_page(
     page: int = 1,
     message=None,
 ) -> None:
+    _lg = _admin_bot_lang()
     results = context.user_data.get("smart_search_results") or []
     if not results:
-        text = "❌ نتیجه جستجو در دسترس نیست."
+        text = _T(_lg, "adm_search_no_results")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -3742,13 +3769,13 @@ async def send_smart_search_results_page(
     offline_count = max(0, total - online_count - expired_count)
 
     text = (
-        "[📥 نتیجه جستجو]\n"
-        "#️⃣ لیست کاربران\n"
-        "شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
-        f"👤 تعداد کاربران: {total}\n"
-        f"🔵 کاربران آنلاین: {online_count}\n"
-        f"🟡 کاربران آفلاین: {offline_count}\n"
-        f"🔴 کاربران منقضی: {expired_count}"
+        _T(_lg, "adm_search_results_title") + "\n"
+        + _T(_lg, "adm_search_users_header") + "\n"
+        + _T(_lg, "adm_search_users_hint") + "\n"
+        + _T(_lg, "adm_search_count", n=total) + "\n"
+        + _T(_lg, "adm_search_online", n=online_count) + "\n"
+        + _T(_lg, "adm_search_offline", n=offline_count) + "\n"
+        + _T(_lg, "adm_search_expired_n", n=expired_count)
     )
     kb = _build_smart_search_results_keyboard(results, page, total_pages)
 
@@ -3778,19 +3805,21 @@ async def send_expired_users_list(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     results, online_count = await _collect_expired_users()
 
     if not results:
         text = (
-            "[⚠️لیست کاربران منقضی شده]\n"
-            "#️⃣ لیست کاربران\n"
-            "شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
-            "👤 تعداد کاربران: 0\n"
-            f"🔵 کاربران آنلاین: {online_count}\n\n"
-            "در حال حاضر هیچ کاربر منقضی‌شده‌ای پیدا نشد."
+            _t("adm_exp_list_title") + "\n"
+            + _t("adm_search_users_header") + "\n"
+            + _t("adm_search_users_hint") + "\n"
+            + _t("adm_search_count", n=0) + "\n"
+            + _t("adm_search_online", n=online_count) + "\n\n"
+            + _t("adm_exp_none_found")
         )
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("بازگشت🔙", callback_data="expired:back")]]
+            [[InlineKeyboardButton(_t("adm_btn_back_emoji"), callback_data="expired:back")]]
         )
         if message is not None:
             await message.edit_text(text, reply_markup=kb)
@@ -3800,11 +3829,11 @@ async def send_expired_users_list(
 
     total = len(results)
     lines = [
-        "[⚠️لیست کاربران منقضی شده]",
-        "#️⃣ لیست کاربران",
-        "شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید",
-        f"👤 تعداد کاربران: {total}",
-        f"🔵 کاربران آنلاین: {online_count}",
+        _t("adm_exp_list_title"),
+        _t("adm_search_users_header"),
+        _t("adm_search_users_hint"),
+        _t("adm_search_count", n=total),
+        _t("adm_search_online", n=online_count),
         "",
     ]
 
@@ -3824,10 +3853,10 @@ async def send_expired_users_list(
         keyboard_rows.append(list(reversed(chunk)))
 
     keyboard_rows.append(
-        [InlineKeyboardButton("🗑 حذف همه کاربران منقضی", callback_data="expired:delall:ask")]
+        [InlineKeyboardButton(_t("adm_exp_delete_all_btn"), callback_data="expired:delall:ask")]
     )
     keyboard_rows.append(
-        [InlineKeyboardButton("بازگشت🔙", callback_data="expired:back")]
+        [InlineKeyboardButton(_t("adm_btn_back_emoji"), callback_data="expired:back")]
     )
 
     kb = InlineKeyboardMarkup(keyboard_rows)
@@ -3854,7 +3883,7 @@ async def _collect_expired_users() -> tuple[List[Dict[str, Any]], int]:
 
     for s, users in zip(valid_servers, users_batches):
         server_id = s.get("id")
-        server_title = s.get("title") or f"سرور #{server_id}"
+        server_title = s.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=server_id)
 
         for u in users:
             status = classify_user_status(u)
@@ -3919,7 +3948,7 @@ async def _delete_user_across_related_servers(
 ) -> tuple[List[int], List[str]]:
     server = database.get_server_by_id(server_id)
     if not server:
-        return [], [f"سرور #{server_id}: یافت نشد"]
+        return [], [_T(_admin_bot_lang(), "adm_srv_delete_not_found", sid=server_id)]
 
     related_servers = _get_related_server_targets(server_id)
     if not related_servers:
@@ -3936,7 +3965,7 @@ async def _delete_user_across_related_servers(
         if target_id <= 0:
             continue
 
-        target_title = (target.get("title") or f"سرور #{target_id}").strip()
+        target_title = (target.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=target_id)).strip()
         try:
             if hasattr(hiddify_api, "delete_user"):
                 await hiddify_api.delete_user(target, user_uuid)
@@ -3977,6 +4006,8 @@ async def handle_add_server_flow(
     if not message:
         return
 
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     text = (message.text or "").strip()
 
     # لغو در هر مرحله
@@ -3984,7 +4015,7 @@ async def handle_add_server_flow(
         context.user_data.pop("state", None)
         context.user_data.pop("new_server", None)
         await message.reply_text(
-            "❌ عملیات افزودن سرور لغو شد.",
+            _t("adm_addsrv_cancelled"),
             reply_markup=admin_main_keyboard(),
         )
         await send_servers_list(chat_id=message.chat_id, context=context)
@@ -3996,21 +4027,21 @@ async def handle_add_server_flow(
     # انتخاب نوع پنل (از دکمه‌های اینلاین) - اگر متن ارسال شد، دوباره درخواست کن
     if state == ADD_STATE_TYPE:
         await message.reply_text(
-            "لطفاً از دکمه‌های زیر نوع پنل سرور را انتخاب کنید:",
+            _t("adm_addsrv_choose_type"),
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
-                        InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
+                        InlineKeyboardButton(_t("adm_addsrv_type_hiddify"), callback_data="servers:add:type:hiddify"),
                     ],
                     [
-                        InlineKeyboardButton("🛡 مرزبان (Marzban)", callback_data="servers:add:type:marzban"),
-                        InlineKeyboardButton("🛡 پاسارگارد (PasarGuard)", callback_data="servers:add:type:pasarguard"),
+                        InlineKeyboardButton(_t("adm_addsrv_type_marzban"), callback_data="servers:add:type:marzban"),
+                        InlineKeyboardButton(_t("adm_addsrv_type_pasarguard"), callback_data="servers:add:type:pasarguard"),
                     ],
                     [
-                        InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data="servers:add:type:xui_alireza"),
-                        InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data="servers:add:type:xui_sanaei"),
+                        InlineKeyboardButton(_t("adm_addsrv_type_xui_alireza"), callback_data="servers:add:type:xui_alireza"),
+                        InlineKeyboardButton(_t("adm_addsrv_type_xui_sanaei"), callback_data="servers:add:type:xui_sanaei"),
                     ],
-                    [InlineKeyboardButton("🔙بازگشت", callback_data="servers:list_back")],
+                    [InlineKeyboardButton(_t("adm_btn_back_no_space"), callback_data="servers:list_back")],
                 ]
             ),
         )
@@ -4023,21 +4054,17 @@ async def handle_add_server_flow(
         context.user_data["state"] = ADD_STATE_PANEL_URL
         if str(new_server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
             await message.reply_text(
-                "🌐 لطفاً آدرس پنل را وارد کنید:\nمثال: https://site.example.com/E6xNPh2XZF5A6UO\n"
-                "اگر پنل روی پورت غیر استاندارد است، پورت را هم وارد کنید (مثال: https://site.example.com:2056/E6xNPh2XZF5A6UO)",
+                _t("adm_addsrv_panel_url_xui"),
                 reply_markup=cancel_keyboard(),
             )
         elif str(new_server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES:
             await message.reply_text(
-                f"🌐 لطفاً آدرس پنل {_panel_type_label(new_server.get('panel_type'))} را وارد کنید:\n"
-                "مثال: https://panel.example.com:8000\n"
-                "⚠️ فقط آدرس پایه پنل (بدون /api و بدون مسیر اضافه).\n"
-                "اگر پورت غیر استاندارد است، پورت را هم وارد کنید.",
+                _t("adm_addsrv_panel_url_marzban", panel=_panel_type_label(new_server.get('panel_type'))),
                 reply_markup=cancel_keyboard(),
             )
         else:
             await message.reply_text(
-                "🌐 لطفاً آدرس پنل هیدیفای را وارد کنید:\nمثال: https://site.example.com",
+                _t("adm_addsrv_panel_url_hiddify"),
                 reply_markup=cancel_keyboard(),
             )
         return
@@ -4047,8 +4074,7 @@ async def handle_add_server_flow(
         panel_url = text.strip()
         if not (panel_url.startswith("http://") or panel_url.startswith("https://")):
             await message.reply_text(
-                "❌ لطفاً آدرس پنل را به صورت کامل و با http/https ارسال کنید.\n"
-                "مثال: https://site.example.com/E6xNPh2XZF5A6UO",
+                _t("adm_addsrv_panel_url_invalid"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4059,8 +4085,7 @@ async def handle_add_server_flow(
         if new_server.get("panel_type") in MARZBAN_PANEL_TYPES:
             context.user_data["state"] = ADD_STATE_MARZBAN_USERNAME
             await message.reply_text(
-                f"👤 لطفاً «نام کاربری ادمین» پنل {_panel_type_label(new_server.get('panel_type'))} را وارد کنید:\n"
-                "(همان مدیری که در پنل ساخته‌اید، مثلاً admin)",
+                _t("adm_addsrv_marzban_username", panel=_panel_type_label(new_server.get('panel_type'))),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4068,15 +4093,14 @@ async def handle_add_server_flow(
         if new_server.get("panel_type") == "xui":
             context.user_data["state"] = ADD_STATE_XUI_USERNAME
             await message.reply_text(
-                "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
+                _t("adm_addsrv_xui_username"),
                 reply_markup=cancel_keyboard(),
             )
             return
 
         context.user_data["state"] = ADD_STATE_ADMIN_PROXY
         await message.reply_text(
-            "🔑 لطفاً «کد مسیر ادمین پنل» را وارد کنید (Admin Proxy Path):\n"
-            "مثال: cNT69A5AAw",
+            _t("adm_addsrv_admin_proxy"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4086,8 +4110,7 @@ async def handle_add_server_flow(
         username = text.strip()
         if not username or " " in username:
             await message.reply_text(
-                "❌ نام کاربری ادمین مرزبان نمی‌تواند خالی باشد یا فاصله داشته باشد.\n"
-                "مثال: admin",
+                _t("adm_addsrv_marzban_username_invalid"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4095,7 +4118,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_MARZBAN_PASSWORD
         await message.reply_text(
-            "🔑 لطفاً «رمز عبور ادمین» پنل مرزبان را وارد کنید:",
+            _t("adm_addsrv_marzban_password"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4105,7 +4128,7 @@ async def handle_add_server_flow(
         password = text.strip()
         if not password:
             await message.reply_text(
-                "❌ رمز عبور نمی‌تواند خالی باشد. دوباره ارسال کنید:",
+                _t("adm_addsrv_password_empty"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4113,7 +4136,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_LIMIT
         await message.reply_text(
-            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            _t("adm_addsrv_users_limit"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4124,7 +4147,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_XUI_PASSWORD
         await message.reply_text(
-            "🔑 لطفاً «رمز عبور» پنل X-UI را وارد کنید:",
+            _t("adm_addsrv_xui_password"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4135,10 +4158,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_XUI_TOKEN
         await message.reply_text(
-            "🔑 توکن API پنل X-UI (اختیاری - برای 3x-ui سنایی):\n"
-            "از مسیر Settings → Security → API Token بسازید.\n"
-            "اگر پنل علیرضا دارید یا نمی‌خواهید استفاده کنید، «0» یا «skip» بفرستید.\n\n"
-            "برای گذشتن: «0» یا «skip» یا «-»",
+            _t("adm_addsrv_xui_token"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4152,9 +4172,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_XUI_SUB_DOMAIN
         await message.reply_text(
-            "🌐 دامنه سابسکریپشن (Subscription Domain) را وارد کنید (اختیاری):\n"
-            "اگر خالی گذاشته شود، از آدرس پنل استفاده می‌شود.\n\n"
-            "برای گذشتن از این مرحله، «0» یا «skip» یا «-» را بفرستید.",
+            _t("adm_addsrv_xui_sub_domain"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4170,10 +4188,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_XUI_INBOUND
         await message.reply_text(
-            "🧩 شناسه اینباند فروش (Inbound ID) را وارد کنید (اختیاری):\n"
-            "اگر خالی/skip باشد، اولین اینباند فعال انتخاب می‌شود.\n"
-            "`0` = همه اینباندهای فعال، `1` = تک اینباند، `1,2,3` = چند اینباند\n\n"
-            "مثال: `0` یا `1` یا `1,2,3`",
+            _t("adm_addsrv_xui_inbound"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4200,15 +4215,14 @@ async def handle_add_server_flow(
                     new_server["xui_inbound_id"] = ",".join(ids)
                 except ValueError:
                     await message.reply_text(
-                        "❌ شناسه اینباند باید عدد باشد.\n"
-                        "مثال: `1` (تک)، `1,2,3` (چندتا)، `0` (همه)",
+                        _t("adm_addsrv_inbound_invalid"),
                         reply_markup=cancel_keyboard(),
                     )
                     return
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_LIMIT
         await message.reply_text(
-            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            _t("adm_addsrv_users_limit"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4219,8 +4233,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_ADMIN_UUID
         await message.reply_text(
-            "🧩 لطفاً «کلید ادمین پنل» را وارد کنید (UUID یا API Key):\n"
-            "⚠️ فقط مقدار خالص، بدون / و بدون آدرس",
+            _t("adm_addsrv_admin_uuid"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4230,10 +4243,7 @@ async def handle_add_server_flow(
         admin_key = text.strip()
         if "/" in admin_key or admin_key.startswith("http://") or admin_key.startswith("https://"):
             await message.reply_text(
-                "❌ UUID/API Key ادمین نامعتبر است.\n"
-                "فقط مقدار خالص را وارد کنید (بدون / و بدون آدرس).\n"
-                "مثال درست:\n"
-                "123e4567-e89b-12d3-a456-426614174000",
+                _t("adm_addsrv_admin_uuid_invalid"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4241,7 +4251,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_USER_PROXY
         await message.reply_text(
-            "🔑 لطفاً «کد مسیر کاربران پنل» را وارد کنید (User Proxy Path):",
+            _t("adm_addsrv_user_proxy"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4252,7 +4262,7 @@ async def handle_add_server_flow(
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_LIMIT
         await message.reply_text(
-            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            _t("adm_addsrv_users_limit"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4265,7 +4275,7 @@ async def handle_add_server_flow(
                 raise ValueError
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً یک عدد صحیح و بزرگ‌تر از صفر برای محدودیت کاربران وارد کنید.",
+                _t("adm_addsrv_limit_invalid"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4289,41 +4299,27 @@ async def handle_add_server_flow(
             if _is_marzban_pt:
                 if "auth failed" in err_low or "401" in err_low:
                     await message.reply_text(
-                        "❌ ورود به پنل مرزبان ناموفق بود (نام کاربری یا رمز عبور ادمین اشتباه است).\n\n"
-                        "لطفاً از دستور زیر دوباره اقدام کنید:\n"
-                        "«ویرایش سرور✏️ → سرور → نام کاربری/رمز» یا حذف و افزودن مجدد سرور.",
+                        _t("adm_addsrv_mb_auth_failed"),
                         reply_markup=cancel_keyboard(),
                     )
                     return
                 if len(err_text) > 800:
-                    err_text = err_text[:800] + "\n... (خطا کوتاه شد)"
+                    err_text = err_text[:800] + "\n" + _t("adm_err_truncated")
                 await message.reply_text(
-                    "❌ اتصال به پنل مرزبان برقرار نشد.\n"
-                    "لطفاً آدرس پنل (مثلاً https://panel.example.com:8000)، "
-                    "نام کاربری و رمز ادمین را بررسی کنید.\n\n"
-                    f"جزئیات خطا:\n{err_text}",
+                    _t("adm_addsrv_mb_connect_failed", err=err_text),
                     reply_markup=cancel_keyboard(),
                 )
                 return
             if "just a moment" in err_low or "cloudflare" in err_low or "enable javascript and cookies" in err_low:
                 await message.reply_text(
-                    "❌ اتصال به پنل توسط Cloudflare مسدود شد (HTTP 403).\n"
-                    "برای این دامنه/مسیر API باید Challenge خاموش یا Bypass شود.\n\n"
-                    "✅ راهکار:\n"
-                    "1) روی Cloudflare یک Rule بگذارید که مسیر\n"
-                    "   `/<admin_proxy_path>/api/*`\n"
-                    "   بدون Challenge/Captcha باشد.\n"
-                    "2) یا برای اتصال ربات، دامنه‌ای استفاده کنید که پشت Cloudflare Challenge نباشد.\n"
-                    "3) مقدار UUID ادمین را فقط UUID/API Key خالص وارد کنید (بدون / و بدون proxy path).",
+                    _t("adm_addsrv_cf_blocked"),
                     reply_markup=cancel_keyboard(),
                 )
                 return
             if len(err_text) > 800:
-                err_text = err_text[:800] + "\n... (خطا کوتاه شد)"
+                err_text = err_text[:800] + "\n" + _t("adm_err_truncated")
             await message.reply_text(
-                "❌ اتصال به پنل با اطلاعات وارد شده برقرار نشد.\n"
-                "لطفاً آدرس پنل، Proxy Pathها و UUID/API Key را بررسی کنید.\n\n"
-                f"جزئیات خطا:\n{err_text}",
+                _t("adm_addsrv_connect_failed", err=err_text),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -4336,21 +4332,21 @@ async def handle_add_server_flow(
         context.user_data.pop("new_server", None)
 
         summary = (
-            "✅ سرور با موفقیت اضافه شد.\n\n"
-            f"🖥️ عنوان: {saved.get('title')}\n"
-            f"🌐 آدرس پنل: {saved.get('panel_url')}\n"
-            f"🧩 نوع پنل: {_panel_type_label(saved.get('panel_type'))}\n"
+            _t("adm_addsrv_saved") + "\n\n"
+            + _t("adm_addsrv_sum_title", title=saved.get('title')) + "\n"
+            + _t("adm_addsrv_sum_url", url=saved.get('panel_url')) + "\n"
+            + _t("adm_addsrv_sum_type", panel=_panel_type_label(saved.get('panel_type'))) + "\n"
         )
         if _is_marzban_pt:
-            summary += f"👤 ادمین مرزبان: {saved.get('marzban_admin_username')}\n"
-        summary += f"👥 محدودیت کاربران: {saved.get('users_limit')}\n"
+            summary += _t("adm_addsrv_sum_mb_admin", user=saved.get('marzban_admin_username')) + "\n"
+        summary += _t("adm_addsrv_sum_limit", n=saved.get('users_limit'))
         await message.reply_text(summary, reply_markup=admin_main_keyboard())
         await send_servers_list(chat_id=message.chat_id, context=context)
         return
 
     # اگر state نامعتبر بود
     await message.reply_text(
-        "❌ وضعیت افزودن سرور نامعتبر است. دوباره از منوی «افزودن سرور» اقدام کنید.",
+        _t("adm_addsrv_invalid_state"),
         reply_markup=admin_main_keyboard(),
     )
     context.user_data.pop("state", None)
@@ -5523,7 +5519,7 @@ async def handle_smart_search_input(
 
         for s, users in zip(valid_servers, users_batches):
             server_id = s.get("id")
-            server_title = s.get("title") or f"سرور #{server_id}"
+            server_title = s.get("title") or _T(_admin_bot_lang(), "adm_srv_fallback_title", sid=server_id)
 
             for u in users:
                 user_uuid = str(u.get("uuid") or u.get("id") or "")

@@ -13,11 +13,25 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from AdminBot.keyboards import admin_main_keyboard
-from Shared import database, plans_storage
+from Shared import database, plans_storage, userbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
 
 logger = logging.getLogger(__name__)
+
+# ---- چندزبانه: زبان ادمین + شورت‌کات ترجمه ----
+from Shared import i18n as _i18n
+
+
+def _admin_bot_lang() -> str:
+    try:
+        return userbot_db.get_admin_language()
+    except Exception:
+        return "fa"
+
+
+def _T(lang: str, key: str, **kw) -> str:
+    return _i18n.t(key, lang, **kw)
 
 # حالت‌های نمایش پلن برای هر سرور
 PLAN_MODE_FIXED = "fixed"
@@ -51,7 +65,9 @@ def _normalize_digit_text(value: Any) -> str:
 
 def _cancel_kb() -> ReplyKeyboardMarkup:
     """کیبورد لغو برای هنگام دریافت ورودی متنی."""
-    return ReplyKeyboardMarkup([[KeyboardButton("لغو❌")]], resize_keyboard=True)
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+    return ReplyKeyboardMarkup([[KeyboardButton(_t("btn_cancel") + "❌")]], resize_keyboard=True)
 
 
 def _finish_reply_kb() -> ReplyKeyboardMarkup:
@@ -59,10 +75,12 @@ def _finish_reply_kb() -> ReplyKeyboardMarkup:
 
 
 def _format_discount_tiers(tiers: List[Dict[str, int]]) -> str:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     normalized = plans_storage.normalize_discount_tiers(tiers)
     if not normalized:
-        return "غیرفعال"
-    return " | ".join(f"از {item['gb']} گیگ: {item['percent']}٪" for item in normalized)
+        return _t("adm_pl_discount_off")
+    return " | ".join(_t("adm_pl_tier_item", n=item['gb'], v=item['percent']) for item in normalized)
 
 
 def _is_simple_discount_enabled(settings: Dict[str, Any]) -> bool:
@@ -137,23 +155,26 @@ async def send_plans_root_menu(
       - در حالت پویا: فقط تنظیمات پلن‌ها
     """
     server = database.get_server_by_id(server_id)
-    server_title = server.get("title") if server else f"سرور #{server_id}"
+    server_title = server.get("title") if server else _T(_admin_bot_lang(), "adm_pl_server_fallback", n=server_id)
+
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
 
     mode = plans_storage.get_plan_display_mode(server_id)
     if mode == PLAN_MODE_FIXED:
-        mode_txt = "فقط پلن‌های ثابت"
+        mode_txt = _t("adm_pl_mode_fixed")
     elif mode == PLAN_MODE_DYNAMIC:
-        mode_txt = "فقط پلن پویا"
+        mode_txt = _t("adm_pl_mode_dynamic")
     elif mode == PLAN_MODE_MIXED:
-        mode_txt = "حالت ترکیبی (ثابت + پویا)"
+        mode_txt = _t("adm_pl_mode_mixed")
     else:
-        mode_txt = "نامشخص"
+        mode_txt = _t("adm_pl_mode_unknown")
 
     text = (
-        f"مدیریت پلن‌ها برای سرور 🖥 {server_title}\n"
+        _t("adm_pl_root_title", v=server_title) + "\n"
         "━━━━━━━━━━━━━━\n"
-        f"حالت نمایش فعلی در ربات کاربران: {mode_txt}\n\n"
-        "یکی از گزینه‌های زیر را انتخاب کنید:"
+        +         _t("adm_pl_root_mode", v=mode_txt) + "\n\n"
+        + _t("adm_pl_choose_option")
     )
 
     rows: List[List[InlineKeyboardButton]] = []
@@ -163,7 +184,7 @@ async def send_plans_root_menu(
         rows.append(
             [
                 InlineKeyboardButton(
-                    "📂 لیست دسته‌های پلن",
+                    _t("adm_pl_cats_btn"),
                     callback_data=f"plans:{server_id}:cats",
                 )
             ]
@@ -173,7 +194,7 @@ async def send_plans_root_menu(
     rows.append(
         [
             InlineKeyboardButton(
-                "⚙️تنظیمات پلن‌ها",
+                _t("adm_pl_settings_btn"),
                 callback_data=f"plans:{server_id}:settings",
             )
         ]
@@ -184,7 +205,7 @@ async def send_plans_root_menu(
         rows.append(
             [
                 InlineKeyboardButton(
-                    "🎛 مدیریت حرفه‌ای تخفیف‌ها",
+                    _t("adm_pl_pro_discount_btn"),
                     callback_data=f"plans:{server_id}:dyn_discount_settings",
                 )
             ]
@@ -194,7 +215,7 @@ async def send_plans_root_menu(
     rows.append(
         [
             InlineKeyboardButton(
-                "بازگشت🔙",
+                _t("btn_back") + "🔙",
                 callback_data=f"server:{server_id}",
             )
         ]
@@ -227,21 +248,24 @@ async def _send_categories_menu(
     cats = plans_storage.get_plan_categories(server_id)
     mode = plans_storage.get_plan_display_mode(server_id)
 
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     if not cats:
         text = (
-            "📂 لیست دسته‌های پلن\n"
-            "برای این سرور هنوز هیچ دسته‌ای ثبت نشده است.\n"
-            "می‌توانید یک دسته جدید اضافه کنید."
+            _t("adm_pl_cats_btn") + "\n"
+            + _t("adm_pl_cats_empty") + "\n"
+            + _t("adm_pl_cats_empty_hint")
         )
         rows: List[List[InlineKeyboardButton]] = []
     else:
-        lines: List[str] = ["📂 لیست دسته‌های پلن", ""]
+        lines: List[str] = [_t("adm_pl_cats_btn"), ""]
         rows = []
         for c in cats:
             cid = c["id"]
-            title = c.get("title") or f"دسته #{cid}"
+            title = c.get("title") or _t("adm_pl_cat_fallback", n=cid)
             prio = c.get("priority", 0)
-            lines.append(f"• {title} (اولویت: {prio})")
+            lines.append(_t("adm_pl_cat_line", v=title, n=prio))
             rows.append(
                 [
                     InlineKeyboardButton(
@@ -256,7 +280,7 @@ async def _send_categories_menu(
     rows.append(
         [
             InlineKeyboardButton(
-                "➕ افزودن دسته",
+                _t("adm_pl_cat_add_btn"),
                 callback_data=f"plans:{server_id}:cat_add",
             )
         ]
@@ -265,7 +289,7 @@ async def _send_categories_menu(
         rows.append(
             [
                 InlineKeyboardButton(
-                    "➖ حذف دسته",
+                    _t("adm_pl_cat_del_btn"),
                     callback_data=f"plans:{server_id}:cat_del_menu",
                 )
             ]
@@ -276,7 +300,7 @@ async def _send_categories_menu(
         rows.append(
             [
                 InlineKeyboardButton(
-                    "تنظیم مقادیر پلن پویا📈",
+                    _t("adm_pl_dyn_values_btn"),
                     callback_data=f"plans:{server_id}:dyn_settings",
                 )
             ]
@@ -286,7 +310,7 @@ async def _send_categories_menu(
     rows.append(
         [
             InlineKeyboardButton(
-                "⚙️تنظیمات پلن‌ها",
+                _t("adm_pl_settings_btn"),
                 callback_data=f"plans:{server_id}:settings",
             )
         ]
@@ -296,7 +320,7 @@ async def _send_categories_menu(
     rows.append(
         [
             InlineKeyboardButton(
-                "بازگشت🔙",
+                _t("btn_back") + "🔙",
                 callback_data=f"plans:{server_id}:root",
             )
         ]
@@ -317,51 +341,54 @@ async def _send_category_detail(
     message=None,
 ) -> None:
     """جزئیات یک دسته و دکمه‌های مدیریت آن."""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     cats = plans_storage.get_plan_categories(server_id)
     cat = next((c for c in cats if int(c["id"]) == int(category_id)), None)
     if not cat:
-        txt = "❌ این دسته پیدا نشد."
+        txt = _t("adm_pl_cat_notfound")
         if message:
             await message.edit_text(txt)
         else:
             await context.bot.send_message(chat_id, txt)
         return
 
-    title = cat.get("title") or f"دسته #{category_id}"
+    title = cat.get("title") or _t("adm_pl_cat_fallback", n=category_id)
     prio = cat.get("priority", 0)
     plans = plans_storage.get_plans(server_id, category_id=category_id)
 
     text = (
-        f"📂 دسته: {title}\n"
+        _t("adm_pl_cat_detail_title", v=title) + "\n"
         "━━━━━━━━━━━━━━\n"
-        f"🔢 اولویت: {prio}\n"
-        f"📋 تعداد پلن: {len(plans)}\n\n"
-        "از دکمه‌های زیر برای مدیریت این دسته استفاده کنید."
+        + _t("adm_pl_cat_prio_line", n=prio) + "\n"
+        + _t("adm_pl_cat_count_line", n=len(plans)) + "\n\n"
+        + _t("adm_pl_cat_manage_hint")
     )
 
     kb = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "📋 لیست پلن‌ها",
+                    _t("adm_pl_plans_list_btn"),
                     callback_data=f"plans:{server_id}:plans:{category_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "📝 ویرایش عنوان",
+                    _t("adm_pl_cat_edit_title_btn"),
                     callback_data=f"plans:{server_id}:cat_edit_title:{category_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "🔢 ویرایش اولویت",
+                    _t("adm_pl_cat_edit_prio_btn"),
                     callback_data=f"plans:{server_id}:cat_edit_prio:{category_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:cats",
                 )
             ],
@@ -382,38 +409,42 @@ async def _send_plans_list(
     message=None,
 ) -> None:
     """لیست پلن‌های یک دسته (با ستون ردیف و مرتب)."""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     plans = plans_storage.get_plans(server_id, category_id=category_id)
 
     if not plans:
         text = (
-            "📋 لیست پلن‌های موجود\n"
-            "هنوز هیچ پلنی در این دسته ثبت نشده است."
+            _t("adm_pl_list_title") + "\n"
+            + _t("adm_pl_list_empty")
         )
         rows: List[List[InlineKeyboardButton]] = []
     else:
         lines: List[str] = [
-            "📋 لیست پلن‌های موجود",
+            _t("adm_pl_list_title"),
             "",
-            "ستون‌ها:",
-            "ردیف | عنوان پلن | 💰 قیمت | ⌛ زمان (روز) | 📊 حجم (گیگابایت)",
+            _t("adm_pl_list_cols"),
+            _t("adm_pl_list_header"),
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         ]
+
         rows: List[List[InlineKeyboardButton]] = []
 
         for idx, p in enumerate(plans, start=1):
             pid = p["id"]
-            title = p.get("title") or f"پلن #{pid}"
+            title = p.get("title") or _t("adm_pl_fallback", n=pid)
             price = p.get("price", 0)
             days = p.get("days", 0)
             gb = p.get("gb", 0)
 
-            price_txt = f"{price:,} تومان"
-            days_txt = f"{days} روز"
-            gb_txt = f"{gb} گیگ"
+            price_txt = _t("adm_pl_price_val", v=f"{price:,}")
+            days_txt = _t("adm_pl_days_val", n=days)
+            gb_txt = _t("adm_pl_gb_val", n=gb)
 
             # متن ردیف
             lines.append(
-                f"{idx} | {title} | {price_txt} | {days_txt} | {gb_txt}"
+                _t("adm_pl_list_row", n=idx, t=title, p=price_txt, d=days_txt, g=gb_txt)
             )
 
             # دکمه برای مدیریت همان پلن
@@ -432,7 +463,7 @@ async def _send_plans_list(
     rows.append(
         [
             InlineKeyboardButton(
-                "➕ افزودن پلن",
+                _t("adm_pl_add_btn"),
                 callback_data=f"plans:{server_id}:plan_add:{category_id}",
             )
         ]
@@ -441,7 +472,7 @@ async def _send_plans_list(
         rows.append(
             [
                 InlineKeyboardButton(
-                    "🗑️ حذف پلن",
+                    _t("adm_pl_del_btn"),
                     callback_data=f"plans:{server_id}:plan_del_menu:{category_id}",
                 )
             ]
@@ -449,12 +480,11 @@ async def _send_plans_list(
     rows.append(
         [
             InlineKeyboardButton(
-                "بازگشت🔙",
+                _t("btn_back") + "🔙",
                 callback_data=f"plans:{server_id}:cat:{category_id}",
             )
         ]
     )
-
     kb = InlineKeyboardMarkup(rows)
     if message:
         await message.edit_text(text, reply_markup=kb)
@@ -470,40 +500,43 @@ async def _send_plan_detail(
     message=None,
 ) -> None:
     """نمایش جزئیات یک پلن ثابت."""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     plan = plans_storage.get_plan(server_id, plan_id)
     if not plan:
-        txt = "❌ پلن مورد نظر پیدا نشد."
+        txt = _t("adm_pl_plan_notfound")
         if message:
             await message.edit_text(txt)
         else:
             await context.bot.send_message(chat_id, txt)
         return
 
-    title = plan.get("title") or f"پلن #{plan_id}"
+    title = plan.get("title") or _t("adm_pl_fallback", n=plan_id)
     price = plan.get("price", 0)
     days = plan.get("days", 0)
     gb = plan.get("gb", 0)
     cat_id = plan.get("category_id")
 
     text = (
-        f"📦 {title}\n"
+        _t("adm_pl_plan_title_line", v=title) + "\n"
         "━━━━━━━━━━━━━━\n"
-        f"💰 قیمت: {price:,} تومان\n"
-        f"⌛ زمان: {days} روز\n"
-        f"📊 حجم: {gb} گیگابایت\n"
+        + _t("adm_pl_plan_price_line", v=f"{price:,}") + "\n"
+        + _t("adm_pl_plan_days_line", n=days) + "\n"
+        + _t("adm_pl_plan_gb_line", n=gb) + "\n"
     )
 
     kb = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "🗑️ حذف این پلن",
+                    _t("adm_pl_del_this_btn"),
                     callback_data=f"plans:{server_id}:plan_del:{plan_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:plans:{cat_id}",
                 )
             ],
@@ -532,24 +565,27 @@ async def _send_plans_settings_menu(
       - تنظیمات پلن پویا
       - بازگشت
     """
-    text = "⚙️تنظیمات پلن‌ها\n\nیکی از گزینه‌های زیر را انتخاب کنید:"
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
+    text = _t("adm_pl_settings_btn") + "\n\n" + _t("adm_pl_choose_option")
     kb = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "نوع نمایش پلن‌ها📋",
+                    _t("adm_pl_display_mode_btn"),
                     callback_data=f"plans:{server_id}:mode_menu",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "تنظیم پلن پویا📈",
+                    _t("adm_pl_dyn_set_btn"),
                     callback_data=f"plans:{server_id}:dyn_settings",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:root",
                 )
             ],
@@ -573,31 +609,34 @@ async def _send_display_mode_menu(
     """
     mode = plans_storage.get_plan_display_mode(server_id)
 
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     def _mode_label(value: str, title: str) -> str:
         mark = "✅" if mode == value else "❌"
         return f"{mark} {title}"
 
-    text = "⚙️تنظیمات پلن‌ها\n\nحالت نمایش پلن‌ها را انتخاب کنید:"
+    text = _t("adm_pl_settings_btn") + "\n\n" + _t("adm_pl_mode_choose")
 
     kb = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    _mode_label(PLAN_MODE_FIXED, "ثابت"),
+                    _mode_label(PLAN_MODE_FIXED, _t("adm_pl_mode_lbl_fixed")),
                     callback_data=f"plans:{server_id}:mode_fixed",
                 ),
                 InlineKeyboardButton(
-                    _mode_label(PLAN_MODE_DYNAMIC, "پویا"),
+                    _mode_label(PLAN_MODE_DYNAMIC, _t("adm_pl_mode_lbl_dynamic")),
                     callback_data=f"plans:{server_id}:mode_dynamic",
                 ),
                 InlineKeyboardButton(
-                    _mode_label(PLAN_MODE_MIXED, "ترکیبی"),
+                    _mode_label(PLAN_MODE_MIXED, _t("adm_pl_mode_lbl_mixed")),
                     callback_data=f"plans:{server_id}:mode_mixed",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:settings",
                 )
             ],
@@ -621,62 +660,67 @@ async def _send_dynamic_settings_menu(
     message=None,
 ) -> None:
     """نمایش و ویرایش تنظیمات پلن پویا."""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     s = plans_storage.get_plan_dynamic_settings(server_id)
     discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
     simple_enabled = _is_simple_discount_enabled(s)
     tiered_enabled = _is_tiered_discount_enabled(s)
     if discount_tiers:
-        discount_line = f"🎚 تخفیف پلاکانی: {_format_discount_tiers(discount_tiers)}"
+        discount_line = _t("adm_pl_tiered_line", v=_format_discount_tiers(discount_tiers))
     else:
-        discount_line = (
-            f"🎁 تخفیف حجمی ساده: هر {s['discount_step_gb']} گیگ +{s['discount_percent_step']}٪ "
-            f"تا سقف {s['discount_percent_max']}٪"
+        discount_line = _t(
+            "adm_pl_simple_line",
+            a=s['discount_step_gb'],
+            b=s['discount_percent_step'],
+            c=s['discount_percent_max'],
         )
 
     lines = [
-        "📈 تنظیم مقادیر پلن پویا",
+        _t("adm_pl_dyn_title"),
         "",
-        f"💰 قیمت هر گیگ: {s['price_per_gb']:,} تومان",
-        f"💰 قیمت هر ماه: {s['price_per_month']:,} تومان",
+        _t("adm_pl_price_gb_line", v=f"{s['price_per_gb']:,}"),
+        _t("adm_pl_price_month_line", v=f"{s['price_per_month']:,}"),
         "",
-        f"📊 حجم قابل فروش: از {s['min_gb']} تا {s['max_gb']} گیگ (گام: {s['step_gb']})",
-        f"⌛ زمان اشتراک: از {s['min_month']} تا {s['max_month']} ماه (گام: {s['step_month']})",
+        _t("adm_pl_volume_line", a=s['min_gb'], b=s['max_gb'], c=s['step_gb']),
+        _t("adm_pl_time_line", a=s['min_month'], b=s['max_month'], c=s['step_month']),
         "",
         discount_line,
         "",
-        "برای تغییر هر مقدار از دکمه‌های زیر استفاده کنید.",
-        "برای مدیریت و ویرایش تنظیمات تخفیف‌ها، از دکمه‌ی اختصاصی استفاده کنید.",
+        _t("adm_pl_dyn_change_hint"),
+        _t("adm_pl_dyn_discount_hint"),
     ]
 
     kb = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "💰 قیمت هر گیگ",
+                    _t("adm_pl_price_gb_btn"),
                     callback_data=f"plans:{server_id}:dyn_edit:price_per_gb",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "💰 قیمت هر ماه",
+                    _t("adm_pl_price_month_btn"),
                     callback_data=f"plans:{server_id}:dyn_edit:price_per_month",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "📊 حداقل/حداکثر حجم و گام",
+                    _t("adm_pl_volume_btn"),
                     callback_data=f"plans:{server_id}:dyn_edit:volume_range",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⌛ حداقل/حداکثر زمان و گام",
+                    _t("adm_pl_time_btn"),
                     callback_data=f"plans:{server_id}:dyn_edit:time_range",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:settings",
                 )
             ],
@@ -697,6 +741,9 @@ async def _send_discount_settings_menu(
     message=None,
 ) -> None:
     """منوی اختصاصی مدیریت روشن/خاموش کردن تخفیف‌ها."""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     s = plans_storage.get_plan_dynamic_settings(server_id)
     discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
     simple_enabled = _is_simple_discount_enabled(s)
@@ -725,83 +772,85 @@ async def _send_discount_settings_menu(
         minutes = (remaining % 3600) // 60
         parts = []
         if days > 0:
-            parts.append(f"{days} روز")
+            parts.append(_t("adm_pl_days_val", n=days))
         if hours > 0:
-            parts.append(f"{hours} ساعت")
+            parts.append(_t("adm_pl_hours_val", n=hours))
         if minutes > 0:
-            parts.append(f"{minutes} دقیقه")
-        remaining_txt = " و ".join(parts) if parts else "کمتر از یک دقیقه"
-        timer_line = (
-            f"⏱ تایمر تخفیف حجمی ساده: {remaining_txt} مانده "
-            f"(پایان: {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')})"
+            parts.append(_t("adm_pl_minutes_val", n=minutes))
+        remaining_txt = _t("adm_pl_and").join(parts) if parts else _t("adm_pl_lt_minute")
+        timer_line = _t(
+            "adm_pl_timer_line",
+            v=remaining_txt,
+            e=datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M'),
         )
+
     else:
         timer_line = ""
 
     lines = [
-        "🎛 مدیریت حرفه‌ای تخفیف‌ها",
+        _t("adm_pl_pro_discount_title"),
         "",
-        f"🎁 تخفیف حجمی ساده: {'فعال ✅' if simple_enabled else 'غیرفعال ❌'}",
-        f"🎚 تخفیف پلاکانی: {'فعال ✅' if tiered_enabled else 'غیرفعال ❌'}",
+        _t("adm_pl_simple_state", v=(_t("adm_pl_on") if simple_enabled else _t("adm_pl_off"))),
+        _t("adm_pl_tiered_line", v=(_t("adm_pl_on") if tiered_enabled else _t("adm_pl_off"))),
         "",
-        "در این بخش می‌توانی تنظیمات ذخیره‌شده هر نوع تخفیف را ببینی و تنها در صورت نیاز آن را تغییر بدهی.",
+        _t("adm_pl_discount_hint"),
     ]
     if timer_line:
         lines.append(timer_line)
 
     if simple_enabled:
         lines.append(
-            f"• تخفیف حجمی ساده: از {s['discount_step_gb']} گیگ به بالا، {s['discount_percent_step']}٪ تا سقف {s['discount_percent_max']}٪"
+            _t("adm_pl_simple_detail", a=s['discount_step_gb'], b=s['discount_percent_step'], c=s['discount_percent_max'])
         )
     elif int(s.get('discount_step_gb', 0)) > 0 and int(s.get('discount_percent_step', 0)) > 0:
         lines.append(
-            f"• تنظیمات ذخیره‌شده تخفیف حجمی ساده: از {s['discount_step_gb']} گیگ به بالا، {s['discount_percent_step']}٪ تا سقف {s['discount_percent_max']}٪ (غیرفعال)"
+            _t("adm_pl_simple_saved", a=s['discount_step_gb'], b=s['discount_percent_step'], c=s['discount_percent_max'])
         )
 
     if tiered_enabled:
-        lines.append(f"• پله‌های تخفیف پلاکانی: {_format_discount_tiers(discount_tiers)}")
+        lines.append(_t("adm_pl_tiered_detail", v=_format_discount_tiers(discount_tiers)))
     elif discount_tiers:
         lines.append(
-            f"• پله‌های تخفیف پلاکانی ذخیره شده: {_format_discount_tiers(discount_tiers)} (غیرفعال)"
+            _t("adm_pl_tiered_saved", v=_format_discount_tiers(discount_tiers))
         )
 
     kb = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    f"{'خاموش کن' if simple_enabled else 'روشن کن'} تخفیف حجمی ساده",
+                    (_t("adm_pl_turn_off") if simple_enabled else _t("adm_pl_turn_on")) + " " + _t("adm_pl_simple_short"),
                     callback_data=f"plans:{server_id}:dyn_toggle:discount",
                     style="danger" if simple_enabled else "success",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    f"{'خاموش کن' if tiered_enabled else 'روشن کن'} تخفیف پلاکانی",
+                    (_t("adm_pl_turn_off") if tiered_enabled else _t("adm_pl_turn_on")) + " " + _t("adm_pl_tiered_short"),
                     callback_data=f"plans:{server_id}:dyn_toggle:discount_tiers",
                     style="danger" if tiered_enabled else "success",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "✏️ ویرایش تخفیف حجمی ساده",
+                    _t("adm_pl_edit_simple_btn"),
                     callback_data=f"plans:{server_id}:dyn_edit:discount",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "✏️ ویرایش تخفیف پله‌ای",
+                    _t("adm_pl_edit_tiered_btn"),
                     callback_data=f"plans:{server_id}:dyn_edit:discount_tiers",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⏱ تنظیم تایمر تخفیف حجمی ساده",
+                    _t("adm_pl_timer_btn"),
                     callback_data=f"plans:{server_id}:dyn_edit:discount_timer",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:root",
                 )
             ],
@@ -827,6 +876,9 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not query or not query.data:
         return
 
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     data = query.data
     msg = query.message
     chat_id = msg.chat_id
@@ -834,14 +886,14 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     # data مثل plans:SERVER_ID:...
     if len(parts) < 3:
-        await query.answer("داده نامعتبر است.")
+        await query.answer(_t("adm_pl_err_invalid_data"))
         return
 
     _, sid_str, *rest = parts
     try:
         server_id = int(sid_str)
     except ValueError:
-        await query.answer("شناسه سرور نامعتبر است.")
+        await query.answer(_t("adm_pl_err_invalid_server"))
         return
 
     action = rest[0] if rest else "root"
@@ -937,7 +989,7 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
             await context.bot.send_message(
                 chat_id,
-                "⚠️ هیچ پله‌ای برای تخفیف پلاکانی تنظیم نشده است. برای فعال کردن ابتدا روی «🎚 ویرایش تخفیف پله‌ای» بزن و پله‌ها را وارد کن.",
+                _t("adm_pl_no_tiers_warn"),
                 reply_markup=_cancel_kb(),
             )
             await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
@@ -951,45 +1003,23 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_reply_markup(reply_markup=None)
 
         if dyn_action == "price_per_gb":
-            prompt = "💰 قیمت هر گیگ را (تومان) ارسال کنید:"
+            prompt = _t("adm_pl_prompt_price_gb")
         elif dyn_action == "price_per_month":
-            prompt = "💰 قیمت هر ماه اشتراک را (تومان) ارسال کنید:"
+            prompt = _t("adm_pl_prompt_price_month")
         elif dyn_action == "volume_range":
-            prompt = (
-                "📊 تنظیم حجم به صورت: حداقل_حجم-حداکثر_حجم-گام\n"
-                "مثال: 20-200-20"
-            )
+            prompt = _t("adm_pl_prompt_volume")
         elif dyn_action == "time_range":
-            prompt = (
-                "⌛ تنظیم زمان به صورت: حداقل_ماه-حداکثر_ماه-گام\n"
-                "مثال: 1-12-1"
-            )
+            prompt = _t("adm_pl_prompt_time")
         elif dyn_action == "discount":
             # مرحله اول: پرسیدن آستانه‌ی حجم
             context.user_data["plans_dyn_discount_phase"] = "threshold"
-            prompt = (
-                "🎁 تنظیم تخفیف حجمی\n"
-                "ابتدا بنویس از چه حجمی به بالا تخفیف فعال شود (بر حسب گیگ).\n"
-                "مثال: 50\n"
-                "برای خاموش کردن کامل تخفیف، عدد 0 بفرست."
-            )
+            prompt = _t("adm_pl_prompt_discount")
         elif dyn_action == "discount_tiers":
-            prompt = (
-                "🎚 تنظیم تخفیف پله‌ای\n"
-                "هر پله را با فرمت `حجم:درصد` وارد کن و پله‌ها را با کاما یا خط جدید جدا کن.\n"
-                "مثال: 50:5, 100:10, 200:15\n"
-                "یعنی: از ۵۰ گیگ ۵٪، از ۱۰۰ گیگ ۱۰٪ و از ۲۰۰ گیگ ۱۵٪ تخفیف.\n"
-                "برای خاموش کردن تخفیف، عدد 0 بفرست.\n"
-                "می‌توانی از `-` یا `=` هم به جای `:` استفاده کنی."
-            )
+            prompt = _t("adm_pl_prompt_tiers")
         elif dyn_action == "discount_timer":
-            prompt = (
-                "⏱ تنظیم تایمر تخفیف حجمی ساده\n"
-                "مدت زمان را به ساعت ارسال کنید (مثلاً 12 یا 24).\n"
-                "برای اتمام تایمر و خاموش شدن خودکار تخفیف، عدد 0 بفرستید."
-            )
+            prompt = _t("adm_pl_prompt_timer")
         else:
-            prompt = "لطفاً مقدار جدید را ارسال کنید:"
+            prompt = _t("adm_pl_prompt_value")
 
         await context.bot.send_message(chat_id, prompt, reply_markup=_cancel_kb())
         return
@@ -1005,14 +1035,14 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_reply_markup(reply_markup=None)
         await context.bot.send_message(
             chat_id,
-            "➕ افزودن دسته جدید\nلطفاً عنوان دسته را وارد کنید:",
+            _t("adm_pl_prompt_cat_title"),
             reply_markup=_cancel_kb(),
         )
         return
 
     if action == "cat":
         if len(rest) < 2:
-            await msg.edit_text("❌ شناسه دسته نامعتبر است.")
+            await msg.edit_text(_t("adm_pl_err_invalid_cat"))
             return
         cid = int(rest[1])
         await _send_category_detail(server_id, cid, chat_id, context, message=msg)
@@ -1026,7 +1056,7 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_reply_markup(reply_markup=None)
         await context.bot.send_message(
             chat_id,
-            "📝 ویرایش عنوان دسته\nعنوان جدید را ارسال کنید:",
+            _t("adm_pl_prompt_cat_edit_title"),
             reply_markup=_cancel_kb(),
         )
         return
@@ -1039,7 +1069,7 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_reply_markup(reply_markup=None)
         await context.bot.send_message(
             chat_id,
-            "🔢 لطفاً عدد اولویت این دسته را ارسال کنید (عدد کمتر = اولویت بالاتر):",
+            _t("adm_pl_prompt_cat_prio"),
             reply_markup=_cancel_kb(),
         )
         return
@@ -1047,16 +1077,16 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if action == "cat_del_menu":
         cats = plans_storage.get_plan_categories(server_id)
         if not cats:
-            await msg.edit_text("هیچ دسته‌ای برای حذف وجود ندارد.")
+            await msg.edit_text(_t("adm_pl_no_cats_del"))
             return
         rows = []
         for c in cats:
             cid = c["id"]
-            title = c.get("title") or f"دسته #{cid}"
+            title = c.get("title") or _t("adm_pl_cat_fallback", n=cid)
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"❌ {title}",
+                        "❌ " + title,
                         callback_data=f"plans:{server_id}:cat_del:{cid}",
                     )
                 ]
@@ -1064,22 +1094,22 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         rows.append(
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:cats",
                 )
             ]
         )
         kb = InlineKeyboardMarkup(rows)
-        await msg.edit_text("یک دسته را برای حذف انتخاب کنید:", reply_markup=kb)
+        await msg.edit_text(_t("adm_pl_select_cat_del"), reply_markup=kb)
         return
 
     if action == "cat_del":
         cid = int(rest[1])
         ok = plans_storage.delete_plan_category(server_id, cid)
         if ok:
-            await msg.edit_text("✅ دسته حذف شد (پلن‌هایش بدون دسته شدند).")
+            await msg.edit_text(_t("adm_pl_cat_deleted"))
         else:
-            await msg.edit_text("❌ حذف دسته ناموفق بود.")
+            await msg.edit_text(_t("adm_pl_cat_del_failed"))
         await _send_categories_menu(server_id, chat_id, context)
         return
 
@@ -1103,7 +1133,7 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_reply_markup(reply_markup=None)
         await context.bot.send_message(
             chat_id,
-            "➕ افزودن پلن جدید\nلطفاً عنوان پلن را ارسال کنید:",
+            _t("adm_pl_prompt_plan_title"),
             reply_markup=_cancel_kb(),
         )
         return
@@ -1112,16 +1142,16 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         cid = int(rest[1])
         plans = plans_storage.get_plans(server_id, category_id=cid)
         if not plans:
-            await msg.edit_text("در این دسته هیچ پلنی برای حذف وجود ندارد.")
+            await msg.edit_text(_t("adm_pl_no_plans_del"))
             return
         rows = []
         for p in plans:
             pid = p["id"]
-            title = p.get("title") or f"پلن #{pid}"
+            title = p.get("title") or _t("adm_pl_fallback", n=pid)
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"🗑️ {title}",
+                        "🗑️ " + title,
                         callback_data=f"plans:{server_id}:plan_del:{pid}",
                     )
                 ]
@@ -1129,30 +1159,30 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
         rows.append(
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _t("btn_back") + "🔙",
                     callback_data=f"plans:{server_id}:plans:{cid}",
                 )
             ]
         )
         kb = InlineKeyboardMarkup(rows)
-        await msg.edit_text("یک پلن را برای حذف انتخاب کنید:", reply_markup=kb)
+        await msg.edit_text(_t("adm_pl_select_plan_del"), reply_markup=kb)
         return
 
     if action == "plan_del":
         pid = int(rest[1])
         plan = plans_storage.get_plan(server_id, pid)
         if not plan:
-            await msg.edit_text("❌ پلن پیدا نشد.")
+            await msg.edit_text(_t("adm_pl_err_plan_notfound"))
             return
         cat_id = plan.get("category_id")
         plans_storage.delete_plan(server_id, pid)
-        await msg.edit_text("✅ پلن حذف شد.")
+        await msg.edit_text(_t("adm_pl_plan_deleted"))
         if cat_id is not None:
             await _send_plans_list(server_id, int(cat_id), chat_id, context)
         return
 
     # اگر به اینجا رسید یعنی دکمه ناشناخته
-    await msg.edit_text("❌ این دکمه هنوز پیاده‌سازی نشده است.")
+    await msg.edit_text(_t("adm_pl_btn_not_impl"))
 
 
 # ===============================
@@ -1172,10 +1202,13 @@ async def handle_plans_message(
     if not message:
         return
 
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
+
     text = (message.text or "").strip()
 
     # لغو
-    if text in CANCEL_WORDS:
+    if text in CANCEL_WORDS or text == (_t("btn_cancel") + "❌") or text == _t("btn_cancel"):
         cancel_server_id = context.user_data.get("plans_server_id")
         return_to_dynamic_menu = state == PLANS_STATE_EDIT_DYNAMIC_FIELD and cancel_server_id
         for key in (
@@ -1190,7 +1223,7 @@ async def handle_plans_message(
             "plans_new_cat_title",
         ):
             context.user_data.pop(key, None)
-        await message.reply_text("❌ عملیات لغو شد.", reply_markup=_finish_reply_kb())
+        await message.reply_text(_t("adm_pl_cancelled"), reply_markup=_finish_reply_kb())
         if return_to_dynamic_menu:
             await _send_dynamic_settings_menu(int(cancel_server_id), message.chat_id, context)
         return
@@ -1198,7 +1231,7 @@ async def handle_plans_message(
     server_id = context.user_data.get("plans_server_id")
     if not server_id:
         context.user_data.pop("state", None)
-        await message.reply_text("❌ وضعیت مدیریت پلن‌ها نامشخص است.")
+        await message.reply_text(_t("adm_pl_err_state_unknown"))
         return
 
     chat_id = message.chat_id
@@ -1209,7 +1242,7 @@ async def handle_plans_message(
         context.user_data["plans_new_cat_title"] = text
         context.user_data["state"] = PLANS_STATE_ADD_CAT_PRIORITY
         await message.reply_text(
-            "🔢 حالا عدد اولویت این دسته را ارسال کنید (عدد کمتر = بالاتر):",
+            _t("adm_pl_prompt_cat_prio2"),
             reply_markup=_cancel_kb(),
         )
         return
@@ -1217,10 +1250,10 @@ async def handle_plans_message(
     if state == PLANS_STATE_EDIT_CAT_TITLE:
         cat_id = context.user_data.get("plans_edit_cat_id")
         if not cat_id:
-            await message.reply_text("❌ دسته برای ویرایش مشخص نیست.")
+            await message.reply_text(_t("adm_pl_err_cat_unknown"))
             return
         plans_storage.edit_plan_category(server_id, int(cat_id), title=text)
-        await message.reply_text("✅ عنوان دسته بروزرسانی شد.", reply_markup=_finish_reply_kb())
+        await message.reply_text(_t("adm_pl_cat_title_updated"), reply_markup=_finish_reply_kb())
         # برگشت به صفحه همان دسته
         await _send_category_detail(server_id, int(cat_id), chat_id, context)
         context.user_data.pop("plans_edit_cat_id", None)
@@ -1232,14 +1265,14 @@ async def handle_plans_message(
             prio = int(text)
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً یک عدد صحیح برای اولویت ارسال کنید.",
+                _t("adm_pl_err_not_int"),
                 reply_markup=_cancel_kb(),
             )
             return
-        title = context.user_data.pop("plans_new_cat_title", "بدون عنوان")
+        title = context.user_data.pop("plans_new_cat_title", _t("adm_pl_unnamed"))
         cat = plans_storage.add_plan_category(server_id, title, priority=prio)
         await message.reply_text(
-            f"✅ دسته با موفقیت اضافه شد.\nعنوان: {cat['title']}\nاولویت: {cat['priority']}",
+            _t("adm_pl_cat_added", t=cat['title'], n=cat['priority']),
             reply_markup=_finish_reply_kb(),
         )
         # برگشت به لیست دسته‌ها
@@ -1250,18 +1283,18 @@ async def handle_plans_message(
     if state == PLANS_STATE_EDIT_CAT_PRIORITY:
         cat_id = context.user_data.get("plans_edit_cat_id")
         if not cat_id:
-            await message.reply_text("❌ دسته برای ویرایش مشخص نیست.")
+            await message.reply_text(_t("adm_pl_err_cat_unknown"))
             return
         try:
             prio = int(text)
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً یک عدد صحیح برای اولویت ارسال کنید.",
+                _t("adm_pl_err_not_int"),
                 reply_markup=_cancel_kb(),
             )
             return
         plans_storage.edit_plan_category(server_id, int(cat_id), priority=prio)
-        await message.reply_text("✅ اولویت دسته بروزرسانی شد.", reply_markup=_finish_reply_kb())
+        await message.reply_text(_t("adm_pl_cat_prio_updated"), reply_markup=_finish_reply_kb())
         # برگشت به صفحه همان دسته
         await _send_category_detail(server_id, int(cat_id), chat_id, context)
         context.user_data.pop("plans_edit_cat_id", None)
@@ -1275,7 +1308,7 @@ async def handle_plans_message(
         context.user_data["plans_new_plan"] = new_plan
         context.user_data["state"] = PLANS_STATE_ADD_PLAN_PRICE
         await message.reply_text(
-            "💰 قیمت پلن (تومان) را ارسال کنید:",
+            _t("adm_pl_prompt_plan_price"),
             reply_markup=_cancel_kb(),
         )
         return
@@ -1285,7 +1318,7 @@ async def handle_plans_message(
             price = int(text.replace(",", ""))
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً قیمت را به صورت عددی ارسال کنید.",
+                _t("adm_pl_err_not_numeric"),
                 reply_markup=_cancel_kb(),
             )
             return
@@ -1294,7 +1327,7 @@ async def handle_plans_message(
         context.user_data["plans_new_plan"] = new_plan
         context.user_data["state"] = PLANS_STATE_ADD_PLAN_DAYS
         await message.reply_text(
-            "⌛ مدت پلن را به روز ارسال کنید (مثال: 30):",
+            _t("adm_pl_prompt_plan_days"),
             reply_markup=_cancel_kb(),
         )
         return
@@ -1304,7 +1337,7 @@ async def handle_plans_message(
             days = int(text)
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً مدت را به صورت عدد روز ارسال کنید.",
+                _t("adm_pl_err_not_days"),
                 reply_markup=_cancel_kb(),
             )
             return
@@ -1313,7 +1346,7 @@ async def handle_plans_message(
         context.user_data["plans_new_plan"] = new_plan
         context.user_data["state"] = PLANS_STATE_ADD_PLAN_GB
         await message.reply_text(
-            "📊 حجم پلن را به گیگابایت ارسال کنید (برای نامحدود 0 بفرستید):",
+            _t("adm_pl_prompt_plan_gb"),
             reply_markup=_cancel_kb(),
         )
         return
@@ -1323,14 +1356,14 @@ async def handle_plans_message(
             gb = float(text.replace(",", "."))
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً حجم را به صورت عددی ارسال کنید.",
+                _t("adm_pl_err_not_gb"),
                 reply_markup=_cancel_kb(),
             )
             return
 
         cat_id = context.user_data.get("plans_category_id")
         new_plan = context.user_data.pop("plans_new_plan", {})
-        title = new_plan.get("title", "پلن جدید")
+        title = new_plan.get("title", _t("adm_pl_new_plan_default"))
         price = new_plan.get("price", 0)
         days = new_plan.get("days", 0)
 
@@ -1343,11 +1376,11 @@ async def handle_plans_message(
             gb=gb,
         )
         await message.reply_text(
-            "✅ پلن با موفقیت اضافه شد.\n"
-            f"عنوان: {plan['title']}\n"
-            f"قیمت: {plan['price']:,} تومان\n"
-            f"مدت: {plan['days']} روز\n"
-            f"حجم: {plan['gb']} گیگ",
+            _t("adm_pl_plan_added",
+               t=plan['title'],
+               p=f"{plan['price']:,}",
+               d=plan['days'],
+               g=plan['gb']),
             reply_markup=_finish_reply_kb(),
         )
 
@@ -1368,7 +1401,7 @@ async def handle_plans_message(
                 hours = int(text)
             except ValueError:
                 await message.reply_text(
-                    "❌ لطفاً مدت زمان را به ساعت به صورت عددی ارسال کنید (مثلاً 12).",
+                    _t("adm_pl_err_not_hours"),
                     reply_markup=_cancel_kb(),
                 )
                 return
@@ -1380,7 +1413,7 @@ async def handle_plans_message(
                     discount_simple_expire_at=0,
                 )
                 await message.reply_text(
-                    "✅ تایمر تخفیف حذف شد و تخفیف حجمی ساده خاموش شد.",
+                    _t("adm_pl_timer_removed"),
                     reply_markup=_finish_reply_kb(),
                 )
             else:
@@ -1391,9 +1424,9 @@ async def handle_plans_message(
                     discount_simple_expire_at=expire_at,
                 )
                 await message.reply_text(
-                    "✅ تایمر تخفیف حجمی ساده تنظیم شد.\n"
-                    f"تخفیف به مدت {hours} ساعت (تا {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')}) فعال است "
-                    "و پس از اتمام، به‌صورت خودکار خاموش می‌شود.",
+                    _t("adm_pl_timer_set",
+                       n=hours,
+                       e=datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')),
                     reply_markup=_finish_reply_kb(),
                 )
 
@@ -1407,7 +1440,7 @@ async def handle_plans_message(
                 tiers = _parse_discount_tiers_text(text)
             except ValueError:
                 await message.reply_text(
-                    "❌ فرمت پله‌ها معتبر نیست. مثال درست: 50:5,100:10,200:15",
+                    _t("adm_pl_err_bad_tiers"),
                     reply_markup=_cancel_kb(),
                 )
                 return
@@ -1419,12 +1452,12 @@ async def handle_plans_message(
             )
             if tiers:
                 await message.reply_text(
-                    f"✅ تخفیف پلاکانی ذخیره شد.\n{_format_discount_tiers(tiers)}",
+                    _t("adm_pl_tiered_saved_ok", v=_format_discount_tiers(tiers)),
                     reply_markup=_finish_reply_kb(),
                 )
             else:
                 await message.reply_text(
-                    "✅ تخفیف حجمی غیرفعال شد.",
+                    _t("adm_pl_discount_disabled"),
                     reply_markup=_finish_reply_kb(),
                 )
 
@@ -1443,7 +1476,7 @@ async def handle_plans_message(
                     threshold = int(text.replace(",", ""))
                 except ValueError:
                     await message.reply_text(
-                        "❌ لطفاً عدد حجم را به صورت صحیح وارد کنید (مثلاً 50).",
+                        _t("adm_pl_err_not_gb_int"),
                         reply_markup=_cancel_kb(),
                     )
                     return
@@ -1455,8 +1488,7 @@ async def handle_plans_message(
                 context.user_data["plans_dyn_discount_phase"] = "percent"
 
                 await message.reply_text(
-                    "الان درصد تخفیف را ارسال کن (مثلاً 25).\n"
-                    "برای خاموش کردن کامل تخفیف 0 بفرست.",
+                    _t("adm_pl_prompt_percent"),
                     reply_markup=_cancel_kb(),
                 )
                 return
@@ -1469,7 +1501,7 @@ async def handle_plans_message(
                     )
                 except ValueError:
                     await message.reply_text(
-                        "❌ لطفاً درصد تخفیف را به صورت عددی بفرست (مثلاً 25).",
+                        _t("adm_pl_err_not_percent"),
                         reply_markup=_cancel_kb(),
                     )
                     return
@@ -1489,7 +1521,7 @@ async def handle_plans_message(
                         discount_simple_expire_at=0,
                     )
                     await message.reply_text(
-                        "✅ تخفیف حجمی غیرفعال شد.",
+                        _t("adm_pl_discount_disabled"),
                         reply_markup=_finish_reply_kb(),
                     )
                 else:
@@ -1503,8 +1535,7 @@ async def handle_plans_message(
                         discount_simple_expire_at=0,
                     )
                     await message.reply_text(
-                        f"✅ تخفیف ذخیره شد.\n"
-                        f"از {threshold} گیگ به بالا، {percent}٪ تخفیف روی قیمت نهایی اعمال می‌شود.",
+                        _t("adm_pl_discount_saved_ok", a=threshold, b=percent),
                         reply_markup=_finish_reply_kb(),
                     )
 
@@ -1547,18 +1578,18 @@ async def handle_plans_message(
                 )
 
             else:
-                await message.reply_text("❌ نوع تنظیم پویا نامعتبر است.")
+                await message.reply_text(_t("adm_pl_err_bad_dyn_type"))
                 return
 
         except ValueError:
             await message.reply_text(
-                "❌ مقدار ارسال‌شده معتبر نیست. لطفاً طبق فرمت خواسته‌شده ارسال کنید.",
+                _t("adm_pl_err_invalid_value"),
                 reply_markup=_cancel_kb(),
             )
             return
 
         await message.reply_text(
-            "✅ تنظیمات با موفقیت ذخیره شد.",
+            _t("adm_pl_saved_ok"),
             reply_markup=_finish_reply_kb(),
         )
 
@@ -1570,5 +1601,5 @@ async def handle_plans_message(
         return
 
     # اگر استیت ناشناخته بود
-    await message.reply_text("❌ وضعیت نامعتبر است.")
+    await message.reply_text(_t("adm_pl_err_invalid_state"))
     context.user_data.pop("state", None)

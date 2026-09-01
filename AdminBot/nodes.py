@@ -19,11 +19,25 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, node_ops, plans_storage
+from Shared import database, hiddify_api, node_ops, plans_storage, userbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import admin_main_keyboard, cancel_keyboard
 
 logger = logging.getLogger(__name__)
+
+# ---- چندزبانه: زبان ادمین + شورت‌کات ترجمه ----
+from Shared import i18n as _i18n
+
+
+def _admin_bot_lang() -> str:
+    try:
+        return userbot_db.get_admin_language()
+    except Exception:
+        return "fa"
+
+
+def _T(lang: str, key: str, **kw) -> str:
+    return _i18n.t(key, lang, **kw)
 
 # استیت‌های ویزارد نود
 NODES_STATE_ADD_TYPE = "nodes_add_type"
@@ -75,7 +89,7 @@ def _short_error(exc: Exception, max_len: int = 320) -> str:
     lower = raw.lower()
 
     if "just a moment" in lower or "__cf_chl" in lower or "cloudflare" in lower:
-        return "دسترسی توسط Cloudflare مسدود شده است (HTTP 403). روی دامنه پنل، WAF/Bot Challenge را برای API غیرفعال کنید."
+        return _T(_admin_bot_lang(), "adm_nd_err_cloudflare")
 
     if len(raw) > max_len:
         return raw[: max_len - 3] + "..."
@@ -117,6 +131,8 @@ def _normalize_nodes(raw_nodes: Any) -> List[Dict[str, Any]]:
     [{"id": int, "title": str, "host": str}, ...]
     تبدیل می‌کند.
     """
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     nodes: List[Dict[str, Any]] = []
     if not raw_nodes:
         return nodes
@@ -124,11 +140,11 @@ def _normalize_nodes(raw_nodes: Any) -> List[Dict[str, Any]]:
     for idx, n in enumerate(raw_nodes, start=1):
         if isinstance(n, dict):
             nid = n.get("id") or idx
-            title = n.get("title") or n.get("name") or f"نود #{nid}"
+            title = n.get("title") or n.get("name") or _t("adm_nd_default_title", nid=nid)
             host = n.get("host") or n.get("domain") or n.get("ip") or ""
         else:
             nid = idx
-            title = f"نود #{nid}"
+            title = _t("adm_nd_default_title", nid=nid)
             host = str(n)
 
         host = str(host).strip()
@@ -192,6 +208,8 @@ def _build_node_edit_text(
     *,
     users_count_override: Optional[int] = None,
 ) -> str:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     target_sid = int(node.get("target_server_id") or 0)
     child = database.get_server_by_id(target_sid) if target_sid > 0 else None
     panel_url = (child or {}).get("panel_url") or ""
@@ -239,23 +257,25 @@ def _build_node_edit_text(
             server_panel_link = base
     server_title = _safe_text(node.get("title") or "—")
     if server_panel_link:
-        server_line = f'🖥 سرور: <a href="{escape(server_panel_link, quote=True)}">{server_title}</a>'
+        server_line = _t("adm_nd_server_link", url=escape(server_panel_link, quote=True), title=server_title)
     else:
-        server_line = f"🖥 سرور: {server_title}"
+        server_line = _t("adm_nd_server_line", title=server_title)
 
     return (
-        "✏️ ویرایش نود\n"
-        f"{server_line}\n"
+        _t("adm_nd_edit_header") + "\n"
+        + f"{server_line}\n"
         "❖ • -------------------------- • ❖\n"
-        f"👤 تعداد کاربران: {users_count} از {_safe_text(users_limit_text)}\n"
-        f"📋 تعداد پلن ها: {plans_count}\n"
-        f"🟩 اولویت: {priority}\n"
-        f"📦 نسخه: {_safe_text(version_text)}\n\n"
-        "فیلد موردنظر را انتخاب کنید:"
+        f"{_t('adm_nd_users_count', count=users_count, limit=_safe_text(users_limit_text))}\n"
+        f"{_t('adm_nd_plans_count', count=plans_count)}\n"
+        f"{_t('adm_nd_priority', priority=priority)}\n"
+        f"{_t('adm_nd_version', version=_safe_text(version_text))}\n\n"
+        + _t("adm_nd_choose_field")
     )
 
 
 def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMarkup:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     # For X-UI child, show X-UI specific buttons (panel is X-UI, not Hiddify)
     try:
         _, node, _ = _find_node(server_id, node_id)
@@ -268,31 +288,31 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
     if is_xui:
         return InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],
-                [InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"nodeedit:{server_id}:{node_id}:title")],
-                [InlineKeyboardButton("🌐 ویرایش آدرس پنل", callback_data=f"seredit:{target_sid}:panel_url")],
-                [InlineKeyboardButton("👤 ویرایش نام کاربری پنل", callback_data=f"seredit:{target_sid}:xui_username")],
-                [InlineKeyboardButton("🔑 ویرایش رمز پنل", callback_data=f"seredit:{target_sid}:xui_password")],
-                [InlineKeyboardButton("🔑 ویرایش توکن", callback_data=f"seredit:{target_sid}:xui_token")],
-                [InlineKeyboardButton("🔗 ویرایش دامنه ساب", callback_data=f"seredit:{target_sid}:xui_sub_domain")],
-                [InlineKeyboardButton("🧩 ویرایش اینباند", callback_data=f"seredit:{target_sid}:xui_inbound")],
-                [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{target_sid}:create_inbound_from_link")],
-                [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{target_sid}:sync_inbounds")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
+                [InlineKeyboardButton(_t("adm_nd_users_list"), callback_data=f"nodeact:{server_id}:{node_id}:users")],
+                [InlineKeyboardButton(_t("adm_nd_edit_title"), callback_data=f"nodeedit:{server_id}:{node_id}:title")],
+                [InlineKeyboardButton(_t("adm_nd_edit_panel_url"), callback_data=f"seredit:{target_sid}:panel_url")],
+                [InlineKeyboardButton(_t("adm_nd_edit_username"), callback_data=f"seredit:{target_sid}:xui_username")],
+                [InlineKeyboardButton(_t("adm_nd_edit_password"), callback_data=f"seredit:{target_sid}:xui_password")],
+                [InlineKeyboardButton(_t("adm_nd_edit_token"), callback_data=f"seredit:{target_sid}:xui_token")],
+                [InlineKeyboardButton(_t("adm_nd_edit_sub_domain"), callback_data=f"seredit:{target_sid}:xui_sub_domain")],
+                [InlineKeyboardButton(_t("adm_nd_edit_inbound"), callback_data=f"seredit:{target_sid}:xui_inbound")],
+                [InlineKeyboardButton(_t("adm_nd_create_inbound"), callback_data=f"server:{target_sid}:create_inbound_from_link")],
+                [InlineKeyboardButton(_t("adm_nd_sync_inbounds"), callback_data=f"server:{target_sid}:sync_inbounds")],
+                [InlineKeyboardButton(_t("btn_back"), callback_data=f"nodes:{server_id}:back")],
             ]
         )
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],
-            [InlineKeyboardButton("🛡️ عملیات کاربری نود", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")],
-            [InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"nodeedit:{server_id}:{node_id}:title")],
-            [InlineKeyboardButton("📚 لیست دامنه‌ها", callback_data=f"nodeedit:{server_id}:{node_id}:domains")],
-            [InlineKeyboardButton("🔐 ویرایش Proxy کاربر", callback_data=f"nodeedit:{server_id}:{node_id}:user_proxy")],
-            [InlineKeyboardButton("🔐 ویرایش Proxy ادمین", callback_data=f"nodeedit:{server_id}:{node_id}:admin_proxy")],
-            [InlineKeyboardButton("🔑 ویرایش UUID ادمین", callback_data=f"nodeedit:{server_id}:{node_id}:admin_uuid")],
-            [InlineKeyboardButton("🌐 ویرایش آدرس پنل", callback_data=f"nodeedit:{server_id}:{node_id}:panel_url")],
-            [InlineKeyboardButton("👤 ویرایش محدودیت کاربران", callback_data=f"nodeedit:{server_id}:{node_id}:users_limit")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
+            [InlineKeyboardButton(_t("adm_nd_users_list"), callback_data=f"nodeact:{server_id}:{node_id}:users")],
+            [InlineKeyboardButton(_t("adm_nd_user_ops"), callback_data=f"nodeact:{server_id}:{node_id}:user_ops")],
+            [InlineKeyboardButton(_t("adm_nd_edit_title"), callback_data=f"nodeedit:{server_id}:{node_id}:title")],
+            [InlineKeyboardButton(_t("adm_nd_domains_list"), callback_data=f"nodeedit:{server_id}:{node_id}:domains")],
+            [InlineKeyboardButton(_t("adm_nd_edit_user_proxy"), callback_data=f"nodeedit:{server_id}:{node_id}:user_proxy")],
+            [InlineKeyboardButton(_t("adm_nd_edit_admin_proxy"), callback_data=f"nodeedit:{server_id}:{node_id}:admin_proxy")],
+            [InlineKeyboardButton(_t("adm_nd_edit_admin_uuid"), callback_data=f"nodeedit:{server_id}:{node_id}:admin_uuid")],
+            [InlineKeyboardButton(_t("adm_nd_edit_panel_url"), callback_data=f"nodeedit:{server_id}:{node_id}:panel_url")],
+            [InlineKeyboardButton(_t("adm_nd_edit_users_limit"), callback_data=f"nodeedit:{server_id}:{node_id}:users_limit")],
+            [InlineKeyboardButton(_t("btn_back"), callback_data=f"nodes:{server_id}:back")],
         ]
     )
 
@@ -324,32 +344,34 @@ async def send_node_user_ops_menu(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     _, node, _ = _find_node(server_id, node_id)
     target_sid = int((node or {}).get("target_server_id") or 0)
     child = database.get_server_by_id(target_sid) if target_sid > 0 else None
     if not node or not child:
-        text = "❌ سرور نود پیدا نشد."
+        text = _t("adm_nd_err_node_server")
         if message is not None:
             await message.edit_text(text)
         else:
             await context.bot.send_message(chat_id, text)
         return
 
-    title = escape(str(node.get("title") or child.get("title") or "نود"))
+    title = escape(str(node.get("title") or child.get("title") or _t("adm_nd_node")))
     text = (
-        "🛡️ عملیات کاربری نود\n"
-        f"🖥 سرور: {title}\n"
+        _t("adm_nd_user_ops") + "\n"
+        + _t("adm_nd_server_line", title=title) + "\n"
         "❖ • -------------------------- • ❖\n"
-        "عملیات موردنظر را انتخاب کنید:"
+        + _t("adm_nd_choose_action")
     )
     keyboard = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],
-            [InlineKeyboardButton("افزودن کاربر➕", callback_data=f"userops:{target_sid}:add")],
-            [InlineKeyboardButton("افزودن چندین کاربر➕", callback_data=f"userops:{target_sid}:add_multi")],
-            [InlineKeyboardButton("افزودن کاربر با پلن➕", callback_data=f"nodeact:{server_id}:{node_id}:add_with_plan")],
-            [InlineKeyboardButton("جستجوی کاربر🔍", callback_data=f"userops:{target_sid}:search")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodeinfo:{server_id}:{node_id}")],
+            [InlineKeyboardButton(_t("adm_nd_users_list"), callback_data=f"nodeact:{server_id}:{node_id}:users")],
+            [InlineKeyboardButton(_t("adm_nd_add_user"), callback_data=f"userops:{target_sid}:add")],
+            [InlineKeyboardButton(_t("adm_nd_add_users_multi"), callback_data=f"userops:{target_sid}:add_multi")],
+            [InlineKeyboardButton(_t("adm_nd_add_user_plan"), callback_data=f"nodeact:{server_id}:{node_id}:add_with_plan")],
+            [InlineKeyboardButton(_t("adm_nd_search_user"), callback_data=f"userops:{target_sid}:search")],
+            [InlineKeyboardButton(_t("btn_back"), callback_data=f"nodeinfo:{server_id}:{node_id}")],
         ]
     )
     if message is not None:
@@ -365,10 +387,12 @@ async def send_node_add_with_plan_menu(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     _, node, _ = _find_node(server_id, node_id)
     target_sid = int((node or {}).get("target_server_id") or 0)
     if not node or target_sid <= 0 or not database.get_server_by_id(target_sid):
-        text = "❌ سرور نود پیدا نشد."
+        text = _t("adm_nd_err_node_server")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -378,9 +402,9 @@ async def send_node_add_with_plan_menu(
     get_plans = getattr(database, "get_plans", None)
     plans = (get_plans(server_id) or []) if callable(get_plans) else []
     if not plans:
-        text = "❌ برای سرور مادر هنوز هیچ پلنی ثبت نشده است."
+        text = _t("adm_nd_err_no_plans")
         keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")]]
+            [[InlineKeyboardButton(_t("btn_back"), callback_data=f"nodeact:{server_id}:{node_id}:user_ops")]]
         )
         if message is not None:
             await message.edit_text(text, reply_markup=keyboard)
@@ -388,27 +412,27 @@ async def send_node_add_with_plan_menu(
             await context.bot.send_message(chat_id, text, reply_markup=keyboard)
         return
 
-    lines = ["📋 لیست پلن های سرور مادر", ""]
+    lines = [_t("adm_nd_plans_header"), ""]
     rows: List[List[InlineKeyboardButton]] = []
     for plan in plans:
         plan_id = plan.get("id")
-        title = plan.get("title") or plan.get("name") or f"پلن #{plan_id}"
+        title = plan.get("title") or plan.get("name") or _t("adm_nd_default_plan", plan_id=plan_id)
         days = plan.get("days") or plan.get("duration_days") or "-"
         usage_gb = plan.get("gb") or plan.get("usage_limit_GB") or plan.get("volume_GB")
         price = plan.get("price") or plan.get("price_toman") or "-"
-        usage_text = "نامحدود" if usage_gb in (None, "", 0) else f"{usage_gb} گیگابایت"
-        lines.append(f"• {title} | {price} تومان | {days} روز | {usage_text}")
+        usage_text = _t("adm_nd_unlimited") if usage_gb in (None, "", 0) else _t("adm_nd_gb", gb=usage_gb)
+        lines.append(_t("adm_nd_plan_line", title=title, price=price, days=days, usage=usage_text))
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"{title} | {days} روز",
+                    _t("adm_nd_plan_btn", title=title, days=days),
                     callback_data=f"nodeaddplan:{target_sid}:{server_id}:{plan_id}",
                 )
             ]
         )
 
     rows.append(
-        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")]
+        [InlineKeyboardButton(_t("btn_back"), callback_data=f"nodeact:{server_id}:{node_id}:user_ops")]
     )
     keyboard = InlineKeyboardMarkup(rows)
     text = "\n".join(lines)
@@ -425,9 +449,11 @@ async def send_node_edit_menu(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     _, node, _ = _find_node(server_id, node_id)
     if not node:
-        text = "❌ نود مورد نظر پیدا نشد."
+        text = _t("adm_nd_err_node_not_found")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -463,9 +489,11 @@ async def send_nodes_menu(
     message=None,
 ) -> None:
     """منوی اصلی لیست نودهای یک سرور"""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _t("adm_nd_err_server")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -475,15 +503,15 @@ async def send_nodes_menu(
     nodes = _load_nodes_for_server(server_id)
 
     lines = [
-        "⚙️ مدیریت نودها",
-        "⬇️ لیست نود های شما",
+        _t("adm_nd_title"),
+        _t("adm_nd_your_nodes"),
         "",
     ]
 
     if not nodes:
-        lines.append("در حال حاضر هیچ نودی ثبت نشده است.")
+        lines.append(_t("adm_nd_no_nodes"))
     else:
-        lines.append("نودهای ثبت‌شده:")
+        lines.append(_t("adm_nd_registered"))
         # فقط عنوان هر نود را نشان می‌دهیم؛ آدرس (host) در متن نمی‌آید
         for n in nodes:
             lines.append(f"• {n['title']}")
@@ -504,16 +532,16 @@ async def send_nodes_menu(
 
     # دکمه‌های عملیاتی
     rows.append(
-        [InlineKeyboardButton("➕ افزودن", callback_data=f"nodes:{server_id}:add")]
+        [InlineKeyboardButton(_t("adm_nd_add"), callback_data=f"nodes:{server_id}:add")]
     )
     if nodes:
         rows.append(
-            [InlineKeyboardButton("🗑 حذف", callback_data=f"nodes:{server_id}:remove")]
+            [InlineKeyboardButton(_t("adm_nd_remove"), callback_data=f"nodes:{server_id}:remove")]
         )
 
     # 🔙 دکمه بازگشت همیشه اضافه می‌شود (چه نود باشد چه نباشد)
     rows.append(
-        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]
+        [InlineKeyboardButton(_t("btn_back"), callback_data=f"server:{server_id}")]
     )
 
     kb = InlineKeyboardMarkup(rows)
@@ -538,9 +566,11 @@ async def send_nodes_delete_menu(
     message=None,
 ) -> None:
     """نمایش لیست نودها برای حذف"""
+    _lg = _admin_bot_lang()
+    _t = lambda k, **kw: _T(_lg, k, **kw)
     server = database.get_server_by_id(server_id)
     if not server:
-        text = "❌ سرور پیدا نشد."
+        text = _t("adm_nd_err_server")
         if message is not None:
             await message.edit_text(text)
         else:
@@ -550,9 +580,9 @@ async def send_nodes_delete_menu(
     nodes = _load_nodes_for_server(server_id)
 
     if not nodes:
-        text = "هیچ نودی برای حذف وجود ندارد."
+        text = _t("adm_nd_no_nodes_delete")
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")]]
+            [[InlineKeyboardButton(_t("btn_back"), callback_data=f"nodes:{server_id}:back")]]
         )
         if message is not None:
             await message.edit_text(text, reply_markup=kb)
@@ -562,8 +592,8 @@ async def send_nodes_delete_menu(
 
     # ===== متن بالای منو =====
     lines = [
-        "🗑 حذف نود",
-        "یکی از نودهای زیر را برای حذف انتخاب کنید:",
+        _t("adm_nd_delete_title"),
+        _t("adm_nd_delete_prompt"),
         "",
     ]
 
@@ -584,7 +614,7 @@ async def send_nodes_delete_menu(
         )
 
     rows.append(
-        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")]
+        [InlineKeyboardButton(_t("btn_back"), callback_data=f"nodes:{server_id}:back")]
     )
 
     kb = InlineKeyboardMarkup(rows)
