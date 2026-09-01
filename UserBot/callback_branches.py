@@ -2545,7 +2545,7 @@ async def _rs_wallet_topup_amount(update, context, user_id, text, step):
         if tx_marker > 0:
             msg = f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker:,} تومان\n\n{msg}"
         set_user_step(context, user_id, "WAIT_WALLET_TOPUP_CONFIRM")
-        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=confirm_payment_keyboard())
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=confirm_payment_keyboard(_user_lang(user_id)))
         return
 
 
@@ -2557,7 +2557,7 @@ async def _rs_wallet_topup_confirm(update, context, user_id, text, step):
             await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
             return
 
-        if text == "✅ پرداخت کردم، ارسال رسید":
+        if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
             set_user_step(context, user_id, "WAIT_WALLET_TOPUP_IMAGE")
             await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
             return
@@ -2715,7 +2715,7 @@ async def _rs_receipt_confirm(update, context, user_id, text, step):
             await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
             return
             
-        if text == "✅ پرداخت کردم، ارسال رسید":
+        if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
             set_user_step(context, user_id, "WAIT_RECEIPT_IMAGE")
             await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
             return

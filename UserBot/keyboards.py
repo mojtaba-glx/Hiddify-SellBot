@@ -157,10 +157,10 @@ def mixed_buy_keyboard(server_id, gb, days, price, plans=None, off_percent=0):
     return InlineKeyboardMarkup(keyboard)
 
 # --- تایید پرداخت (عکس آخر) ---
-def confirm_payment_keyboard():
+def confirm_payment_keyboard(lang: str = "fa"):
     return ReplyKeyboardMarkup([
-        [KeyboardButton("✅ پرداخت کردم، ارسال رسید")],
-        [KeyboardButton("بازگشت")]
+        [KeyboardButton(i18n.t("btn_pay_done", lang))],
+        [KeyboardButton(i18n.t("btn_back", lang))]
     ], resize_keyboard=True)
 # این توابع را به فایل keyboards.py اضافه کنید
 

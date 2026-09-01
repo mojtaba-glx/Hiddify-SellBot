@@ -17,7 +17,7 @@ from CustomerBot.constants import (
 # کلیدهای i18n دکمه‌های منوی اصلی (برای مچر چندزبانه)
 MENU_BTN_KEYS = (
     "menu_status", "menu_renew", "menu_buy", "menu_trial",
-    "menu_support", "menu_guide", "menu_faq", "btn_back", "lang_btn",
+    "menu_support", "menu_guide", "menu_faq", "btn_back",
 )
 
 
@@ -47,7 +47,6 @@ def main_menu_keyboard(show_renew: bool = True, lang: str = "fa"):
         [KeyboardButton(_bl("menu_trial", lang))],
         [KeyboardButton(_bl("menu_guide", lang)), KeyboardButton(_bl("menu_support", lang))],
         [KeyboardButton(_bl("menu_faq", lang))],
-        [KeyboardButton(_bl("lang_btn", lang))],
     ])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 

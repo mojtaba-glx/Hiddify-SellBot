@@ -18,7 +18,7 @@ def _normalize_action_text(text: str) -> str:
 
 def _is_back_or_cancel_text(text: str) -> bool:
     t = _normalize_action_text(text)
-    return t in {
+    labels = {
         "بازگشت",
         "🔙بازگشت",
         "🔙 بازگشت",
@@ -27,6 +27,15 @@ def _is_back_or_cancel_text(text: str) -> bool:
         "❌ لغو",
         "/cancel",
     }
+    # لیبل‌های معادل در سایر زبان‌ها (چندزبانه)
+    try:
+        from Shared import i18n as _i18n
+        for _lg in _i18n.supported_langs():
+            labels.add(str(_i18n.t("btn_back", _lg) or "").strip())
+            labels.add(str(_i18n.t("btn_cancel", _lg) or "").strip())
+    except Exception:
+        pass
+    return t in labels
 
 
 def _extract_start_payload(update: Update) -> str:

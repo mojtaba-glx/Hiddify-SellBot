@@ -26,7 +26,7 @@ from CustomerBot.keyboards import (
     services_list_keyboard, renew_services_keyboard,
     support_panel_keyboard, guide_os_keyboard,
     cancel_keyboard, subscription_status_keyboard,
-    language_keyboard, MENU_BTN_KEYS,
+    MENU_BTN_KEYS,
 )
 from CustomerBot.utils.helpers import is_rate_limited, format_price
 
@@ -53,14 +53,6 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     agent_id = context.bot_data.get("agent_id", 0)
     lang = _menu_lang(agent_id, user.id)
-
-    # --- تغییر زبان رابط کاربری (چندزبانه) ---
-    if i18n.resolve_button(text, ("lang_btn",)) == "lang_btn":
-        await update.message.reply_text(
-            i18n.t("lang_choose", lang),
-            reply_markup=language_keyboard(),
-        )
-        return
 
     # نگاشت دکمه هر زبان به لیبل مرجع فارسی — مچرهای موجود بدون تغییر کار می‌کنند
     menu_key = i18n.resolve_button(text, MENU_BTN_KEYS)

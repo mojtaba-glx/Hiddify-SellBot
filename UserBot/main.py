@@ -6352,17 +6352,16 @@ def _attach_userbot_handlers(app) -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("language", language_command))
 
-    # هندلرهای منوی متنی پایین صفحه
-    app.add_handler(MessageHandler(filters.Regex("خرید اشتراک"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("کیف پول"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("وضعیت اشتراک"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("اتصال اشتراک"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("تمدید اشتراک"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("تست رایگان"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("پشتیبانی"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("راهنما"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("سوالات متداول"), menu_handler))
-    app.add_handler(MessageHandler(filters.Regex("دعوت دوستان"), menu_handler))
+    # هندلرهای منوی متنی پایین صفحه — Regex از لیبل‌های همه زبان‌های i18n ساخته می‌شود
+    # تا دکمه‌های منو در فارسی/انگلیسی/روسی به menu_handler برسند.
+    _menu_regex_parts = []
+    for _k in ("menu_status", "menu_renew", "menu_buy", "menu_connect", "menu_trial",
+               "menu_wallet", "menu_support", "menu_guide", "menu_faq", "menu_invite"):
+        for _lg in i18n.supported_langs():
+            _v = i18n.t(_k, _lg)
+            if _v and _v not in _menu_regex_parts:
+                _menu_regex_parts.append(_v)
+    app.add_handler(MessageHandler(filters.Regex("|".join(re.escape(p) for p in _menu_regex_parts)), menu_handler))
 
     # هندلرهای شیشه‌ای (Inline)
     app.add_handler(CallbackQueryHandler(inline_handler))
