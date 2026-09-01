@@ -10,7 +10,7 @@ from Shared.tg_button_styles import keyboard_button as KeyboardButton
 MENU_BTN_KEYS = (
     "menu_status", "menu_renew", "menu_buy", "menu_connect", "menu_trial",
     "menu_wallet", "menu_support", "menu_guide", "menu_faq", "menu_invite",
-    "btn_back", "btn_pay_done", "btn_cancel", "lang_btn",
+    "btn_back", "btn_pay_done", "btn_cancel",
 )
 
 
@@ -29,7 +29,6 @@ def main_menu_keyboard(show_renew: bool = True, show_invite: bool = True, lang: 
         [KeyboardButton(_bl("menu_connect", lang))],
         [KeyboardButton(_bl("menu_trial", lang)), KeyboardButton(_bl("menu_wallet", lang))],
         [KeyboardButton(_bl("menu_support", lang)), KeyboardButton(_bl("menu_guide", lang)), KeyboardButton(_bl("menu_faq", lang))],
-        [KeyboardButton(_bl("lang_btn", lang))],
     ])
     if show_invite:
         keyboard.append([KeyboardButton(_bl("menu_invite", lang))])

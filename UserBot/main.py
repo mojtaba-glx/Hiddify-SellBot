@@ -5640,15 +5640,6 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _should_skip_stale_startup_update(update, context, user_id):
         return
 
-    # --- تغییر زبان رابط کاربری (چندزبانه) ---
-    lang_key = i18n.resolve_button(text, ("lang_btn",))
-    if lang_key == "lang_btn":
-        await update.message.reply_text(
-            i18n.t("lang_choose", i18n.get_user_lang(user_id)),
-            reply_markup=language_keyboard(),
-        )
-        return
-
     # نگاشت دکمه فارسی/انگلیسی/روسی به کلید — کلید معادل همیشه به text تزریق می‌شود
     menu_key = i18n.resolve_button(text, UserBot_keyboards.MENU_BTN_KEYS)
     if menu_key:
