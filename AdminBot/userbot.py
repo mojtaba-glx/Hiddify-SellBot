@@ -2117,21 +2117,34 @@ def build_zarin_coupon_detail_keyboard(code: str, item: Optional[Dict[str, Any]]
     return InlineKeyboardMarkup(rows)
 
 
+def _adm_lang() -> str:
+    try:
+        from Shared import userbot_db as _udb
+        return _udb.get_admin_language()
+    except Exception:
+        return "fa"
+
+
+def _adm_t(key: str, **kw) -> str:
+    from Shared import i18n as _i18n
+    return _i18n.t(key, _adm_lang(), **kw)
+
+
 def build_userbot_settings_menu_keyboard(ui_settings: Optional[Dict[str, Any]] = None) -> InlineKeyboardMarkup:
     theme = normalize_button_theme((ui_settings or {}).get("button_theme"))
     theme_title = BUTTON_STYLE_THEMES.get(theme, BUTTON_STYLE_THEMES["smart"])["title"]
     rows = [
-        [InlineKeyboardButton("🛍تنظیمات اشتراک", callback_data="userbot:settings:subscription")],
-        [InlineKeyboardButton("📁وضعیت نمایش لینک اشتراک", callback_data="userbot:settings:sub_link_status")],
-        [InlineKeyboardButton(f"🎨 دکمه‌های رنگی | {theme_title}", callback_data="userbot:settings:ui")],
-        [InlineKeyboardButton("🛒تنظیمات خرید و تمدید", callback_data="userbot:settings:buy_renew")],
-        [InlineKeyboardButton("🧮تنظیمات تراکنشات و پلن ها", callback_data="userbot:settings:tx_plans")],
-        [InlineKeyboardButton("🧾تنظیمات متون", callback_data="userbot:settings:texts")],
-        [InlineKeyboardButton("🎯تنظیمات بازاریابی", callback_data="userbot:settings:marketing")],
-        [InlineKeyboardButton("🔒تنظیمات عضویت اجباری", callback_data="userbot:settings:force_join")],
-        [InlineKeyboardButton("💳تنظیمات پرداخت", callback_data="userbot:settings:payment")],
-        [InlineKeyboardButton("🗂️تنظیمات بکاپ و بازیابی", callback_data="userbot:settings:backup_restore")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+        [InlineKeyboardButton(_adm_t("us_sub_settings"), callback_data="userbot:settings:subscription")],
+        [InlineKeyboardButton(_adm_t("us_link_status"), callback_data="userbot:settings:sub_link_status")],
+        [InlineKeyboardButton(f"{_adm_t('us_colored_buttons')} | {theme_title}", callback_data="userbot:settings:ui")],
+        [InlineKeyboardButton(_adm_t("us_buy_renew_settings"), callback_data="userbot:settings:buy_renew")],
+        [InlineKeyboardButton(_adm_t("us_tx_plans_settings"), callback_data="userbot:settings:tx_plans")],
+        [InlineKeyboardButton(_adm_t("us_texts_settings"), callback_data="userbot:settings:texts")],
+        [InlineKeyboardButton(_adm_t("us_marketing_settings"), callback_data="userbot:settings:marketing")],
+        [InlineKeyboardButton(_adm_t("us_force_join_settings"), callback_data="userbot:settings:force_join")],
+        [InlineKeyboardButton(_adm_t("us_payment_settings"), callback_data="userbot:settings:payment")],
+        [InlineKeyboardButton(_adm_t("us_backup_settings"), callback_data="userbot:settings:backup_restore")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2141,8 +2154,8 @@ def build_colored_buttons_settings_keyboard(ui_settings: Dict[str, Any]) -> Inli
     current_theme = normalize_button_theme(ui_settings.get("button_theme"))
     enabled_icon = "✅" if enabled else "❌"
     rows = [
-        [InlineKeyboardButton(f"رنگی بودن دکمه‌ها | {enabled_icon}", callback_data="userbot:settings:ui:colored_buttons")],
-        [InlineKeyboardButton("🎛 انتخاب طرح رنگی", callback_data="userbot:noop")],
+        [InlineKeyboardButton(f"{_adm_t('us_colored_state')} | {enabled_icon}", callback_data="userbot:settings:ui:colored_buttons")],
+        [InlineKeyboardButton(_adm_t("us_select_theme"), callback_data="userbot:noop")],
     ]
     for theme_key, meta in BUTTON_STYLE_THEMES.items():
         selected_icon = "✅" if theme_key == current_theme else "▫️"
@@ -2152,7 +2165,7 @@ def build_colored_buttons_settings_keyboard(ui_settings: Dict[str, Any]) -> Inli
                 callback_data=f"userbot:settings:ui:theme:{theme_key}",
             )
         ])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")])
+    rows.append([InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -2169,15 +2182,15 @@ def build_subscription_settings_menu_keyboard(
     shuffle_server_icon = "✅" if shuffle_server_layout else "❌"
     shuffle_config_icon = "✅" if shuffle_config_layout else "❌"
     rows = [
-        [InlineKeyboardButton(f"نمایش لینک صفحه یوزر هیدیفای | {user_page_icon}", callback_data="userbot:settings:subscription:show_user_page_link")],
-        [InlineKeyboardButton(f"نمایش نام کاربری | {username_icon}", callback_data="userbot:settings:subscription:show_username")],
-        [InlineKeyboardButton(f"تصادفی کردن کانفیگ‌ها | {shuffle_icon}", callback_data="userbot:settings:subscription:shuffle_configs")],
-        [InlineKeyboardButton(f"تصادفی کردن چینش سرورها | {shuffle_server_icon}", callback_data="userbot:settings:subscription:shuffle_server_layout")],
-        [InlineKeyboardButton(f"تصادفی کردن چینش کانفیگ‌ها | {shuffle_config_icon}", callback_data="userbot:settings:subscription:shuffle_config_layout")],
-        [InlineKeyboardButton("🔔یادآور وضعیت اشتراک", callback_data="userbot:settings:subscription:sub_status_reminder")],
-        [InlineKeyboardButton("🎊مشخصات اشتراک تستی", callback_data="userbot:settings:subscription:trial_spec")],
-        [InlineKeyboardButton("🔄بازنشانی تست رایگان", callback_data="userbot:settings:subscription:reset_free_trial")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(f"{_adm_t('us_show_hiddify_page')} | {user_page_icon}", callback_data="userbot:settings:subscription:show_user_page_link")],
+        [InlineKeyboardButton(f"{_adm_t('us_show_username')} | {username_icon}", callback_data="userbot:settings:subscription:show_username")],
+        [InlineKeyboardButton(f"{_adm_t('us_shuffle_configs')} | {shuffle_icon}", callback_data="userbot:settings:subscription:shuffle_configs")],
+        [InlineKeyboardButton(f"{_adm_t('us_shuffle_servers')} | {shuffle_server_icon}", callback_data="userbot:settings:subscription:shuffle_server_layout")],
+        [InlineKeyboardButton(f"{_adm_t('us_shuffle_configs_layout')} | {shuffle_config_icon}", callback_data="userbot:settings:subscription:shuffle_config_layout")],
+        [InlineKeyboardButton(_adm_t("us_sub_reminder"), callback_data="userbot:settings:subscription:sub_status_reminder")],
+        [InlineKeyboardButton(_adm_t("us_trial_spec"), callback_data="userbot:settings:subscription:trial_spec")],
+        [InlineKeyboardButton(_adm_t("us_reset_trial"), callback_data="userbot:settings:subscription:reset_free_trial")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2189,15 +2202,15 @@ def build_sub_link_status_menu_keyboard(settings: Dict[str, bool]) -> InlineKeyb
     multi_icon = "✅" if settings.get("show_multi_server", False) else "❌"
     multi_b64_icon = "✅" if settings.get("show_multi_server_b64", False) else "❌"
     rows = [
-        [InlineKeyboardButton(f"کانفیگ مستقیم | {direct_icon}", callback_data="userbot:settings:sub_link_status:show_direct_config")],
-        [InlineKeyboardButton(f"لینک اشتراک خودکار | {auto_icon}", callback_data="userbot:settings:sub_link_status:show_auto_sub_link")],
-        [InlineKeyboardButton(f"لینک اشتراک | {sub_icon}", callback_data="userbot:settings:sub_link_status:show_sub_link")],
-        [InlineKeyboardButton(f"لینک اشتراک b64 | {sub_b64_icon}", callback_data="userbot:settings:sub_link_status:show_sub_link_b64")],
-        [InlineKeyboardButton(f"لینک اشتراک هوشمند | {multi_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server")],
-        [InlineKeyboardButton(f"لینک اشتراک هوشمند b64 | {multi_b64_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server_b64")],
-        [InlineKeyboardButton("🌐 تنظیم دامنه لینک اشتراک هوشمند", callback_data="userbot:settings:sub_link_status:set_base_url")],
-        [InlineKeyboardButton("🔐 راهنمای SSL دامنه", callback_data="userbot:settings:sub_link_status:ssl_help")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(f"{_adm_t('config_direct')} | {direct_icon}", callback_data="userbot:settings:sub_link_status:show_direct_config")],
+        [InlineKeyboardButton(f"{_adm_t('auto_sub_link_label')} | {auto_icon}", callback_data="userbot:settings:sub_link_status:show_auto_sub_link")],
+        [InlineKeyboardButton(f"{_adm_t('config_sub_link')} | {sub_icon}", callback_data="userbot:settings:sub_link_status:show_sub_link")],
+        [InlineKeyboardButton(f"{_adm_t('sub_b64_label')} | {sub_b64_icon}", callback_data="userbot:settings:sub_link_status:show_sub_link_b64")],
+        [InlineKeyboardButton(f"{_adm_t('config_smart')} | {multi_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server")],
+        [InlineKeyboardButton(f"{_adm_t('smart_b64_label')} | {multi_b64_icon}", callback_data="userbot:settings:sub_link_status:show_multi_server_b64")],
+        [InlineKeyboardButton(_adm_t("us_set_smart_domain"), callback_data="userbot:settings:sub_link_status:set_base_url")],
+        [InlineKeyboardButton(_adm_t("us_ssl_help"), callback_data="userbot:settings:sub_link_status:ssl_help")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2205,10 +2218,10 @@ def build_sub_link_status_menu_keyboard(settings: Dict[str, bool]) -> InlineKeyb
 def build_sub_status_reminder_menu_keyboard(reminder: Dict[str, Any]) -> InlineKeyboardMarkup:
     enabled_icon = "✅" if reminder.get("enabled", True) else "❌"
     rows = [
-        [InlineKeyboardButton(f"🔔 یادآور وضعیت اشتراک | {enabled_icon}", callback_data="userbot:settings:sub_status_reminder:enabled")],
-        [InlineKeyboardButton("📊 یادآور وضعیت مصرف", callback_data="userbot:settings:sub_status_reminder:usage")],
-        [InlineKeyboardButton("📆 یادآور وضعیت زمان", callback_data="userbot:settings:sub_status_reminder:days")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:subscription")],
+        [InlineKeyboardButton(f"{_adm_t('us_sub_reminder')} | {enabled_icon}", callback_data="userbot:settings:sub_status_reminder:enabled")],
+        [InlineKeyboardButton(_adm_t("us_reminder_usage"), callback_data="userbot:settings:sub_status_reminder:usage")],
+        [InlineKeyboardButton(_adm_t("us_reminder_days"), callback_data="userbot:settings:sub_status_reminder:days")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings:subscription")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2217,11 +2230,11 @@ def build_trial_spec_menu_keyboard(spec: Dict[str, Any]) -> InlineKeyboardMarkup
     enabled_icon = "✅" if spec.get("enabled", True) else "❌"
     announce_icon = "✅" if spec.get("announce_enabled", True) else "❌"
     rows = [
-        [InlineKeyboardButton(f"🔥 وضعیت اشتراک تستی | {enabled_icon}", callback_data="userbot:settings:trial_spec:enabled")],
-        [InlineKeyboardButton(f"🔔 اعلان اشتراک تستی | {announce_icon}", callback_data="userbot:settings:trial_spec:announce")],
-        [InlineKeyboardButton("📊 حجم اشتراک تستی", callback_data="userbot:settings:trial_spec:usage")],
-        [InlineKeyboardButton("📆 مدت اشتراک تستی", callback_data="userbot:settings:trial_spec:days")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:subscription")],
+        [InlineKeyboardButton(f"{_adm_t('us_trial_status')} | {enabled_icon}", callback_data="userbot:settings:trial_spec:enabled")],
+        [InlineKeyboardButton(f"{_adm_t('us_trial_announce')} | {announce_icon}", callback_data="userbot:settings:trial_spec:announce")],
+        [InlineKeyboardButton(_adm_t("us_trial_usage"), callback_data="userbot:settings:trial_spec:usage")],
+        [InlineKeyboardButton(_adm_t("us_trial_days"), callback_data="userbot:settings:trial_spec:days")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings:subscription")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2233,21 +2246,21 @@ def build_buy_renew_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineKe
     event_status = "✅" if settings.get("event_channel_enabled", False) else "❌"
 
     rows = [
-        [InlineKeyboardButton(f"امکان خرید اشتراک | {buy_icon}", callback_data="userbot:settings:buy_renew:enable_buy")],
-        [InlineKeyboardButton(f"امکان تمدید اشتراک | {renew_icon}", callback_data="userbot:settings:buy_renew:enable_renew")],
-        [InlineKeyboardButton(f"دکمه تمدید اشتراک در منوی اصلی | {renew_btn_icon}", callback_data="userbot:settings:buy_renew:show_renew_in_main_menu")],
-        [InlineKeyboardButton("تنظیم شیوه تمدید", callback_data="userbot:settings:buy_renew:renew_mode_info")],
+        [InlineKeyboardButton(f"{_adm_t('us_enable_buy')} | {buy_icon}", callback_data="userbot:settings:buy_renew:enable_buy")],
+        [InlineKeyboardButton(f"{_adm_t('us_enable_renew')} | {renew_icon}", callback_data="userbot:settings:buy_renew:enable_renew")],
+        [InlineKeyboardButton(f"{_adm_t('us_renew_btn_menu')} | {renew_btn_icon}", callback_data="userbot:settings:buy_renew:show_renew_in_main_menu")],
+        [InlineKeyboardButton(_adm_t("us_renew_mode"), callback_data="userbot:settings:buy_renew:renew_mode_info")],
         [
-            InlineKeyboardButton("ستون‌های پلن‌ها", callback_data="userbot:settings:buy_renew:plan_columns:menu"),
-            InlineKeyboardButton("ستون‌های سرورها", callback_data="userbot:settings:buy_renew:server_columns:menu"),
+            InlineKeyboardButton(_adm_t("us_plan_columns"), callback_data="userbot:settings:buy_renew:plan_columns:menu"),
+            InlineKeyboardButton(_adm_t("us_server_columns"), callback_data="userbot:settings:buy_renew:server_columns:menu"),
         ],
-        [InlineKeyboardButton(f"حجم نامحدود∞ | {'✅' if settings.get('renew_unlimited_volume', False) else '❌'}", callback_data="userbot:settings:buy_renew:renew_unlimited_volume")],
-        [InlineKeyboardButton(f"زمان نامحدود∞ | {'✅' if settings.get('renew_unlimited_time', False) else '❌'}", callback_data="userbot:settings:buy_renew:renew_unlimited_time")],
+        [InlineKeyboardButton(f"{_adm_t('us_unlimited_volume')} | {'✅' if settings.get('renew_unlimited_volume', False) else '❌'}", callback_data="userbot:settings:buy_renew:renew_unlimited_volume")],
+        [InlineKeyboardButton(f"{_adm_t('us_unlimited_time')} | {'✅' if settings.get('renew_unlimited_time', False) else '❌'}", callback_data="userbot:settings:buy_renew:renew_unlimited_time")],
         [
             InlineKeyboardButton(event_status, callback_data="userbot:settings:buy_renew:event_channel_enabled"),
-            InlineKeyboardButton("تنظیم کانال رویداد📢", callback_data="userbot:settings:buy_renew:event_channel_set"),
+            InlineKeyboardButton(_adm_t("ag_event_set"), callback_data="userbot:settings:buy_renew:event_channel_set"),
         ],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2255,49 +2268,49 @@ def build_buy_renew_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineKe
 def build_tx_plans_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboardMarkup:
     random_icon = "✅" if settings.get("random_tx_spec", False) else "❌"
     rows = [
-        [InlineKeyboardButton(f"🔢مشخصه تصادفی تراکنش | {random_icon}", callback_data="userbot:settings:tx_plans:random_tx_spec")],
-        [InlineKeyboardButton("🧲محدودیت حداقل تراکنش", callback_data="userbot:settings:tx_plans:min_tx")],
-        [InlineKeyboardButton("🗂دسته بندی پلن‌ها", callback_data="userbot:settings:tx_plans:plan_categories_mode:menu")],
-        [InlineKeyboardButton("🔢ترتیب پلن‌ها", callback_data="userbot:settings:tx_plans:plan_sort_mode:menu")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(f"{_adm_t('us_random_tx')} | {random_icon}", callback_data="userbot:settings:tx_plans:random_tx_spec")],
+        [InlineKeyboardButton(_adm_t("us_min_tx"), callback_data="userbot:settings:tx_plans:min_tx")],
+        [InlineKeyboardButton(_adm_t("us_plan_categories"), callback_data="userbot:settings:tx_plans:plan_categories_mode:menu")],
+        [InlineKeyboardButton(_adm_t("us_plan_sort"), callback_data="userbot:settings:tx_plans:plan_sort_mode:menu")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_text_settings_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("🔔پیام خوش آمدگویی", callback_data="userbot:settings:texts:edit:welcome_message")],
-        [InlineKeyboardButton("📕متن سوالات متداول", callback_data="userbot:settings:texts:edit:faq_text")],
-        [InlineKeyboardButton("💡متن راهنما", callback_data="userbot:settings:texts:guide_menu")],
-        [InlineKeyboardButton("📄تنظیم بنر دعوت", callback_data="userbot:settings:texts:invite_menu")],
-        [InlineKeyboardButton("🛰️متن لیست سرورها", callback_data="userbot:settings:texts:edit:servers_list_text")],
-        [InlineKeyboardButton("📋متن لیست پلن‌ها", callback_data="userbot:settings:texts:edit:plans_list_text")],
-        [InlineKeyboardButton("📬متن پنل تیکت", callback_data="userbot:settings:texts:edit:ticket_panel_text")],
-        [InlineKeyboardButton("📝تنظیم متن زرین پال", callback_data="userbot:settings:texts:edit:zarinpal_pro_text")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(_adm_t("us_txt_welcome"), callback_data="userbot:settings:texts:edit:welcome_message")],
+        [InlineKeyboardButton(_adm_t("us_txt_faq"), callback_data="userbot:settings:texts:edit:faq_text")],
+        [InlineKeyboardButton(_adm_t("us_txt_guide"), callback_data="userbot:settings:texts:guide_menu")],
+        [InlineKeyboardButton(_adm_t("us_txt_invite_banner"), callback_data="userbot:settings:texts:invite_menu")],
+        [InlineKeyboardButton(_adm_t("us_txt_servers_list"), callback_data="userbot:settings:texts:edit:servers_list_text")],
+        [InlineKeyboardButton(_adm_t("us_txt_plans_list"), callback_data="userbot:settings:texts:edit:plans_list_text")],
+        [InlineKeyboardButton(_adm_t("us_txt_ticket_panel"), callback_data="userbot:settings:texts:edit:ticket_panel_text")],
+        [InlineKeyboardButton(_adm_t("us_txt_zarinpal"), callback_data="userbot:settings:texts:edit:zarinpal_pro_text")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_guide_text_settings_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("📱 راهنمای اندروید", callback_data="userbot:settings:texts:edit:guide_android_text")],
-        [InlineKeyboardButton("📱 راهنمای IOS", callback_data="userbot:settings:texts:edit:guide_ios_text")],
-        [InlineKeyboardButton("🖥️ راهنمای ویندوز", callback_data="userbot:settings:texts:edit:guide_windows_text")],
-        [InlineKeyboardButton("💻 راهنمای مک", callback_data="userbot:settings:texts:edit:guide_mac_text")],
-        [InlineKeyboardButton("🖥️ راهنمای لینوکس", callback_data="userbot:settings:texts:edit:guide_linux_text")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:texts")],
+        [InlineKeyboardButton(_adm_t("guide_android"), callback_data="userbot:settings:texts:edit:guide_android_text")],
+        [InlineKeyboardButton(_adm_t("guide_ios"), callback_data="userbot:settings:texts:edit:guide_ios_text")],
+        [InlineKeyboardButton(_adm_t("guide_windows"), callback_data="userbot:settings:texts:edit:guide_windows_text")],
+        [InlineKeyboardButton(_adm_t("guide_mac"), callback_data="userbot:settings:texts:edit:guide_mac_text")],
+        [InlineKeyboardButton(_adm_t("guide_linux"), callback_data="userbot:settings:texts:edit:guide_linux_text")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings:texts")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_invite_text_settings_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("📄تنظیم متن اطلاعات دعوت", callback_data="userbot:settings:texts:edit:invite_info_text")],
-        [InlineKeyboardButton("🧾تنظیم متن بنر", callback_data="userbot:settings:texts:edit:invite_banner_text")],
-        [InlineKeyboardButton("🖼️افزودن عکس", callback_data="userbot:settings:texts:invite:add_photo")],
-        [InlineKeyboardButton("❌حذف بنر", callback_data="userbot:settings:texts:invite:remove_photo")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:texts")],
+        [InlineKeyboardButton(_adm_t("us_txt_invite_info"), callback_data="userbot:settings:texts:edit:invite_info_text")],
+        [InlineKeyboardButton(_adm_t("us_txt_banner"), callback_data="userbot:settings:texts:edit:invite_banner_text")],
+        [InlineKeyboardButton(_adm_t("us_add_photo"), callback_data="userbot:settings:texts:invite:add_photo")],
+        [InlineKeyboardButton(_adm_t("us_remove_banner"), callback_data="userbot:settings:texts:invite:remove_photo")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings:texts")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2309,15 +2322,15 @@ def build_marketing_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineKe
     user_status_icon = "✅" if settings.get("show_user_status", True) else "❌"
     instant_coupon_icon = "✅" if settings.get("instant_gift_coupon", False) else "❌"
     rows = [
-        [InlineKeyboardButton("🎯تنظیمات بازاریابی", callback_data="userbot:noop")],
-        [InlineKeyboardButton(f"🛍 اعمال کد تخفیف | {discount_icon}", callback_data="userbot:settings:marketing:toggle:enable_discount_code")],
-        [InlineKeyboardButton(f"🔼 اعمال کد افزایشی | {increase_icon}", callback_data="userbot:settings:marketing:toggle:enable_increase_code")],
-        [InlineKeyboardButton(f"🎁 دکمه هدیه | {gift_btn_icon}", callback_data="userbot:settings:marketing:toggle:show_gift_button")],
-        [InlineKeyboardButton(f"👤 نمایش وضعیت کاربر | {user_status_icon}", callback_data="userbot:settings:marketing:toggle:show_user_status")],
-        [InlineKeyboardButton(f"🚀 استفاده آنی هدیه کوپن | {instant_coupon_icon}", callback_data="userbot:settings:marketing:toggle:instant_gift_coupon")],
-        [InlineKeyboardButton("⚙️تنظیم متن هدایای اتوماتیک", callback_data="userbot:settings:marketing:edit:auto_gift_text")],
-        [InlineKeyboardButton("⚙️حداقل شارژ هدیه اتوماتیک", callback_data="userbot:settings:marketing:edit:min_auto_gift_charge")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(_adm_t("us_marketing_settings"), callback_data="userbot:noop")],
+        [InlineKeyboardButton(f"{_adm_t('us_discount_code')} | {discount_icon}", callback_data="userbot:settings:marketing:toggle:enable_discount_code")],
+        [InlineKeyboardButton(f"{_adm_t('us_increase_code')} | {increase_icon}", callback_data="userbot:settings:marketing:toggle:enable_increase_code")],
+        [InlineKeyboardButton(f"{_adm_t('us_gift_btn')} | {gift_btn_icon}", callback_data="userbot:settings:marketing:toggle:show_gift_button")],
+        [InlineKeyboardButton(f"{_adm_t('us_show_user_status')} | {user_status_icon}", callback_data="userbot:settings:marketing:toggle:show_user_status")],
+        [InlineKeyboardButton(f"{_adm_t('us_instant_coupon')} | {instant_coupon_icon}", callback_data="userbot:settings:marketing:toggle:instant_gift_coupon")],
+        [InlineKeyboardButton(_adm_t("us_auto_gift_text"), callback_data="userbot:settings:marketing:edit:auto_gift_text")],
+        [InlineKeyboardButton(_adm_t("us_min_auto_gift"), callback_data="userbot:settings:marketing:edit:min_auto_gift_charge")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2325,10 +2338,10 @@ def build_marketing_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineKe
 def build_force_join_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboardMarkup:
     enabled_icon = "✅" if settings.get("enabled", False) else "❌"
     rows = [
-        [InlineKeyboardButton("🧩راهنما", callback_data="userbot:settings:force_join:help")],
-        [InlineKeyboardButton("عضویت اجباری | " + enabled_icon, callback_data="userbot:settings:force_join:toggle")],
-        [InlineKeyboardButton("📢تنظیم کانال پشتیبانی", callback_data="userbot:settings:force_join:set_channel")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(_adm_t("us_fj_help"), callback_data="userbot:settings:force_join:help")],
+        [InlineKeyboardButton(_adm_t("us_force_join") + " | " + enabled_icon, callback_data="userbot:settings:force_join:toggle")],
+        [InlineKeyboardButton(_adm_t("us_set_support_channel"), callback_data="userbot:settings:force_join:set_channel")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2336,15 +2349,15 @@ def build_force_join_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineK
 def build_payment_settings_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboardMarkup:
     event_icon = "✅" if settings.get("event_channel_enabled", False) else "❌"
     rows = [
-        [InlineKeyboardButton("💳تنظیمات کارت به کارت", callback_data="userbot:settings:payment:card")],
-        [InlineKeyboardButton("📦تنظیمات زرین پال", callback_data="userbot:settings:payment:zarinpal")],
-        [InlineKeyboardButton("🧰تنظیمات پرفکت مانی", callback_data="userbot:settings:payment:perfect")],
-        [InlineKeyboardButton("🔗تنظیمات پرداخت ارز دیجیتال", callback_data="userbot:settings:payment:crypto")],
+        [InlineKeyboardButton(_adm_t("us_card_settings"), callback_data="userbot:settings:payment:card")],
+        [InlineKeyboardButton(_adm_t("us_zarinpal_settings"), callback_data="userbot:settings:payment:zarinpal")],
+        [InlineKeyboardButton(_adm_t("us_perfect_settings"), callback_data="userbot:settings:payment:perfect")],
+        [InlineKeyboardButton(_adm_t("us_crypto_settings"), callback_data="userbot:settings:payment:crypto")],
         [
             InlineKeyboardButton(event_icon, callback_data="userbot:settings:payment:event_channel_toggle"),
-            InlineKeyboardButton("📢تنظیم کانال رویداد", callback_data="userbot:settings:payment:event_channel_set"),
+            InlineKeyboardButton(_adm_t("us_event_channel"), callback_data="userbot:settings:payment:event_channel_set"),
         ],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2353,16 +2366,16 @@ def build_backup_restore_settings_menu_keyboard(settings: Dict[str, Any]) -> Inl
     auto_icon = "✅" if settings.get("auto_backup_enabled", True) else "❌"
     event_icon = "✅" if settings.get("event_channel_enabled", False) else "❌"
     rows = [
-        [InlineKeyboardButton(f"ارسال خودکار بکاپ | {auto_icon}", callback_data="userbot:settings:backup_restore:auto_toggle")],
+        [InlineKeyboardButton(f"{_adm_t('us_auto_backup')} | {auto_icon}", callback_data="userbot:settings:backup_restore:auto_toggle")],
         [
-            InlineKeyboardButton("📩دریافت فایل بکاپ", callback_data="userbot:settings:backup_restore:download"),
-            InlineKeyboardButton("📩بازیابی بکاپ", callback_data="userbot:settings:backup_restore:restore"),
+            InlineKeyboardButton(_adm_t("us_download_backup"), callback_data="userbot:settings:backup_restore:download"),
+            InlineKeyboardButton(_adm_t("us_restore_backup"), callback_data="userbot:settings:backup_restore:restore"),
         ],
         [
             InlineKeyboardButton(event_icon, callback_data="userbot:settings:backup_restore:event_toggle"),
-            InlineKeyboardButton("📢تنظیم کانال رویداد", callback_data="userbot:settings:backup_restore:event_set"),
+            InlineKeyboardButton(_adm_t("us_event_channel"), callback_data="userbot:settings:backup_restore:event_set"),
         ],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings_menu")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:settings_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -7825,7 +7838,7 @@ async def send_force_join_settings_menu(chat_id: int, context: ContextTypes.DEFA
 
 async def send_payment_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     settings = _get_payment_settings()
-    text = "💳تنظیمات پرداخت"
+    text = _adm_t("us_payment_settings")
     kb = build_payment_settings_menu_keyboard(settings)
     if message:
         try:
@@ -7875,7 +7888,7 @@ async def send_payment_method_menu(
         "perfect": "🧰تنظیمات پرفکت مانی",
         "crypto": "🔗تنظیمات پرداخت ارز دیجیتال",
     }
-    text = title_map.get(method, "💳تنظیمات پرداخت")
+    text = title_map.get(method, _adm_t("us_payment_settings"))
     kb = build_payment_method_menu_keyboard(method, enabled)
     if message:
         try:
