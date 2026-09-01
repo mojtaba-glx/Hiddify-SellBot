@@ -1793,26 +1793,33 @@ def userbot_cancel_keyboard() -> ReplyKeyboardMarkup:
 
 def build_userbot_main_menu() -> InlineKeyboardMarkup:
     """منوی اصلی مدیریت ربات کاربران"""
+    try:
+        from Shared import userbot_db as _udb
+        _lg = _udb.get_admin_language()
+    except Exception:
+        _lg = "fa"
+    from Shared import i18n as _i18n
+    _t = lambda k: _i18n.t(k, _lg)
     rows = [
         [
-            InlineKeyboardButton("👤مدیریت کاربران ربات", callback_data="userbot:users_menu")
+            InlineKeyboardButton(_t("adm_ub_users"), callback_data="userbot:users_menu")
         ],
         [
-            InlineKeyboardButton("💵مدیریت تراکنشات", callback_data="userbot:payments_menu"),
-            InlineKeyboardButton("📗مدیریت سفارشات", callback_data="userbot:orders_menu"),
+            InlineKeyboardButton(_t("adm_ub_tx"), callback_data="userbot:payments_menu"),
+            InlineKeyboardButton(_t("adm_ub_orders"), callback_data="userbot:orders_menu"),
         ],
         [
-            InlineKeyboardButton("🎁مدیریت هدایا", callback_data="userbot:gifts_menu")
+            InlineKeyboardButton(_t("adm_ub_gifts"), callback_data="userbot:gifts_menu")
         ],
         [
-            InlineKeyboardButton("🤝مدیریت رفرال", callback_data="userbot:referral_menu")
+            InlineKeyboardButton(_t("adm_ub_referral"), callback_data="userbot:referral_menu")
         ],
         [
-            InlineKeyboardButton("📑مدیریت تیکت‌ها", callback_data="userbot:tickets_menu"),
-            InlineKeyboardButton("📧ارسال پیام همگانی", callback_data="userbot:broadcast_menu"),
+            InlineKeyboardButton(_t("adm_ub_tickets"), callback_data="userbot:tickets_menu"),
+            InlineKeyboardButton(_t("adm_ub_broadcast"), callback_data="userbot:broadcast_menu"),
         ],
         [
-            InlineKeyboardButton("⚙️تنظیمات", callback_data="userbot:settings_menu")
+            InlineKeyboardButton(_t("adm_ub_settings"), callback_data="userbot:settings_menu")
         ],
     ]
     return InlineKeyboardMarkup(rows)
@@ -4734,9 +4741,15 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
 # ---------------------------------------------------------
 
 async def send_userbot_main_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    try:
+        from Shared import userbot_db as _udb
+        _lg = _udb.get_admin_language()
+    except Exception:
+        _lg = "fa"
+    from Shared import i18n as _i18n
     text = (
-        "🤖 مدیریت ربات کاربران\n"
-        "از این بخش می‌توانید کاربران ربات، سفارشات، تراکنش‌ها و سایر بخش‌ها را مدیریت کنید."
+        _i18n.t("adm_userbot_title", _lg) + "\n"
+        + _i18n.t("adm_userbot_hint", _lg)
     )
     kb = build_userbot_main_menu()
     if message:

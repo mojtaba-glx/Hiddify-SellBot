@@ -110,6 +110,20 @@ SERVER_DISPLAY_VERSION = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,
 
 logger = logging.getLogger(__name__)
 
+# ---- چندزبانه: زبان ادمین + شورت‌کات ترجمه ----
+from Shared import i18n as _i18n
+
+
+def _admin_bot_lang() -> str:
+    try:
+        return userbot_db.get_admin_language()
+    except Exception:
+        return "fa"
+
+
+def _T(lang: str, key: str, **kw) -> str:
+    return _i18n.t(key, lang, **kw)
+
 # ===============================
 #   ثابت‌ها و کمک‌کننده‌ها
 # ===============================
@@ -2082,7 +2096,7 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
 
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")])
 
-    keyboard.append([InlineKeyboardButton("افزودن سرور➕", callback_data="servers:add")])
+    keyboard.append([InlineKeyboardButton(_T(_admin_bot_lang(), "adm_add_server"), callback_data="servers:add")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -2094,6 +2108,7 @@ async def send_servers_list(
     servers = database.get_servers()
     child_ids = _get_child_server_ids()
     count = sum(1 for s in servers if int((s or {}).get("id") or 0) not in child_ids)
+    _al = _admin_bot_lang()
     # خلاصه یخ‌زدگی برای داشبورد
     try:
         from Shared import userbot_db as _ub
@@ -2102,15 +2117,15 @@ async def send_servers_list(
         _deleted = int(_fr.get("deleted_nodes") or 0)
         _fserv = int(_fr.get("frozen_services") or 0)
         if _frozen or _deleted:
-            _frozen_line = f"\n❄️ یخ‌زده: {_frozen} نود ({_fserv} سرویس) | 🗑 حذف‌شده: {_deleted} نود"
+            _frozen_line = "\n❄️ " + _T(_al, "adm_frozen_line", f=_frozen, s=_fserv, d=_deleted)
         else:
-            _frozen_line = "\n✅ همه نودها فعال"
+            _frozen_line = "\n✅ " + _T(_al, "adm_all_nodes_active")
     except Exception:
         _frozen_line = ""
     text = (
-        "‏🖥 مدیریت سرورها\n"
-        "⬇️ لیست سرور های شما"
-        f"{_frozen_line}"
+        _T(_al, "adm_servers_title") + "\n"
+        + _T(_al, "adm_servers_list_hint")
+        + f"{_frozen_line}"
     )
     kb = build_servers_inline_keyboard()
 
@@ -3582,29 +3597,30 @@ async def send_user_edit_menu(
 # ===============================
 
 def build_search_menu_keyboard() -> InlineKeyboardMarkup:
+    _al = _admin_bot_lang()
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "🔍 جستجوی هوشمند کاربر",
+                    _T(_al, "adm_search_smart"),
                     callback_data="searchmenu:smart",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "📊پیگیری اشتراک",
+                    _T(_al, "adm_search_track"),
                     callback_data="userbot:subs_menu",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⚠️ لیست کاربران منقضی شده",
+                    _T(_al, "adm_search_expired"),
                     callback_data="searchmenu:expired",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت🔙",
+                    _T(_al, "back"),
                     callback_data="searchmenu:back_main",
                 )
             ],
@@ -3618,7 +3634,7 @@ async def send_search_menu(
     message=None,
 ) -> None:
     # متن کوتاه برای جلوگیری از ارسال حباب خالی (فقط ساعت).
-    text = "🔍 جستجوی کاربر"
+    text = _T(_admin_bot_lang(), "adm_menu_search")
     kb = build_search_menu_keyboard()
     if message is not None:
         await message.edit_text(text, reply_markup=kb)
@@ -8078,10 +8094,11 @@ async def admin_inline_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # منوی لیست سرورها برای وضعیت
 async def send_status_servers_list(chat_id: int, context: ContextTypes.DEFAULT_TYPE, msg=None):
+    _al = _admin_bot_lang()
     servers = database.get_servers()
     child_ids = _get_child_server_ids()
     if not servers:
-        text = "❌ سروری یافت نشد."
+        text = _T(_al, "no_servers_found")
         if msg: await msg.reply_text(text, reply_markup=admin_main_keyboard())
         else: await context.bot.send_message(chat_id, text, reply_markup=admin_main_keyboard())
         return

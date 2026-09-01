@@ -19,6 +19,7 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 
 from Shared import agent_db, database, userbot_db
+from Shared import i18n as _i18n_mod
 from AgentBot import database as agentbot_db
 from CustomerBot import database as customerbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
@@ -156,6 +157,8 @@ def _fmt_agent_display(agent: Dict[str, Any]) -> str:
 
 
 def _main_menu_kb() -> InlineKeyboardMarkup:
+    _lg = userbot_db.get_admin_language()
+    _t = lambda k: _i18n_mod.t(k, _lg)
     try:
         ev = userbot_db.get_agency_event_settings()
         event_icon = "✅" if ev.get("event_channel_enabled") else "❌"
@@ -163,20 +166,20 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
         event_icon = "❌"
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("➕ افزودن نماینده", callback_data="agency:add")],
+            [InlineKeyboardButton(_t("ag_add_agent"), callback_data="agency:add")],
             [
-                InlineKeyboardButton("📋 لیست نماینده‌ها", callback_data="agency:list:1"),
-                InlineKeyboardButton("⏳ شارژهای در انتظار", callback_data="agency:payments:1"),
+                InlineKeyboardButton(_t("ag_list_agents"), callback_data="agency:list:1"),
+                InlineKeyboardButton(_t("ag_pending_charges"), callback_data="agency:payments:1"),
             ],
             [
-                InlineKeyboardButton("📊 آمار کلی", callback_data="agency:stats"),
-                InlineKeyboardButton("⚙️ توکن ربات نماینده", callback_data="agency:agenttoken"),
+                InlineKeyboardButton(_t("ag_stats"), callback_data="agency:stats"),
+                InlineKeyboardButton(_t("ag_agent_token"), callback_data="agency:agenttoken"),
             ],
             [
                 InlineKeyboardButton(event_icon, callback_data="agency:event:toggle"),
-                InlineKeyboardButton("تنظیم کانال رویداد📢", callback_data="agency:event:set"),
+                InlineKeyboardButton(_t("ag_event_set"), callback_data="agency:event:set"),
             ],
-            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="agency:exit")],
+            [InlineKeyboardButton(_t("ag_main_menu_back"), callback_data="agency:exit")],
         ]
     )
 
@@ -210,18 +213,20 @@ async def handle_agencies_entry(update: Update, context: ContextTypes.DEFAULT_TY
     """ورود به منوی مدیریت نماینده‌ها."""
     agent_db.init_db()
     stats = agent_db.get_global_agency_stats()
+    _lg = userbot_db.get_admin_language()
+    _t = lambda k, **kw: userbot_db and _i18n_mod.t(k, _lg, **kw)
 
     text = (
-        "🏢 <b>داشبورد مدیریت نماینده‌ها</b>\n"
+        _t("ag_dash_title") + "\n"
         f"{SEPARATOR}\n\n"
-        f"👥 تعداد کل نمایندگان: <b>{stats['agents_total']}</b>\n"
-        f"✅ فعال: <b>{stats['agents_active']}</b> | ❌ غیرفعال: <b>{stats['agents_total'] - stats['agents_active']}</b>\n\n"
-        f"👤 مشتریان کل: <b>{stats['customers_total']}</b>\n"
-        f"📦 سرویس‌ها: <b>{stats['services_total']}</b> (فعال: {stats['services_active']})\n\n"
-        f"💰 فروش کل: <b>{_fmt_toman(stats['total_sales'])}</b> تومان\n"
-        f"🏷 سود سیستم: <b>{_fmt_toman(stats['total_profit'])}</b> تومان\n"
-        f"📥 شارژ کل: <b>{_fmt_toman(stats['total_charges'])}</b> تومان\n\n"
-        f"🤖 ربات‌های فعال: <b>{stats['bots_active']}</b>"
+        + _t("ag_dash_agents", n=stats['agents_total']) + "\n"
+        + _t("ag_dash_active", a=stats['agents_active'], i=stats['agents_total'] - stats['agents_active']) + "\n\n"
+        + _t("ag_dash_customers", n=stats['customers_total']) + "\n"
+        + _t("ag_dash_services", n=stats['services_total'], a=stats['services_active']) + "\n\n"
+        + _t("ag_dash_sales", v=_fmt_toman(stats['total_sales'])) + "\n"
+        + _t("ag_dash_profit", v=_fmt_toman(stats['total_profit'])) + "\n"
+        + _t("ag_dash_charges", v=_fmt_toman(stats['total_charges'])) + "\n\n"
+        + _t("ag_dash_bots", n=stats['bots_active'])
     )
 
     # پاک کردن stateهای قبلی
