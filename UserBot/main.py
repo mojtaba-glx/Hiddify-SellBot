@@ -4714,7 +4714,7 @@ async def _send_config_and_qr_after_delivery(
             try:
                 managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
                 if managed_link:
-                    config_items.append(("🌐 " + i18n.t("config_smart", _dlg) + ":", managed_link))
+                    config_items.append((i18n.t("config_smart", _dlg) + ":", managed_link))
             except Exception as e:
                 logger.warning("Failed to build managed sub link after delivery (service_id=%s): %s", service_id, e)
         if settings.get("show_multi_server_b64", False):

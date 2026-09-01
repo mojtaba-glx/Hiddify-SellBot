@@ -1188,7 +1188,7 @@ async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_
                 try:
                     managed_link, _ = get_or_create_bot_sub_links(svc)
                     if managed_link:
-                        config_items.append(("🌐 " + _t(_cust_lang, "config_smart") + ":", managed_link))
+                        config_items.append((_t(_cust_lang, "config_smart") + ":", managed_link))
                 except Exception as e:
                     logger.warning("Failed to build managed sub link after delivery (service_id=%s): %s", service_id, e)
             if subs_settings.get("show_multi_server_b64", False):
