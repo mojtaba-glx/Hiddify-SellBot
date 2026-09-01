@@ -204,7 +204,7 @@ async def get_core_config(server: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def update_core_config(server: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-    return await _call("update_core_config", server)
+    return await _call("update_core_config", server, config)
 
 
 def build_inbound_from_link(link: str, *, port: int = None, private_key: str = "") -> Dict[str, Any]:
