@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from Shared import database, hiddify_api, marzban_api, userbot_db
+from Shared import database, hiddify_api, userbot_db
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +319,6 @@ async def _disable_service_on_all_nodes(
     for node in mappings:
         server_id = int(node.get("server_id") or 0)
         user_uuid = str(node.get("panel_user_uuid") or "").strip()
-        marzban_un = str(node.get("marzban_username") or "").strip()
         if server_id <= 0 or not user_uuid:
             continue
 
@@ -337,19 +336,6 @@ async def _disable_service_on_all_nodes(
                 user_uuid,
                 e,
             )
-        # Also disable on Marzban/PasarGuard if applicable
-        if marzban_un:
-            try:
-                from Shared import multi_panel
-                panel_mod = multi_panel.panel_api(server)
-                await panel_mod.disable_user(server, marzban_un)
-            except Exception as e:
-                logger.warning(
-                    "Failed disabling Marzban/PasarGuard user on server_id=%s username=%s: %s",
-                    server_id,
-                    marzban_un,
-                    e,
-                )
 
     # Local lock must be applied even if remote patch partially fails,
     # so user cannot bypass limits through Multi/Direct links.

@@ -143,7 +143,6 @@ async def buy_service(
         payload["uuid"] = shared_uuid
         created_nodes: List[dict] = []
         panel_user = None
-        primary_marzban = ""
         for idx, tgt in enumerate(targets):
             created = None
             last_exc = None
@@ -180,18 +179,15 @@ async def buy_service(
                     "server_title": tgt.get("title") or f"سرور #{tgt.get('id')}",
                     "panel_user_uuid": created_uuid,
                     "panel_user_id": str(created.get("id") or "").strip(),
-                    "marzban_username": str(created.get("_marzban_username") or "").strip(),
                     "is_primary": idx == 0,
                 }
             )
             if idx == 0:
                 panel_user = created
-                primary_marzban = str(created.get("_marzban_username") or "").strip()
         if panel_user is None:
             raise RuntimeError("no primary node created")
         panel_uuid = str(panel_user.get("uuid") or user_uuid).strip()
         panel_user_id = str(panel_user.get("id") or "").strip()
-        marzban_username = primary_marzban
     except Exception as e:
         logger.error("buy_service create_user failed agent=%s: %s", agent_id, e)
         agent_db.charge_wallet(agent_id, wholesale, description=f"Refund: API error")
@@ -221,7 +217,6 @@ async def buy_service(
                 server_title=item.get("server_title") or "",
                 panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
                 panel_user_id=str(item.get("panel_user_id") or "").strip(),
-                marzban_username=str(item.get("marzban_username") or "").strip(),
             )
 
     return {
@@ -277,7 +272,6 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
                         await multi_panel.patch_user(
                             primary_target[0], primary_target[1],
                             {"expire_date": new_end.split(" ")[0]},
-                            marzban_username=primary_target[2],
                         )
                     except Exception as e:
                         logger.warning("renew primary patch failed svc=%s: %s", service_id, e)
@@ -286,14 +280,13 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
 
                     # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.
                     failed_nodes: List[str] = []
-                    for srv, uuid, marzban_un in targets:
+                    for srv, uuid, _un in targets:
                         if int(srv.get("id") or 0) == primary_sid:
                             continue
                         try:
                             await multi_panel.patch_user(
                                 srv, uuid,
                                 {"expire_date": new_end.split(" ")[0]},
-                                marzban_username=marzban_un,
                             )
                         except Exception as e:
                             failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
@@ -333,14 +326,14 @@ async def get_configs(service_id: int) -> Dict[str, Any]:
     aggregated: List[Dict[str, Any]] = []
     seen_links: set = set()
     last_error: str = ""
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         try:
             # برای نود X-UI که uuid mapping ندارد، از uuid سرویس اصلی استفاده کن
             fetch_uuid = str(uuid or panel_uuid).strip()
             if not fetch_uuid:
                 continue
             configs = await multi_panel.get_user_configs(
-                srv, fetch_uuid, marzban_username=marzban_un,
+                srv, fetch_uuid,
             )
             for item in configs or []:
                 if isinstance(item, dict):
@@ -812,7 +805,7 @@ def get_service_node_base_urls(svc: dict) -> List[str]:
 
 
 def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
-    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس + نودهای زیرمجموعه"""
+    """لیست (server, uuid, "") برای همه نودهای سرویس + نودهای زیرمجموعه (سازگاری با فراخواننده‌های قدیمی)"""
     try:
         from Shared.sub_links import get_service_panel_targets as _g
         return list(_g(svc) or [])
@@ -840,7 +833,7 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
         if key in seen:
             continue
         seen.add(key)
-        targets.append((srv, uuid, str(m.get("marzban_username") or "").strip()))
+        targets.append((srv, uuid, ""))
     if targets:
         return targets
     try:
@@ -986,9 +979,9 @@ async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
     """پشتیبان: دریافت کانفیگ‌ها از API پنل برای همه نودها"""
     out: List[str] = []
     seen: set = set()
-    for srv, uuid, marzban_un in get_service_panel_targets(svc):
+    for srv, uuid, _un in get_service_panel_targets(svc):
         try:
-            configs = await multi_panel.get_user_configs(srv, uuid, marzban_username=marzban_un)
+            configs = await multi_panel.get_user_configs(srv, uuid)
             for item in configs or []:
                 link = str(item.get("link") or "").strip()
                 if link and link not in seen:
@@ -1098,7 +1091,7 @@ async def sync_service_status_from_panels(service_id: int) -> Dict[str, Any]:
     min_days_left: Optional[int] = None
     found_any = False
     missing_any = False
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         try:
             user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
             usage = _to_float(user_data.get("current_usage_GB"), 0.0)
@@ -1148,9 +1141,9 @@ async def rename_service_on_panels(svc: dict, new_name: str) -> Tuple[bool, str]
         return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
     errors: List[str] = []
     ok_count = 0
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         try:
-            await multi_panel.patch_user(srv, uuid, {"name": new_name}, marzban_username=marzban_un)
+            await multi_panel.patch_user(srv, uuid, {"name": new_name})
             ok_count += 1
         except Exception as e:
             errors.append(f"{srv.get('title') or srv.get('id')}: {str(e)[:60]}")
@@ -1186,7 +1179,7 @@ async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
     final_uuid: Optional[str] = None
     updated_targets: List[Tuple[dict, str, str]] = []  # (srv, old_uuid, new_uuid)
 
-    for srv, old_uuid, _marzban_un in targets:
+    for srv, old_uuid, _new_uuid in targets:
         if not old_uuid:
             continue
         try:

@@ -1397,7 +1397,7 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
         lines: list[str] = []
         seen: set = set()
         # per-node: هر نود جداگانه HTTP و اگر X-UI و خالی بود API
-        for srv, uuid, marzban_un in get_service_panel_targets(svc):
+        for srv, uuid, _un in get_service_panel_targets(svc):
             try:
                 from Shared.sub_links import _build_user_base_url as _build_ub
                 base = _build_ub(srv, uuid)
@@ -1412,7 +1412,7 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
                 try:
                     from Shared import xui_api
                     if xui_api.is_xui_server(srv):
-                        api_lines = _fetch_lines_from_admin_api(srv, uuid, marzban_username=marzban_un)
+                        api_lines = _fetch_lines_from_admin_api(srv, uuid)
                         if api_lines:
                             fetched = api_lines
                 except Exception:
@@ -1446,11 +1446,11 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
                     except Exception:
                         pass
                 if needs_xui_fallback:
-                    for srv, uuid, marzban_un in get_service_panel_targets(svc):
+                    for srv, uuid, _un in get_service_panel_targets(svc):
                         if not srv or not uuid:
                             continue
                         try:
-                            api_lines = _fetch_lines_from_admin_api(srv, uuid, marzban_username=marzban_un)
+                            api_lines = _fetch_lines_from_admin_api(srv, uuid)
                             for ln in api_lines or []:
                                 raw = str(ln or "").strip()
                                 if not raw or raw in seen:

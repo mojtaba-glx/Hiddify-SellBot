@@ -2204,18 +2204,8 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> 
     errors: list[str] = []
 
     for srv, uuid in targets:
-        marzban_un = ""
         try:
-            service_id_tmp = int(service.get("id") or 0)
-            if service_id_tmp > 0:
-                for node in userbot_db.get_service_nodes(service_id_tmp):
-                    if int(node.get("server_id") or 0) == int(srv.get("id") or 0):
-                        marzban_un = str(node.get("marzban_username") or "").strip()
-                        break
-        except Exception:
-            pass
-        try:
-            await multi_panel.patch_user(srv, uuid, {"name": new_name}, marzban_username=marzban_un)
+            await multi_panel.patch_user(srv, uuid, {"name": new_name})
             updated_targets.append((srv, uuid))
         except Exception as e:
             # Retry with sibling server records (same panel/proxy, different admin key).
@@ -2223,7 +2213,7 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> 
             if _is_panel_unauthorized_error(e):
                 for alt_srv in _find_auth_fallback_servers_for_panel(srv):
                     try:
-                        await multi_panel.patch_user(alt_srv, uuid, {"name": new_name}, marzban_username=marzban_un)
+                        await multi_panel.patch_user(alt_srv, uuid, {"name": new_name})
                         updated_targets.append((alt_srv, uuid))
                         patched = True
                         break
@@ -2540,14 +2530,12 @@ async def _create_service_users_on_targets(
                     shared_uuid,
                     user_uuid,
                 )
-            marzban_username = str(created.get("_marzban_username") or "").strip()
             created_nodes.append(
                 {
                     "server_id": int(srv.get("id") or 0),
                     "server_title": srv.get("title") or f"سرور #{srv.get('id')}",
                     "panel_user_uuid": user_uuid,
                     "panel_user_id": created.get("id"),
-                    "marzban_username": marzban_username,
                     "created": created,
                     "is_primary": idx == 0,
                 }
@@ -2564,19 +2552,12 @@ async def _deactivate_created_users(created_nodes: list[dict]) -> None:
         try:
             sid = int(item.get("server_id") or 0)
             uuid = str(item.get("panel_user_uuid") or "").strip()
-            marzban_un = str(item.get("marzban_username") or "").strip()
             if sid <= 0 or not uuid:
                 continue
             server = database.get_server_by_id(sid)
             if not server:
                 continue
             await hiddify_api.disable_user(server, uuid)
-            if marzban_un:
-                try:
-                    from Shared import multi_panel
-                    await multi_panel.panel_api(server).disable_user(server, marzban_un)
-                except Exception:
-                    pass
         except Exception as e:
             logger.warning(
                 "Rollback deactivate failed for sid=%s uuid=%s: %s",
@@ -2708,18 +2689,9 @@ async def _apply_service_renewal_on_targets(
     errors_primary: list[str] = []
     failed_servers: list[str] = []
     for srv, uuid in targets:
-        # Look up marzban_username for this target
-        marzban_un = ""
         try:
-            for node in userbot_db.get_service_nodes(service_id) if service_id > 0 else []:
-                if int(node.get("server_id") or 0) == int(srv.get("id") or 0):
-                    marzban_un = str(node.get("marzban_username") or "").strip()
-                    break
-        except Exception:
-            pass
-        try:
-            patched = await multi_panel.patch_user(srv, uuid, payload, marzban_username=marzban_un)
-            await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+            patched = await multi_panel.patch_user(srv, uuid, payload)
+            await multi_panel.enable_user(srv, uuid)
         except Exception as e:
             # یک نود down نباید مانع تحویل به بقیه شود؛ فقط لاگ و ادامه بده.
             logger.warning(
@@ -3461,17 +3433,8 @@ async def _collect_direct_configs_map_from_api(
             targets.append((server, uuid))
 
     for server, uuid in targets:
-        marzban_un = ""
         try:
-            if service_id > 0:
-                for node in userbot_db.get_service_nodes(service_id):
-                    if int(node.get("server_id") or 0) == int(server.get("id") or 0):
-                        marzban_un = str(node.get("marzban_username") or "").strip()
-                        break
-        except Exception:
-            pass
-        try:
-            configs_raw = await multi_panel.get_user_configs(server, uuid, marzban_username=marzban_un)
+            configs_raw = await multi_panel.get_user_configs(server, uuid)
         except Exception:
             continue
 
@@ -5430,7 +5393,6 @@ async def _process_wallet_purchase(
                         if node_item.get("panel_user_id") is not None
                         else None
                     ),
-                    marzban_username=str(node_item.get("marzban_username") or "").strip(),
                     is_active=1,
                 )
             except Exception as e:
@@ -8702,7 +8664,6 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if node_item.get("panel_user_id") is not None
                             else None
                         ),
-                        marzban_username=str(node_item.get("marzban_username") or "").strip(),
                         is_active=1,
                     )
                 except Exception as e:

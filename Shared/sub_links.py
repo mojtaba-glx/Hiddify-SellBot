@@ -345,7 +345,7 @@ def get_or_create_bot_sub_links(svc: dict) -> Tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
-    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس + نودهای زیرمجموعه"""
+    """لیست (server, uuid, "") برای همه نودهای سرویس + نودهای زیرمجموعه (سازگاری با فراخواننده‌های قدیمی)"""
     targets: List[Tuple[dict, str, str]] = []
     seen: set = set()
     try:
@@ -368,7 +368,7 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
         if key in seen:
             continue
         seen.add(key)
-        targets.append((srv, uuid, str(m.get("marzban_username") or "").strip()))
+        targets.append((srv, uuid, ""))
     if not targets:
         try:
             sid = int(svc.get("server_id") or 0)
@@ -399,7 +399,6 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
                     continue
                 child_map = child_mappings.get(child_sid) or {}
                 child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
-                child_un = str(child_map.get("marzban_username") or "").strip()
                 child_srv = database.get_server_by_id(child_sid)
                 if not child_srv or not child_uuid:
                     continue
@@ -407,7 +406,7 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
                 if key in seen:
                     continue
                 seen.add(key)
-                targets.append((child_srv, child_uuid, child_un))
+                targets.append((child_srv, child_uuid, ""))
         # اگر سرویس روی نود است، خوشه کامل (parent + sibling nodes) را هم برگردان
         # این حالت برای سرویس‌های قدیمی که server_id آنها خودِ نود است پیش می‌آید
         parent_ids: List[int] = []
@@ -435,13 +434,10 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
             parent_map = next((m for m in mappings if int((m or {}).get("server_id") or 0) == pid), None)
             if parent_map:
                 parent_uuid = str(parent_map.get("panel_user_uuid") or "").strip() or parent_uuid
-                parent_un = str(parent_map.get("marzban_username") or "").strip()
-            else:
-                parent_un = ""
             key = (pid, parent_uuid)
             if parent_uuid and key not in seen:
                 seen.add(key)
-                targets.append((parent_srv, parent_uuid, parent_un))
+                targets.append((parent_srv, parent_uuid, ""))
             # sibling nodes of this parent
             child_mappings2 = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
             for node in (parent_srv.get("nodes") or []):
@@ -455,7 +451,6 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
                     continue
                 child_map = child_mappings2.get(child_sid) or {}
                 child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
-                child_un = str(child_map.get("marzban_username") or "").strip()
                 child_srv = database.get_server_by_id(child_sid)
                 if not child_srv or not child_uuid:
                     continue
@@ -463,7 +458,7 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
                 if key in seen:
                     continue
                 seen.add(key)
-                targets.append((child_srv, child_uuid, child_un))
+                targets.append((child_srv, child_uuid, ""))
     return targets
 
 
@@ -560,7 +555,7 @@ def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
     """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)"""
     out: List[str] = []
     seen_links: set = set()
-    for srv, uuid, marzban_un in get_service_panel_targets(svc):
+    for srv, uuid, _un in get_service_panel_targets(svc):
         base_url = _build_user_base_url(srv, uuid)
         node_lines: List[str] = []
         seen_lines: set = set()
@@ -597,9 +592,9 @@ async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
     """پشتیبان: دریافت کانفیگ‌ها از API پنل برای همه نودها"""
     out: List[str] = []
     seen: set = set()
-    for srv, uuid, marzban_un in get_service_panel_targets(svc):
+    for srv, uuid, _un in get_service_panel_targets(svc):
         try:
-            configs = await multi_panel.get_user_configs(srv, uuid, marzban_username=marzban_un)
+            configs = await multi_panel.get_user_configs(srv, uuid)
             for item in configs or []:
                 link = str(item.get("link") or "").strip()
                 if link and link not in seen:

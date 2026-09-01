@@ -42,7 +42,7 @@ def _to_int(value, default: int = 0) -> int:
 async def _disable_on_all_targets(svc: dict, targets: list) -> int:
     """غیرفعال کردن کاربر روی سرور اصلی + همه نودها. تعداد موفق را برمی‌گرداند."""
     disabled = 0
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         if not srv or not uuid:
             continue
         try:
@@ -70,7 +70,7 @@ async def _process_service(svc: dict) -> Dict[str, str]:
 
     total_usage = 0.0
     found_any = False
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         try:
             user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
             total_usage += _to_float(user_data.get("current_usage_GB"), 0.0)

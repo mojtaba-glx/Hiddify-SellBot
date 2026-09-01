@@ -68,18 +68,6 @@ def get_service_targets(service: Dict[str, Any]) -> List[Tuple[Dict[str, Any], s
     return targets
 
 
-def _marzban_username_for(service_id: int, server_id: int) -> str:
-    if service_id <= 0 or server_id <= 0:
-        return ""
-    try:
-        for node in userbot_db.get_service_nodes(service_id) or []:
-            if int(node.get("server_id") or 0) == int(server_id):
-                return str(node.get("marzban_username") or "").strip()
-    except Exception:
-        pass
-    return ""
-
-
 async def delete_service_from_panels(service: Dict[str, Any]) -> Tuple[int, List[str]]:
     """
     حذف/غیرفعال‌کردن کاربر پنلی این سرویس روی سرور اصلی + همه نودها.
@@ -95,9 +83,8 @@ async def delete_service_from_panels(service: Dict[str, Any]) -> Tuple[int, List
     failed: List[str] = []
     for srv, uuid in targets:
         title = str(srv.get("title") or f"سرور #{srv.get('id')}")
-        marzban_un = _marzban_username_for(service_id, int(srv.get("id") or 0))
         try:
-            await multi_panel.delete_user(srv, uuid, marzban_username=marzban_un)
+            await multi_panel.delete_user(srv, uuid)
             deleted += 1
         except Exception as e:
             logger.warning(
@@ -126,11 +113,10 @@ async def patch_service_on_panels(
     failed: List[str] = []
     for srv, uuid in targets:
         title = str(srv.get("title") or f"سرور #{srv.get('id')}")
-        marzban_un = _marzban_username_for(service_id, int(srv.get("id") or 0))
         try:
-            await multi_panel.patch_user(srv, uuid, payload, marzban_username=marzban_un)
+            await multi_panel.patch_user(srv, uuid, payload)
             try:
-                await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+                await multi_panel.enable_user(srv, uuid)
             except Exception:
                 pass
             changed += 1
@@ -208,7 +194,6 @@ def create_service_in_db(
                     if node.get("panel_user_id") is not None
                     else None
                 ),
-                marzban_username=str(node.get("marzban_username") or "").strip(),
                 is_active=1,
             )
         except Exception as e:

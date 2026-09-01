@@ -27,7 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api, marzban_api, multi_panel
+from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api, multi_panel
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import (
     admin_main_keyboard,
@@ -448,10 +448,6 @@ ADD_STATE_USER_PROXY = "add_server_user_proxy"
 ADD_STATE_LIMIT = "add_server_limit"
 ADD_STATE_XUI_USERNAME = "add_server_xui_username"
 ADD_STATE_XUI_PASSWORD = "add_server_xui_password"
-ADD_STATE_MARZBAN_USERNAME = "add_server_marzban_username"
-ADD_STATE_MARZBAN_PASSWORD = "add_server_marzban_password"
-
-MARZBAN_PANEL_TYPES = {"marzban", "pasarguard"}
 
 
 def _panel_type_label(panel_type: str) -> str:
@@ -459,10 +455,6 @@ def _panel_type_label(panel_type: str) -> str:
     pt = str(panel_type or "").strip().lower()
     if pt in {"xui", "x-ui"}:
         return "X-UI"
-    if pt == "marzban":
-        return _T(_lg, "adm_panel_marzban")
-    if pt == "pasarguard":
-        return _T(_lg, "adm_panel_pasarguard")
     return _T(_lg, "adm_panel_hiddify")
 ADD_STATE_XUI_TOKEN = "add_server_xui_token"
 ADD_STATE_XUI_SUB_DOMAIN = "add_server_xui_sub_domain"
@@ -481,13 +473,6 @@ EDIT_SERVER_XUI_PASSWORD = "edit_server_xui_password"
 EDIT_SERVER_XUI_TOKEN = "edit_server_xui_token"
 EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
 EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
-EDIT_SERVER_MARZBAN_USERNAME = "edit_server_marzban_username"
-EDIT_SERVER_MARZBAN_PASSWORD = "edit_server_marzban_password"
-
-# ساخت اینباند مرزبان از لینک
-MARZBAN_CREATE_INBOUND_LINK = "marzban_create_inbound_link"
-MARZBAN_CREATE_INBOUND_REALITY_KEY = "marzban_create_inbound_reality_key"
-MARZBAN_CREATE_INBOUND_PORT = "marzban_create_inbound_port"
 
 # افزودن کاربر
 ADD_USER_NAME = "add_user_name"
@@ -1138,14 +1123,6 @@ def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str
                 sub_path = xui_api._sub_path(server)
                 if origin and sub_path:
                     return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
-    except Exception:
-        pass
-    # Marzban native: subscription_url از پنل مرزبان (سبک /sub/{token})
-    try:
-        if (str((server or {}).get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES):
-            panel_url_mb = (server.get("panel_url") or "").strip().rstrip("/")
-            if panel_url_mb:
-                return f"{panel_url_mb}/sub/{user_uuid}"
     except Exception:
         pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
@@ -2184,14 +2161,9 @@ def build_server_detail_text(
             plans_count = 0
     priority = int(server.get("priority") or 0)
     is_xui = str(server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
-    is_marzban = str(server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES
     if is_xui:
         version_text = "X-UI"
         # برای X-UI آدرس پنل خودش لینک است (شامل base path)
-        admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
-    elif is_marzban:
-        version_text = _panel_type_label(server.get("panel_type"))
-        # برای مرزبان آدرس پنل خودش لینک است
         admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
     else:
         version_text = SERVER_DISPLAY_VERSION or f"V{int(server.get('version') or 11)}"
@@ -2233,23 +2205,6 @@ def build_server_detail_text(
             + _T(_lg, "adm_srv_plans_line", n=plans_count) + "\n"
             + _T(_lg, "adm_srv_priority_line", n=priority) + "\n"
             + _T(_lg, "adm_srv_panel_line", panel=escape(version_text)) + xui_info
-        )
-
-    if is_marzban:
-        marzban_info = ""
-        try:
-            mb_user = (server.get("marzban_admin_username") or "").strip()
-            if mb_user:
-                marzban_info += "\n" + _T(_lg, "adm_srv_marzban_admin", user=escape(mb_user))
-        except Exception:
-            pass
-        return (
-            f"{title_line}\n"
-            "❖ • -------------------------- • ❖\n"
-            + _T(_lg, "adm_srv_users_line", n=users_count, limit=users_limit) + "\n"
-            + _T(_lg, "adm_srv_plans_line", n=plans_count) + "\n"
-            + _T(_lg, "adm_srv_priority_line", n=priority) + "\n"
-            + _T(_lg, "adm_srv_panel_line", panel=escape(version_text)) + marzban_info
         )
 
     return (
@@ -2330,10 +2285,8 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
     try:
         srv = database.get_server_by_id(server_id)
         is_xui = str((srv or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
-        is_marzban = str((srv or {}).get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES
     except Exception:
         is_xui = False
-        is_marzban = False
     keyboard = [
         [InlineKeyboardButton(_T(_lg, "adm_srv_users_list_btn"), callback_data=f"server:{server_id}:users")],
         [InlineKeyboardButton(_T(_lg, "adm_srv_user_ops_btn"), callback_data=f"server:{server_id}:user_ops")],
@@ -2347,23 +2300,6 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
     if is_xui:
         keyboard.insert(4, [InlineKeyboardButton(_T(_lg, "adm_srv_inbound_from_link_btn"), callback_data=f"server:{server_id}:create_inbound_from_link")])
         keyboard.insert(5, [InlineKeyboardButton(_T(_lg, "adm_srv_sync_inbounds_btn"), callback_data=f"server:{server_id}:sync_inbounds")])
-    if is_marzban:
-        keyboard.insert(
-            4,
-            [InlineKeyboardButton(_T(_lg, "adm_mb_live_stats_btn"), callback_data=f"server:{server_id}:marzban_stats")],
-        )
-        keyboard.insert(
-            5,
-            [InlineKeyboardButton(_T(_lg, "adm_mb_inbounds_list_btn"), callback_data=f"server:{server_id}:marzban_inbounds")],
-        )
-        keyboard.insert(
-            6,
-            [InlineKeyboardButton(_T(_lg, "adm_mb_nodes_btn"), callback_data=f"server:{server_id}:marzban_nodes")],
-        )
-        keyboard.insert(
-            7,
-            [InlineKeyboardButton(_T(_lg, "adm_srv_inbound_from_link_btn"), callback_data=f"server:{server_id}:marzban_create_inbound")],
-        )
     keyboard.append([InlineKeyboardButton(_T(_lg, "adm_btn_back_arrow"), callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -3139,8 +3075,6 @@ async def send_user_configs_menu(
     server_for_display = dict(server)
     server_for_display["title"] = _format_server_location_title(server.get("title") or "")
 
-    is_marzban_server = str(server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES
-
     # لینک پنل کاربر پشت اسم نمایش داده شود.
     user_name_link = _build_user_base_url(server, user_uuid)
     panel_user_link = _panel_user_link_from_base(user_name_link)
@@ -3150,50 +3084,6 @@ async def send_user_configs_menu(
         source=source,
         user_name_link=user_name_link,
     )
-
-    if is_marzban_server:
-        # پنل مرزبان: فقط لینک اشتراک مرزبان + کانفیگ‌های مستقیم معنا دارند
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        _t("adm_cfg_mb_sub_btn"),
-                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:marzban_sub",
-                        style="success",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        _t("adm_cfg_direct_btn"),
-                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:direct",
-                        style="primary",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        _t("adm_cfg_back_to_user_btn"),
-                        callback_data=f"server:{server_id}:useruuid:{user_uuid}",
-                        style="primary",
-                    )
-                ],
-            ]
-        )
-        if message is not None and message.text:
-            await message.edit_text(
-                text,
-                reply_markup=keyboard,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        return
 
     keyboard = InlineKeyboardMarkup(
         [
@@ -4034,10 +3924,6 @@ async def handle_add_server_flow(
                         InlineKeyboardButton(_t("adm_addsrv_type_hiddify"), callback_data="servers:add:type:hiddify"),
                     ],
                     [
-                        InlineKeyboardButton(_t("adm_addsrv_type_marzban"), callback_data="servers:add:type:marzban"),
-                        InlineKeyboardButton(_t("adm_addsrv_type_pasarguard"), callback_data="servers:add:type:pasarguard"),
-                    ],
-                    [
                         InlineKeyboardButton(_t("adm_addsrv_type_xui_alireza"), callback_data="servers:add:type:xui_alireza"),
                         InlineKeyboardButton(_t("adm_addsrv_type_xui_sanaei"), callback_data="servers:add:type:xui_sanaei"),
                     ],
@@ -4055,11 +3941,6 @@ async def handle_add_server_flow(
         if str(new_server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
             await message.reply_text(
                 _t("adm_addsrv_panel_url_xui"),
-                reply_markup=cancel_keyboard(),
-            )
-        elif str(new_server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES:
-            await message.reply_text(
-                _t("adm_addsrv_panel_url_marzban", panel=_panel_type_label(new_server.get('panel_type'))),
                 reply_markup=cancel_keyboard(),
             )
         else:
@@ -4082,14 +3963,6 @@ async def handle_add_server_flow(
         new_server["panel_url"] = panel_url
         context.user_data["new_server"] = new_server
 
-        if new_server.get("panel_type") in MARZBAN_PANEL_TYPES:
-            context.user_data["state"] = ADD_STATE_MARZBAN_USERNAME
-            await message.reply_text(
-                _t("adm_addsrv_marzban_username", panel=_panel_type_label(new_server.get('panel_type'))),
-                reply_markup=cancel_keyboard(),
-            )
-            return
-    
         if new_server.get("panel_type") == "xui":
             context.user_data["state"] = ADD_STATE_XUI_USERNAME
             await message.reply_text(
@@ -4101,42 +3974,6 @@ async def handle_add_server_flow(
         context.user_data["state"] = ADD_STATE_ADMIN_PROXY
         await message.reply_text(
             _t("adm_addsrv_admin_proxy"),
-            reply_markup=cancel_keyboard(),
-        )
-        return
-
-    # مرحله مرزبان: نام کاربری ادمین
-    if state == ADD_STATE_MARZBAN_USERNAME:
-        username = text.strip()
-        if not username or " " in username:
-            await message.reply_text(
-                _t("adm_addsrv_marzban_username_invalid"),
-                reply_markup=cancel_keyboard(),
-            )
-            return
-        new_server["marzban_admin_username"] = username
-        context.user_data["new_server"] = new_server
-        context.user_data["state"] = ADD_STATE_MARZBAN_PASSWORD
-        await message.reply_text(
-            _t("adm_addsrv_marzban_password"),
-            reply_markup=cancel_keyboard(),
-        )
-        return
-
-    # مرحله مرزبان: رمز عبور ادمین
-    if state == ADD_STATE_MARZBAN_PASSWORD:
-        password = text.strip()
-        if not password:
-            await message.reply_text(
-                _t("adm_addsrv_password_empty"),
-                reply_markup=cancel_keyboard(),
-            )
-            return
-        new_server["marzban_admin_password"] = password
-        context.user_data["new_server"] = new_server
-        context.user_data["state"] = ADD_STATE_LIMIT
-        await message.reply_text(
-            _t("adm_addsrv_users_limit"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -4283,33 +4120,15 @@ async def handle_add_server_flow(
         new_server["users_limit"] = limit
         context.user_data["new_server"] = new_server
 
-        _is_marzban_pt = str(new_server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES
-
         # تست اتصال به پنل با اطلاعات وارد شده
         try:
-            if _is_marzban_pt:
-                await multi_panel.panel_api(new_server).test_connect(new_server)
-            elif new_server.get("panel_type") == "xui":
+            if new_server.get("panel_type") == "xui":
                 await xui_api.test_connect(new_server)
             else:
                 await hiddify_api.list_users(new_server)
         except Exception as e:
             err_text = str(e or "")
             err_low = err_text.lower()
-            if _is_marzban_pt:
-                if "auth failed" in err_low or "401" in err_low:
-                    await message.reply_text(
-                        _t("adm_addsrv_mb_auth_failed"),
-                        reply_markup=cancel_keyboard(),
-                    )
-                    return
-                if len(err_text) > 800:
-                    err_text = err_text[:800] + "\n" + _t("adm_err_truncated")
-                await message.reply_text(
-                    _t("adm_addsrv_mb_connect_failed", err=err_text),
-                    reply_markup=cancel_keyboard(),
-                )
-                return
             if "just a moment" in err_low or "cloudflare" in err_low or "enable javascript and cookies" in err_low:
                 await message.reply_text(
                     _t("adm_addsrv_cf_blocked"),
@@ -4337,8 +4156,6 @@ async def handle_add_server_flow(
             + _t("adm_addsrv_sum_url", url=saved.get('panel_url')) + "\n"
             + _t("adm_addsrv_sum_type", panel=_panel_type_label(saved.get('panel_type'))) + "\n"
         )
-        if _is_marzban_pt:
-            summary += _t("adm_addsrv_sum_mb_admin", user=saved.get('marzban_admin_username')) + "\n"
         summary += _t("adm_addsrv_sum_limit", n=saved.get('users_limit'))
         await message.reply_text(summary, reply_markup=admin_main_keyboard())
         await send_servers_list(chat_id=message.chat_id, context=context)
@@ -4620,26 +4437,6 @@ async def handle_edit_server_flow(
                     reply_markup=cancel_keyboard(),
                 )
                 return
-    elif state == EDIT_SERVER_MARZBAN_USERNAME:
-        username = text.strip()
-        if not username or " " in username:
-            await message.reply_text(
-                "❌ نام کاربری ادمین مرزبان نمی‌تواند خالی باشد یا فاصله داشته باشد.",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-        updates["marzban_admin_username"] = username
-        msg_ok = "✅ نام کاربری ادمین مرزبان بروزرسانی شد."
-    elif state == EDIT_SERVER_MARZBAN_PASSWORD:
-        password = text.strip()
-        if not password:
-            await message.reply_text(
-                "❌ رمز عبور نمی‌تواند خالی باشد.",
-                reply_markup=cancel_keyboard(),
-            )
-            return
-        updates["marzban_admin_password"] = password
-        msg_ok = "✅ رمز عبور ادمین مرزبان بروزرسانی شد."
     else:
         await message.reply_text("❌ حالت ویرایش سرور نامعتبر است.", reply_markup=admin_main_keyboard())
         context.user_data.pop("state", None)
@@ -4688,7 +4485,6 @@ async def send_server_edit_menu(
     text = await build_server_detail_text_live(server)
 
     is_xui = str(server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
-    is_marzban = str(server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES
     if is_xui:
         kb = InlineKeyboardMarkup(
             [
@@ -4700,20 +4496,6 @@ async def send_server_edit_menu(
                 [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xui_sub_domain")],
                 [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xui_inbound")],
                 [InlineKeyboardButton("🔢ویرایش اولویت ترتیب", callback_data=f"seredit:{server_id}:priority")],
-                [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
-                [InlineKeyboardButton("🔙بازگشت", callback_data=f"server:{server_id}")],
-            ]
-        )
-    elif is_marzban:
-        kb = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("📌ویرایش عنوان", callback_data=f"seredit:{server_id}:title")],
-                [InlineKeyboardButton("🌐ویرایش آدرس پنل", callback_data=f"seredit:{server_id}:panel_url")],
-                [InlineKeyboardButton("👤ویرایش نام کاربری ادمین مرزبان", callback_data=f"seredit:{server_id}:marzban_username")],
-                [InlineKeyboardButton("🔑ویرایش رمز ادمین مرزبان", callback_data=f"seredit:{server_id}:marzban_password")],
-                [InlineKeyboardButton("🗿ویرایش محدودیت کاربر", callback_data=f"seredit:{server_id}:limit")],
-                [InlineKeyboardButton("🔢ویرایش اولویت ترتیب", callback_data=f"seredit:{server_id}:priority")],
-                [InlineKeyboardButton("✅ تست اتصال به پنل", callback_data=f"seredit:{server_id}:test")],
                 [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
                 [InlineKeyboardButton("🔙بازگشت", callback_data=f"server:{server_id}")],
             ]
@@ -5190,18 +4972,10 @@ async def handle_add_user_flow(
 
                 await send_user_detail(server_id, row_uuid, message.chat_id, context)
 
-                if str(server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES:
-                    # مرزبان: لینک اشتراک native خود کاربر
-                    sub_url = str((row.get("subscription_url") or "")).strip()
-                    if not sub_url:
-                        sub_url = _build_user_base_url(server, row_uuid) or ""
-                    if not sub_url:
-                        continue
-                else:
-                    base_url = _build_user_base_url(server, row_uuid)
-                    if not base_url:
-                        continue
-                    sub_url = f"{base_url}/all.txt"
+                base_url = _build_user_base_url(server, row_uuid)
+                if not base_url:
+                    continue
+                sub_url = f"{base_url}/all.txt"
                 qr_image = make_qr_image(sub_url)
                 await context.bot.send_photo(
                     chat_id=message.chat_id,
@@ -5607,10 +5381,6 @@ async def handle_server_state_message(
         await handle_xui_create_inbound_from_link_port(update, context)
         return
 
-    if state.startswith("marzban_create_inbound"):
-        await handle_marzban_create_inbound_flow(state, update, context)
-        return
-
     if state == SEARCH_SMART_INPUT:
         await handle_smart_search_input(update, context)
         return
@@ -5772,216 +5542,6 @@ async def handle_xui_create_inbound_from_link_port(update: Update, context: Cont
         )
 
 
-async def _marzban_core_used_ports(server: Dict[str, Any]) -> Optional[set]:
-    """پورت‌های اشغال‌شده در کانفیگ هسته مرزبان (برای پیشنهاد پورت آزاد)."""
-    try:
-        cfg = await multi_panel.panel_api(server).get_core_config(server)
-        used = set()
-        for ib in (cfg.get("inbounds") or []):
-            if isinstance(ib, dict) and ib.get("port"):
-                try:
-                    used.add(int(ib.get("port")))
-                except (TypeError, ValueError):
-                    pass
-        return used
-    except Exception:
-        return None
-
-
-async def handle_marzban_create_inbound_flow(
-    state: str, update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """
-    ویزارد ساخت اینباند مرزبان از لینک:
-      1) لینک (vless/vmess/trojan/ss) → پارس و نمایش خلاصه
-      2) اگر REALITY بود → گرفتن privateKey
-      3) پورت → ساخت اینباند و تزریق در کانفیگ هسته (PUT /api/core/config)
-    """
-    from Shared import marzban_api
-
-    message = update.message
-    if not message:
-        return
-    text = (message.text or "").strip()
-
-    server_id = int(context.user_data.get("create_inbound_server_id") or 0)
-    server = database.get_server_by_id(server_id)
-    if not server or str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
-        context.user_data.pop("state", None)
-        context.user_data.pop("create_inbound_server_id", None)
-        context.user_data.pop("create_inbound_link", None)
-        context.user_data.pop("create_inbound_private_key", None)
-        await message.reply_text("❌ سرور پیدا نشد.", reply_markup=admin_main_keyboard())
-        return
-
-    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]])
-
-    if _is_cancel_text(text):
-        for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
-            context.user_data.pop(k, None)
-        await message.reply_text("❌ ساخت اینباند لغو شد.", reply_markup=admin_main_keyboard())
-        return
-
-    # ---------- مرحله ۱: لینک ----------
-    if state == MARZBAN_CREATE_INBOUND_LINK:
-        link = ""
-        for line in text.splitlines():
-            line = line.strip()
-            if line.lower().startswith(("vless://", "vmess://", "trojan://", "ss://")):
-                link = line
-                break
-        if not link:
-            await message.reply_text(
-                "❌ لینک نامعتبر است. یک لینک vless / vmess / trojan / ss بفرستید.\n"
-                "(hysteria2 روی مرزبان پشتیبانی نمی‌شود)",
-                reply_markup=back_kb,
-            )
-            return
-
-        try:
-            parsed = marzban_api.build_inbound_from_link(link)
-        except ValueError as e:
-            if "privateKey" in str(e) or "REALITY" in str(e):
-                # لینک REALITY → گرفتن کلید خصوصی
-                context.user_data["create_inbound_link"] = link
-                context.user_data["create_inbound_port"] = None
-                context.user_data["state"] = MARZBAN_CREATE_INBOUND_REALITY_KEY
-                await message.reply_text(
-                    "🔐 این لینک REALITY است.\n"
-                    "لطفاً «کلید خصوصی» (privateKey) سرور را بفرستید:\n"
-                    "(خروجی `xray x25519` → مقدار PRIVATE key)",
-                    reply_markup=back_kb,
-                )
-                return
-            await message.reply_text(f"❌ خطا در پارس لینک:\n{e}", reply_markup=back_kb)
-            return
-
-        context.user_data["create_inbound_link"] = link
-        context.user_data["create_inbound_private_key"] = None
-
-        # پیشنهاد پورت آزاد
-        used = await _marzban_core_used_ports(server)
-        orig_port = int(parsed.get("port") or 0)
-        suggest = orig_port
-        if used:
-            while suggest in used and suggest < 65535:
-                suggest += 1
-        port_msg = f"🔌 پورت داخل لینک: `{orig_port}`\n"
-        if used and suggest != orig_port:
-            port_msg += f"⚠️ این پورت قبلاً استفاده شده، پیشنهاد: `{suggest}`\n"
-        port_msg += f"\nروی کدام پورت بسازم؟ عدد بفرستید (مثلاً `{suggest}`) یا `0` برای همان `{orig_port}`"
-
-        sec = (parsed.get("streamSettings") or {}).get("security") or "none"
-        net = (parsed.get("streamSettings") or {}).get("network") or "tcp"
-        await message.reply_text(
-            f"🔍 لینک تشخیص داده شد:\n"
-            f"🔧 پروتکل: `{parsed.get('protocol')}`\n"
-            f"🌐 شبکه: `{net}` | امنیت: `{sec}`\n"
-            f"🏷 تگ: `{parsed.get('tag')}`\n\n{port_msg}",
-            parse_mode="Markdown",
-            reply_markup=back_kb,
-        )
-        context.user_data["state"] = MARZBAN_CREATE_INBOUND_PORT
-        return
-
-    # ---------- مرحله ۲: privateKey (فقط REALITY) ----------
-    if state == MARZBAN_CREATE_INBOUND_REALITY_KEY:
-        key = text.strip()
-        if not key or " " in key:
-            await message.reply_text(
-                "❌ privateKey نامعتبر است. مقدار خروجی `xray x25519` (PRIVATE) را بفرستید:",
-                reply_markup=back_kb,
-            )
-            return
-        context.user_data["create_inbound_private_key"] = key
-        # ادامه به مرحله پورت
-        context.user_data["state"] = MARZBAN_CREATE_INBOUND_PORT
-        used = await _marzban_core_used_ports(server)
-        try:
-            parsed = marzban_api.build_inbound_from_link(
-                str(context.user_data.get("create_inbound_link") or ""), private_key=key
-            )
-            orig_port = int(parsed.get("port") or 0)
-        except Exception:
-            orig_port = 0
-        suggest = orig_port
-        if used:
-            while suggest in used and suggest < 65535:
-                suggest += 1
-        await message.reply_text(
-            f"✅ کلید ثبت شد.\n\nروی کدام پورت بسازم؟\nعدد بفرستید (مثلاً `{suggest}`) یا `0`",
-            parse_mode="Markdown",
-            reply_markup=back_kb,
-        )
-        return
-
-    # ---------- مرحله ۳: پورت + ساخت ----------
-    if state == MARZBAN_CREATE_INBOUND_PORT:
-        raw = text.strip().lower()
-        port_override = None
-        if raw not in {"0", "skip", "-", ""}:
-            try:
-                port_override = int(raw)
-                if not (1 <= port_override <= 65535):
-                    raise ValueError
-            except ValueError:
-                await message.reply_text(
-                    "❌ پورت نامعتبر است. عدد 1 تا 65535 بفرستید یا `0` برای همان پورت لینک.",
-                    reply_markup=back_kb,
-                )
-                return
-
-        link = str(context.user_data.get("create_inbound_link") or "")
-        private_key = str(context.user_data.get("create_inbound_private_key") or "")
-        if not link:
-            context.user_data.pop("state", None)
-            await message.reply_text("❌ اطلاعات ناقص است. دوباره از منوی سرور شروع کنید.", reply_markup=admin_main_keyboard())
-            return
-
-        await message.reply_text("⏳ در حال ساخت اینباند...")
-        try:
-            inbound = marzban_api.build_inbound_from_link(link, port=port_override, private_key=private_key)
-            panel_mod = multi_panel.panel_api(server)
-            cfg = await panel_mod.get_core_config(server)
-            marzban_api.add_inbound_to_core_config(cfg, inbound)
-            await panel_mod.update_core_config(server, cfg)
-        except ValueError as e:
-            err = str(e)
-            if "پورت" in err and "استفاده شده" in err:
-                # پورت اشغال → دوباره بپرس
-                await message.reply_text(f"❌ {err}\n\nپورت دیگری بفرستید یا `لغو`:", reply_markup=back_kb)
-                return
-            for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
-                context.user_data.pop(k, None)
-            await message.reply_text(f"❌ خطا:\n{err}", reply_markup=admin_main_keyboard())
-            return
-        except Exception as e:
-            for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
-                context.user_data.pop(k, None)
-            err = str(e)
-            if len(err) > 700:
-                err = err[:700] + "..."
-            if "403" in err or "sudo" in err.lower() or "not allowed" in err.lower():
-                err = "ادمین مرزبان باید دسترسی sudo داشته باشد (PUT /api/core/config فقط برای sudo).\n\n" + err
-            await message.reply_text(f"❌ خطا در ساخت اینباند:\n{err}", reply_markup=admin_main_keyboard())
-            return
-
-        final_port = port_override or int(inbound.get("port") or 0)
-        for k in ("state", "create_inbound_server_id", "create_inbound_link", "create_inbound_private_key"):
-            context.user_data.pop(k, None)
-        await message.reply_text(
-            "✅ اینباند با موفقیت در مرزبان ساخته شد.\n\n"
-            f"🔧 پروتکل: {inbound.get('protocol')}\n"
-            f"🔌 پورت: {final_port}\n"
-            f"🏷 تگ: `{inbound.get('tag')}`\n"
-            "🔄 هسته xray ری‌استارت شد (چند ثانیه قطعی طبیعی است).\n\n"
-            f"⚠️ لینک کانفیگ همان کاربر فقط وقتی کار می‌کند که دامنه/آدرس پشت آن به این سرور اشاره کند.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 بازگشت به سرور", callback_data=f"server:{server_id}")]]
-            ),
-        )
-        return
 
 
 # ===============================
@@ -7103,22 +6663,6 @@ async def handle_server_inline_callback(
             )
             return
 
-        if field == "marzban_username":
-            set_server_state(EDIT_SERVER_MARZBAN_USERNAME)
-            await msg.edit_text(
-                "👤 لطفاً نام کاربری جدید ادمین مرزبان را وارد کنید:\nمثال: admin",
-                reply_markup=cancel_kb,
-            )
-            return
-
-        if field == "marzban_password":
-            set_server_state(EDIT_SERVER_MARZBAN_PASSWORD)
-            await msg.edit_text(
-                "🔑 لطفاً رمز عبور جدید ادمین مرزبان را وارد کنید:",
-                reply_markup=cancel_kb,
-            )
-            return
-
         if field == "xui_token":
             set_server_state(EDIT_SERVER_XUI_TOKEN)
             await msg.edit_text(
@@ -7147,10 +6691,7 @@ async def handle_server_inline_callback(
 
         if field == "test":
             try:
-                if str(server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES:
-                    await multi_panel.panel_api(server).test_connect(server)
-                else:
-                    await hiddify_api.list_users(server)
+                await hiddify_api.list_users(server)
                 await msg.edit_text(
                     "✅ اتصال به پنل با موفقیت انجام شد.",
                     reply_markup=build_server_detail_keyboard(server_id),
@@ -7188,7 +6729,7 @@ async def handle_server_inline_callback(
             ptype = "xui"
             # Store hint for UI (optional)
             context.user_data["xui_variant"] = ptype
-        if ptype not in {"hiddify", "xui", "marzban", "pasarguard"}:
+        if ptype not in {"hiddify", "xui"}:
             await query.answer("نوع پنل نامعتبر است.")
             return
         context.user_data["state"] = ADD_STATE_TITLE
@@ -7226,10 +6767,6 @@ async def handle_server_inline_callback(
                 [
                     [
                         InlineKeyboardButton("هیدیفای (Hiddify)", callback_data="servers:add:type:hiddify"),
-                    ],
-                    [
-                        InlineKeyboardButton("🛡 مرزبان (Marzban)", callback_data="servers:add:type:marzban"),
-                        InlineKeyboardButton("🛡 پاسارگارد (PasarGuard)", callback_data="servers:add:type:pasarguard"),
                     ],
                     [
                         InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data="servers:add:type:xui_alireza"),
@@ -7282,184 +6819,6 @@ async def handle_server_inline_callback(
             await send_user_list(server_id, chat_id, context, message=msg, page=page)
             return
 
-        if action == "marzban_stats":
-            server = database.get_server_by_id(server_id)
-            if not server:
-                await msg.edit_text("❌ سرور پیدا نشد.")
-                return
-            if str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
-                await msg.edit_text("❌ این سرور از نوع مرزبان نیست.")
-                return
-            try:
-                stats = await multi_panel.panel_api(server).get_server_stats(server)
-            except Exception as e:
-                kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]
-                )
-                await msg.edit_text(
-                    f"❌ دریافت آمار پنل مرزبان ناموفق بود:\n{e}",
-                    reply_markup=kb,
-                )
-                return
-
-            def _gb(v: Any) -> str:
-                try:
-                    f = float(v or 0)
-                    return f"{f:.2f}".rstrip("0").rstrip(".")
-                except Exception:
-                    return "0"
-
-            try:
-                ram_total = float(stats.get("ram_total") or 0)
-                ram_used = float(stats.get("ram_used") or 0)
-                ram_pct = (ram_used / ram_total * 100) if ram_total > 0 else 0.0
-            except Exception:
-                ram_pct = 0.0
-
-            text = (
-                "📡 آمار زنده پنل مرزبان\n"
-                "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
-                f"🖥 سرور: {escape(str(server.get('title') or ''))}\n"
-                f"🧠 CPU: {stats.get('cpu_percent', 0)}% ({stats.get('cpu_cores', 1)} هسته)\n"
-                f"💾 RAM: {_gb(ram_used)} از {_gb(ram_total)} MB ({ram_pct:.1f}%)\n"
-                f"👥 کاربران کل: {stats.get('users_total', 0)}\n"
-                f"🟢 آنلاین: {stats.get('users_online', 0)}\n"
-                f"📅 فعال امروز: {stats.get('users_today', 0)}\n"
-                f"📆 فعال ماه: {stats.get('users_month', 0)}\n"
-                f"⬇️ دانلود کل: {_gb(stats.get('traffic_dl'))} GB\n"
-                f"⬆️ آپلود کل: {_gb(stats.get('traffic_ul'))} GB\n"
-                f"⚡ سرعت لحظه‌ای: ↓{_gb(stats.get('now_net_recv_mb'))} / ↑{_gb(stats.get('now_net_sent_mb'))} MB/s"
-            )
-            kb = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"server:{server_id}:marzban_stats")],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")],
-                ]
-            )
-            try:
-                await msg.edit_text(text, reply_markup=kb)
-            except Exception:
-                await context.bot.send_message(chat_id, text, reply_markup=kb)
-            return
-
-        if action == "marzban_inbounds":
-            server = database.get_server_by_id(server_id)
-            if not server:
-                await msg.edit_text("❌ سرور پیدا نشد.")
-                return
-            if str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
-                await msg.edit_text("❌ این سرور از نوع مرزبان نیست.")
-                return
-            try:
-                inbounds = await multi_panel.panel_api(server).get_inbounds(server)
-            except Exception as e:
-                kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]
-                )
-                await msg.edit_text(
-                    f"❌ دریافت اینباندهای مرزبان ناموفق بود:\n{e}",
-                    reply_markup=kb,
-                )
-                return
-
-            if not inbounds:
-                text = "🧩 هیچ اینباندی روی پنل مرزبان یافت نشد."
-            else:
-                lines = ["🧩 اینباندهای پنل مرزبان", "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"]
-                for inb in inbounds[:30]:
-                    lines.append(
-                        f"• [{escape(str(inb.get('node') or 'master'))}] "
-                        f"{escape(str(inb.get('tag') or ''))} — "
-                        f"{escape(str(inb.get('protocol') or '').upper())}:{inb.get('port')}"
-                    )
-                if len(inbounds) > 30:
-                    lines.append(f"... و {len(inbounds) - 30} اینباند دیگر")
-                text = "\n".join(lines)
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]
-            )
-            try:
-                await msg.edit_text(text, reply_markup=kb)
-            except Exception:
-                await context.bot.send_message(chat_id, text, reply_markup=kb)
-            return
-
-        if action == "marzban_nodes":
-            server = database.get_server_by_id(server_id)
-            if not server:
-                await msg.edit_text("❌ سرور پیدا نشد.")
-                return
-            if str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
-                await msg.edit_text("❌ این سرور از نوع مرزبان/پاسارگارد نیست.")
-                return
-            try:
-                nodes = await multi_panel.panel_api(server).get_nodes(server)
-            except Exception as e:
-                kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]
-                )
-                await msg.edit_text(
-                    f"❌ دریافت نودهای مرزبان ناموفق بود:\n{e}\n\n"
-                    "💡 اگر پنل شما نسخه‌ی قدیمی marzban بدون /api/nodes است، این گزینه کار نمی‌کند.",
-                    reply_markup=kb,
-                )
-                return
-
-            from Shared import marzban_api as _mbapi
-            if not nodes:
-                text = (
-                    "🛰 هیچ نودی روی پنل مرزبان ثبت نشده.\n"
-                    "(فقط سرور اصلی/master فعال است)"
-                )
-            else:
-                lines = [
-                    "🛰 نودهای مرزبان",
-                    "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",
-                ]
-                for node in nodes[:25]:
-                    if isinstance(node, dict):
-                        lines.append(_mbapi.format_node_line(node))
-                if len(nodes) > 25:
-                    lines.append(f"... و {len(nodes) - 25} نود دیگر")
-                connected = sum(
-                    1 for n in nodes if isinstance(n, dict) and str(n.get("status") or "").lower() == "connected"
-                )
-                lines.append("")
-                lines.append(f"📊 مجموع: {len(nodes)} نود | 🟢 متصل: {connected}")
-                text = "\n".join(lines)
-            kb = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"server:{server_id}:marzban_nodes")],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")],
-                ]
-            )
-            try:
-                await msg.edit_text(text, reply_markup=kb)
-            except Exception:
-                await context.bot.send_message(chat_id, text, reply_markup=kb)
-            return
-
-        if action == "marzban_create_inbound":
-            server = database.get_server_by_id(server_id)
-            if not server:
-                await msg.edit_text("❌ سرور پیدا نشد.")
-                return
-            if str(server.get("panel_type") or "").strip().lower() not in MARZBAN_PANEL_TYPES:
-                await msg.edit_text("❌ این سرور از نوع مرزبان/پاسارگارد نیست.")
-                return
-            context.user_data["state"] = MARZBAN_CREATE_INBOUND_LINK
-            context.user_data["create_inbound_server_id"] = server_id
-            await msg.edit_text(
-                "➕ ساخت اینباند از لینک (مرزبان)\n\n"
-                "لینک کانفیگ را بفرست (vless / vmess / trojan / ss):\n"
-                "⚠️ hysteria2 روی مرزبان (xray) پشتیبانی نمی‌شود.\n\n"
-                "اینباند با همان UUID/پسورد و تنظیمات لینک ساخته می‌شود تا لینک همان کاربر کار کند.",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]
-                ),
-            )
-            return
-
         if action == "useruuid" and len(parts) >= 4:
             user_uuid = parts[3]
             await send_user_detail(server_id, user_uuid, chat_id, context, message=msg)
@@ -7484,54 +6843,6 @@ async def handle_server_inline_callback(
                     await send_direct_config_menu(
                         server_id, user_uuid, chat_id, context, message=msg
                     )
-                    return
-
-                if cfg_type == "marzban_sub":
-                    from Shared import multi_panel as _multi_panel
-
-                    sub_url = ""
-                    try:
-                        sub_url = await _multi_panel.get_subscription_url(server, user_uuid)
-                    except Exception as e:
-                        logger.warning("marzban_sub fetch failed: %s", e)
-                    if not sub_url:
-                        # fallback: from normalized user object
-                        try:
-                            u = await hiddify_api.get_user_by_uuid(server, user_uuid)
-                            sub_url = str((u or {}).get("subscription_url") or "")
-                        except Exception:
-                            sub_url = ""
-                    if not sub_url:
-                        await msg.edit_text(
-                            "❌ لینک اشتراک مرزبان برای این کاربر یافت نشد.\n"
-                            "اطلاعات پنل مرزبان را از «✏️ویرایش سرور» بررسی کنید."
-                        )
-                        return
-                    caption = (
-                        "🔗 لینک اشتراک مرزبان\n"
-                        f"👤 کاربر: {user_uuid}\n\n"
-                        f"{sub_url}"
-                    )
-                    kb = InlineKeyboardMarkup(
-                        [
-                            [
-                                InlineKeyboardButton(
-                                    "🔙 برگشت به منوی لینک‌ها",
-                                    callback_data=f"server:{server_id}:usercfg:{user_uuid}",
-                                )
-                            ],
-                        ]
-                    )
-                    try:
-                        qr_image = make_qr_image(sub_url)
-                        await context.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=qr_image,
-                            caption=caption[:1000],
-                            reply_markup=kb,
-                        )
-                    except Exception:
-                        await msg.edit_text(caption, reply_markup=kb, disable_web_page_preview=True)
                     return
 
                 panel_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
@@ -7671,52 +6982,24 @@ async def handle_server_inline_callback(
                 await msg.edit_text("❌ سرور پیدا نشد.")
                 return
 
-            if str(server.get("panel_type") or "").strip().lower() in MARZBAN_PANEL_TYPES:
-                # مرزبان: کانفیگ‌ها مستقیم از API مرزبان (links) دریافت می‌شود
-                try:
-                    from Shared import multi_panel as _mp
-
-                    _cfg_items = await _mp.get_user_configs(server, user_uuid)
-                except Exception as e:
-                    kb_err = InlineKeyboardMarkup(
+            try:
+                configs = await hiddify_api.get_user_configs(server, user_uuid)
+            except hiddify_api.HiddifyApiError as e:
+                kb_err = InlineKeyboardMarkup(
+                    [
                         [
-                            [
-                                InlineKeyboardButton(
-                                    "بازگشت به منوی کانفیگ‌ها",
-                                    callback_data=f"server:{server_id}:usercfg:{user_uuid}",
-                                )
-                            ]
+                            InlineKeyboardButton(
+                                "بازگشت به منوی کانفیگ‌ها",
+                                callback_data=f"server:{server_id}:usercfg:{user_uuid}",
+                            )
                         ]
-                    )
-                    await msg.edit_text(
-                        f"❌ خطا در دریافت کانفیگ‌ها از مرزبان:\n{e}",
-                        reply_markup=kb_err,
-                    )
-                    return
-                configs = [
-                    {"link": str(c.get("link") or ""), "protocol": ""}
-                    for c in (_cfg_items or [])
-                    if isinstance(c, dict) and str(c.get("link") or "").strip()
-                ]
-            else:
-                try:
-                    configs = await hiddify_api.get_user_configs(server, user_uuid)
-                except hiddify_api.HiddifyApiError as e:
-                    kb_err = InlineKeyboardMarkup(
-                        [
-                            [
-                                InlineKeyboardButton(
-                                    "بازگشت به منوی کانفیگ‌ها",
-                                    callback_data=f"server:{server_id}:usercfg:{user_uuid}",
-                                )
-                            ]
-                        ]
-                    )
-                    await msg.edit_text(
-                        f"❌ خطا در دریافت کانفیگ‌ها از Hiddify API:\n{e}",
-                        reply_markup=kb_err,
-                    )
-                    return
+                    ]
+                )
+                await msg.edit_text(
+                    f"❌ خطا در دریافت کانفیگ‌ها از Hiddify API:\n{e}",
+                    reply_markup=kb_err,
+                )
+                return
 
             links: List[str] = []
             seen_links: set[str] = set()

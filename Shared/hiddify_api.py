@@ -18,37 +18,6 @@ def _is_xui_server(server: Dict[str, Any]) -> bool:
     return str((server or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
 
 
-def _is_marzban_server(server: Dict[str, Any]) -> bool:
-    """True if the server dict is a Marzban/PasarGuard panel."""
-    return str((server or {}).get("panel_type") or "").strip().lower() in {"marzban", "pasarguard"}
-
-
-def _marzban_panel_module(server: Dict[str, Any]):
-    """Return the marzban-like client module for this server (marzban_api or pasarguard_api)."""
-    from Shared import marzban_api
-    pt = str((server or {}).get("panel_type") or "").strip().lower()
-    if pt == "pasarguard":
-        from Shared import pasarguard_api
-        return pasarguard_api
-    return marzban_api
-
-
-async def _marzban_dispatch(server: Dict[str, Any], func_name: str, *args: Any, **kwargs: Any) -> Any:
-    """
-    Dispatch a call to the marzban-like client (marzban_api or pasarguard_api)
-    by function name.  Translates panel errors into HiddifyApiError so callers
-    that catch HiddifyApiError also handle Marzban/PasarGuard failures uniformly.
-    """
-    from Shared import marzban_api
-    module = _marzban_panel_module(server)
-    try:
-        return await getattr(module, func_name)(*args, **kwargs)
-    except Exception as e:
-        if isinstance(e, marzban_api.MarzbanApiError):
-            raise HiddifyApiError(str(e)) from e
-        raise
-
-
 SSL_MODE_ENV = "HIDDIFY_SSL_MODE"
 SSL_MODE_AUTO = "auto"
 SSL_MODE_SECURE = "secure"
@@ -589,9 +558,6 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
         from Shared import xui_api
         return await xui_api.download_server_backup(server)
 
-    if _is_marzban_server(server):
-        return await _marzban_dispatch(server, "download_server_backup", server)
-
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
 
@@ -865,10 +831,6 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
         from Shared import xui_api
         return await xui_api.list_users(server)
 
-    if _is_marzban_server(server):
-        # marzban_api.list_users already returns normalized (hiddify-like) dicts
-        return await _marzban_dispatch(server, "list_users", server)
-
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/"
@@ -887,9 +849,6 @@ async def get_user_by_uuid(server: Dict[str, Any], user_uuid: str) -> Dict[str, 
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.get_user_by_uuid(server, user_uuid)
-
-    if _is_marzban_server(server):
-        return await _marzban_dispatch(server, "get_user", server, user_uuid)
 
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
@@ -913,9 +872,6 @@ async def patch_user(
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.patch_user(server, user_uuid, payload)
-
-    if _is_marzban_server(server):
-        return await _marzban_dispatch(server, "update_user", server, user_uuid, payload)
 
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
@@ -1007,9 +963,6 @@ async def enable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]:
         from Shared import xui_api
         return await xui_api.enable_user(server, user_uuid)
 
-    if _is_marzban_server(server):
-        return await _marzban_dispatch(server, "enable_user", server, user_uuid)
-
     attempts = (
         {"is_active": True},
         {"is_active": 1},
@@ -1082,9 +1035,6 @@ async def disable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.disable_user(server, user_uuid)
-
-    if _is_marzban_server(server):
-        return await _marzban_dispatch(server, "disable_user", server, user_uuid)
 
     attempts = (
         {"is_active": False},
@@ -1177,24 +1127,6 @@ async def create_user(
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.create_user(server, payload)
-
-    if _is_marzban_server(server):
-        from Shared import marzban_api as _mb
-        import re as _re
-        import uuid as _uuid
-        payload = dict(payload or {})
-        if not str(payload.get("username") or "").strip():
-            # Marzban needs a unique [a-zA-Z0-9-_@.] username (3-32 chars).
-            # Sanitize the display name; non-Latin names fall back to "user".
-            raw_name = str(payload.get("name") or "").strip()
-            base_un = _re.sub(r'[^a-zA-Z0-9_\-@.]', '_', raw_name).strip("_")[:24] or "user"
-            payload["username"] = f"{base_un}_{_uuid.uuid4().hex[:6]}"[:32]
-        raw = await _marzban_dispatch(server, "create_user", server, payload)
-        # normalize so callers get uuid/name/usage_limit_GB keys
-        try:
-            return _mb.normalize_user(raw if isinstance(raw, dict) else {}, server=server)
-        except Exception:
-            return raw
 
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
@@ -1305,9 +1237,6 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
         from Shared import xui_api
         return await xui_api.delete_user(server, user_uuid)
 
-    if _is_marzban_server(server):
-        return await _marzban_dispatch(server, "delete_user", server, user_uuid)
-
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/{user_uuid}/"
@@ -1351,11 +1280,6 @@ async def get_user_configs(
         from Shared import xui_api
         return await xui_api.get_user_configs(server, user_uuid)
 
-    if _is_marzban_server(server):
-        links = await _marzban_dispatch(server, "get_user_configs", server, user_uuid)
-        return [{"link": str(link or "").strip(), "_source": "marzban"}
-                for link in (links or []) if str(link or "").strip()]
-
     base = _get_panel_url(server)
     proxy = _get_user_proxy(server)
     url = f"{base}/{proxy}/{user_uuid}/api/v2/user/all-configs/"
@@ -1372,10 +1296,6 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.get_server_stats(server)
-
-    if _is_marzban_server(server):
-        return await _marzban_dispatch(server, "get_server_stats", server)
-
 
     def _to_int(v: Any, default: int = 0) -> int:
         try:

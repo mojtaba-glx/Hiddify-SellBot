@@ -946,7 +946,6 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
     payload["uuid"] = shared_uuid
     created_nodes: list[dict] = []
     panel_user = None
-    primary_marzban = ""
     for idx, tgt in enumerate(targets):
         try:
             created = await mp_create_user(tgt, payload)
@@ -966,13 +965,11 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
                 "server_title": tgt.get("title") or f"سرور #{tgt.get('id')}",
                 "panel_user_uuid": created_uuid,
                 "panel_user_id": str(created.get("id") or "").strip(),
-                "marzban_username": str(created.get("_marzban_username") or "").strip(),
                 "is_primary": idx == 0,
             }
         )
         if idx == 0:
             panel_user = created
-            primary_marzban = str(created.get("_marzban_username") or "").strip()
     if panel_user is None:
         raise RuntimeError("no primary node created")
     panel_uuid = str(panel_user.get("uuid") or shared_uuid).strip()
@@ -1000,7 +997,6 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
                 server_title=item.get("server_title") or "",
                 panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
                 panel_user_id=str(item.get("panel_user_id") or "").strip(),
-                marzban_username=str(item.get("marzban_username") or "").strip(),
             )
 
     # Notify customer
@@ -1106,15 +1102,14 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
             await multi_panel.patch_user(
                 primary_target[0], primary_target[1],
                 patch_data,
-                marzban_username=primary_target[2],
             )
         except Exception as e:
             raise RuntimeError(f"panel_patch_failed: {str(e)[:100]}")
-        for srv, uuid, marzban_un in targets:
+        for srv, uuid, _un in targets:
             if int(srv.get("id") or 0) == int(primary_target[0].get("id") or 0):
                 continue
             try:
-                await multi_panel.patch_user(srv, uuid, patch_data, marzban_username=marzban_un)
+                await multi_panel.patch_user(srv, uuid, patch_data)
             except Exception as e:
                 logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
 
@@ -1122,9 +1117,9 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
     agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, vol_mode, time_mode)
 
     # ── فعال‌سازی مجدد (اگر به‌خاطر اتمام حجم/زمان غیرفعال شده بود) ──
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         try:
-            await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+            await multi_panel.enable_user(srv, uuid)
         except Exception as e:
             logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
     agent_db.set_service_active(service_id, True)

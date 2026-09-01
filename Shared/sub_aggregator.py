@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
-from Shared import database, userbot_db, hiddify_api, marzban_api, multi_panel, xui_api
+from Shared import database, userbot_db, hiddify_api, multi_panel, xui_api
 
 
 ALLOWED_CONFIG_SCHEMES = (
@@ -543,7 +543,6 @@ def _service_targets(service: dict) -> List[dict]:
     for m in mappings:
         sid = int(m.get("server_id") or 0)
         uuid = str(m.get("panel_user_uuid") or "").strip()
-        marzban_un = str(m.get("marzban_username") or "").strip()
         if sid <= 0 or not uuid:
             continue
         srv = database.get_server_by_id(sid)
@@ -560,7 +559,6 @@ def _service_targets(service: dict) -> List[dict]:
                 "server": srv,
                 "uuid": uuid,
                 "base_url": base,
-                "marzban_username": marzban_un,
             }
         )
 
@@ -580,10 +578,9 @@ def _service_targets(service: dict) -> List[dict]:
     return out
 
 
-def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: str = "") -> List[str]:
+def _fetch_lines_from_admin_api(server: dict, user_uuid: str) -> List[str]:
     """
     Fallback: fetch user configs via admin API and extract direct links.
-    Also fetches from Marzban if marzban_username is provided.
     """
     lines: List[str] = []
     # X-UI: native subscription is the most faithful source of config lines
@@ -609,21 +606,6 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: 
                 lines.append(link)
     except Exception:
         pass
-
-    # Marzban / PasarGuard configs
-    if marzban_username:
-        try:
-            from Shared import multi_panel
-            panel_mod = multi_panel.panel_api(server)
-            marzban_links = _run_async(panel_mod.get_user_configs(server, marzban_username))
-            existing = set(lines)
-            for link in marzban_links or []:
-                link_str = str(link or "").strip()
-                if link_str and "://" in link_str and link_str not in existing:
-                    lines.append(link_str)
-                    existing.add(link_str)
-        except Exception:
-            pass
 
     return lines
 
@@ -658,7 +640,7 @@ def build_subscription_text_for_service(service_id: int) -> str:
                     fetched = []
             if not fetched:
                 try:
-                    fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""), marzban_username=str(target.get("marzban_username") or ""))
+                    fetched = _fetch_lines_from_admin_api(srv, str(target.get("uuid") or ""))
                 except Exception:
                     fetched = []
         else:

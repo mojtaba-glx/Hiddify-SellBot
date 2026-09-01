@@ -47,7 +47,7 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
     """روی همه افراد هدف با یک uuid مشترک کاربر می‌سازد (مثل UserBot).
 
     Returns: (primary_created, created_nodes) که created_nodes هر پیروز شامل
-    server_id/server_title/panel_user_uuid/marzban_username/is_primary است.
+    server_id/server_title/panel_user_uuid/is_primary است.
     """
     shared_uuid = str((payload or {}).get("uuid") or "").strip() or (str(len(targets) and __import__("uuid").uuid4()))
     payload_base = dict(payload or {})
@@ -86,13 +86,11 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
             continue
         if idx == 0:
             primary_created = created
-        marzban_username = str(created.get("_marzban_username") or "").strip()
         created_nodes.append(
             {
                 "server_id": int(srv.get("id") or 0),
                 "server_title": srv.get("title") or f"\u0633\u0631\u0648\u0631 #{srv.get('id')}",
                 "panel_user_uuid": user_uuid,
-                "marzban_username": marzban_username,
                 "is_primary": idx == 0,
             }
         )
@@ -155,7 +153,6 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
             logger.warning("Failed to send delivery error report: %s", _report_e)
         return None
     panel_uuid = str(panel_result.get("uuid", "") or panel_result.get("id", "") or "").strip()
-    primary_marzban = str((panel_result or {}).get("_marzban_username") or "").strip()
 
     svc = agent_db.create_service(
         agent_id=agent_id,
@@ -177,7 +174,6 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
                 server_id=int(item.get("server_id") or 0),
                 server_title=item.get("server_title") or "",
                 panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
-                marzban_username=str(item.get("marzban_username") or "").strip(),
             )
 
     # اگر بعضی نودها در دسترس نبودند → گزارش partial به ادمین + دکمه sync.
@@ -286,13 +282,11 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         primary_ok = False
         for tgt in targets:
             tgt_id = int(tgt.get("id") or 0)
-            marzban_un = _lookup_marzban_username(service_id, tgt_id)
             try:
                 await multi_panel.patch_user(
                     tgt,
                     updated["panel_user_uuid"],
                     patch_data,
-                    marzban_username=marzban_un,
                 )
                 if tgt_id == sid:
                     primary_ok = True
@@ -303,9 +297,8 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         for tgt in targets:
             tgt_id = int(tgt.get("id") or 0)
-            marzban_un = _lookup_marzban_username(service_id, tgt_id)
             try:
-                await enable_user_on_panel(updated["panel_user_uuid"], tgt_id, marzban_username=marzban_un)
+                await enable_user_on_panel(updated["panel_user_uuid"], tgt_id)
             except Exception as e:
                 logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, tgt_id, e)
         agent_db.set_service_active(service_id, True)
@@ -359,26 +352,13 @@ def get_admin_renew_policy() -> Tuple[str, str, bool]:
         return "add", "add", True
 
 
-def _lookup_marzban_username(service_id: int, server_id: int) -> str:
-    """Look up the marzban_username for a given service+server from agent_service_nodes."""
-    try:
-        nodes = agent_db.get_service_nodes(service_id) or []
-        for n in nodes:
-            if int(n.get("server_id") or 0) == server_id:
-                return str(n.get("marzban_username") or "").strip()
-    except Exception:
-        pass
-    return ""
-
-
 async def disable_subscription(agent_id: int, service_id: int) -> bool:
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return False
     sid = int(svc.get("server_id") or 0)
-    marzban_un = _lookup_marzban_username(service_id, sid)
     try:
-        await disable_user_on_panel(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+        await disable_user_on_panel(svc.get("panel_user_uuid", ""), sid)
     except Exception as e:
         logger.error("disable panel API failed svc=%s: %s", service_id, e)
     agent_db.set_service_active(service_id, False)
@@ -390,9 +370,8 @@ async def enable_subscription(agent_id: int, service_id: int) -> bool:
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return False
     sid = int(svc.get("server_id") or 0)
-    marzban_un = _lookup_marzban_username(service_id, sid)
     try:
-        await enable_user_on_panel(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+        await enable_user_on_panel(svc.get("panel_user_uuid", ""), sid)
     except Exception as e:
         logger.error("enable panel API failed svc=%s: %s", service_id, e)
     agent_db.set_service_active(service_id, True)
@@ -428,8 +407,7 @@ async def delete_subscription(agent_id: int, service_id: int) -> bool:
         if not t_sid or not t_uuid:
             continue
         try:
-            marzban_un = _lookup_marzban_username(service_id, t_sid)
-            await delete_user_on_panel(t_uuid, t_sid, marzban_username=marzban_un)
+            await delete_user_on_panel(t_uuid, t_sid)
             agent_db.delete_service_node(service_id, t_sid, t_uuid)
         except Exception as e:
             failures.append(f"server={t_sid}: {str(e)[:100]}")
@@ -442,7 +420,7 @@ async def delete_subscription(agent_id: int, service_id: int) -> bool:
 
 
 async def change_subscription_link(agent_id: int, service_id: int) -> Optional[Dict[str, Any]]:
-    """Regenerate user config links (new UUID on Hiddify, revoke sub on Marzban)."""
+    """Regenerate user config links (new UUID on Hiddify)."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return None
@@ -452,9 +430,8 @@ async def change_subscription_link(agent_id: int, service_id: int) -> Optional[D
     if not old_uuid:
         return None
 
-    marzban_un = _lookup_marzban_username(service_id, sid)
     try:
-        result = await revoke_user_link_on_panel(old_uuid, sid, marzban_username=marzban_un)
+        result = await revoke_user_link_on_panel(old_uuid, sid)
     except Exception as e:
         logger.error("change_subscription_link panel failed svc=%s: %s", service_id, e)
         return None
@@ -488,9 +465,9 @@ async def rename_service_on_panels(agent_id: int, service_id: int, new_name: str
 
     errors: List[str] = []
     ok_count = 0
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         try:
-            await multi_panel.patch_user(srv, uuid, {"name": new_name}, marzban_username=marzban_un)
+            await multi_panel.patch_user(srv, uuid, {"name": new_name})
             ok_count += 1
         except Exception as e:
             title = str(srv.get("title") or f"سرور #{srv.get('id')}")
@@ -525,14 +502,13 @@ async def get_configs(agent_id: int, service_id: int) -> list:
     targets = get_service_panel_targets(svc)
     if not targets:
         sid = int(svc.get("server_id") or 0)
-        marzban_un = _lookup_marzban_username(service_id, sid)
-        return await get_user_configs(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+        return await get_user_configs(svc.get("panel_user_uuid", ""), sid)
 
     aggregated: list = []
     seen: set = set()
-    for srv, uuid, marzban_un in targets:
+    for srv, uuid, _un in targets:
         try:
-            cfgs = await get_user_configs(uuid, int(srv.get("id") or 0), marzban_username=marzban_un)
+            cfgs = await get_user_configs(uuid, int(srv.get("id") or 0))
             for item in cfgs or []:
                 link = item if isinstance(item, str) else str((item or {}).get("link") or "").strip()
                 if not link or link in seen:

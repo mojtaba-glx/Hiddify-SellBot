@@ -290,7 +290,6 @@ def init_db() -> None:
             server_title TEXT,
             panel_user_uuid TEXT NOT NULL,
             panel_user_id TEXT,
-            marzban_username TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
             created_at TEXT,
             updated_at TEXT
@@ -554,16 +553,6 @@ def _migrate_db():
         try:
             cur.execute("ALTER TABLE userbot_service_probe ADD COLUMN first_missing_at TEXT")
             print("Migrated: first_missing_at column added to userbot_service_probe.")
-        except sqlite3.OperationalError:
-            pass
-
-    # Marzban integration: add marzban_username column to service_nodes
-    try:
-        cur.execute("SELECT marzban_username FROM userbot_service_nodes LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            cur.execute("ALTER TABLE userbot_service_nodes ADD COLUMN marzban_username TEXT DEFAULT ''")
-            print("Migrated: marzban_username column added to userbot_service_nodes.")
         except sqlite3.OperationalError:
             pass
 
@@ -2452,11 +2441,11 @@ def fix_admin_services_missing_source_mapping() -> int:
                         server_title = f"سرور #{parent_sid}"
                     cur.execute("""
                         INSERT INTO userbot_service_nodes
-                        (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username, is_active, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(service_id, server_id, panel_user_uuid)
                         DO UPDATE SET is_active = excluded.is_active, updated_at = excluded.updated_at
-                    """, (svc_id, parent_sid, server_title, uuid, None, "", 1, now, now))
+                    """, (svc_id, parent_sid, server_title, uuid, None, 1, now, now))
                     mapped_ids.add(parent_sid)
                     fixed += 1
 
@@ -2789,7 +2778,7 @@ def add_service_node(
     server_title: str = "",
     panel_user_id: Optional[str] = None,
     is_active: int = 1,
-    marzban_username: str = "",
+    **_: Any,
 ) -> None:
     init_db()
     now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
@@ -2799,13 +2788,12 @@ def add_service_node(
         cur.execute(
             """
             INSERT INTO userbot_service_nodes
-            (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(service_id, server_id, panel_user_uuid)
             DO UPDATE SET
                 server_title=excluded.server_title,
                 panel_user_id=excluded.panel_user_id,
-                marzban_username=CASE WHEN excluded.marzban_username != '' THEN excluded.marzban_username ELSE userbot_service_nodes.marzban_username END,
                 is_active=excluded.is_active,
                 updated_at=excluded.updated_at
             """,
@@ -2815,7 +2803,6 @@ def add_service_node(
                 server_title or "",
                 str(panel_user_uuid).strip(),
                 (str(panel_user_id).strip() if panel_user_id is not None else None),
-                str(marzban_username or "").strip(),
                 int(bool(is_active)),
                 now,
                 now,

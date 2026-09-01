@@ -731,7 +731,7 @@ async def _send_service_direct_configs(msg, svc):
             seen_api = set(str(l).strip() for l in links or [])
             api_links = list(links or [])
             supplemented = False
-            for srv, uuid, marzban_un in get_service_panel_targets(svc):
+            for srv, uuid, _un in get_service_panel_targets(svc):
                 if not srv or not uuid:
                     continue
                 # فقط نودهای X-UI که HTTP شان خالی مانده را از API بگیر
@@ -744,7 +744,7 @@ async def _send_service_direct_configs(msg, svc):
                 try:
                     # در thread جدا اجرا می‌شود (event loop بلاک نشود)؛ قفل‌های
                     # xui حالا loop-scoped هستند پس خطای cross-loop رخ نمی‌دهد
-                    api_lines = await asyncio.to_thread(_fetch_lines_from_admin_api, srv, uuid, marzban_un)
+                    api_lines = await asyncio.to_thread(_fetch_lines_from_admin_api, srv, uuid)
                 except Exception:
                     api_lines = []
                 added_here = 0
@@ -773,9 +773,9 @@ async def _send_service_direct_configs(msg, svc):
             from Shared.sub_aggregator import _fetch_lines_from_admin_api as _f2, _is_config_line as _ic2, _is_panel_status_config_line as _ipc2
             seen_api = set()
             api_links = []
-            for srv, uuid, marzban_un in _g2(svc):
+            for srv, uuid, _un in _g2(svc):
                 try:
-                    api_lines = _f2(srv, uuid, marzban_un)
+                    api_lines = _f2(srv, uuid)
                 except Exception:
                     api_lines = []
                 for ln in api_lines or []:

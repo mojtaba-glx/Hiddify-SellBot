@@ -130,7 +130,6 @@ def init_db() -> None:
             server_title TEXT DEFAULT '',
             panel_user_uuid TEXT NOT NULL,
             panel_user_id TEXT DEFAULT '',
-            marzban_username TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT '',
             updated_at TEXT DEFAULT '',
@@ -267,15 +266,6 @@ def _migrate_db():
         cur.execute("SELECT is_trial FROM agent_services LIMIT 1")
     except sqlite3.OperationalError:
         cur.execute("ALTER TABLE agent_services ADD COLUMN is_trial INTEGER DEFAULT 0")
-
-    # marzban_username ستون برای agent_service_nodes
-    try:
-        cur.execute("SELECT marzban_username FROM agent_service_nodes LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            cur.execute("ALTER TABLE agent_service_nodes ADD COLUMN marzban_username TEXT DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass
 
     # deleted_at ستون برای agent_services (soft-delete)
     try:
@@ -1715,7 +1705,7 @@ def add_service_node(
     server_title: str = "",
     panel_user_uuid: str = "",
     panel_user_id: str = "",
-    marzban_username: str = "",
+    **_: Any,
 ) -> Dict[str, Any]:
     """ثبت نگاشت سرویس به یک نود."""
     init_db()
@@ -1725,10 +1715,10 @@ def add_service_node(
     try:
         cur.execute(
             """
-            INSERT INTO agent_service_nodes (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            INSERT INTO agent_service_nodes (service_id, server_id, server_title, panel_user_uuid, panel_user_id, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
             """,
-            (service_id, server_id, server_title, panel_user_uuid, panel_user_id, marzban_username or "", now, now),
+            (service_id, server_id, server_title, panel_user_uuid, panel_user_id, now, now),
         )
         conn.commit()
         node_id = cur.lastrowid
@@ -1740,9 +1730,6 @@ def add_service_node(
         # تکراری — بروزرسانی
         update_fields = "is_active = 1, panel_user_id = ?, updated_at = ?"
         update_params = [panel_user_id, now]
-        if marzban_username:
-            update_fields += ", marzban_username = ?"
-            update_params.append(marzban_username)
         update_params.extend([service_id, server_id, panel_user_uuid])
         cur.execute(
             f"""

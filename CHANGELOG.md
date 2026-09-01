@@ -269,7 +269,6 @@ Major Release برای ربات نمایندگی، ربات مشتری، و رف
 - `AgentBot/` - پوشه کامل ربات نمایندگی
 - `CustomerBot/` - پوشه کامل ربات مشتری
 - `Shared/agent_db.py` - دیتابیس نمایندگان
-- `Shared/marzban_api.py` - API مارزبان
 - `Shared/multi_panel.py` - مدیریت چند پنل
 - `AdminBot/agencies.py` - ماژول آژانس‌ها
 
