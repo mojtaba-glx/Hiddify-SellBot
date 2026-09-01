@@ -1137,7 +1137,7 @@ async def _cb_pay(update, context, query, data, user_id):
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=user_id, text="عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+        await context.bot.send_message(chat_id=user_id, text=i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
         return
 
     if action == "receipt_done":
@@ -1148,7 +1148,7 @@ async def _cb_pay(update, context, query, data, user_id):
             pass
         await context.bot.send_message(
             chat_id=user_id,
-            text="⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:",
+            text=i18n.t("pay_receipt_prompt", _user_lang(user_id)),
             reply_markup=receipt_cancel_keyboard(),
         )
         return
@@ -1679,7 +1679,7 @@ async def _rs_admin_direct_reply(update, context, user_id, text, step):
     if step == "WAIT_ADMIN_DIRECT_REPLY_TEXT":
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         reply_text = str(text or "").strip()
@@ -1751,7 +1751,7 @@ async def _rs_ticket_title(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         title = str(text or "").strip()
         if not title:
@@ -1770,7 +1770,7 @@ async def _rs_ticket_question(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         question = str(text or "").strip()
         if not question:
@@ -1792,7 +1792,7 @@ async def _rs_ticket_screenshot(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         pending = context.user_data.get(f"pending_ticket_{user_id}") or {}
@@ -1822,7 +1822,7 @@ async def _rs_ticket_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         await update.message.reply_text(
             "برای ارسال تیکت از دکمه‌های «✅ارسال» یا «✏️ویرایش» استفاده کنید.",
@@ -1836,7 +1836,7 @@ async def _rs_ticket_reply(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         state = context.user_data.get(f"ticket_reply_{user_id}") or {}
         ticket_code = int(state.get("ticket_code") or 0)
@@ -1878,7 +1878,7 @@ async def _rs_ticket_reply_screenshot(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         state = context.user_data.get(f"ticket_reply_{user_id}") or {}
@@ -1931,7 +1931,7 @@ async def _rs_ticket_reply_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         await update.message.reply_text(
             "برای ارسال پاسخ از دکمه‌های «✅ارسال» یا «✏️ویرایش» استفاده کنید.",
@@ -1944,7 +1944,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
     if step == "WAIT_CONNECT_SUB_INPUT":
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         parsed_uuid = _extract_uuid_from_user_input(text or "")
@@ -2108,7 +2108,7 @@ async def _rs_rename_service(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_rename_service_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         pending_rename = context.user_data.get(f"pending_rename_service_{user_id}", None) or {}
@@ -2181,7 +2181,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_trial_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         service_name = (text or "").strip()
@@ -2454,7 +2454,7 @@ async def _rs_service_name(update, context, user_id, text, step):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_{user_id}", None)
             context.user_data.pop(f"renew_target_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         service_name = (text or "").strip()
@@ -2484,7 +2484,7 @@ async def _rs_wallet_topup_amount(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         pay_settings = _get_payment_settings()
         if not bool(pay_settings.get("enable_card_to_card", True)):
@@ -2554,12 +2554,12 @@ async def _rs_wallet_topup_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
             set_user_step(context, user_id, "WAIT_WALLET_TOPUP_IMAGE")
-            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
+            await update.message.reply_text(i18n.t("pay_receipt_prompt", _user_lang(user_id)), reply_markup=receipt_cancel_keyboard())
             return
 
 
@@ -2568,7 +2568,7 @@ async def _rs_wallet_topup_image(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         if update.message.photo:
@@ -2622,7 +2622,7 @@ async def _rs_wallet_topup_last4(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         payer_last4 = _parse_exact_card_last4(text)
@@ -2667,7 +2667,7 @@ async def _rs_coupon_code(update, context, user_id, text, step):
     if step == "WAIT_COUPON_CODE":
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         mkt = _get_marketing_settings()
         if not (
@@ -2712,12 +2712,12 @@ async def _rs_receipt_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
             
         if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
             set_user_step(context, user_id, "WAIT_RECEIPT_IMAGE")
-            await update.message.reply_text("⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:", reply_markup=receipt_cancel_keyboard())
+            await update.message.reply_text(i18n.t("pay_receipt_prompt", _user_lang(user_id)), reply_markup=receipt_cancel_keyboard())
             return
 
 
@@ -2726,7 +2726,7 @@ async def _rs_receipt_image(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         if update.message.photo:
@@ -2792,7 +2792,7 @@ async def _rs_receipt_last4(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         payer_last4 = _parse_exact_card_last4(text)

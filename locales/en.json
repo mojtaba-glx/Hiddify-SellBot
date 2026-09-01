@@ -743,5 +743,6 @@
   "wallet_no_method": "🚫 No top-up method is currently available.",
   "wallet_title": "🔻 Your wallet balance is {b:,} Toman",
   "wallet_topup_prompt": "🔻 Please enter the amount you want to charge (in Toman):",
-  "welcome": "Hello {full_name} 👋\n\nWelcome to the bot.\nPlease use the menu below 👇"
+  "welcome": "Hello {full_name} 👋\n\nWelcome to the bot.\nPlease use the menu below 👇",
+  "op_cancelled": "Operation cancelled."
 }
