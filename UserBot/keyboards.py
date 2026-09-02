@@ -35,7 +35,7 @@ def main_menu_keyboard(show_renew: bool = True, show_invite: bool = True, lang: 
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
-def language_keyboard():
+def language_keyboard(lang: str = "fa"):
     rows = []
     langs = i18n.supported_langs()
     for i in range(0, len(langs), 2):
