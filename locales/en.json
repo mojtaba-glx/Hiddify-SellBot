@@ -1008,5 +1008,15 @@
   "sms_auto_approved": "✅ Your payment was auto-approved via bank SMS.\n💰 Approved amount: ",
   "receipt_already_approved": "⚠️ This receipt was already submitted and approved.\nTo prevent mistakes, duplicate receipts are not processed again.",
   "receipt_rejected_before": "❌ This receipt was already rejected by the admin.\nIf you made a new payment, please send a new receipt for it.",
-  "direct_note_sms": "\n⏳ If this was a direct purchase, the subscription will be created and sent in a few moments."
+  "direct_note_sms": "\n⏳ If this was a direct purchase, the subscription will be created and sent in a few moments.",
+  "ticket_shot_caption": "🖼 Screenshot #{idx} | Ticket #{code}",
+  "zarpal_pay_label": "💳 Pay {amount} Toman",
+  "ticket_id_line": "🧾 Ticket ID: ",
+  "ticket_q_label": "◈Question:",
+  "ticket_a_label": "◈Answer:",
+  "ticket_created_line": "📅Created: ",
+  "ticket_title_line": "◈Subject:",
+  "ticket_screenshot_link": "Screenshot",
+  "rename_more_errors": "\\n... and {count} more errors",
+  "direct_config_api_hint": "⚠️ Direct fetch from the subscription link was limited; configs were read from the panel API.\\n\\n"
 }

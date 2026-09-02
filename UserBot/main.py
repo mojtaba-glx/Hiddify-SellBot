@@ -891,7 +891,7 @@ async def _handle_user_ticket_shot_start(
         return True
 
     photo_id = str(target.get("photo_file_id") or "").strip()
-    caption = f"🖼 اسکرین‌شات #{idx} | تیکت #{code}"
+    caption = i18n.t("ticket_shot_caption", _user_lang(user_id), idx=idx, code=code)
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton(i18n.t("btn_back_to_ticket", _user_lang(user_id)), callback_data=f"support:view:{code}:1")]]
     )
@@ -929,16 +929,16 @@ def _default_zarinpal_text() -> str:
     )
 
 
-def _build_zarinpal_links_keyboard(vouchers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+def _build_zarinpal_links_keyboard(vouchers: List[Dict[str, Any]], lang: str = "fa") -> InlineKeyboardMarkup:
     rows = []
     for item in vouchers:
         link = str(item.get("zarinpal_link") or "").strip()
         if not link:
             continue
         amount = int(item.get("amount_toman") or 0)
-        label = f"💳 پرداخت {amount:,} تومان"
+        label = i18n.t("zarpal_pay_label", lang, amount=f"{amount:,}")
         rows.append([InlineKeyboardButton(label, url=link)])
-    rows.append([InlineKeyboardButton("بازگشت", callback_data="wallet:back")])
+    rows.append([InlineKeyboardButton(i18n.t("btn_back_inline", lang), callback_data="wallet:back")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1067,23 +1067,24 @@ def _ticket_detail_text(
     ticket: Dict[str, Any],
     messages: List[Dict[str, Any]],
     screenshot_links: Optional[Dict[int, str]] = None,
+    lang: str = "fa",
 ) -> str:
     code = str(ticket.get("ticket_code") or "-")
     title = str(ticket.get("title") or "").strip() or "-"
     lines = [
-        f"🧾 شناسه تیکت: {escape(code)}",
+        i18n.t("ticket_id_line", lang) + escape(code),
         "❖⬩--------------------------------⬩❖",
     ]
 
     for idx, item in enumerate(messages or [], start=1):
         sender = str(item.get("sender_type") or "").strip().lower()
-        sender_title = "◈سوال:" if sender == "user" else "◈پاسخ:"
+        sender_title = i18n.t("ticket_q_label", lang) if sender == "user" else i18n.t("ticket_a_label", lang)
         text = str(item.get("message_text") or "").strip()
         when = str(item.get("created_at") or "-")
         has_photo = bool(str(item.get("photo_file_id") or "").strip())
-        lines.append(f"📅تاریخ ایجاد: {escape(when)}")
+        lines.append(i18n.t("ticket_created_line", lang) + escape(when))
         if idx == 1:
-            lines.append("◈عنوان:")
+            lines.append(i18n.t("ticket_title_line", lang))
             lines.append(escape(title))
         lines.append(sender_title)
         if text:
@@ -1091,14 +1092,14 @@ def _ticket_detail_text(
         if has_photo:
             shot_link = str((screenshot_links or {}).get(idx) or "").strip()
             if shot_link:
-                lines.append(f"<a href=\"{escape(shot_link, quote=True)}\">اسکرین‌شات</a>")
+                lines.append(f"<a href=\"{escape(shot_link, quote=True)}\">" + i18n.t("ticket_screenshot_link", lang) + "</a>")
             else:
-                lines.append("اسکرین‌شات")
+                lines.append(i18n.t("ticket_screenshot_link", lang))
         lines.append("❖⬩------------------------------⬩❖")
     text = "\n".join(lines)
     if len(text) > 3900:
         if screenshot_links:
-            return _ticket_detail_text(ticket, messages, screenshot_links=None)
+            return _ticket_detail_text(ticket, messages, screenshot_links=None, lang=lang)
         return text[:3890] + "\n..."
     return text
 
@@ -1969,7 +1970,7 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str, lan
                         re_err,
                     )
         preview = "\n".join(errors[:3])
-        extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
+        extra = i18n.t("rename_more_errors", lang, count=len(errors) - 3) if len(errors) > 3 else ""
         return False, i18n.t("rename_panel_failed", lang, details=preview + extra)
 
     try:
@@ -2894,10 +2895,7 @@ async def _send_service_direct_configs_shell(
     if not links and allow_api_fallback:
         links = await _collect_all_direct_configs_from_api_for_service(service)
         if links:
-            source_hint = (
-                "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ "
-                "کانفیگ‌ها از API پنل خوانده شد.\n\n"
-            )
+            source_hint = i18n.t("direct_config_api_hint", _user_lang(user_id))
     base_urls = _get_service_node_base_urls(service)
     fallback_base = base_urls[0] if base_urls else ""
 

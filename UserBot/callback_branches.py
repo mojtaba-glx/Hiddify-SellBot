@@ -292,7 +292,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 return
             messages = userbot_db.get_ticket_messages(code)
             shot_links = await _build_user_ticket_screenshot_links(context, code, messages)
-            text = _ticket_detail_text(ticket, messages, screenshot_links=shot_links)
+            text = _ticket_detail_text(ticket, messages, screenshot_links=shot_links, lang=_user_lang(user_id))
             is_closed = str(ticket.get("status") or "").strip().lower() == "closed"
             can_reply = not is_closed
             try:
@@ -338,7 +338,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             fresh = userbot_db.get_user_ticket_by_code(internal_uid, code) or ticket
             messages = userbot_db.get_ticket_messages(code)
             shot_links = await _build_user_ticket_screenshot_links(context, code, messages)
-            detail_text = _ticket_detail_text(fresh, messages, screenshot_links=shot_links)
+            detail_text = _ticket_detail_text(fresh, messages, screenshot_links=shot_links, lang=_user_lang(user_id))
             is_closed = str(fresh.get("status") or "").strip().lower() == "closed"
             can_reply = not is_closed
             notice = "✅ تیکت بسته شد."
@@ -481,7 +481,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
 
                 detail_messages = userbot_db.get_ticket_messages(ticket_code)
                 detail_links = await _build_user_ticket_screenshot_links(context, ticket_code, detail_messages)
-                detail = _ticket_detail_text(fresh_ticket, detail_messages, screenshot_links=detail_links)
+                detail = _ticket_detail_text(fresh_ticket, detail_messages, screenshot_links=detail_links, lang=_user_lang(user_id))
                 out_text = "✅ پاسخ شما ثبت شد.\n\n" + detail
                 try:
                     await query.message.delete()
@@ -1045,7 +1045,7 @@ async def _cb_wallet(update, context, query, data, user_id):
         await context.bot.send_message(
             chat_id=user_id,
             text=ztxt,
-            reply_markup=_build_zarinpal_links_keyboard(vouchers),
+            reply_markup=_build_zarinpal_links_keyboard(vouchers, lang=_user_lang(user_id)),
             disable_web_page_preview=True,
         )
         return
