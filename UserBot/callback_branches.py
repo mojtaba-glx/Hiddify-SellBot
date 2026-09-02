@@ -121,12 +121,16 @@ async def _cb_invite(update, context, query, data, user_id, text_settings):
                 stats = {}
             settings = userbot_db.get_referral_settings()
             text = (
-                "🎁 جوایز من\n"
-                "❖ ◈━━━━━━━━━━━━━━━◈ ❖\n"
-                f"🤝 پاداش تست: {int(settings.get('trial_reward_amount') or 0):,} تومان\n"
-                f"🛒 پاداش خرید اول: {int(settings.get('purchase_reward_amount') or 0):,} تومان\n"
-                f"🎯 جوایز دریافتی: {int(stats.get('paid_rewards_count') or 0)}\n"
-                f"💰 مجموع پاداش‌ها: {int(stats.get('total_rewards') or 0):,} تومان\n"
+                i18n.t("invite_rewards_header", _user_lang(user_id))
+                + f"{int(settings.get('trial_reward_amount') or 0):,}"
+                + i18n.t("invite_reward_buy_first", _user_lang(user_id))
+                + f"{int(settings.get('purchase_reward_amount') or 0):,}"
+                + "\n"
+                + i18n.t("invite_rewards_given", _user_lang(user_id))
+                + f"{int(stats.get('paid_rewards_count') or 0)}"
+                + i18n.t("invite_rewards_total", _user_lang(user_id))
+                + f"{int(stats.get('total_rewards') or 0):,}"
+                + "\n"
             )
             await context.bot.send_message(chat_id=user_id, text=text)
             return
@@ -153,13 +157,17 @@ async def _cb_invite(update, context, query, data, user_id, text_settings):
             except Exception:
                 stats = {}
             text = (
-                "📊 آمار دعوت\n"
-                "❖ ◈━━━━━━━━━━━━━━━◈ ❖\n"
-                f"👥 کل دعوت‌ها: {int(stats.get('total_referrals') or 0)}\n"
-                f"✅ دعوت‌های موفق: {int(stats.get('successful_referrals') or 0)}\n"
-                f"⏳ در انتظار خرید: {int(stats.get('pending_purchase') or 0)}\n"
-                f"🧪 پاداش‌های تست: {int(stats.get('trial_rewards_count') or 0)}\n"
-                f"🛒 پاداش‌های خرید: {int(stats.get('purchase_rewards_count') or 0)}\n"
+                i18n.t("invite_stats_header", _user_lang(user_id))
+                + f"{int(stats.get('total_referrals') or 0)}"
+                + i18n.t("invite_stats_success", _user_lang(user_id))
+                + f"{int(stats.get('successful_referrals') or 0)}"
+                + i18n.t("invite_stats_awaiting", _user_lang(user_id))
+                + f"{int(stats.get('pending_purchase') or 0)}"
+                + i18n.t("invite_stats_trial_rewards", _user_lang(user_id))
+                + f"{int(stats.get('trial_rewards_count') or 0)}"
+                + i18n.t("invite_stats_buy_rewards", _user_lang(user_id))
+                + f"{int(stats.get('purchase_rewards_count') or 0)}"
+                + "\n"
             )
             await context.bot.send_message(chat_id=user_id, text=text)
             return
@@ -726,7 +734,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 return
 
             await context.bot.send_message(chat_id=user_id, text=i18n.t("link_changing", _user_lang(user_id)))
-            ok, result_text, new_uuid = await _regenerate_service_uuid_for_service(service)
+            ok, result_text, new_uuid = await _regenerate_service_uuid_for_service(service, lang=_user_lang(user_id))
             if not ok:
                 await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
                 return
@@ -1279,13 +1287,15 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         # نمایش اطلاعات پلن انتخاب شده (طبق اسکرین‌شات)
         plan_gb = float(plan["gb"])
         plan_days = int(plan["days"])
-        plan_gb_text = "نامحدود" if _is_unlimited_volume(plan_gb) else f"{plan_gb:g} گیگ"
-        plan_days_text = "نامحدود" if _is_unlimited_time(plan_days) else f"{plan_days} روز"
+        plan_gb_text = i18n.t("word_unlimited", _user_lang(user_id)) if _is_unlimited_volume(plan_gb) else f"{plan_gb:g}{i18n.t('unit_gb_p', _user_lang(user_id))}"
+        plan_days_text = i18n.t("word_unlimited", _user_lang(user_id)) if _is_unlimited_time(plan_days) else f"{plan_days}{i18n.t('unit_days_p', _user_lang(user_id))}"
         text = (
-            "📄 اطلاعات پلن انتخاب شده\n\n"
-            f"📊 حجم: {plan_gb_text}\n"
-            f"⏳ زمان: {plan_days_text}\n"
-            f"💰 قیمت: {plan['price']:,} تومان"
+            i18n.t("plan_info_header", _user_lang(user_id))
+            + f"{plan_gb_text}\n"
+            + i18n.t("plan_info_time", _user_lang(user_id))
+            + f"{plan_days_text}\n"
+            + i18n.t("plan_info_price", _user_lang(user_id))
+            + f"{plan['price']:,}"
         )
         await _safe_edit_message_text(
             query,
@@ -1393,10 +1403,12 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         price, off_percent = _calc_dynamic_price(gb, wiz_data.get("months"), dyn_settings)
 
         text = (
-            "📄 اطلاعات پلن انتخاب شده\n\n"
-            f"📊 حجم: {gb} گیگ\n"
-            f"⏳ زمان: {days} روز\n"
-            f"💰 قیمت: {price:,} تومان"
+            i18n.t("plan_info_header", _user_lang(user_id))
+            + f"{gb}{i18n.t('unit_gb_p', _user_lang(user_id))}\n"
+            + i18n.t("plan_info_time", _user_lang(user_id))
+            + f"{days}{i18n.t('unit_days_p', _user_lang(user_id))}\n"
+            + i18n.t("plan_info_price", _user_lang(user_id))
+            + f"{price:,}"
         )
         if off_percent > 0:
             text += f"\n🏷 تخفیف حجمی: {off_percent}٪"
@@ -2071,7 +2083,7 @@ async def _rs_rename_service(update, context, user_id, text, step):
             return
 
         await update.message.reply_text(i18n.t("rename_in_progress", _user_lang(user_id)))
-        ok, result_text = await _rename_service_across_panels_and_db(service, new_name)
+        ok, result_text = await _rename_service_across_panels_and_db(service, new_name, lang=_user_lang(user_id))
         if not ok:
             await update.message.reply_text(result_text, reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return

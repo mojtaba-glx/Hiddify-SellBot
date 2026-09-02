@@ -1915,22 +1915,22 @@ def _find_auth_fallback_servers_for_panel(server: dict) -> list[dict]:
     return out
 
 
-def _format_rename_panel_error(server: dict, exc: Exception) -> str:
+def _format_rename_panel_error(server: dict, exc: Exception, lang: str = "fa") -> str:
     title = str(server.get("title") or f"server-{server.get('id') or '?'}")
     if _is_panel_unauthorized_error(exc):
-        return f"{title}: دسترسی ادمین نامعتبر است (کلید Admin/API این سرور را بررسی کنید)."
-    return f"{title}: خطا در بروزرسانی نام."
+        return title + i18n.t("rename_panel_err_auth", lang)
+    return title + i18n.t("rename_panel_err_update", lang)
 
 
-async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> tuple[bool, str]:
+async def _rename_service_across_panels_and_db(service: dict, new_name: str, lang: str = "fa") -> tuple[bool, str]:
     service_id = int(service.get("id") or 0)
     if service_id <= 0:
-        return False, "❌ سرویس نامعتبر است."
+        return False, i18n.t("rename_service_invalid", lang)
 
     old_name = str(service.get("name") or "").strip()
     targets = _get_service_panel_targets(service)
     if not targets:
-        return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
+        return False, i18n.t("rename_no_panel_targets", lang)
 
     updated_targets: list[tuple[dict, str]] = []
     errors: list[str] = []
@@ -1970,32 +1970,32 @@ async def _rename_service_across_panels_and_db(service: dict, new_name: str) -> 
                     )
         preview = "\n".join(errors[:3])
         extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
-        return False, "❌ تغییر نام روی همه سرورها انجام نشد.\n" + preview + extra
+        return False, i18n.t("rename_panel_failed", lang, details=preview + extra)
 
     try:
         ok_db = userbot_db.update_service_name(service_id, new_name)
     except Exception as e:
         logger.exception("Failed updating service name in DB (service_id=%s): %s", service_id, e)
-        return False, "❌ نام روی پنل بروزرسانی شد ولی ذخیره در دیتابیس خطا داد."
+        return False, i18n.t("rename_db_failed_after_panel", lang)
 
     if not ok_db:
-        return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
+        return False, i18n.t("rename_db_failed", lang)
 
-    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد."
+    return True, i18n.t("rename_ok", lang)
 
 
-async def _regenerate_service_uuid_for_service(service: dict) -> tuple[bool, str, Optional[str]]:
+async def _regenerate_service_uuid_for_service(service: dict, lang: str = "fa") -> tuple[bool, str, Optional[str]]:
     service_id = int(service.get("id") or 0)
     if service_id <= 0:
-        return False, "❌ سرویس نامعتبر است.", None
+        return False, i18n.t("rename_service_invalid", lang), None
 
     current_uuid = _resolve_service_uuid_for_managed_sub_link(service_id, service=service)
     if not current_uuid:
-        return False, "❌ UUID فعلی اشتراک تعیین نشده است.", None
+        return False, i18n.t("uuid_current_missing", lang), None, None
 
     targets = _get_service_panel_targets(service)
     if not targets:
-        return False, "❌ مسیرهای پنل این اشتراک پیدا نشد.", None
+        return False, i18n.t("uuid_no_panel_targets", lang), None, None
 
     desired_uuid = str(uuid4())
     final_uuid: Optional[str] = None
@@ -2023,7 +2023,7 @@ async def _regenerate_service_uuid_for_service(service: dict) -> tuple[bool, str
                     await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
                 except Exception:
                     pass
-            return False, "❌ بازسازی UUID روی همه سرورها انجام نشد. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.", None
+            return False, i18n.t("uuid_regen_failed", lang), None, None
 
         returned_uuid = str(patched.get("uuid") or patched.get("id") or "").strip()
         if not returned_uuid:
@@ -2037,12 +2037,12 @@ async def _regenerate_service_uuid_for_service(service: dict) -> tuple[bool, str
                     await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
                 except Exception:
                     pass
-            return False, "❌ UUID جدید روی همه سرورها همگن نشد. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.", None
+            return False, i18n.t("uuid_mismatch", lang), None, None
 
         updated_targets.append((srv, old_uuid, returned_uuid))
 
     if not final_uuid:
-        return False, "❌ UUID جدید تهیه نشد.", None
+        return False, i18n.t("uuid_generate_failed", lang), None, None
 
     # Persist new UUID in local DB mappings and service comment.
     comment = str(service.get("comment") or "").strip()
@@ -2076,12 +2076,9 @@ async def _regenerate_service_uuid_for_service(service: dict) -> tuple[bool, str
                 await hiddify_api.patch_user(srv, new_uuid, {"uuid": old_uuid})
             except Exception:
                 pass
-        return False, "❌ لینک در پنل تغییر کرد اما ذخیره در دیتابیس کامل نشد. تغییرات پنل تا حد امکان برگردانده شد؛ لطفاً دوباره تلاش کنید.", None
+        return False, i18n.t("uuid_db_partial", lang), None
 
-    return True, (
-        "✅ لینک اشتراک با موفقیت تغییر کرد.\n"
-        "لینک و کانفیگ قبلی از کار می‌افتد؛ لطفاً لینک جدید را دوباره دریافت و در برنامه وارد کنید."
-    ), final_uuid
+    return True, i18n.t("uuid_changed_ok", lang), final_uuid
 
 
 async def _service_probe_state(service: dict) -> str:
@@ -2905,12 +2902,12 @@ async def _send_service_direct_configs_shell(
     fallback_base = base_urls[0] if base_urls else ""
 
     if not links:
-        msg = "❌ کانفیگی از لینک اشتراک استخراج نشد."
+        msg = i18n.t("direct_config_extract_failed", _user_lang(user_id))
         if fallback_base:
             msg = (
                 f"{msg}\n"
-                "می‌توانید از لینک اشتراک استفاده کنید:\n"
-                f"{fallback_base}/all.txt"
+                + i18n.t("direct_config_sub_hint", _user_lang(user_id))
+                + f"{fallback_base}/all.txt"
             )
         await context.bot.send_message(
             chat_id=user_id,
@@ -3461,30 +3458,21 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
         logger.warning("Failed to send admin SMS auto approval report: %s", e)
 
 
-def _sms_auto_approval_user_text(amount: int, *, direct_note: bool = False) -> str:
-    text = (
-        "✅ پرداخت شما به‌صورت خودکار با SMS بانک تایید شد.\n"
-        f"💰 مبلغ تاییدشده: {int(amount or 0):,} تومان"
-    )
+def _sms_auto_approval_user_text(amount: int, *, direct_note: bool = False, user_id: int = 0) -> str:
+    text = i18n.t("sms_auto_approved", _user_lang(user_id)) + f"{int(amount or 0):,}"
     if direct_note:
-        text += "\n⏳ اگر خرید مستقیم بوده، اشتراک تا چند لحظه دیگر ساخته و ارسال می‌شود."
+        text += i18n.t("direct_note_sms", _user_lang(user_id))
     return text
 
 
 def _card_payment_result_user_text(amount: int, result: str, *, direct_note: bool = False, user_id: int = 0) -> str:
     status = str(result or "").strip().lower()
     if status == "auto_approved":
-        return _sms_auto_approval_user_text(amount, direct_note=direct_note)
+        return _sms_auto_approval_user_text(amount, direct_note=direct_note, user_id=user_id)
     if status == "duplicate_approved":
-        return (
-            "⚠️ این رسید قبلاً ثبت و تایید شده است.\n"
-            "برای جلوگیری از تایید اشتباه، رسید تکراری دوباره پردازش نمی‌شود."
-        )
+        return i18n.t("receipt_already_approved", _user_lang(user_id))
     if status == "duplicate_rejected":
-        return (
-            "❌ این رسید قبلاً توسط ادمین رد شده است.\n"
-            "اگر پرداخت جدید انجام داده‌اید، لطفاً رسید جدید همان پرداخت را ارسال کنید."
-        )
+        return i18n.t("receipt_rejected_before", _user_lang(user_id))
     return i18n.t("pay_pending_admin", _user_lang(user_id))
 
 
@@ -5360,7 +5348,7 @@ async def _connect_panel_subscription_by_uuid(
 
 
 # --- 5. هندلر دستور استارت ---
-async def _render_invite_home_text(context: ContextTypes.DEFAULT_TYPE, internal_user_id: int) -> str:
+async def _render_invite_home_text(context: ContextTypes.DEFAULT_TYPE, internal_user_id: int, lang: str = "fa") -> str:
     """متن صفحه اصلی «دعوت دوستان» با آمار کاربر."""
     try:
         settings = userbot_db.get_referral_settings()
@@ -5403,7 +5391,7 @@ async def _render_invite_home_text(context: ContextTypes.DEFAULT_TYPE, internal_
         )
 
     if not enabled:
-        return "🎁 سیستم دعوت دوستان به‌طور موقت غیرفعال است."
+        return i18n.t("invite_disabled", lang)
 
     total_referrals = int(stats.get("total_referrals") or 0)
     successful = int(stats.get("successful_referrals") or 0)
