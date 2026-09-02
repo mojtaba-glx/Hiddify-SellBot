@@ -206,6 +206,10 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
     text = (update.message.text or update.message.caption or "").strip()
 
+    from AgentBot.keyboards import (
+        BTN_SUBSCRIPTIONS, BTN_WALLET, BTN_PLANS, BTN_CUSTOMER_BOT,
+        BTN_TICKETS, BTN_SETTINGS, BTN_BACK,
+    )
     # --- مچر چندزبانه: نگاشت دکمه هر زبان به لیبل مرجع فارسی ---
     from Shared import i18n as _i18n
     _menu_key = _i18n.resolve_button(text, AGENT_MENU_KEYS)
@@ -216,11 +220,6 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "ag_menu_tickets": BTN_TICKETS, "ag_menu_settings": BTN_SETTINGS,
         }
         text = _fa_map.get(_menu_key, text)
-    from AgentBot.keyboards import (
-    agent_lang,
-        BTN_SUBSCRIPTIONS, BTN_WALLET, BTN_PLANS, BTN_CUSTOMER_BOT,
-        BTN_TICKETS, BTN_SETTINGS, BTN_BACK,
-    )
     state = context.user_data.get(UD_STATE)
 
     # اگر در حالت تغییر نام هستیم، دکمه بازگشت پایین باید مستقیم به هندلر rename برود
