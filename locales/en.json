@@ -1025,5 +1025,20 @@
   "ag_cbot_auto_start_failed": "❌ Automatic start of the customer bot failed.\nPlease tap «🔄 Restart bot» in the «🤖 Customer bot» menu or restart from the terminal.",
   "ag_cbot_restarting": "🔄 <b>Restarting the customer bot...</b>\nPlease wait a moment.",
   "ag_cbot_restart_ok": "✅ <b>Customer bot restarted successfully.</b>",
-  "ag_cbot_restart_fail": "❌ <b>Failed to restart the customer bot.</b>\nPlease restart from the terminal or contact the admin."
+  "ag_cbot_restart_fail": "❌ <b>Failed to restart the customer bot.</b>\nPlease restart from the terminal or contact the admin.",
+  "card_receipt_done_short": "\n\n⚡ After payment approval, your subscription will be created and sent automatically.",
+  "cfg_servers_list": "📡 **Servers list**\nPlease select your location:",
+  "cfg_plans_list": "🛒 **Please select your plan:**",
+  "cfg_ticket_panel": "📩 To contact support, send us a message.",
+  "cfg_welcome": "Hi {full_name} 👋\nWelcome to our bot.",
+  "cfg_guide_intro": "Choose your OS ⬇️",
+  "cfg_invite_link": "💌 Your invite link:\n{invite_link}",
+  "cfg_invite_info": "🎁 Invite your friends and enjoy special rewards",
+  "cfg_invite_banner": "🎁 Your personal invite banner\n\n🔗 Your invite link:\n{invite_link}\n\nInvite friends and enjoy exclusive benefits.",
+  "cfg_gift_active": "🎁 Your gift is activated. Thank you for being with us.",
+  "cfg_force_join": "🔒 To use the bot, first join the support channel.\nAfter joining, tap «✅ Check membership».",
+  "invite_link_not_ready": "The invite link is not set up yet.",
+  "invite_intro_default": "🎁 Invite your friends and earn rewards for each invite.\n\n🔗 Invite link:\n{invite_link}",
+  "invite_stats_lines": "👥 Total invites: {total}\n✅ Successful invites: {success}\n⏳ Awaiting purchase: {pending}\n🎁 Total rewards: {rewards} Toman\n🧾 Rewards received: {paid}",
+  "word_toman2": " Toman"
 }

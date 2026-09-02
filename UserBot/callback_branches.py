@@ -32,7 +32,7 @@ async def _cb_lang_set(update, context, query, data, user_id):
     await context.bot.send_message(
         chat_id=user_id,
         text=i18n.t("lang_changed", new_lang, lang_name=lang_name),
-        reply_markup=_main_menu_keyboard(lang=new_lang),
+        reply_markup=_main_menu_keyboard(user_id=user_id, lang=new_lang),
     )
     return
 
@@ -93,11 +93,10 @@ async def _cb_invite(update, context, query, data, user_id, text_settings):
             invite_link = (
                 f"https://t.me/{bot_username}?start=ref_{code}"
                 if bot_username and code
-                else "لینک دعوت هنوز تنظیم نشده است."
+                else i18n.t("invite_link_not_ready", _user_lang(user_id))
             )
             banner_text = _format_text_template(
-                text_settings.get("invite_banner_text")
-                or "🎁 بنر دعوت اختصاصی شما\n\n🔗 لینک دعوت شما:\n{invite_link}",
+                _cfg_text(user_id, "invite_banner_text", "cfg_invite_banner", text_settings),
                 invite_link=invite_link,
             )
             photo_id = str(text_settings.get("invite_banner_photo_id") or "").strip()
@@ -223,7 +222,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("main_menu_btn", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -626,7 +625,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("main_menu_btn", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -634,7 +633,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             service_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
             service = userbot_db.get_service_by_id(service_id) if service_id else None
             if not service:
-                await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_selected_missing", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+                await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_selected_missing", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                 return
             service = await _sync_service_runtime_from_panels(service)
             settings = _get_subscription_settings()
@@ -697,7 +696,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=_service_local_lock_text(lock_reason, lang=_user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
 
@@ -736,13 +735,13 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             await context.bot.send_message(chat_id=user_id, text=i18n.t("link_changing", _user_lang(user_id)))
             ok, result_text, new_uuid = await _regenerate_service_uuid_for_service(service, lang=_user_lang(user_id))
             if not ok:
-                await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
+                await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard(user_id=user_id))
                 return
 
             refreshed = userbot_db.get_service_by_id(service_id) or service
             refreshed = await _sync_service_runtime_from_panels(refreshed)
             settings = _get_subscription_settings()
-            await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard(user_id=user_id))
             await context.bot.send_message(
                 chat_id=user_id,
                 text=_build_subscription_status_text(refreshed, lang=_user_lang(user_id)),
@@ -758,7 +757,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=i18n.t("service_code_missing", _user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
             await context.bot.send_message(
@@ -784,7 +783,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("main_menu_btn", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -803,7 +802,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=i18n.t("no_config_link", _user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
 
@@ -812,28 +811,28 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             config_items = []
             if action == "sub_link":
                 if not settings.get("show_sub_link", True):
-                    await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_link_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_link_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
                 config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
             elif action == "auto_sub":
                 if not settings.get("show_auto_sub_link", False):
-                    await context.bot.send_message(chat_id=user_id, text=i18n.t("auto_sub_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text=i18n.t("auto_sub_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
                 config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
             elif action == "sub_b64":
                 if not settings.get("show_sub_link_b64", False):
-                    await context.bot.send_message(chat_id=user_id, text=i18n.t("b64_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text=i18n.t("b64_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
                 config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
             elif action == "multi":
                 if not settings.get("show_multi_server", False):
-                    await context.bot.send_message(chat_id=user_id, text=i18n.t("smart_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text=i18n.t("smart_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
                 managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
                 config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
             elif action == "multi_b64":
                 if not settings.get("show_multi_server_b64", False):
-                    await context.bot.send_message(chat_id=user_id, text=i18n.t("smart_b64_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text=i18n.t("smart_b64_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
                 _, managed_link_b64 = _get_or_create_bot_sub_links(int(service_id), service=service)
                 config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
@@ -842,7 +841,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=i18n.t("no_active_links", _user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
 
@@ -887,7 +886,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
         if action == "guide":
             await context.bot.send_message(
                 chat_id=user_id,
-                text=text_settings.get("guide_text") or _default_guide_intro_text(),
+                text=_cfg_text(user_id, "guide_text", "cfg_guide_intro", text_settings),
                 reply_markup=guide_os_keyboard('m', lang=_user_lang(user_id)),
             )
             return
@@ -907,14 +906,14 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=i18n.t("renew_disabled", _user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
             if not await _service_is_renewable_live(service):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=_renew_not_allowed_text(lang=_user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
             try:
@@ -925,7 +924,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=i18n.t("sub_server_invalid", _user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
             context.user_data[f"renew_target_{user_id}"] = int(service_id)
@@ -937,14 +936,14 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=i18n.t("sub_undetachable", _user_lang(user_id)),
-                    reply_markup=_main_menu_keyboard(),
+                    reply_markup=_main_menu_keyboard(user_id=user_id),
                 )
                 return
             userbot_db.delete_service(int(service_id))
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("sub_detached_ok", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -962,17 +961,17 @@ async def _cb_renew(update, context, query, data, user_id):
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=user_id, text=i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+        await context.bot.send_message(chat_id=user_id, text=i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
         return
 
     if action == "svc":
         service_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
         service = userbot_db.get_service_by_id(service_id) if service_id > 0 else None
         if not service:
-            await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_selected_missing", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_selected_missing", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         if not await _service_is_renewable_live(service):
-            await context.bot.send_message(chat_id=user_id, text=_renew_not_allowed_text(lang=_user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=_renew_not_allowed_text(lang=_user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         try:
             renew_sid = int(service.get("server_id") or 0)
@@ -982,7 +981,7 @@ async def _cb_renew(update, context, query, data, user_id):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("sub_server_invalid", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
         context.user_data[f"renew_target_{user_id}"] = int(service_id)
@@ -1000,7 +999,7 @@ async def _cb_wallet(update, context, query, data, user_id):
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=user_id, text=i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+        await context.bot.send_message(chat_id=user_id, text=i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
         return
     if action == "card":
         pay_settings = _get_payment_settings()
@@ -1008,7 +1007,7 @@ async def _cb_wallet(update, context, query, data, user_id):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("card_pay_disabled", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
         set_user_step(context, user_id, "WAIT_WALLET_TOPUP_AMOUNT")
@@ -1026,7 +1025,7 @@ async def _cb_wallet(update, context, query, data, user_id):
     if action == "zarinpal":
         pay_settings = _get_payment_settings()
         if not bool(pay_settings.get("enable_zarinpal", False)):
-            await context.bot.send_message(chat_id=user_id, text=i18n.t("zarinpal_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=i18n.t("zarinpal_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         text_settings = _get_text_settings()
         ztxt = str(text_settings.get("zarinpal_pro_text") or "").strip()
@@ -1039,7 +1038,7 @@ async def _cb_wallet(update, context, query, data, user_id):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=ztxt + i18n.t("zarpal_no_links", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
         await context.bot.send_message(
@@ -1052,16 +1051,16 @@ async def _cb_wallet(update, context, query, data, user_id):
     if action == "perfect":
         pay_settings = _get_payment_settings()
         if not bool(pay_settings.get("enable_perfect_money", False)):
-            await context.bot.send_message(chat_id=user_id, text=i18n.t("perfectmoney_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=i18n.t("perfectmoney_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
-        await context.bot.send_message(chat_id=user_id, text=i18n.t("perfectmoney_coming", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+        await context.bot.send_message(chat_id=user_id, text=i18n.t("perfectmoney_coming", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
         return
     if action == "crypto":
         pay_settings = _get_payment_settings()
         if not bool(pay_settings.get("enable_crypto", False)):
-            await context.bot.send_message(chat_id=user_id, text=i18n.t("crypto_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=i18n.t("crypto_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
-        await context.bot.send_message(chat_id=user_id, text=i18n.t("crypto_coming", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+        await context.bot.send_message(chat_id=user_id, text=i18n.t("crypto_coming", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
         return
     if action == "coupon":
         mkt = _get_marketing_settings()
@@ -1072,7 +1071,7 @@ async def _cb_wallet(update, context, query, data, user_id):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("gift_disabled", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
         set_user_step(context, user_id, "WAIT_COUPON_CODE")
@@ -1099,7 +1098,7 @@ async def _cb_pay(update, context, query, data, user_id):
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=user_id, text=i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+        await context.bot.send_message(chat_id=user_id, text=i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
         return
 
     if action == "receipt_done":
@@ -1123,7 +1122,7 @@ async def _cb_trial_back(update, context, query, data, user_id):
         await query.message.delete()
     except Exception:
         pass
-    await context.bot.send_message(chat_id=user_id, text=i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+    await context.bot.send_message(chat_id=user_id, text=i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
     return
 
 
@@ -1152,7 +1151,7 @@ async def _cb_trial_loc(update, context, query, data, user_id):
         await context.bot.send_message(
             chat_id=user_id,
             text=i18n.t("trial_already_used", _user_lang(user_id)),
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(user_id=user_id),
         )
         return
 
@@ -1165,7 +1164,7 @@ async def _cb_trial_loc(update, context, query, data, user_id):
         await context.bot.send_message(
             chat_id=user_id,
             text=i18n.t("trial_disabled", _user_lang(user_id)),
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(user_id=user_id),
         )
         return
 
@@ -1196,7 +1195,7 @@ async def _cb_buy_back_main(update, context, query, data, user_id, br, text_sett
     server_columns = int(br.get("server_columns") or 1)
     await _safe_edit_message_text(
         query,
-        text_settings.get("servers_list_text") or "📡 **لیست سرورها**\nلطفاً لوکیشن مورد نظر خود را انتخاب کنید:",
+        _cfg_text(user_id, "servers_list_text", "cfg_servers_list", text_settings),
         parse_mode="Markdown",
         reply_markup=location_keyboard(servers, columns=server_columns)
     )
@@ -1270,7 +1269,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         
         await _safe_edit_message_text(
             query,
-            text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**", parse_mode="Markdown",
+            _cfg_text(user_id, "plans_list_text", "cfg_plans_list", text_settings), parse_mode="Markdown",
             reply_markup=plans_keyboard(plans, sid, cat_id, columns=plan_columns, unlimited_volume=uv, unlimited_volume_from=uv_from, unlimited_time=ut, unlimited_time_from=ut_from, sort_by_priority=False, rtl_rows=bool(txp.get('plan_sort_desc', False)), lang=_user_lang(user_id))
         )
 
@@ -1369,7 +1368,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
                 ut_from = int(br.get("renew_unlimited_time_from_days") or 365)
                 await _safe_edit_message_text(
                     query,
-                    text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
+                    _cfg_text(user_id, "plans_list_text", "cfg_plans_list", text_settings),
                     parse_mode="Markdown",
                     reply_markup=plans_keyboard(ordered, sid, 0, columns=plan_columns, unlimited_volume=uv, unlimited_volume_from=uv_from, unlimited_time=ut, unlimited_time_from=ut_from, sort_by_priority=False, back_to_categories=False, rtl_rows=bool(txp.get('plan_sort_desc', False)), lang=_user_lang(user_id)),
                 )
@@ -1433,7 +1432,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("btn_expired_restart", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
         price = expected_price
@@ -1473,7 +1472,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
                 context.user_data.pop(f"renew_target_{user_id}", None)
                 set_user_step(context, user_id, None)
                 if not ok:
-                    await context.bot.send_message(chat_id=user_id, text=i18n.t("renew_failed", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+                    await context.bot.send_message(chat_id=user_id, text=i18n.t("renew_failed", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                 return
 
             # در خرید عادی: نام سرویس از کاربر گرفته می‌شود.
@@ -1489,7 +1488,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("wallet_low_no_card", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
         try:
@@ -1549,7 +1548,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("btn_expired_restart", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
         price = expected_price
@@ -1560,7 +1559,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("direct_pay_disabled", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -1595,7 +1594,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         )
         if tx_marker > 0:
             msg = i18n.t("tx_marker_applied", _user_lang(user_id), marker=f"{tx_marker:,}", msg=msg)
-        msg += "\n\n⚡ پس از تایید پرداخت، اشتراک شما به‌صورت خودکار ساخته و ارسال می‌شود."
+        msg += i18n.t("card_receipt_done_short", _user_lang(user_id))
 
         context.user_data[f"pending_pay_{user_id}"] = {
             "amount": pay_amount_toman,
@@ -1624,7 +1623,7 @@ async def _rs_admin_direct_reply(update, context, user_id, text, step):
     if step == "WAIT_ADMIN_DIRECT_REPLY_TEXT":
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         reply_text = str(text or "").strip()
@@ -1653,7 +1652,7 @@ async def _rs_admin_direct_reply(update, context, user_id, text, step):
             set_user_step(context, user_id, None)
             await update.message.reply_text(
                 i18n.t("support_settings_incomplete", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -1679,14 +1678,14 @@ async def _rs_admin_direct_reply(update, context, user_id, text, step):
             logger.warning("Failed to forward direct admin message reply (tg=%s): %s", user_id, e)
             await update.message.reply_text(
                 i18n.t("send_failed_retry", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
         set_user_step(context, user_id, None)
         await update.message.reply_text(
             i18n.t("support_msg_sent", _user_lang(user_id)),
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(user_id=user_id),
         )
         return
 
@@ -1696,7 +1695,7 @@ async def _rs_ticket_title(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         title = str(text or "").strip()
         if not title:
@@ -1715,7 +1714,7 @@ async def _rs_ticket_question(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         question = str(text or "").strip()
         if not question:
@@ -1737,7 +1736,7 @@ async def _rs_ticket_screenshot(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         pending = context.user_data.get(f"pending_ticket_{user_id}") or {}
@@ -1767,7 +1766,7 @@ async def _rs_ticket_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_ticket_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         await update.message.reply_text(
             i18n.t("ticket_use_send_edit", _user_lang(user_id)),
@@ -1781,14 +1780,14 @@ async def _rs_ticket_reply(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         state = context.user_data.get(f"ticket_reply_{user_id}") or {}
         ticket_code = int(state.get("ticket_code") or 0)
         if ticket_code <= 0:
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text(i18n.t("ticket_info_invalid", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("ticket_info_invalid", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         user_row = userbot_db.get_user_by_telegram_id(user_id)
@@ -1797,7 +1796,7 @@ async def _rs_ticket_reply(update, context, user_id, text, step):
         if not ticket:
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text(i18n.t("ticket_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("ticket_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         message_text = str(text or "").strip()
@@ -1823,7 +1822,7 @@ async def _rs_ticket_reply_screenshot(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         state = context.user_data.get(f"ticket_reply_{user_id}") or {}
@@ -1831,7 +1830,7 @@ async def _rs_ticket_reply_screenshot(update, context, user_id, text, step):
         if ticket_code <= 0:
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text(i18n.t("ticket_info_invalid", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("ticket_info_invalid", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         skip_text = _normalize_action_text(text or "")
@@ -1876,7 +1875,7 @@ async def _rs_ticket_reply_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"ticket_reply_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         await update.message.reply_text(
             i18n.t("reply_use_send_edit", _user_lang(user_id)),
@@ -1889,7 +1888,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
     if step == "WAIT_CONNECT_SUB_INPUT":
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         parsed_uuid = _extract_uuid_from_user_input(text or "")
@@ -1910,7 +1909,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
             u_db = userbot_db.get_user_by_id(internal_user_id) or {}
         internal_user_id = int((u_db or {}).get("id") or 0)
         if internal_user_id <= 0:
-            await update.message.reply_text(i18n.t("user_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("user_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             set_user_step(context, user_id, None)
             return
 
@@ -1919,7 +1918,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
         if owner and int(owner.get("user_id") or 0) != int(internal_user_id):
             await update.message.reply_text(
                 i18n.t("sub_linked_other", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             set_user_step(context, user_id, None)
             return
@@ -1931,7 +1930,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
             settings = _get_subscription_settings()
             await update.message.reply_text(
                 i18n.t("sub_already_linked_self", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             await update.message.reply_text(
                 _build_subscription_status_text(service, lang=_user_lang(user_id)),
@@ -1945,7 +1944,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
         if not targets:
             await update.message.reply_text(
                 i18n.t("uuid_not_found_panels", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             set_user_step(context, user_id, None)
             return
@@ -1998,7 +1997,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
             logger.exception("Failed persisting connected subscription (telegram_id=%s)", user_id)
             await update.message.reply_text(
                 i18n.t("sub_connect_failed", _user_lang(user_id), error=e),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             set_user_step(context, user_id, None)
             return
@@ -2025,7 +2024,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
         settings = _get_subscription_settings()
         await update.message.reply_text(
             i18n.t("sub_linked_ok", _user_lang(user_id)),
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(user_id=user_id),
         )
         await update.message.reply_text(
             _build_subscription_status_text(service, lang=_user_lang(user_id)),
@@ -2040,7 +2039,7 @@ async def _rs_rename_service(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_rename_service_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         pending_rename = context.user_data.get(f"pending_rename_service_{user_id}", None) or {}
@@ -2048,7 +2047,7 @@ async def _rs_rename_service(update, context, user_id, text, step):
         if service_id <= 0:
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_rename_service_{user_id}", None)
-            await update.message.reply_text(i18n.t("service_info_invalid", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("service_info_invalid", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         u_db = userbot_db.get_user_by_telegram_id(user_id) or {}
@@ -2057,7 +2056,7 @@ async def _rs_rename_service(update, context, user_id, text, step):
         if not service or internal_user_id <= 0 or int(service.get("user_id") or 0) != internal_user_id:
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_rename_service_{user_id}", None)
-            await update.message.reply_text(i18n.t("sub_target_missing", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("sub_target_missing", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         new_name = _normalize_service_name_input(text or "")
@@ -2093,7 +2092,7 @@ async def _rs_rename_service(update, context, user_id, text, step):
         refreshed = userbot_db.get_service_by_id(service_id) or service
         refreshed = await _sync_service_runtime_from_panels(refreshed)
         settings = _get_subscription_settings()
-        await update.message.reply_text(result_text, reply_markup=_main_menu_keyboard())
+        await update.message.reply_text(result_text, reply_markup=_main_menu_keyboard(user_id=user_id))
         await update.message.reply_text(
             _build_subscription_status_text(refreshed, lang=_user_lang(user_id)),
             parse_mode="Markdown",
@@ -2107,7 +2106,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_trial_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         service_name = (text or "").strip()
@@ -2126,7 +2125,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
         if not internal_user_id or sid <= 0:
             await update.message.reply_text(
                 i18n.t("trial_info_incomplete", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_trial_{user_id}", None)
@@ -2138,7 +2137,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
             context.user_data.pop(f"pending_trial_{user_id}", None)
             await update.message.reply_text(
                 i18n.t("trial_already_used", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -2148,7 +2147,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
             context.user_data.pop(f"pending_trial_{user_id}", None)
             await update.message.reply_text(
                 i18n.t("trial_disabled", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -2163,7 +2162,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
         if not server:
             await update.message.reply_text(
                 i18n.t("server_missing_retry", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_trial_{user_id}", None)
@@ -2193,7 +2192,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
                 await _deactivate_created_users(created_nodes)
             await update.message.reply_text(
                 i18n.t("trial_panel_failed", _user_lang(user_id), error=e),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             return
 
@@ -2265,7 +2264,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
             logger.exception("Failed persisting free trial for telegram_id=%s", user_id)
             await update.message.reply_text(
                 i18n.t("trial_db_error", _user_lang(user_id), error=e),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_trial_{user_id}", None)
@@ -2305,10 +2304,10 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
         if announce_enabled:
             await update.message.reply_text(
                 i18n.t("trial_created_ok", _user_lang(user_id)),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
         else:
-            await update.message.reply_text(i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("main_menu_btn", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
 
         delivered_service = {
             "id": service_db_id or panel_user_id or "—",
@@ -2373,7 +2372,7 @@ async def _rs_service_name(update, context, user_id, text, step):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_{user_id}", None)
             context.user_data.pop(f"renew_target_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         service_name = (text or "").strip()
@@ -2394,7 +2393,7 @@ async def _rs_service_name(update, context, user_id, text, step):
         context.user_data.pop(f"pending_wallet_{user_id}", None)
         context.user_data.pop(f"renew_target_{user_id}", None)
         if not ok:
-            await update.message.reply_text(i18n.t("buy_renew_failed", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("buy_renew_failed", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
         return
 
 
@@ -2403,13 +2402,13 @@ async def _rs_wallet_topup_amount(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         pay_settings = _get_payment_settings()
         if not bool(pay_settings.get("enable_card_to_card", True)):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text(i18n.t("card_pay_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("card_pay_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         raw = (text or "").replace(",", "").strip()
@@ -2473,7 +2472,7 @@ async def _rs_wallet_topup_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
@@ -2487,7 +2486,7 @@ async def _rs_wallet_topup_image(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         if update.message.photo:
@@ -2528,7 +2527,7 @@ async def _rs_wallet_topup_image(update, context, user_id, text, step):
 
             await update.message.reply_text(
                 _card_payment_result_user_text(amount, payment_result, user_id=user_id),
-                reply_markup=_main_menu_keyboard(),
+                reply_markup=_main_menu_keyboard(user_id=user_id),
             )
             set_user_step(context, user_id, None)
         else:
@@ -2541,7 +2540,7 @@ async def _rs_wallet_topup_last4(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_wallet_topup_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         payer_last4 = _parse_exact_card_last4(text)
@@ -2557,7 +2556,7 @@ async def _rs_wallet_topup_last4(update, context, user_id, text, step):
         photo_file_id = str(pending.get("receipt_photo_file_id") or "").strip()
         if amount <= 0 or not photo_file_id:
             set_user_step(context, user_id, None)
-            await update.message.reply_text(i18n.t("payment_info_incomplete", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("payment_info_incomplete", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         auto_approved, payment_result = await _finalize_pending_card_payment(
@@ -2576,7 +2575,7 @@ async def _rs_wallet_topup_last4(update, context, user_id, text, step):
         )
         await update.message.reply_text(
             _card_payment_result_user_text(amount, payment_result, user_id=user_id),
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(user_id=user_id),
         )
         set_user_step(context, user_id, None)
         return
@@ -2586,7 +2585,7 @@ async def _rs_coupon_code(update, context, user_id, text, step):
     if step == "WAIT_COUPON_CODE":
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         mkt = _get_marketing_settings()
         if not (
@@ -2594,7 +2593,7 @@ async def _rs_coupon_code(update, context, user_id, text, step):
             or bool(mkt.get("enable_increase_code", False))
         ):
             set_user_step(context, user_id, None)
-            await update.message.reply_text(i18n.t("gift_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("gift_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         code = (text or "").strip()
         if not code:
@@ -2604,22 +2603,22 @@ async def _rs_coupon_code(update, context, user_id, text, step):
         u_db = userbot_db.get_user_by_telegram_id(user_id)
         internal_user_id = int((u_db or {}).get("id") or 0)
         if internal_user_id <= 0:
-            await update.message.reply_text(i18n.t("user_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("user_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         try:
             ok, result_text, amount = userbot_db.redeem_zarin_voucher(code, internal_user_id)
         except Exception as e:
             logger.warning(f"Failed to redeem coupon in WAIT_COUPON_CODE user={user_id}: {e}")
-            await update.message.reply_text(i18n.t("coupon_check_error", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("coupon_check_error", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         if not ok:
-            await update.message.reply_text(f"⚠️ {result_text}", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(f"⚠️ {result_text}", reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         fresh = userbot_db.get_user_by_id(internal_user_id) or {}
         balance = int(fresh.get("wallet_balance") or 0)
         await update.message.reply_text(
             i18n.t("coupon_applied", _user_lang(user_id), amount=f"{int(amount):,}", balance=f"{balance:,}"),
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(user_id=user_id),
         )
         return
 
@@ -2629,7 +2628,7 @@ async def _rs_receipt_confirm(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
             
         if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
@@ -2643,7 +2642,7 @@ async def _rs_receipt_image(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         if update.message.photo:
@@ -2695,7 +2694,7 @@ async def _rs_receipt_image(update, context, user_id, text, step):
             
             await update.message.reply_text(
                 _card_payment_result_user_text(amount, payment_result, direct_note=True, user_id=user_id),
-                reply_markup=_main_menu_keyboard()
+                reply_markup=_main_menu_keyboard(user_id=user_id)
             )
             await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
             set_user_step(context, user_id, None)
@@ -2709,7 +2708,7 @@ async def _rs_receipt_last4(update, context, user_id, text, step):
         if _is_back_or_cancel_text(text):
             set_user_step(context, user_id, None)
             context.user_data.pop(f"pending_pay_{user_id}", None)
-            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("op_cancelled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         payer_last4 = _parse_exact_card_last4(text)
@@ -2725,7 +2724,7 @@ async def _rs_receipt_last4(update, context, user_id, text, step):
         photo_file_id = str(pending.get("receipt_photo_file_id") or "").strip()
         if amount <= 0 or not photo_file_id:
             set_user_step(context, user_id, None)
-            await update.message.reply_text(i18n.t("payment_info_incomplete", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("payment_info_incomplete", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
 
         is_direct_buy = bool(pending.get("direct_buy"))
@@ -2755,7 +2754,7 @@ async def _rs_receipt_last4(update, context, user_id, text, step):
         )
         await update.message.reply_text(
             _card_payment_result_user_text(amount, payment_result, direct_note=True, user_id=user_id),
-            reply_markup=_main_menu_keyboard(),
+            reply_markup=_main_menu_keyboard(user_id=user_id),
         )
         await _deliver_direct_buy_after_sms_notice(context, auto_approved and is_direct_buy)
         set_user_step(context, user_id, None)
