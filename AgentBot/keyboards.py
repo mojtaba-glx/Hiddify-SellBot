@@ -58,7 +58,7 @@ def back_keyboard(callback_data: str = f"agbot:menu") -> InlineKeyboardMarkup:
 
 def cancel_keyboard():
     return ReplyKeyboardMarkup(
-        [[KButton("\u274c \u0644\u063a\u0648")]],
+        [[KButton("\u274c \u0644\u063a\u0648", style="danger")]],
         resize_keyboard=True, one_time_keyboard=True,
     )
 

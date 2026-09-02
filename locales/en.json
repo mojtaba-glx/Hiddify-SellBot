@@ -432,6 +432,7 @@
   "ag_cbot_restart": "🔄 Restart bot",
   "ag_cbot_title": "🤖 <b>Customer bot</b>",
   "ag_cbot_token": "🔑 Register bot token",
+  "ag_cbot_token_prompt": "🔑 <b>Register customer bot token</b>\n\nGet the token from <b>@BotFather</b> and send it here.\n\n📝 Valid format:\n<code>1234567890:ABCdefGHIjklMNOpqrsTUVwxyz</code>\n\n💡 After registering, tap «🔄 Restart bot» in this menu to bring the customer bot online.\n\n❌ To cancel, tap the «Cancel» button on the keyboard below.",
   "ag_cfg_auto_sub": "🤖 Auto subscription",
   "ag_cfg_direct": "⚔️ Direct config",
   "ag_cfg_multi": "🌐 Smart subscription link",
@@ -1018,5 +1019,11 @@
   "ticket_title_line": "◈Subject:",
   "ticket_screenshot_link": "Screenshot",
   "rename_more_errors": "\\n... and {count} more errors",
-  "direct_config_api_hint": "⚠️ Direct fetch from the subscription link was limited; configs were read from the panel API.\\n\\n"
+  "direct_config_api_hint": "⚠️ Direct fetch from the subscription link was limited; configs were read from the panel API.\\n\\n",
+  "ag_cbot_auto_starting": "⏳ Starting customer bot @{username} ...",
+  "ag_cbot_auto_started": "✅ Customer bot <b>@{username}</b> has been started successfully!",
+  "ag_cbot_auto_start_failed": "❌ Automatic start of the customer bot failed.\nPlease tap «🔄 Restart bot» in the «🤖 Customer bot» menu or restart from the terminal.",
+  "ag_cbot_restarting": "🔄 <b>Restarting the customer bot...</b>\nPlease wait a moment.",
+  "ag_cbot_restart_ok": "✅ <b>Customer bot restarted successfully.</b>",
+  "ag_cbot_restart_fail": "❌ <b>Failed to restart the customer bot.</b>\nPlease restart from the terminal or contact the admin."
 }

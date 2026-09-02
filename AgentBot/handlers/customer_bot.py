@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import shlex
 import signal
 import subprocess
 import time
@@ -84,33 +86,53 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_reply_markup(reply_markup=cbot_menu_keyboard(still_active, lang=agent_lang(context)))
         except Exception:
             pass
+        # اعمال تغییر وضعیت: ریستارت پروسه ربات مشتری تا لیست ربات‌های فعال دوباره خوانده شود
+        if bots:
+            _ok = await _restart_customer_bot_async()
+            if not _ok:
+                try:
+                    from Shared import i18n as _i18n
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=_i18n.t("ag_cbot_auto_start_failed", agent_lang(context)),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
         return
 
     if action == "token":
         context.user_data[UD_STATE] = STATE_CBOT_TOKEN
+        from Shared import i18n as _i18n
+        _lg = agent_lang(context)
+        _prompt = _i18n.t("ag_cbot_token_prompt", _lg)
+        _chat_id = update.effective_chat.id if update.effective_chat else query.message.chat_id
         try:
-            await query.edit_message_text(
-                "\U0001f511 <b>\u062b\u0628\u062a \u062a\u0648\u06a9\u0646 \u0631\u0628\u0627\u062a</b>\n\n"
-                "\u062a\u0648\u06a9\u0646 \u0631\u0628\u0627\u062a \u0631\u0627 \u0627\u0632 @BotFather \u062f\u0631\u06cc\u0627\u0641\u062a \u06a9\u0631\u062f\u0647 \u0648 \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f.\n\n"
-                "\u0641\u0631\u0645\u0627\u062a: <code>1234567890:ABCdef...</code>",
-                reply_markup=cancel_keyboard(), parse_mode="HTML",
+            await context.bot.send_message(
+                chat_id=_chat_id,
+                text=_prompt, reply_markup=cancel_keyboard(), parse_mode="HTML",
             )
         except Exception:
-            pass
+            try:
+                await query.message.reply_text(
+                    _prompt, reply_markup=cancel_keyboard(), parse_mode="HTML",
+                )
+            except Exception:
+                pass
         return
 
     if action == "restart":
         await query.answer()
-        await query.edit_message_text(
-            "\U0001f504 <b>\u062f\u0631 \u062d\u0627\u0644 \u0631\u06cc\u0633\u062a\u0627\u0631\u062a \u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc...</b>",
-            parse_mode="HTML",
-        )
-        success = _restart_customer_bot()
-        text = (
-            "\u2705 <b>\u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc \u0628\u0627 \u0645\u0648\u0641\u0642\u06cc\u062a \u0631\u06cc\u0633\u062a\u0627\u0631\u062a \u0634\u062f.</b>"
-            if success
-            else "\u274c <b>\u062e\u0637\u0627 \u062f\u0631 \u0631\u06cc\u0633\u062a\u0627\u0631\u062a \u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc.</b>\n\u0644\u0637\u0641\u0627\u064b \u0627\u0632 \u062a\u0631\u0645\u06cc\u0646\u0627\u0644 \u062f\u0633\u062a\u06cc \u0631\u06cc\u0633\u062a\u0627\u0631\u062a \u06a9\u0646\u06cc\u062f."
-        )
+        from Shared import i18n as _i18n
+        _lg = agent_lang(context)
+        try:
+            await query.edit_message_text(
+                _i18n.t("ag_cbot_restarting", _lg), parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        success = await _restart_customer_bot_async()
+        text = _i18n.t("ag_cbot_restart_ok", _lg) if success else _i18n.t("ag_cbot_restart_fail", _lg)
         await query.edit_message_text(
             text,
             parse_mode="HTML",
@@ -145,6 +167,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     from AgentBot.keyboards import main_menu_keyboard
     await update.message.reply_text(
         f"\u2705 \u0631\u0628\u0627\u062a @{_escape(username)} \u0628\u0627 \u0645\u0648\u0641\u0642\u06cc\u062a \u062b\u0628\u062a \u0634\u062f!",
+        parse_mode="HTML",
+    )
+    # استارت خودکار ربات مشتری بعد از ثبت توکن (بدون نیاز به ریستارت کل ربات)
+    from Shared import i18n as _i18n
+    _lg = agent_lang(context)
+    _starting = _i18n.t("ag_cbot_auto_starting", _lg, username=_escape(username))
+    try:
+        await update.message.reply_text(_starting, parse_mode="HTML")
+    except Exception:
+        pass
+    _ok = await _restart_customer_bot_async()
+    if _ok:
+        _done = _i18n.t("ag_cbot_auto_started", _lg, username=_escape(username))
+    else:
+        _done = _i18n.t("ag_cbot_auto_start_failed", _lg)
+    try:
+        await update.message.reply_text(_done, parse_mode="HTML")
+    except Exception:
+        pass
+    await update.message.reply_text(
+        "\U0001f4ca <b>\u067e\u0627\u0646\u0644 \u0646\u0645\u0627\u06cc\u0646\u062f\u06af\u06cc</b>\n"
+        "\u0627\u0632 \u0645\u0646\u0648\u06cc \u0632\u06cc\u0631 \u06af\u0632\u06cc\u0646\u0647 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f.",
         reply_markup=main_menu_keyboard(), parse_mode="HTML",
     )
     return True
@@ -173,6 +217,14 @@ def _systemd_unit_active(unit: str) -> bool:
         return False
 
 
+def _systemd_unit_installed(unit: str) -> bool:
+    try:
+        res = subprocess.run(["systemctl", "cat", unit], capture_output=True, timeout=10)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def _systemd_restart_unit(unit: str) -> bool:
     try:
         res = subprocess.run(["systemctl", "restart", unit], capture_output=True, timeout=30)
@@ -180,6 +232,36 @@ def _systemd_restart_unit(unit: str) -> bool:
     except Exception as e:
         logger.warning("systemctl restart failed: %s", e)
         return False
+
+
+def _sudo_systemd_restart_unit(unit: str) -> bool:
+    """در صورت نبود مجوز restart مستقیم، با sudo بدون رمز تلاش می‌کند."""
+    try:
+        res = subprocess.run(["sudo", "-n", "systemctl", "restart", unit], capture_output=True, timeout=30)
+        return res.returncode == 0
+    except Exception as e:
+        logger.warning("sudo systemctl restart failed: %s", e)
+        return False
+
+
+def _pick_cbot_log_file(root_dir: Path) -> Path:
+    """اولین فایل لاگ قابل‌نوشتن را انتخاب می‌کند (فایل root-owned باعث شکست spawn می‌شد)."""
+    candidates = [
+        root_dir / "logs" / "customerbot.log",
+        root_dir / "logs" / "customerbot-agent.log",
+        Path("/tmp") / "hiddify-customerbot.log",
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                if os.access(p, os.W_OK):
+                    return p
+                continue
+            if p.parent.exists() and os.access(p.parent, os.W_OK):
+                return p
+        except Exception:
+            continue
+    return Path("/tmp") / "hiddify-customerbot.log"
 
 
 def _pgrep_cbot_pids() -> list:
@@ -205,34 +287,48 @@ def _kill_cbot_processes() -> None:
     for pid in _pgrep_cbot_pids():
         try:
             os.kill(int(pid), signal.SIGTERM)
-        except (ProcessLookupError, ValueError):
+        except (ProcessLookupError, ValueError, PermissionError):
             pass
     if not _wait_cbot_gone(20):
         for pid in _pgrep_cbot_pids():
             try:
                 os.kill(int(pid), signal.SIGKILL)
-            except (ProcessLookupError, ValueError):
+            except (ProcessLookupError, ValueError, PermissionError):
                 pass
         _wait_cbot_gone(5)
 
 
 def _restart_customer_bot() -> bool:
     try:
-        if _systemd_available() and _systemd_unit_active(SYSTEMD_CBOT_UNIT):
-            logger.info("CustomerBot running under systemd unit %s; restarting via systemctl", SYSTEMD_CBOT_UNIT)
-            return _systemd_restart_unit(SYSTEMD_CBOT_UNIT)
+        # 1) اگر unit systemd نصب است اول از همان مسیر تلاش کن (حتی اگر inactive باشد)
+        if _systemd_available() and _systemd_unit_installed(SYSTEMD_CBOT_UNIT):
+            if _systemd_restart_unit(SYSTEMD_CBOT_UNIT):
+                logger.info("CustomerBot restarted via systemctl (%s)", SYSTEMD_CBOT_UNIT)
+                return True
+            if _sudo_systemd_restart_unit(SYSTEMD_CBOT_UNIT):
+                logger.info("CustomerBot restarted via sudo systemctl (%s)", SYSTEMD_CBOT_UNIT)
+                return True
+            # اگر unit در حال اجراست و مجوز ریستارت نداریم، نباید دستی duplicate بسازیم
+            if _systemd_unit_active(SYSTEMD_CBOT_UNIT):
+                logger.error("CustomerBot systemd unit active but restart denied (no permission)")
+                return False
+            logger.warning("CustomerBot systemd unit installed but inactive and restart denied; falling back to manual start")
 
         root_dir = Path(__file__).resolve().parents[2]
         venv_python = root_dir / "venv" / "bin" / "python"
         customer_main = root_dir / "CustomerBot" / "main.py"
-        log_file = root_dir / "logs" / "customerbot.log"
+        log_file = _pick_cbot_log_file(root_dir)
 
         _kill_cbot_processes()
         if _pgrep_cbot_pids():
             logger.error("CustomerBot processes still alive after kill; aborting restart to avoid duplicate instances")
             return False
 
-        cmd = f"cd {root_dir} && {venv_python} {customer_main} >> {log_file} 2>&1 &"
+        cmd = (
+            f"cd {shlex.quote(str(root_dir))} && "
+            f"{shlex.quote(str(venv_python))} {shlex.quote(str(customer_main))} "
+            f">> {shlex.quote(str(log_file))} 2>&1 &"
+        )
         subprocess.Popen(
             cmd, shell=True,
             stdout=subprocess.DEVNULL,
@@ -241,10 +337,15 @@ def _restart_customer_bot() -> bool:
         )
         time.sleep(3)
         if not _pgrep_cbot_pids():
-            logger.warning("No CustomerBot process found shortly after start; checking log")
+            logger.warning("No CustomerBot process found shortly after start; check log file %s", log_file)
             return False
-        logger.info("CustomerBot restarted successfully")
+        logger.info("CustomerBot restarted successfully (log: %s)", log_file)
         return True
     except Exception as e:
         logger.error("Failed to restart CustomerBot (via %s when active): %s", SYSTEMD_CBOT_UNIT, e)
         return False
+
+
+async def _restart_customer_bot_async() -> bool:
+    """اجرای ریستارت بلاک‌کننده در thread تا event loop ربات قفل نشود."""
+    return await asyncio.to_thread(_restart_customer_bot)
