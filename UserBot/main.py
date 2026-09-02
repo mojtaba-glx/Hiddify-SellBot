@@ -660,7 +660,7 @@ async def _enforce_force_join(
     if await _user_joined_force_channel(context, user_id, settings):
         return True
     guide_text = str(settings.get("guide_text") or "").strip() or "🔒 لطفاً ابتدا در کانال عضو شوید."
-    await send_text(guide_text, reply_markup=force_join_keyboard(_force_join_url(settings)))
+    await send_text(guide_text, reply_markup=force_join_keyboard(_force_join_url(settings), lang=_user_lang(user_id)))
     return False
 
 
@@ -747,20 +747,19 @@ def _build_card_to_card_payment_text(
     card_owner: str,
     card_bank: str,
     text_settings: dict,
+    lang: str = "fa",
 ) -> str:
     owner_safe = escape(str(card_owner or ""))
     bank_safe = escape(str(card_bank or ""))
     card_safe = escape(str(card_number or ""))
     template = str((text_settings or {}).get("card_to_card_text") or "").strip()
     if not template or template == "0":
-        bank_line = f"🏦 بانک: {bank_safe}\n" if bank_safe else ""
+        bank_line = (i18n.t("card_pay_bank_line", lang) + f"{bank_safe}\n") if bank_safe else ""
         return (
-            f"💰 لطفا دقیقا مبلغ: <code>{int(amount_toman) * 10:d}</code> ریال\n"
-            f"💰 معادل: {int(amount_toman):,} تومان\n"
-            f"💳 به شماره کارت: <code>{card_safe}</code>\n"
-            f"👤 به نام: {owner_safe}\n"
-            f"{bank_line}"
-            "❗ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید."
+            i18n.t("card_pay_exact", lang, rial=f"{int(amount_toman) * 10:d}", toman=f"{int(amount_toman):,}",
+                   card=card_safe, owner=owner_safe)
+            + ("\n" + bank_line if bank_line else "")
+            + i18n.t("card_pay_after", lang)
         )
     return (
         template
@@ -894,7 +893,7 @@ async def _handle_user_ticket_shot_start(
     photo_id = str(target.get("photo_file_id") or "").strip()
     caption = f"🖼 اسکرین‌شات #{idx} | تیکت #{code}"
     kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🔙 بازگشت به تیکت", callback_data=f"support:view:{code}:1")]]
+        [[InlineKeyboardButton(i18n.t("btn_back_to_ticket", _user_lang(user_id)), callback_data=f"support:view:{code}:1")]]
     )
 
     sent = False
@@ -1015,39 +1014,44 @@ def _guide_platform_text(platform: str, text_settings: dict) -> str:
     return custom or _default_guide_platform_text(platform)
 
 
-def _ticket_status_title(status: str) -> str:
+def _ticket_status_title(status: str, lang: str = "fa") -> str:
     s = str(status or "").strip().lower()
     if s == "open":
-        return "✅ باز"
+        return i18n.t("ticket_status_open", lang)
     if s == "closed":
-        return "📪 بسته"
-    return "⏳ در انتظار"
+        return i18n.t("ticket_status_closed", lang)
+    return i18n.t("ticket_status_pending", lang)
 
 
-def _ticket_compose_preview_text(data: Dict[str, Any]) -> str:
+def _ticket_compose_preview_text(data: Dict[str, Any], lang: str = "fa") -> str:
     title = str((data or {}).get("title") or "").strip() or "-"
     question = str((data or {}).get("question") or "").strip() or "-"
     has_photo = bool(str((data or {}).get("receipt_photo_id") or "").strip())
-    screenshot_line = "📎 اسکرین‌شات: ارسال شده ✅" if has_photo else "📎 اسکرین‌شات: ارسال نشد"
+    screenshot_line = i18n.t("screenshot_attached_line", lang) if has_photo else i18n.t("screenshot_missing_line", lang)
     return (
-        "📩 تایید اطلاعات تیکت\n\n"
-        f"📌 عنوان:\n{title}\n\n"
-        f"📝 سوال:\n{question}\n\n"
-        f"{screenshot_line}\n\n"
-        "❗️در صورت تایید اطلاعات، برای ارسال تیکت گزینه «✅ارسال» را انتخاب نمایید."
+        i18n.t("ticket_confirm_title", lang)
+        + f"{title}\n\n"
+        + i18n.t("ticket_confirm_question", lang)
+        + f"{question}\n\n"
+        + f"{screenshot_line}\n\n"
+        + i18n.t("ticket_confirm_hint", lang)
     )
 
 
-def _ticket_reply_preview_text(data: Dict[str, Any]) -> str:
+def _ticket_reply_preview_text(data: Dict[str, Any], lang: str = "fa") -> str:
     reply_text = str((data or {}).get("reply_text") or "").strip() or "-"
     has_photo = bool(str((data or {}).get("receipt_photo_id") or "").strip())
-    screenshot_line = "📎 اسکرین‌شات: ارسال شده ✅" if has_photo else "📎 اسکرین‌شات: ارسال نشد"
+    screenshot_line = i18n.t("screenshot_attached_line", lang) if has_photo else i18n.t("screenshot_missing_line", lang)
     return (
-        "📩 تایید اطلاعات پاسخ تیکت\n\n"
-        f"📝 پاسخ شما:\n{reply_text}\n\n"
-        f"{screenshot_line}\n\n"
-        "❗️در صورت تایید اطلاعات، برای ارسال پاسخ تیکت گزینه «✅ارسال» را انتخاب نمایید."
+        i18n.t("ticket_reply_confirm_title", lang)
+        + f"{reply_text}\n\n"
+        + f"{screenshot_line}\n\n"
+        + i18n.t("ticket_reply_confirm_hint", lang)
     )
+
+
+def _bl_inline(key: str, lang: str = "fa") -> str:
+    return i18n.t(key, lang)
 
 
 def _ticket_text_cancel_keyboard(mode: str = "new") -> InlineKeyboardMarkup:
@@ -1055,7 +1059,7 @@ def _ticket_text_cancel_keyboard(mode: str = "new") -> InlineKeyboardMarkup:
     if flow not in {"new", "reply"}:
         flow = "new"
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("❌لغو", callback_data=f"support:{flow}:cancel")]]
+        [[InlineKeyboardButton(_bl_inline("btn_cancel_inline"), callback_data=f"support:{flow}:cancel")]]
     )
 
 
@@ -1110,14 +1114,14 @@ async def _send_support_panel(
     panel_text = str(settings.get("ticket_panel_text") or "").strip() or "📩 برای ارتباط با پشتیبانی، پیام خود را ارسال کنید."
     if message is not None:
         try:
-            await message.edit_text(panel_text, reply_markup=support_panel_keyboard())
+            await message.edit_text(panel_text, reply_markup=support_panel_keyboard(lang=_user_lang(user_id)))
             return
         except Exception:
             pass
     await context.bot.send_message(
         chat_id=user_id,
         text=panel_text,
-        reply_markup=support_panel_keyboard(),
+        reply_markup=support_panel_keyboard(lang=_user_lang(user_id)),
     )
 
 
@@ -1453,9 +1457,9 @@ def _resolve_live_server_title(service: dict, default: str = "نامشخص") -> 
     return stored_title or default
 
 
-def _build_subscription_status_text(service):
-    service_name = service.get('name') or 'سرویس'
-    server_title = _resolve_live_server_title(service, default='نامشخص')
+def _build_subscription_status_text(service, lang: str = "fa"):
+    service_name = service.get('name') or i18n.t('word_service', lang)
+    server_title = _resolve_live_server_title(service, default=i18n.t('word_unknown', lang))
     usage_current = _to_float(service.get('usage_current', 0))
     usage_limit = _to_float(service.get('usage_limit', 0))
     days_left = int(service.get('days_left') or 0)
@@ -1485,20 +1489,20 @@ def _build_subscription_status_text(service):
     unlimited_time = _is_unlimited_time(days_left)
 
     if usage_limit > 0:
-        usage_line = f"{usage_current:.1f} از {'نامحدود' if unlimited_volume else f'{usage_limit:.1f} گیگ'}"
+        usage_line = f"{usage_current:.1f}{i18n.t('unit_from', lang)}{'i18n-unlimited' if False else ''}{i18n.t('word_unlimited', lang) if unlimited_volume else f'{usage_limit:.1f}{i18n.t('unit_gb_st', lang)}'}"
     else:
-        usage_line = f"{usage_current:.1f} گیگ"
+        usage_line = f"{usage_current:.1f}{i18n.t('unit_gb_st', lang)}"
 
     settings = _get_subscription_settings()
-    lines = ["📄اطلاعات اشتراک شما", ""]
+    lines = [i18n.t("status_title", lang), ""]
     if settings.get("show_username", True):
-        lines.append(f"👤نام: {service_name}")
+        lines.append(i18n.t("status_name", lang) + str(service_name))
     lines.extend([
-        f"📡سرور: {server_title}",
-        f"📊میزان استفاده: {usage_line}",
-        f"⏳زمان باقی مانده: {'نامحدود' if unlimited_time else f'{days_left} روز'}",
-        f"💰قیمت اشتراک: {price_toman:,} تومان" if price_toman is not None else "💰قیمت اشتراک: نامشخص",
-        f"🔑شناسه: `{service_id}`",
+        i18n.t("status_server", lang) + str(server_title),
+        i18n.t("status_usage", lang) + usage_line,
+        i18n.t("status_days_left", lang) + (i18n.t('word_unlimited', lang) if unlimited_time else f"{days_left}{i18n.t('unit_days_st', lang)}"),
+        (i18n.t("status_price", lang) + f"{price_toman:,}{i18n.t('unit_toman_st', lang)}") if price_toman is not None else i18n.t("status_price_unknown", lang),
+        i18n.t("status_id", lang) + f"`{service_id}`",
     ])
     return "\n".join(lines)
 
@@ -1543,14 +1547,14 @@ def _service_local_lock_reason(service: dict) -> Optional[str]:
     return None
 
 
-def _service_local_lock_text(reason: Optional[str]) -> str:
+def _service_local_lock_text(reason: Optional[str], lang: str = "fa") -> str:
     if reason == "usage_limit_reached":
-        return "⛔ این اشتراک به سقف حجم رسیده و موقتاً غیرفعال است."
+        return i18n.t("lock_usage_limit", lang)
     if reason == "time_expired":
-        return "⛔ زمان این اشتراک به پایان رسیده و موقتاً غیرفعال است."
+        return i18n.t("lock_time_expired", lang)
     if reason == "nodes_inactive":
-        return "⛔ این اشتراک در حال حاضر غیرفعال است."
-    return "⛔ دسترسی این اشتراک موقتاً محدود شده است."
+        return i18n.t("lock_nodes_inactive", lang)
+    return i18n.t("lock_limited", lang)
 
 
 async def _resolve_service_access_lock(service: dict) -> tuple[dict, Optional[str]]:
@@ -1660,15 +1664,11 @@ async def _service_is_renewable_live(service: dict) -> bool:
     return ok
 
 
-def _renew_not_allowed_text() -> str:
+def _renew_not_allowed_text(lang: str = "fa") -> str:
     br = _get_buy_renew_settings()
     max_days = int(br.get("renew_max_days") or 3)
     max_remaining_gb = int(br.get("renew_max_remaining_gb") or 3)
-    return (
-        "🛑 در حال حاضر شما امکان تمدید اشتراک خود را ندارید.\n"
-        f"1- کمتر از {max_days} روز تا اتمام اشتراک شما باقی مانده باشد.\n"
-        f"2- حجم باقی مانده اشتراک شما کمتر از {max_remaining_gb} گیگابایت باشد."
-    )
+    return i18n.t("renew_not_allowed", lang, max_days=max_days, max_gb=max_remaining_gb)
 
 
 
@@ -2864,7 +2864,7 @@ async def _send_service_direct_configs_shell(
     if lock_reason:
         await context.bot.send_message(
             chat_id=user_id,
-            text=_service_local_lock_text(lock_reason),
+            text=_service_local_lock_text(lock_reason, lang=_user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         return
@@ -4476,19 +4476,7 @@ async def show_fixed_categories(query, sid, server_block):
             query,
             text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
             parse_mode="Markdown",
-            reply_markup=plans_keyboard(
-                plans_all,
-                sid,
-                0,
-                columns=plan_columns,
-                unlimited_volume=uv,
-                unlimited_volume_from=uv_from,
-                unlimited_time=ut,
-                unlimited_time_from=ut_from,
-                sort_by_priority=False,
-                back_to_categories=False,
-                rtl_rows=bool(txp.get("plan_sort_desc", False)),
-            ),
+            reply_markup=plans_keyboard(plans_all, sid, 0, columns=plan_columns, unlimited_volume=uv, unlimited_volume_from=uv_from, unlimited_time=ut, unlimited_time_from=ut_from, sort_by_priority=False, back_to_categories=False, rtl_rows=bool(txp.get('plan_sort_desc', False)), lang=_user_lang(query.from_user.id)),
         )
         return
 
@@ -4500,7 +4488,7 @@ async def show_fixed_categories(query, sid, server_block):
         query,
         "📂 **لطفاً دسته بندی مورد نظر را انتخاب کنید:**", 
         parse_mode="Markdown", 
-        reply_markup=category_keyboard(categories, sid)
+        reply_markup=category_keyboard(categories, sid, lang=_user_lang(query.from_user.id))
     )
 
 async def show_main_buy_menu(query, sid, server_block, user_id, context):
@@ -4520,7 +4508,7 @@ async def show_main_buy_menu(query, sid, server_block, user_id, context):
         query,
         "🛒 **خرید اشتراک**\n\n🎛 **بسته دلخواه خود را بسازید یا از پلن‌های آماده استفاده کنید:**", 
         parse_mode="Markdown",
-        reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent)
+        reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent, lang=_user_lang(user_id))
     )
 
 async def start_dynamic_wizard(query, context, sid, user_id, server_block):
@@ -4536,7 +4524,7 @@ async def start_dynamic_wizard(query, context, sid, user_id, server_block):
         query,
         "📦بسته مورد نیاز خود را جهت خرید تنظیم کنید", 
         parse_mode="Markdown",
-        reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent)
+        reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent, lang=_user_lang(user_id))
     )
 
 
@@ -4573,7 +4561,7 @@ async def _send_buy_flow_for_server(
             context.user_data.pop(f"renew_target_{user_id}", None)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=_renew_not_allowed_text(),
+                text=_renew_not_allowed_text(lang=_user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return
@@ -4592,7 +4580,7 @@ async def _send_buy_flow_for_server(
             chat_id=chat_id,
             text=f"🛒 **{title}**\n\n🎛 **بسته دلخواه خود را بسازید یا از پلن‌های آماده استفاده کنید:**",
             parse_mode="Markdown",
-            reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent),
+            reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent, lang=_user_lang(user_id)),
         )
         return
 
@@ -4606,7 +4594,7 @@ async def _send_buy_flow_for_server(
             chat_id=chat_id,
             text=i18n.t("configure_package", _user_lang(user_id)),
             parse_mode="Markdown",
-            reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent),
+            reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent, lang=_user_lang(user_id)),
         )
         return
 
@@ -4628,19 +4616,7 @@ async def _send_buy_flow_for_server(
             chat_id=chat_id,
             text=text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
             parse_mode="Markdown",
-            reply_markup=plans_keyboard(
-                plans_all,
-                sid,
-                0,
-                columns=int(br.get("plan_columns") or 1),
-                unlimited_volume=bool(br.get("renew_unlimited_volume", False)),
-                unlimited_volume_from=int(br.get("renew_unlimited_volume_from_gb") or 1000),
-                unlimited_time=bool(br.get("renew_unlimited_time", False)),
-                unlimited_time_from=int(br.get("renew_unlimited_time_from_days") or 365),
-                sort_by_priority=False,
-                back_to_categories=False,
-                rtl_rows=bool(txp.get("plan_sort_desc", False)),
-            ),
+            reply_markup=plans_keyboard(plans_all, sid, 0, columns=int(br.get('plan_columns') or 1), unlimited_volume=bool(br.get('renew_unlimited_volume', False)), unlimited_volume_from=int(br.get('renew_unlimited_volume_from_gb') or 1000), unlimited_time=bool(br.get('renew_unlimited_time', False)), unlimited_time_from=int(br.get('renew_unlimited_time_from_days') or 365), sort_by_priority=False, back_to_categories=False, rtl_rows=bool(txp.get('plan_sort_desc', False)), lang=_user_lang(user_id)),
         )
         return
 
@@ -4656,7 +4632,7 @@ async def _send_buy_flow_for_server(
         chat_id=chat_id,
         text=i18n.t("select_category", _user_lang(user_id)),
         parse_mode="Markdown",
-        reply_markup=category_keyboard(categories, sid),
+        reply_markup=category_keyboard(categories, sid, lang=_user_lang(user_id)),
     )
 
 
@@ -4740,7 +4716,7 @@ async def _send_config_and_qr_after_delivery(
                 photo=qr_image,
                 caption=qr_caption,
                 parse_mode="HTML",
-                reply_markup=subscription_links_keyboard(service_id) if service_id else None,
+                reply_markup=subscription_links_keyboard(service_id, lang=_user_lang(user_id)) if service_id else None,
             )
         except Exception:
             try:
@@ -4748,7 +4724,7 @@ async def _send_config_and_qr_after_delivery(
                     chat_id=user_id,
                     text=qr_caption,
                     parse_mode="HTML",
-                    reply_markup=subscription_links_keyboard(service_id) if service_id else None,
+                    reply_markup=subscription_links_keyboard(service_id, lang=_user_lang(user_id)) if service_id else None,
                     disable_web_page_preview=True,
                 )
             except Exception:
@@ -4823,7 +4799,7 @@ async def _process_wallet_purchase(
         if not await _service_is_renewable_live(renew_service_pre):
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=_renew_not_allowed_text(),
+                text=_renew_not_allowed_text(lang=_user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -4885,7 +4861,7 @@ async def _process_wallet_purchase(
         if not await _service_is_renewable_live(renew_service):
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=_renew_not_allowed_text(),
+                text=_renew_not_allowed_text(lang=_user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -5175,15 +5151,9 @@ async def _process_wallet_purchase(
     if not delivered_kind:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=_build_subscription_status_text(delivered_service),
+            text=_build_subscription_status_text(delivered_service, lang=_user_lang(user_id)),
             parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                service_db_id,
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(delivered_service),
-            ),
+            reply_markup=subscription_status_keyboard(service_db_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(delivered_service), lang=_user_lang(user_id)),
         )
 
     if ADMIN_ID and ADMIN_BOT_TOKEN:
@@ -5289,15 +5259,9 @@ async def _connect_panel_subscription_by_uuid(
             reply_markup=_main_menu_keyboard(),
         )
         await msg_obj.reply_text(
-            _build_subscription_status_text(service),
+            _build_subscription_status_text(service, lang=_user_lang(update.effective_user.id)),
             parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                service.get("id"),
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(service),
-            ),
+            reply_markup=subscription_status_keyboard(service.get('id'), show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(update.effective_user.id)),
         )
         return True
 
@@ -5388,15 +5352,9 @@ async def _connect_panel_subscription_by_uuid(
         reply_markup=_main_menu_keyboard(),
     )
     await msg_obj.reply_text(
-        _build_subscription_status_text(service),
+        _build_subscription_status_text(service, lang=_user_lang(update.effective_user.id)),
         parse_mode="Markdown",
-        reply_markup=subscription_status_keyboard(
-            service.get("id"),
-            show_direct_config=settings.get("show_direct_config", True),
-            show_sub_link=settings.get("show_sub_link", True),
-            show_configs=_should_show_configs_button(settings),
-            show_detach=_is_connected_service(service),
-        ),
+        reply_markup=subscription_status_keyboard(service.get('id'), show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(update.effective_user.id)),
     )
     return True
 
@@ -5628,7 +5586,7 @@ async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _lg = i18n.get_user_lang(user_id)
     await update.message.reply_text(
         i18n.t("lang_choose", _lg),
-        reply_markup=language_keyboard(),
+        reply_markup=language_keyboard(lang=_user_lang(update.effective_user.id)),
     )
 
 
@@ -5812,13 +5770,13 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if await _service_is_renewable_live(_s):
                 renewable_services.append(_s)
         if not renewable_services:
-            await update.message.reply_text(_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(_renew_not_allowed_text(lang=_user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         _lg = _user_lang(user_id)
         await update.message.reply_text(
             i18n.t("renew_choose", _lg),
-            reply_markup=renew_services_keyboard(renewable_services),
+            reply_markup=renew_services_keyboard(renewable_services, lang=_user_lang(update.effective_user.id)),
         )
 
     elif "کیف پول" in text:
@@ -5845,19 +5803,13 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _lg = _user_lang(user_id)
             await update.message.reply_text(
                 i18n.t("wallet_title", _lg, b=balance) + status_line + "\n\n" + i18n.t("wallet_no_method", _lg),
-                reply_markup=wallet_inline_keyboard(show_coupon=can_use_coupon, show_card=False),
+                reply_markup=wallet_inline_keyboard(show_coupon=can_use_coupon, show_card=False, lang=_user_lang(update.effective_user.id)),
             )
             return
         _lg = _user_lang(user_id)
         await update.message.reply_text(
             i18n.t("wallet_title", _lg, b=balance) + status_line,
-            reply_markup=wallet_inline_keyboard(
-                show_coupon=can_use_coupon,
-                show_card=bool(pay_settings.get("enable_card_to_card", True)),
-                show_zarinpal=bool(pay_settings.get("enable_zarinpal", False)),
-                show_perfect_money=bool(pay_settings.get("enable_perfect_money", False)),
-                show_crypto=bool(pay_settings.get("enable_crypto", False)),
-            ),
+            reply_markup=wallet_inline_keyboard(show_coupon=can_use_coupon, show_card=bool(pay_settings.get('enable_card_to_card', True)), show_zarinpal=bool(pay_settings.get('enable_zarinpal', False)), show_perfect_money=bool(pay_settings.get('enable_perfect_money', False)), show_crypto=bool(pay_settings.get('enable_crypto', False)), lang=_user_lang(update.effective_user.id)),
         )
         
     elif "وضعیت اشتراک" in text:
@@ -5917,7 +5869,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(visible_services) > 3:
                 await update.message.reply_text(
                     i18n.t("select_subscription", _user_lang(user_id)),
-                    reply_markup=services_list_keyboard(visible_services),
+                    reply_markup=services_list_keyboard(visible_services, lang=_user_lang(update.effective_user.id)),
                 )
                 if removed_count > 0:
                     await update.message.reply_text(
@@ -5927,17 +5879,11 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             for service in visible_services:
-                msg = _build_subscription_status_text(service)
+                msg = _build_subscription_status_text(service, lang=_user_lang(update.effective_user.id))
                 await update.message.reply_text(
                     msg,
                     parse_mode="Markdown",
-                    reply_markup=subscription_status_keyboard(
-                        service.get("id"),
-                        show_direct_config=settings.get("show_direct_config", True),
-                        show_sub_link=settings.get("show_sub_link", True),
-                        show_configs=_should_show_configs_button(settings),
-                        show_detach=_is_connected_service(service),
-                    )
+                    reply_markup=subscription_status_keyboard(service.get('id'), show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(update.effective_user.id))
                 )
             if removed_count > 0:
                 await update.message.reply_text(
@@ -5970,7 +5916,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "راهنما" in text:
         await update.message.reply_text(
             text_settings.get("guide_text") or _default_guide_intro_text(),
-            reply_markup=guide_os_keyboard("m"),
+            reply_markup=guide_os_keyboard('m', lang=_user_lang(update.effective_user.id)),
         )
 
     elif "سوالات متداول" in text:
@@ -5989,7 +5935,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         invite_text = await _render_invite_home_text(context, internal_uid)
         await update.message.reply_text(
             invite_text,
-            reply_markup=invite_banner_keyboard(),
+            reply_markup=invite_banner_keyboard(lang=_user_lang(update.effective_user.id)),
         )
 
 # --- 7. هندلر اینلاین (عملیات خرید) ---
@@ -6051,7 +5997,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=str(settings.get("guide_text") or "🔒 لطفاً ابتدا در کانال عضو شوید."),
-                    reply_markup=force_join_keyboard(_force_join_url(settings)),
+                    reply_markup=force_join_keyboard(_force_join_url(settings), lang=_user_lang(update.effective_user.id)),
                 )
         return
 
@@ -6066,7 +6012,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=str(settings_fj.get("guide_text") or "🔒 لطفاً ابتدا در کانال عضو شوید."),
-                reply_markup=force_join_keyboard(_force_join_url(settings_fj)),
+                reply_markup=force_join_keyboard(_force_join_url(settings_fj), lang=_user_lang(update.effective_user.id)),
             )
             return
 

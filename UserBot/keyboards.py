@@ -51,7 +51,7 @@ def receipt_cancel_keyboard(lang: str = "fa"):
     return ReplyKeyboardMarkup([[KeyboardButton(i18n.t("btn_back", lang), style="danger")]], resize_keyboard=True)
 
 # --- انتخاب لوکیشن (Inline) ---
-def location_keyboard(servers, columns: int = 1):
+def location_keyboard(servers, columns: int = 1, lang: str = "fa"):
     rows = []
     cols = int(columns) if str(columns).isdigit() else 1
     if cols not in {1, 2, 3}:
@@ -61,14 +61,14 @@ def location_keyboard(servers, columns: int = 1):
         title = (s.get('title') or "").strip()
         # تشخیص پرچم از روی اسم (ساده)
         flag = "🏳️"
-        if "ترکیه" in title: flag = "🇹🇷"
-        elif "هلند" in title: flag = "🇳🇱"
-        elif "آلمان" in title: flag = "🇩🇪"
-        elif "فرانسه" in title: flag = "🇫🇷"
-        elif "امریک" in title: flag = "🇺🇸"
+        if i18n.t("flag_turkey", lang) in title or "ترکیه" in title: flag = "🇹🇷"
+        elif i18n.t("flag_netherlands", lang) in title or "هلند" in title: flag = "🇳🇱"
+        elif i18n.t("flag_germany", lang) in title or "آلمان" in title: flag = "🇩🇪"
+        elif i18n.t("flag_france", lang) in title or "فرانسه" in title: flag = "🇫🇷"
+        elif i18n.t("flag_america", lang) in title or "امریک" in title: flag = "🇺🇸"
 
         # اگر عنوان خودش «لوکیشن» یا پرچم داشت، دوباره اضافه نکن
-        has_location_word = "لوکیشن" in title
+        has_location_word = _bl("word_location", lang) in title
         has_flag = flag != "🏳️" and flag in title
         if has_location_word:
             if has_flag:
@@ -76,7 +76,7 @@ def location_keyboard(servers, columns: int = 1):
             else:
                 btn_text = f"{title} {flag}" if flag != "🏳️" else title
         else:
-            btn_text = f"لوکیشن {flag} {title}" if flag != "🏳️" else f"لوکیشن {title}"
+            btn_text = f"{i18n.t('word_location', lang)} {flag} {title}" if flag != "🏳️" else f"{i18n.t('word_location', lang)} {title}"
 
         btns.append(InlineKeyboardButton(btn_text, callback_data=f"buy:loc:{s.get('id', '')}"))
 
@@ -85,11 +85,11 @@ def location_keyboard(servers, columns: int = 1):
         rows.append(list(reversed(chunk)))
     
     # بازگشت از خودِ لیست سرورها باید به منوی اصلی برگردد
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="buy:exit_main")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data="buy:exit_main")])
     return InlineKeyboardMarkup(rows)
 
 
-def trial_location_keyboard(servers):
+def trial_location_keyboard(servers, lang: str = "fa"):
     rows = []
     for s in servers:
         title = (s.get('title') or "").strip()
@@ -105,7 +105,7 @@ def trial_location_keyboard(servers):
         elif "امریک" in title:
             flag = "🇺🇸"
 
-        has_location_word = "لوکیشن" in title
+        has_location_word = _bl("word_location", lang) in title
         has_flag = flag != "🏳️" and flag in title
         if has_location_word:
             if has_flag:
@@ -113,46 +113,46 @@ def trial_location_keyboard(servers):
             else:
                 btn_text = f"{title} {flag}" if flag != "🏳️" else title
         else:
-            btn_text = f"لوکیشن {flag} {title}" if flag != "🏳️" else f"لوکیشن {title}"
+            btn_text = f"{i18n.t('word_location', lang)} {flag} {title}" if flag != "🏳️" else f"{i18n.t('word_location', lang)} {title}"
 
         rows.append([InlineKeyboardButton(btn_text, callback_data=f"trial:loc:{s['id']}")])
 
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="trial:back")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data="trial:back")])
     return InlineKeyboardMarkup(rows)
 
 # --- ویزارد خرید (انتخاب حجم و زمان) ---
-def mixed_buy_keyboard(server_id, gb, days, price, plans=None, off_percent=0):
+def mixed_buy_keyboard(server_id, gb, days, price, plans=None, off_percent=0, lang: str = "fa"):
     """کیبورد ترکیبی برای نمایش همزمان ویزارد و پلن‌های آماده"""
     price_str = f"{price:,}"
     
     keyboard = [
         # بخش ویزارد داینامیک
-        [InlineKeyboardButton("🎛 بسته دلخواه خود را بسازید", callback_data="noop")],
-        [InlineKeyboardButton("📊 حجم", callback_data="noop")],
+        [InlineKeyboardButton(_bl("btn_custom_package", lang), callback_data="noop")],
+        [InlineKeyboardButton(_bl("label_volume", lang), callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:gb_dec"),
-            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
+            InlineKeyboardButton(f"{gb}{_bl('unit_gb', lang)}", callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:gb_inc")
         ],
-        [InlineKeyboardButton("⏳ زمان", callback_data="noop")],
+        [InlineKeyboardButton(_bl("label_time", lang), callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:month_dec"),
-            InlineKeyboardButton(f"{days} ماهه", callback_data="noop"),
+            InlineKeyboardButton(f"{days}{_bl('unit_months', lang)}", callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:month_inc")
         ],
         [
-            InlineKeyboardButton(f"🏷 تخفیف: {off_percent}%", callback_data="noop"),
-            InlineKeyboardButton(f"💰 قیمت: {price_str}", callback_data="noop")
+            InlineKeyboardButton(f"{_bl('label_discount', lang)}{off_percent}%", callback_data="noop"),
+            InlineKeyboardButton(f"{_bl('label_price', lang)}{price_str}", callback_data="noop")
         ],
-        [InlineKeyboardButton("💳 خرید بسته دلخواه", callback_data=f"buy:confirm_dyn:{server_id}")],
+        [InlineKeyboardButton(_bl("btn_buy_custom", lang), callback_data=f"buy:confirm_dyn:{server_id}")],
         
         # بخش پلن‌های آماده - دکمه هدایت به منوی اصلی
-        [InlineKeyboardButton("📋 پلن های آماده", callback_data=f"wiz:{server_id}:show_fixed")]
+        [InlineKeyboardButton(_bl("btn_ready_plans", lang), callback_data=f"wiz:{server_id}:show_fixed")]
     ]
     
     # دیگر پلن‌های آماده را نمایش نمی‌دهیم، فقط دکمه هدایت به منوی اصلی
     
-    keyboard.append([InlineKeyboardButton("🔙بازگشت", callback_data="buy:back_main")])
+    keyboard.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data="buy:back_main")])
     
     return InlineKeyboardMarkup(keyboard)
 
@@ -164,12 +164,12 @@ def confirm_payment_keyboard(lang: str = "fa"):
     ], resize_keyboard=True)
 # این توابع را به فایل keyboards.py اضافه کنید
 
-def category_keyboard(categories, server_id):
+def category_keyboard(categories, server_id, lang: str = "fa"):
     rows = []
     # مرتب‌سازی بر اساس priority
     for cat in sorted(categories, key=lambda x: x.get('priority', 0)):
         rows.append([InlineKeyboardButton(cat.get('title', ''), callback_data=f"buy:cat:{server_id}:{cat.get('id', '')}")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت به لوکیشن‌ها", callback_data="buy:back_main")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_to_locations", lang), callback_data="buy:back_main")])
     return InlineKeyboardMarkup(rows)
 
 def plans_keyboard(
@@ -185,6 +185,7 @@ def plans_keyboard(
     sort_by_priority: bool = True,
     back_to_categories: bool = True,
     rtl_rows: bool = True,
+    lang: str = "fa",
 ):
     rows = []
     cols = int(columns) if str(columns).isdigit() else 1
@@ -193,7 +194,7 @@ def plans_keyboard(
     btns = []
     ordered_plans = sorted(plans, key=lambda x: x.get('priority', 0)) if sort_by_priority else list(plans)
     for p in ordered_plans:
-        price_str = f"{p['price']:,} تومان"
+        price_str = f"{p['price']:,}{_bl('unit_toman', lang)}"
         try:
             gb_val = float(p.get("gb") or 0)
         except (TypeError, ValueError):
@@ -202,31 +203,31 @@ def plans_keyboard(
             days_val = int(p.get("days") or 0)
         except (TypeError, ValueError):
             days_val = 0
-        vol_txt = "نامحدود" if (unlimited_volume and gb_val >= int(unlimited_volume_from)) else f"{gb_val:g} گیگ"
-        day_txt = "نامحدود" if (unlimited_time and days_val >= int(unlimited_time_from)) else f"{days_val} روز"
+        vol_txt = _bl("unit_unlimited", lang) if (unlimited_volume and gb_val >= int(unlimited_volume_from)) else f"{gb_val:g}{_bl('unit_gb_v2', lang)}"
+        day_txt = _bl("unit_unlimited", lang) if (unlimited_time and days_val >= int(unlimited_time_from)) else f"{days_val}{_bl('unit_days_v2', lang)}"
         btn_text = f"{p['title']} | {vol_txt} | {day_txt} - {price_str}"
         btns.append(InlineKeyboardButton(btn_text, callback_data=f"buy:plan:{server_id}:{p['id']}"))
     for i in range(0, len(btns), cols):
         chunk = btns[i:i + cols]
         rows.append(list(reversed(chunk)) if rtl_rows else chunk)
     if back_to_categories:
-        rows.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data=f"buy:loc:{server_id}")])
+        rows.append([InlineKeyboardButton(_bl("btn_back_to_categories", lang), callback_data=f"buy:loc:{server_id}")])
     else:
-        rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="buy:back_main")])
+        rows.append([InlineKeyboardButton(_bl("btn_back3", lang), callback_data="buy:back_main")])
     return InlineKeyboardMarkup(rows)
 
-def confirm_buy_keyboard(server_id, plan_id):
+def confirm_buy_keyboard(server_id, plan_id, lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید و پرداخت", callback_data=f"buy:confirm:{server_id}:{plan_id}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="buy:back_main")]
+        [InlineKeyboardButton(_bl("btn_confirm_pay", lang), callback_data=f"buy:confirm:{server_id}:{plan_id}")],
+        [InlineKeyboardButton(_bl("btn_back3", lang), callback_data="buy:back_main")]
     ])
 
 
-def selected_plan_keyboard(server_id: int, gb: int, days: int, price: int, plan_id: int = 0):
+def selected_plan_keyboard(server_id: int, gb: int, days: int, price: int, plan_id: int = 0, lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 پرداخت مستقیم", callback_data=f"buy:pay_direct:{server_id}:{gb}:{days}:{price}:{int(plan_id or 0)}")],
-        [InlineKeyboardButton("💰 پرداخت از کیف پول", callback_data=f"buy:pay_wallet:{server_id}:{gb}:{days}:{price}:{int(plan_id or 0)}")],
-        [InlineKeyboardButton("بازگشت", callback_data=f"buy:loc:{server_id}")],
+        [InlineKeyboardButton(_bl("btn_pay_direct", lang), callback_data=f"buy:pay_direct:{server_id}:{gb}:{days}:{price}:{int(plan_id or 0)}")],
+        [InlineKeyboardButton(_bl("btn_pay_wallet", lang), callback_data=f"buy:pay_wallet:{server_id}:{gb}:{days}:{price}:{int(plan_id or 0)}")],
+        [InlineKeyboardButton(_bl("btn_back_inline", lang), callback_data=f"buy:loc:{server_id}")],
     ])
 
 
@@ -237,65 +238,66 @@ def wallet_inline_keyboard(
     show_zarinpal: bool = False,
     show_perfect_money: bool = False,
     show_crypto: bool = False,
+    lang: str = "fa",
 ):
     rows = []
     if show_card:
-        rows.append([InlineKeyboardButton("💳 کارت به کارت", callback_data="wallet:card")])
+        rows.append([InlineKeyboardButton(_bl("btn_pay_card", lang), callback_data="wallet:card")])
     if show_zarinpal:
-        rows.append([InlineKeyboardButton("🌐 درگاه پرداخت اینترنتی", callback_data="wallet:zarinpal")])
+        rows.append([InlineKeyboardButton(_bl("btn_pay_gateway", lang), callback_data="wallet:zarinpal")])
     if show_perfect_money:
-        rows.append([InlineKeyboardButton("🧰 پرفکت مانی", callback_data="wallet:perfect")])
+        rows.append([InlineKeyboardButton(_bl("btn_pay_perfectmoney", lang), callback_data="wallet:perfect")])
     if show_crypto:
-        rows.append([InlineKeyboardButton("🔗 پرداخت ارز دیجیتال", callback_data="wallet:crypto")])
+        rows.append([InlineKeyboardButton(_bl("btn_pay_crypto", lang), callback_data="wallet:crypto")])
     if show_coupon:
-        rows.append([InlineKeyboardButton("🎁 اعمال کوپن هدیه", callback_data="wallet:coupon")])
-    rows.append([InlineKeyboardButton("بازگشت", callback_data="wallet:back")])
+        rows.append([InlineKeyboardButton(_bl("btn_apply_gift_coupon", lang), callback_data="wallet:coupon")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline", lang), callback_data="wallet:back")])
     return InlineKeyboardMarkup(rows)
 
 
-def confirm_payment_inline_keyboard():
+def confirm_payment_inline_keyboard(lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ پرداخت کردم، ارسال رسید", callback_data="pay:receipt_done")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="pay:cancel")],
+        [InlineKeyboardButton(_bl("btn_pay_done_inline", lang), callback_data="pay:receipt_done")],
+        [InlineKeyboardButton(_bl("btn_back3", lang), callback_data="pay:cancel")],
     ])
 
 
-def cancel_inline_keyboard():
+def cancel_inline_keyboard(lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="pay:cancel")],
+        [InlineKeyboardButton(_bl("btn_back3", lang), callback_data="pay:cancel")],
     ])
 # این دو تابع را به UserBot/keyboards.py اضافه کنید
 
-def mixed_mode_keyboard(server_id):
+def mixed_mode_keyboard(server_id, lang: str = "fa"):
     """منوی انتخاب بین بسته‌های ثابت و پویا در حالت ترکیبی"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦 بسته‌های ثابت (پیشنهادی)", callback_data=f"buy:mixed:fixed:{server_id}")],
-        [InlineKeyboardButton("🎛 بسته دلخواه (تعیین حجم و زمان)", callback_data=f"buy:mixed:dyn:{server_id}")],
-        [InlineKeyboardButton("🔙 بازگشت به لوکیشن‌ها", callback_data="buy:back_main")]
+        [InlineKeyboardButton(_bl("btn_fixed_packages", lang), callback_data=f"buy:mixed:fixed:{server_id}")],
+        [InlineKeyboardButton(_bl("btn_custom_wizard", lang), callback_data=f"buy:mixed:dyn:{server_id}")],
+        [InlineKeyboardButton(_bl("btn_back_to_locations", lang), callback_data="buy:back_main")]
     ])
 
-def buy_wizard_keyboard(server_id, gb, months, price, off_percent=0):
+def buy_wizard_keyboard(server_id, gb, months, price, off_percent=0, lang: str = "fa"):
     """ویزارد خرید بسته دلخواه (پویا) با دکمه‌های مثبت و منفی"""
     price_str = f"{price:,}"
     keyboard = [
-        [InlineKeyboardButton("📊 حجم", callback_data="noop")],
+        [InlineKeyboardButton(_bl("label_volume", lang), callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:gb_dec"),
-            InlineKeyboardButton(f"{gb} گیگابایت", callback_data="noop"),
+            InlineKeyboardButton(f"{gb}{_bl('unit_gb', lang)}", callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:gb_inc")
         ],
-        [InlineKeyboardButton("⏳ زمان", callback_data="noop")],
+        [InlineKeyboardButton(_bl("label_time", lang), callback_data="noop")],
         [
             InlineKeyboardButton("➖", callback_data=f"wiz:{server_id}:month_dec"),
-            InlineKeyboardButton(f"{months} ماهه", callback_data="noop"),
+            InlineKeyboardButton(f"{months}{_bl('unit_months', lang)}", callback_data="noop"),
             InlineKeyboardButton("➕", callback_data=f"wiz:{server_id}:month_inc")
         ],
         [
-            InlineKeyboardButton(f"🏷 تخفیف: {off_percent}%", callback_data="noop"),
-            InlineKeyboardButton(f"💰 قیمت: {price_str} تومان", callback_data="noop")
+            InlineKeyboardButton(f"{_bl('label_discount', lang)}{off_percent}%", callback_data="noop"),
+            InlineKeyboardButton(f"{_bl('label_price', lang)}{price_str}", callback_data="noop")
         ],
-        [InlineKeyboardButton("💳 تایید و خرید", callback_data=f"buy:confirm_dyn:{server_id}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="buy:back_main")]
+        [InlineKeyboardButton(_bl("btn_confirm_buy", lang), callback_data=f"buy:confirm_dyn:{server_id}")],
+        [InlineKeyboardButton(_bl("btn_back3", lang), callback_data="buy:back_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -307,6 +309,7 @@ def subscription_status_keyboard(
     show_sub_link: bool = True,
     show_configs: bool = False,
     show_detach: bool = False,
+    lang: str = "fa",
 ):
     """
     کیبورد وضعیت اشتراک مطابق UI جدید:
@@ -317,32 +320,32 @@ def subscription_status_keyboard(
     - جداسازی اشتراک (فقط برای اشتراک‌های متصل‌شده دستی)
     """
     keyboard = [
-        [InlineKeyboardButton("کانفیگ ها📝", callback_data=f"status:configs:{service_id}")],
-        [InlineKeyboardButton("تمدید اشتراک♾", callback_data=f"status:renew:{service_id}")],
-        [InlineKeyboardButton("تغییر نام اشتراک✏️", callback_data=f"status:rename:{service_id}")],
+        [InlineKeyboardButton(_bl("btn_configs", lang), callback_data=f"status:configs:{service_id}")],
+        [InlineKeyboardButton(_bl("btn_renew_sub2", lang), callback_data=f"status:renew:{service_id}")],
+        [InlineKeyboardButton(_bl("btn_rename_sub", lang), callback_data=f"status:rename:{service_id}")],
         [
             InlineKeyboardButton(
-                "تغییر لینک اشتراک🚨",
+                _bl("btn_change_link", lang),
                 callback_data=f"status:replace_link:{service_id}",
                 style="danger",
             )
         ],
     ]
     if show_detach:
-        keyboard.append([InlineKeyboardButton("جداسازی اشتراک⭕", callback_data=f"status:detach:{service_id}")])
+        keyboard.append([InlineKeyboardButton(_bl("btn_detach_sub", lang), callback_data=f"status:detach:{service_id}")])
     return InlineKeyboardMarkup(keyboard)
 
 
-def replace_subscription_link_confirm_keyboard(service_id=None):
+def replace_subscription_link_confirm_keyboard(service_id=None, lang: str = "fa"):
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "تایید تغییر لینک🚨",
+                _bl("btn_confirm_link_change", lang),
                 callback_data=f"status:replace_link:{service_id}:confirm",
                 style="danger",
             )
         ],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"status:menu:{service_id}")],
+        [InlineKeyboardButton(_bl("btn_back3", lang), callback_data=f"status:menu:{service_id}")],
     ])
 
 
@@ -352,6 +355,7 @@ def direct_configs_keyboard(
     show_vless: bool = True,
     show_vmess: bool = True,
     show_trojan: bool = True,
+    lang: str = "fa",
 ):
     rows = []
     if show_vless:
@@ -360,36 +364,36 @@ def direct_configs_keyboard(
         rows.append([InlineKeyboardButton("Vmess", callback_data=f"status:directcfg:{service_id}:vmess")])
     if show_trojan:
         rows.append([InlineKeyboardButton("Trojan", callback_data=f"status:directcfg:{service_id}:trojan")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data=f"status:menu:{service_id}")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data=f"status:menu:{service_id}")])
     return InlineKeyboardMarkup(rows)
 
 
-def subscription_links_keyboard(service_id=None):
+def subscription_links_keyboard(service_id=None, lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📚 راهنمای اتصال", callback_data=f"status:guide:{service_id}")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data=f"status:menu:{service_id}")],
+        [InlineKeyboardButton(_bl("btn_connect_guide", lang), callback_data=f"status:guide:{service_id}")],
+        [InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data=f"status:menu:{service_id}")],
     ])
 
 
-def invite_banner_keyboard():
+def invite_banner_keyboard(lang: str = "fa"):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 لینک دعوت من", callback_data="invite:get_banner")],
+        [InlineKeyboardButton(_bl("btn_my_invite_link", lang), callback_data="invite:get_banner")],
         [
-            InlineKeyboardButton("🎁 جوایز من", callback_data="invite:rewards"),
-            InlineKeyboardButton("👥 دعوت‌های من", callback_data="invite:list"),
+            InlineKeyboardButton(_bl("btn_my_rewards", lang), callback_data="invite:rewards"),
+            InlineKeyboardButton(_bl("btn_my_invites", lang), callback_data="invite:list"),
         ],
         [
-            InlineKeyboardButton("📊 آمار دعوت", callback_data="invite:stats"),
-            InlineKeyboardButton("📜 تاریخچه جوایز", callback_data="invite:history"),
+            InlineKeyboardButton(_bl("btn_invite_stats", lang), callback_data="invite:stats"),
+            InlineKeyboardButton(_bl("btn_rewards_history", lang), callback_data="invite:history"),
         ],
     ])
 
 
-def force_join_keyboard(join_url: str = ""):
+def force_join_keyboard(join_url: str = "", lang: str = "fa"):
     rows = []
     if str(join_url or "").strip():
-        rows.append([InlineKeyboardButton("📢 عضویت در کانال", url=join_url)])
-    rows.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="forcejoin:check")])
+        rows.append([InlineKeyboardButton(_bl("btn_join_channel", lang), url=join_url)])
+    rows.append([InlineKeyboardButton(_bl("btn_check_join", lang), callback_data="forcejoin:check")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -413,46 +417,47 @@ def subscription_configs_keyboard(
     show_sub_link_b64: bool = False,
     show_multi_server: bool = False,
     show_multi_server_b64: bool = False,
+    lang: str = "fa",
 ):
     rows = []
     if show_direct_config:
-        rows.append([InlineKeyboardButton("کانفیگ مستقیم", callback_data=f"status:direct:{service_id}")])
+        rows.append([InlineKeyboardButton(_bl("btn_direct_config", lang), callback_data=f"status:direct:{service_id}")])
     if show_sub_link:
-        rows.append([InlineKeyboardButton("لینک اشتراک", callback_data=f"status:sub_link:{service_id}")])
+        rows.append([InlineKeyboardButton(_bl("btn_sub_link", lang), callback_data=f"status:sub_link:{service_id}")])
     if show_auto_sub_link:
-        rows.append([InlineKeyboardButton("اشتراک خودکار", callback_data=f"status:auto_sub:{service_id}")])
+        rows.append([InlineKeyboardButton(_bl("btn_auto_sub", lang), callback_data=f"status:auto_sub:{service_id}")])
     if show_sub_link_b64:
-        rows.append([InlineKeyboardButton("لینک اشتراک b64", callback_data=f"status:sub_b64:{service_id}")])
+        rows.append([InlineKeyboardButton(_bl("btn_sub_b64", lang), callback_data=f"status:sub_b64:{service_id}")])
     if show_multi_server:
-        rows.append([InlineKeyboardButton("🌐 لینک اشتراک هوشمند", callback_data=f"status:multi:{service_id}")])
+        rows.append([InlineKeyboardButton(_bl("btn_smart_link", lang), callback_data=f"status:multi:{service_id}")])
     if show_multi_server_b64:
-        rows.append([InlineKeyboardButton("🌐 لینک اشتراک هوشمند b64", callback_data=f"status:multi_b64:{service_id}")])
+        rows.append([InlineKeyboardButton(_bl("btn_smart_link_b64", lang), callback_data=f"status:multi_b64:{service_id}")])
 
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data=f"status:menu:{service_id}")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data=f"status:menu:{service_id}")])
     return InlineKeyboardMarkup(rows)
 
 
-def services_list_keyboard(services):
+def services_list_keyboard(services, lang: str = "fa"):
     rows = []
     for s in services:
-        name = (s.get("name") or "").strip() or f"اشتراک {s.get('id')}"
+        name = (s.get("name") or "").strip() or f"{_bl('unit_service', lang)}{s.get('id')}"
         sid = int(s.get("id") or 0)
         if sid <= 0:
             continue
         rows.append([InlineKeyboardButton(name, callback_data=f"status:list:{sid}")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="status:list_back:0")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data="status:list_back:0")])
     return InlineKeyboardMarkup(rows)
 
 
-def renew_services_keyboard(services):
+def renew_services_keyboard(services, lang: str = "fa"):
     rows = []
     for s in services:
-        name = (s.get("name") or "").strip() or f"اشتراک {s.get('id')}"
+        name = (s.get("name") or "").strip() or f"{_bl('unit_service', lang)}{s.get('id')}"
         sid = int(s.get("id") or 0)
         if sid <= 0:
             continue
         rows.append([InlineKeyboardButton(name, callback_data=f"renew:svc:{sid}")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="renew:back:0")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data="renew:back:0")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -465,34 +470,34 @@ def support_panel_keyboard(lang: str = "fa"):
     ])
 
 
-def ticket_skip_screenshot_keyboard(mode: str = "new"):
+def ticket_skip_screenshot_keyboard(mode: str = "new", lang: str = "fa"):
     flow = str(mode or "new").strip().lower()
     if flow not in {"new", "reply"}:
         flow = "new"
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("▶️رد کردن", callback_data=f"support:{flow}:skip")],
-            [InlineKeyboardButton("❌لغو", callback_data=f"support:{flow}:cancel")],
+            [InlineKeyboardButton(_bl("btn_skip", lang), callback_data=f"support:{flow}:skip")],
+            [InlineKeyboardButton(_bl("btn_cancel_inline", lang), callback_data=f"support:{flow}:cancel")],
         ]
     )
 
 
-def ticket_confirm_keyboard(mode: str = "new"):
+def ticket_confirm_keyboard(mode: str = "new", lang: str = "fa"):
     flow = str(mode or "new").strip().lower()
     if flow not in {"new", "reply"}:
         flow = "new"
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("✅ارسال", callback_data=f"support:{flow}:send"),
-                InlineKeyboardButton("✏️ویرایش", callback_data=f"support:{flow}:edit"),
+                InlineKeyboardButton(_bl("btn_send", lang), callback_data=f"support:{flow}:send"),
+                InlineKeyboardButton(_bl("btn_edit", lang), callback_data=f"support:{flow}:edit"),
             ],
-            [InlineKeyboardButton("❌لغو", callback_data=f"support:{flow}:cancel")],
+            [InlineKeyboardButton(_bl("btn_cancel_inline", lang), callback_data=f"support:{flow}:cancel")],
         ]
     )
 
 
-def user_tickets_list_keyboard(tickets, page: int, total_pages: int):
+def user_tickets_list_keyboard(tickets, page: int, total_pages: int, lang: str = "fa"):
     rows = []
     current = []
     for t in tickets:
@@ -513,14 +518,14 @@ def user_tickets_list_keyboard(tickets, page: int, total_pages: int):
     if page < total_pages:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"support:my:{page+1}"))
     rows.append(nav)
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="support:menu")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data="support:menu")])
     return InlineKeyboardMarkup(rows)
 
 
-def user_ticket_detail_keyboard(ticket_code: int, can_reply: bool = True, is_closed: bool = False):
+def user_ticket_detail_keyboard(ticket_code: int, can_reply: bool = True, is_closed: bool = False, lang: str = "fa"):
     rows = []
     if can_reply:
-        rows.append([InlineKeyboardButton("📩پاسخ", callback_data=f"support:reply:{int(ticket_code)}")])
-        rows.append([InlineKeyboardButton("🚫بستن تیکت", callback_data=f"support:close:{int(ticket_code)}")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="support:menu")])
+        rows.append([InlineKeyboardButton(_bl("btn_reply_ticket2", lang), callback_data=f"support:reply:{int(ticket_code)}")])
+        rows.append([InlineKeyboardButton(_bl("btn_close_ticket", lang), callback_data=f"support:close:{int(ticket_code)}")])
+    rows.append([InlineKeyboardButton(_bl("btn_back_inline2", lang), callback_data="support:menu")])
     return InlineKeyboardMarkup(rows)

@@ -54,15 +54,9 @@ async def _cb_guide(update, context, query, data, user_id, text_settings):
             service = await _sync_service_runtime_from_panels(service)
             await _safe_edit_message_text(
                 query,
-                _build_subscription_status_text(service),
+                _build_subscription_status_text(service, lang=_user_lang(user_id)),
                 parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
+                reply_markup=subscription_status_keyboard(service_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(user_id)),
             )
             return
         try:
@@ -234,9 +228,9 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             if (not faq_text) or ("به‌زودی تکمیل می‌شود" in faq_text) or ("به زودی تکمیل می شود" in faq_text):
                 faq_text = _default_faq_text()
             try:
-                await query.message.edit_text(faq_text, reply_markup=support_panel_keyboard())
+                await query.message.edit_text(faq_text, reply_markup=support_panel_keyboard(lang=_user_lang(user_id)))
             except Exception:
-                await context.bot.send_message(chat_id=user_id, text=faq_text, reply_markup=support_panel_keyboard())
+                await context.bot.send_message(chat_id=user_id, text=faq_text, reply_markup=support_panel_keyboard(lang=_user_lang(user_id)))
             return
 
         if action == "new" and len(parts) == 2:
@@ -270,7 +264,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 f"🔸 تعداد کل تیکت‌ها: {int(total)}\n"
                 "شماره تیکت موردنظر را انتخاب کنید:"
             )
-            kb = user_tickets_list_keyboard(tickets, page, total_pages)
+            kb = user_tickets_list_keyboard(tickets, page, total_pages, lang=_user_lang(user_id))
             try:
                 await query.message.edit_text(header, reply_markup=kb)
             except Exception:
@@ -296,7 +290,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             try:
                 await query.message.edit_text(
                     text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
+                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed, lang=_user_lang(user_id)),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
@@ -304,7 +298,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
+                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed, lang=_user_lang(user_id)),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
@@ -347,7 +341,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             try:
                 await query.message.edit_text(
                     detail_text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
+                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed, lang=_user_lang(user_id)),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
@@ -355,7 +349,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=detail_text,
-                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed),
+                    reply_markup=user_ticket_detail_keyboard(code, can_reply=can_reply, is_closed=is_closed, lang=_user_lang(user_id)),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
@@ -428,13 +422,13 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 try:
                     await query.message.edit_text(
                         preview_text,
-                        reply_markup=ticket_confirm_keyboard("reply"),
+                        reply_markup=ticket_confirm_keyboard('reply', lang=_user_lang(user_id)),
                     )
                 except Exception:
                     await context.bot.send_message(
                         chat_id=user_id,
                         text=preview_text,
-                        reply_markup=ticket_confirm_keyboard("reply"),
+                        reply_markup=ticket_confirm_keyboard('reply', lang=_user_lang(user_id)),
                     )
                 return
 
@@ -488,7 +482,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=out_text,
-                    reply_markup=user_ticket_detail_keyboard(ticket_code, can_reply=True, is_closed=False),
+                    reply_markup=user_ticket_detail_keyboard(ticket_code, can_reply=True, is_closed=False, lang=_user_lang(user_id)),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
@@ -524,13 +518,13 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 try:
                     await query.message.edit_text(
                         _ticket_compose_preview_text(pending),
-                        reply_markup=ticket_confirm_keyboard(),
+                        reply_markup=ticket_confirm_keyboard(lang=_user_lang(user_id)),
                     )
                 except Exception:
                     await context.bot.send_message(
                         chat_id=user_id,
                         text=_ticket_compose_preview_text(pending),
-                        reply_markup=ticket_confirm_keyboard(),
+                        reply_markup=ticket_confirm_keyboard(lang=_user_lang(user_id)),
                     )
                 return
             if sub == "send":
@@ -573,7 +567,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                     try:
                         await query.message.edit_text(
                             detail,
-                            reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
+                            reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False, lang=_user_lang(user_id)),
                             parse_mode="HTML",
                             disable_web_page_preview=True,
                         )
@@ -581,7 +575,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                         await context.bot.send_message(
                             chat_id=user_id,
                             text=detail,
-                            reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False),
+                            reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False, lang=_user_lang(user_id)),
                             parse_mode="HTML",
                             disable_web_page_preview=True,
                         )
@@ -590,7 +584,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                         await query.message.edit_text(
                             i18n.t("ticket_created_ok", _user_lang(user_id)),
                             reply_markup=InlineKeyboardMarkup(
-                                [[InlineKeyboardButton("📬 تیکت‌های من", callback_data="support:my:1")]]
+                                [[InlineKeyboardButton(i18n.t("btn_my_tickets", _user_lang(user_id)), callback_data="support:my:1")]]
                             ),
                         )
                     except Exception:
@@ -598,7 +592,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                             chat_id=user_id,
                             text=i18n.t("ticket_created_ok", _user_lang(user_id)),
                             reply_markup=InlineKeyboardMarkup(
-                                [[InlineKeyboardButton("📬 تیکت‌های من", callback_data="support:my:1")]]
+                                [[InlineKeyboardButton(i18n.t("btn_my_tickets", _user_lang(user_id)), callback_data="support:my:1")]]
                             ),
                         )
                 return
@@ -639,15 +633,9 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             # لیست انتخاب اشتراک باید باقی بماند؛ جزئیات را به‌صورت پیام جدید ارسال می‌کنیم.
             await context.bot.send_message(
                 chat_id=user_id,
-                text=_build_subscription_status_text(service),
+                text=_build_subscription_status_text(service, lang=_user_lang(user_id)),
                 parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
+                reply_markup=subscription_status_keyboard(service_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(user_id)),
             )
             return
 
@@ -700,7 +688,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             if lock_reason:
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=_service_local_lock_text(lock_reason),
+                    text=_service_local_lock_text(lock_reason, lang=_user_lang(user_id)),
                     reply_markup=_main_menu_keyboard(),
                 )
                 return
@@ -709,15 +697,9 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             service = await _sync_service_runtime_from_panels(service)
             await _safe_edit_message_text(
                 query,
-                _build_subscription_status_text(service),
+                _build_subscription_status_text(service, lang=_user_lang(user_id)),
                 parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
+                reply_markup=subscription_status_keyboard(service_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(user_id)),
             )
             return
 
@@ -729,7 +711,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=i18n.t("rename_prompt", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
 
@@ -739,7 +721,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=i18n.t("link_change_warning", _user_lang(user_id)),
-                    reply_markup=replace_subscription_link_confirm_keyboard(service_id),
+                    reply_markup=replace_subscription_link_confirm_keyboard(service_id, lang=_user_lang(user_id)),
                 )
                 return
 
@@ -755,15 +737,9 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             await context.bot.send_message(chat_id=user_id, text=result_text, reply_markup=_main_menu_keyboard())
             await context.bot.send_message(
                 chat_id=user_id,
-                text=_build_subscription_status_text(refreshed),
+                text=_build_subscription_status_text(refreshed, lang=_user_lang(user_id)),
                 parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(refreshed),
-                ),
+                reply_markup=subscription_status_keyboard(service_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(refreshed), lang=_user_lang(user_id)),
             )
             return
 
@@ -781,28 +757,14 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 chat_id=user_id,
                 text=i18n.t("service_code_yours", _user_lang(user_id), code=service_code),
                 parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
+                reply_markup=subscription_status_keyboard(service_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(user_id)),
             )
             return
 
         if action == "configs":
             await _safe_edit_message_reply_markup(
                 query,
-                reply_markup=subscription_configs_keyboard(
-                    service_id,
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_auto_sub_link=settings.get("show_auto_sub_link", False),
-                    show_sub_link_b64=settings.get("show_sub_link_b64", False),
-                    show_multi_server=settings.get("show_multi_server", False),
-                    show_multi_server_b64=settings.get("show_multi_server_b64", False),
-                ),
+                reply_markup=subscription_configs_keyboard(service_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_auto_sub_link=settings.get('show_auto_sub_link', False), show_sub_link_b64=settings.get('show_sub_link_b64', False), show_multi_server=settings.get('show_multi_server', False), show_multi_server_b64=settings.get('show_multi_server_b64', False), lang=_user_lang(user_id)),
             )
             return
 
@@ -888,14 +850,14 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                     photo=qr_image,
                     caption=qr_caption,
                     parse_mode="HTML",
-                    reply_markup=subscription_links_keyboard(service_id),
+                    reply_markup=subscription_links_keyboard(service_id, lang=_user_lang(user_id)),
                 )
             except Exception:
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=qr_caption,
                     parse_mode="HTML",
-                    reply_markup=subscription_links_keyboard(service_id),
+                    reply_markup=subscription_links_keyboard(service_id, lang=_user_lang(user_id)),
                     disable_web_page_preview=True,
                 )
 
@@ -918,7 +880,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             await context.bot.send_message(
                 chat_id=user_id,
                 text=text_settings.get("guide_text") or _default_guide_intro_text(),
-                reply_markup=guide_os_keyboard("m"),
+                reply_markup=guide_os_keyboard('m', lang=_user_lang(user_id)),
             )
             return
 
@@ -943,7 +905,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             if not await _service_is_renewable_live(service):
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=_renew_not_allowed_text(),
+                    text=_renew_not_allowed_text(lang=_user_lang(user_id)),
                     reply_markup=_main_menu_keyboard(),
                 )
                 return
@@ -1002,7 +964,7 @@ async def _cb_renew(update, context, query, data, user_id):
             await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_selected_missing", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         if not await _service_is_renewable_live(service):
-            await context.bot.send_message(chat_id=user_id, text=_renew_not_allowed_text(), reply_markup=_main_menu_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=_renew_not_allowed_text(lang=_user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         try:
             renew_sid = int(service.get("server_id") or 0)
@@ -1050,7 +1012,7 @@ async def _cb_wallet(update, context, query, data, user_id):
         await context.bot.send_message(
             chat_id=user_id,
             text=i18n.t("topup_amount_prompt", _user_lang(user_id)),
-            reply_markup=cancel_keyboard(),
+            reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
         )
         return
     if action == "zarinpal":
@@ -1113,7 +1075,7 @@ async def _cb_wallet(update, context, query, data, user_id):
         await context.bot.send_message(
             chat_id=user_id,
             text=i18n.t("coupon_prompt", _user_lang(user_id)),
-            reply_markup=cancel_keyboard(),
+            reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
         )
         return
     return
@@ -1141,7 +1103,7 @@ async def _cb_pay(update, context, query, data, user_id):
         await context.bot.send_message(
             chat_id=user_id,
             text=i18n.t("pay_receipt_prompt", _user_lang(user_id)),
-            reply_markup=receipt_cancel_keyboard(),
+            reply_markup=receipt_cancel_keyboard(lang=_user_lang(user_id)),
         )
         return
     return
@@ -1212,7 +1174,7 @@ async def _cb_trial_loc(update, context, query, data, user_id):
     await context.bot.send_message(
         chat_id=user_id,
         text=i18n.t("trial_name_prompt", _user_lang(user_id)),
-        reply_markup=cancel_keyboard(),
+        reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
     )
     return
 
@@ -1301,18 +1263,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         await _safe_edit_message_text(
             query,
             text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**", parse_mode="Markdown",
-            reply_markup=plans_keyboard(
-                plans,
-                sid,
-                cat_id,
-                columns=plan_columns,
-                unlimited_volume=uv,
-                unlimited_volume_from=uv_from,
-                unlimited_time=ut,
-                unlimited_time_from=ut_from,
-                sort_by_priority=False,
-                rtl_rows=bool(txp.get("plan_sort_desc", False)),
-            )
+            reply_markup=plans_keyboard(plans, sid, cat_id, columns=plan_columns, unlimited_volume=uv, unlimited_volume_from=uv_from, unlimited_time=ut, unlimited_time_from=ut_from, sort_by_priority=False, rtl_rows=bool(txp.get('plan_sort_desc', False)), lang=_user_lang(user_id))
         )
 
     elif data.startswith("buy:plan:"):
@@ -1339,7 +1290,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         await _safe_edit_message_text(
             query,
             text,
-            reply_markup=selected_plan_keyboard(sid, int(plan['gb']), int(plan['days']), int(plan['price']), plan_id=int(plan.get('id') or 0))
+            reply_markup=selected_plan_keyboard(sid, int(plan['gb']), int(plan['days']), int(plan['price']), plan_id=int(plan.get('id') or 0), lang=_user_lang(user_id))
         )
 
     # ویزارد پویا (دکمه‌های مثبت و منفی)
@@ -1410,19 +1361,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
                     query,
                     text_settings.get("plans_list_text") or "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
                     parse_mode="Markdown",
-                    reply_markup=plans_keyboard(
-                        ordered,
-                        sid,
-                        0,
-                        columns=plan_columns,
-                        unlimited_volume=uv,
-                        unlimited_volume_from=uv_from,
-                        unlimited_time=ut,
-                        unlimited_time_from=ut_from,
-                        sort_by_priority=False,
-                        back_to_categories=False,
-                        rtl_rows=bool(txp.get("plan_sort_desc", False)),
-                    ),
+                    reply_markup=plans_keyboard(ordered, sid, 0, columns=plan_columns, unlimited_volume=uv, unlimited_volume_from=uv_from, unlimited_time=ut, unlimited_time_from=ut_from, sort_by_priority=False, back_to_categories=False, rtl_rows=bool(txp.get('plan_sort_desc', False)), lang=_user_lang(user_id)),
                 )
                 return
 
@@ -1431,9 +1370,9 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
 
             price, off_percent = _calc_dynamic_price(gb, months, dyn_settings)
             if display_mode == "mixed":
-                markup = mixed_buy_keyboard(sid, gb, months, price, off_percent=off_percent)
+                markup = mixed_buy_keyboard(sid, gb, months, price, off_percent=off_percent, lang=_user_lang(user_id))
             else:
-                markup = buy_wizard_keyboard(sid, gb, months, price, off_percent=off_percent)
+                markup = buy_wizard_keyboard(sid, gb, months, price, off_percent=off_percent, lang=_user_lang(user_id))
             await _safe_edit_message_reply_markup(query, reply_markup=markup)
 
     # تایید نهایی و هدایت به پرداخت
@@ -1461,7 +1400,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         )
         if off_percent > 0:
             text += f"\n🏷 تخفیف حجمی: {off_percent}٪"
-        await _safe_edit_message_text(query, text, reply_markup=selected_plan_keyboard(sid, gb, days, price))
+        await _safe_edit_message_text(query, text, reply_markup=selected_plan_keyboard(sid, gb, days, price, lang=_user_lang(user_id)))
         return
 
     elif data.startswith("buy:pay_wallet:"):
@@ -1528,7 +1467,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             # در خرید عادی: نام سرویس از کاربر گرفته می‌شود.
             set_user_step(context, user_id, "WAIT_SERVICE_NAME")
             await query.message.delete()
-            await context.bot.send_message(chat_id=user_id, text=i18n.t("service_name_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard())
+            await context.bot.send_message(chat_id=user_id, text=i18n.t("service_name_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return
 
         # موجودی کافی نیست -> کارت به کارت
@@ -1561,9 +1500,10 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             card_owner=card_owner,
             card_bank=card_bank,
             text_settings=text_settings,
+            lang=_user_lang(user_id),
         )
         if tx_marker > 0:
-            msg = f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker:,} تومان\n\n{msg}"
+            msg = i18n.t("tx_marker_applied", _user_lang(user_id), marker=f"{tx_marker:,}", msg=msg)
 
         context.user_data[f"pending_pay_{user_id}"] = {
             "amount": pay_amount_toman,
@@ -1639,9 +1579,10 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             card_owner=card_owner,
             card_bank=card_bank,
             text_settings=text_settings,
+            lang=_user_lang(user_id),
         )
         if tx_marker > 0:
-            msg = f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker:,} تومان\n\n{msg}"
+            msg = i18n.t("tx_marker_applied", _user_lang(user_id), marker=f"{tx_marker:,}", msg=msg)
         msg += "\n\n⚡ پس از تایید پرداخت، اشتراک شما به‌صورت خودکار ساخته و ارسال می‌شود."
 
         context.user_data[f"pending_pay_{user_id}"] = {
@@ -1712,7 +1653,7 @@ async def _rs_admin_direct_reply(update, context, user_id, text, step):
         rows = []
         if internal_uid > 0:
             rows.append([InlineKeyboardButton(display_name, callback_data=f"userbot:user:{internal_uid}")])
-            rows.append([InlineKeyboardButton("📨پاسخ", callback_data=f"userbot:user:{internal_uid}:message")])
+            rows.append([InlineKeyboardButton(i18n.t("btn_reply_ticket", _user_lang(user_id)), callback_data=f"userbot:user:{internal_uid}:message")])
         admin_kb = InlineKeyboardMarkup(rows) if rows else None
 
         try:
@@ -1774,7 +1715,7 @@ async def _rs_ticket_question(update, context, user_id, text, step):
         set_user_step(context, user_id, "WAIT_TICKET_SCREENSHOT")
         await update.message.reply_text(
             i18n.t("screenshot_or_skip", _user_lang(user_id)),
-            reply_markup=ticket_skip_screenshot_keyboard(),
+            reply_markup=ticket_skip_screenshot_keyboard(lang=_user_lang(user_id)),
         )
         return
 
@@ -1796,7 +1737,7 @@ async def _rs_ticket_screenshot(update, context, user_id, text, step):
         else:
             await update.message.reply_text(
                 i18n.t("photo_or_skip", _user_lang(user_id)),
-                reply_markup=ticket_skip_screenshot_keyboard(),
+                reply_markup=ticket_skip_screenshot_keyboard(lang=_user_lang(user_id)),
             )
             return
 
@@ -1804,7 +1745,7 @@ async def _rs_ticket_screenshot(update, context, user_id, text, step):
         set_user_step(context, user_id, "WAIT_TICKET_CONFIRM")
         await update.message.reply_text(
             _ticket_compose_preview_text(pending),
-            reply_markup=ticket_confirm_keyboard(),
+            reply_markup=ticket_confirm_keyboard(lang=_user_lang(user_id)),
         )
         return
 
@@ -1818,7 +1759,7 @@ async def _rs_ticket_confirm(update, context, user_id, text, step):
             return
         await update.message.reply_text(
             i18n.t("ticket_use_send_edit", _user_lang(user_id)),
-            reply_markup=ticket_confirm_keyboard(),
+            reply_markup=ticket_confirm_keyboard(lang=_user_lang(user_id)),
         )
         return
 
@@ -1860,7 +1801,7 @@ async def _rs_ticket_reply(update, context, user_id, text, step):
         set_user_step(context, user_id, "WAIT_TICKET_REPLY_SCREENSHOT")
         await update.message.reply_text(
             i18n.t("screenshot_or_skip", _user_lang(user_id)),
-            reply_markup=ticket_skip_screenshot_keyboard("reply"),
+            reply_markup=ticket_skip_screenshot_keyboard('reply', lang=_user_lang(user_id)),
         )
         return
 
@@ -1889,7 +1830,7 @@ async def _rs_ticket_reply_screenshot(update, context, user_id, text, step):
         else:
             await update.message.reply_text(
                 i18n.t("photo_or_skip", _user_lang(user_id)),
-                reply_markup=ticket_skip_screenshot_keyboard("reply"),
+                reply_markup=ticket_skip_screenshot_keyboard('reply', lang=_user_lang(user_id)),
             )
             return
 
@@ -1903,17 +1844,17 @@ async def _rs_ticket_reply_screenshot(update, context, user_id, text, step):
                     chat_id=user_id,
                     photo=preview_photo_id,
                     caption=preview_text,
-                    reply_markup=ticket_confirm_keyboard("reply"),
+                    reply_markup=ticket_confirm_keyboard('reply', lang=_user_lang(user_id)),
                 )
             except Exception:
                 await update.message.reply_text(
                     preview_text,
-                    reply_markup=ticket_confirm_keyboard("reply"),
+                    reply_markup=ticket_confirm_keyboard('reply', lang=_user_lang(user_id)),
                 )
         else:
             await update.message.reply_text(
                 preview_text,
-                reply_markup=ticket_confirm_keyboard("reply"),
+                reply_markup=ticket_confirm_keyboard('reply', lang=_user_lang(user_id)),
             )
         return
 
@@ -1927,7 +1868,7 @@ async def _rs_ticket_reply_confirm(update, context, user_id, text, step):
             return
         await update.message.reply_text(
             i18n.t("reply_use_send_edit", _user_lang(user_id)),
-            reply_markup=ticket_confirm_keyboard("reply"),
+            reply_markup=ticket_confirm_keyboard('reply', lang=_user_lang(user_id)),
         )
         return
 
@@ -1943,7 +1884,7 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
         if not parsed_uuid:
             await update.message.reply_text(
                 i18n.t("uuid_invalid", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
 
@@ -1981,15 +1922,9 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
                 reply_markup=_main_menu_keyboard(),
             )
             await update.message.reply_text(
-                _build_subscription_status_text(service),
+                _build_subscription_status_text(service, lang=_user_lang(user_id)),
                 parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    service.get("id"),
-                    show_direct_config=settings.get("show_direct_config", True),
-                    show_sub_link=settings.get("show_sub_link", True),
-                    show_configs=_should_show_configs_button(settings),
-                    show_detach=_is_connected_service(service),
-                ),
+                reply_markup=subscription_status_keyboard(service.get('id'), show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(user_id)),
             )
             return
 
@@ -2081,15 +2016,9 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
             reply_markup=_main_menu_keyboard(),
         )
         await update.message.reply_text(
-            _build_subscription_status_text(service),
+            _build_subscription_status_text(service, lang=_user_lang(user_id)),
             parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                service.get("id"),
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(service),
-            ),
+            reply_markup=subscription_status_keyboard(service.get('id'), show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(service), lang=_user_lang(user_id)),
         )
         return
 
@@ -2123,13 +2052,13 @@ async def _rs_rename_service(update, context, user_id, text, step):
         if len(new_name) < 3:
             await update.message.reply_text(
                 i18n.t("name_too_short", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
         if len(new_name) > 64:
             await update.message.reply_text(
                 i18n.t("name_too_long", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
 
@@ -2137,14 +2066,14 @@ async def _rs_rename_service(update, context, user_id, text, step):
         if new_name == old_name:
             await update.message.reply_text(
                 i18n.t("rename_same_name", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
 
         await update.message.reply_text(i18n.t("rename_in_progress", _user_lang(user_id)))
         ok, result_text = await _rename_service_across_panels_and_db(service, new_name)
         if not ok:
-            await update.message.reply_text(result_text, reply_markup=cancel_keyboard())
+            await update.message.reply_text(result_text, reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return
 
         set_user_step(context, user_id, None)
@@ -2154,15 +2083,9 @@ async def _rs_rename_service(update, context, user_id, text, step):
         settings = _get_subscription_settings()
         await update.message.reply_text(result_text, reply_markup=_main_menu_keyboard())
         await update.message.reply_text(
-            _build_subscription_status_text(refreshed),
+            _build_subscription_status_text(refreshed, lang=_user_lang(user_id)),
             parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                refreshed.get("id"),
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(refreshed),
-            ),
+            reply_markup=subscription_status_keyboard(refreshed.get('id'), show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(refreshed), lang=_user_lang(user_id)),
         )
         return
 
@@ -2177,7 +2100,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
 
         service_name = (text or "").strip()
         if not service_name:
-            await update.message.reply_text(i18n.t("name_required", _user_lang(user_id)), reply_markup=cancel_keyboard())
+            await update.message.reply_text(i18n.t("name_required", _user_lang(user_id)), reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return
 
         pending_trial = context.user_data.get(f"pending_trial_{user_id}", None) or {}
@@ -2387,15 +2310,9 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
         }
         settings = _get_subscription_settings()
         await update.message.reply_text(
-            _build_subscription_status_text(delivered_service),
+            _build_subscription_status_text(delivered_service, lang=_user_lang(user_id)),
             parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                service_db_id,
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(delivered_service),
-            ),
+            reply_markup=subscription_status_keyboard(service_db_id, show_direct_config=settings.get('show_direct_config', True), show_sub_link=settings.get('show_sub_link', True), show_configs=_should_show_configs_button(settings), show_detach=_is_connected_service(delivered_service), lang=_user_lang(user_id)),
         )
 
         # گزارش به ادمین (ربات ادمین): ایجاد اشتراک تستی
@@ -2449,7 +2366,7 @@ async def _rs_service_name(update, context, user_id, text, step):
 
         service_name = (text or "").strip()
         if not service_name:
-            await update.message.reply_text(i18n.t("service_name_required", _user_lang(user_id)), reply_markup=cancel_keyboard())
+            await update.message.reply_text(i18n.t("service_name_required", _user_lang(user_id)), reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return
 
         pending_wallet = context.user_data.get(f"pending_wallet_{user_id}", None) or {}
@@ -2485,19 +2402,19 @@ async def _rs_wallet_topup_amount(update, context, user_id, text, step):
 
         raw = (text or "").replace(",", "").strip()
         if not raw.isdigit():
-            await update.message.reply_text(i18n.t("topup_amount_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard())
+            await update.message.reply_text(i18n.t("topup_amount_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return
 
         amount_toman = int(raw)
         if amount_toman <= 0:
-            await update.message.reply_text(i18n.t("topup_amount_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard())
+            await update.message.reply_text(i18n.t("topup_amount_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return
         txp = _get_tx_plans_settings()
         min_tx = int(txp.get("min_transaction_toman") or 1)
         if amount_toman < min_tx:
             await update.message.reply_text(
                 i18n.t("min_tx_alert", _user_lang(user_id), amount=f"{min_tx:,}"),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
 
@@ -2530,12 +2447,12 @@ async def _rs_wallet_topup_amount(update, context, user_id, text, step):
             card_number=card_number,
             card_owner=card_owner,
             card_bank=card_bank,
-            text_settings=_get_text_settings(),
+            text_settings=_get_text_settings(), lang=_user_lang(user_id),
         )
         if tx_marker > 0:
-            msg = f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker:,} تومان\n\n{msg}"
+            msg = i18n.t("tx_marker_applied", _user_lang(user_id), marker=f"{tx_marker:,}", msg=msg)
         set_user_step(context, user_id, "WAIT_WALLET_TOPUP_CONFIRM")
-        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=confirm_payment_keyboard(_user_lang(user_id)))
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=confirm_payment_keyboard(_user_lang(user_id), lang=_user_lang(user_id)))
         return
 
 
@@ -2549,7 +2466,7 @@ async def _rs_wallet_topup_confirm(update, context, user_id, text, step):
 
         if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
             set_user_step(context, user_id, "WAIT_WALLET_TOPUP_IMAGE")
-            await update.message.reply_text(i18n.t("pay_receipt_prompt", _user_lang(user_id)), reply_markup=receipt_cancel_keyboard())
+            await update.message.reply_text(i18n.t("pay_receipt_prompt", _user_lang(user_id)), reply_markup=receipt_cancel_keyboard(lang=_user_lang(user_id)))
             return
 
 
@@ -2573,7 +2490,7 @@ async def _rs_wallet_topup_image(update, context, user_id, text, step):
                 set_user_step(context, user_id, "WAIT_WALLET_TOPUP_LAST4")
                 await update.message.reply_text(
                     i18n.t("last4_prompt", _user_lang(user_id)),
-                    reply_markup=cancel_keyboard(),
+                    reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
                 )
                 return
 
@@ -2619,7 +2536,7 @@ async def _rs_wallet_topup_last4(update, context, user_id, text, step):
         if not payer_last4:
             await update.message.reply_text(
                 i18n.t("last4_invalid_short", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
 
@@ -2669,7 +2586,7 @@ async def _rs_coupon_code(update, context, user_id, text, step):
             return
         code = (text or "").strip()
         if not code:
-            await update.message.reply_text(i18n.t("coupon_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard())
+            await update.message.reply_text(i18n.t("coupon_prompt", _user_lang(user_id)), reply_markup=cancel_keyboard(lang=_user_lang(user_id)))
             return
         set_user_step(context, user_id, None)
         u_db = userbot_db.get_user_by_telegram_id(user_id)
@@ -2705,7 +2622,7 @@ async def _rs_receipt_confirm(update, context, user_id, text, step):
             
         if text == "✅ پرداخت کردم، ارسال رسید" or i18n.resolve_button(text, ("btn_pay_done",)) == "btn_pay_done":
             set_user_step(context, user_id, "WAIT_RECEIPT_IMAGE")
-            await update.message.reply_text(i18n.t("pay_receipt_prompt", _user_lang(user_id)), reply_markup=receipt_cancel_keyboard())
+            await update.message.reply_text(i18n.t("pay_receipt_prompt", _user_lang(user_id)), reply_markup=receipt_cancel_keyboard(lang=_user_lang(user_id)))
             return
 
 
@@ -2729,7 +2646,7 @@ async def _rs_receipt_image(update, context, user_id, text, step):
                 set_user_step(context, user_id, "WAIT_RECEIPT_LAST4")
                 await update.message.reply_text(
                     i18n.t("last4_prompt2", _user_lang(user_id)),
-                    reply_markup=cancel_keyboard(),
+                    reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
                 )
                 return
 
@@ -2787,7 +2704,7 @@ async def _rs_receipt_last4(update, context, user_id, text, step):
         if not payer_last4:
             await update.message.reply_text(
                 i18n.t("last4_invalid_short", _user_lang(user_id)),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_user_lang(user_id)),
             )
             return
 
