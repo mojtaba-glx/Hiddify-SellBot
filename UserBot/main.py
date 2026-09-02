@@ -874,7 +874,7 @@ async def _handle_user_ticket_shot_start(
 
     ticket = userbot_db.get_user_ticket_by_code(int(internal_user_id), int(code))
     if not ticket:
-        await msg_obj.reply_text("❌ اسکرین‌شات یافت نشد یا دسترسی ندارید.")
+        await msg_obj.reply_text(i18n.t("screenshot_no_access", _user_lang(user_id)))
         return True
 
     rows = userbot_db.get_ticket_messages(code)
@@ -888,7 +888,7 @@ async def _handle_user_ticket_shot_start(
             break
 
     if not target:
-        await msg_obj.reply_text("❌ اسکرین‌شات موردنظر یافت نشد.")
+        await msg_obj.reply_text(i18n.t("screenshot_not_found", _user_lang(user_id)))
         return True
 
     photo_id = str(target.get("photo_file_id") or "").strip()
@@ -918,7 +918,7 @@ async def _handle_user_ticket_shot_start(
             sent = False
 
     if not sent:
-        await msg_obj.reply_text("❌ نمایش اسکرین‌شات ممکن نشد.")
+        await msg_obj.reply_text(i18n.t("screenshot_show_failed", _user_lang(user_id)))
     return True
 
 
@@ -4465,7 +4465,7 @@ async def show_fixed_categories(query, sid, server_block):
 
     if not bool(txp.get("plan_categories_enabled", True)):
         if not plans_all:
-            await query.answer("❌ پلن ثابت برای این سرور یافت نشد.", show_alert=True)
+            await query.answer(i18n.t("fixed_plan_missing", _user_lang(user_id)), show_alert=True)
             return
         plan_columns = int(_get_buy_renew_settings().get("plan_columns") or 1)
         uv = bool(_get_buy_renew_settings().get("renew_unlimited_volume", False))
@@ -4494,7 +4494,7 @@ async def show_fixed_categories(query, sid, server_block):
 
     categories = server_block.get("categories", [])
     if not categories:
-        await query.answer("❌ دسته‌بندی برای این سرور یافت نشد.", show_alert=True)
+        await query.answer(i18n.t("category_missing", _user_lang(user_id)), show_alert=True)
         return
     await _safe_edit_message_text(
         query,
@@ -4553,7 +4553,7 @@ async def _send_buy_flow_for_server(
     if not server_block:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ تنظیمات پلن برای این سرور یافت نشد.",
+            text=i18n.t("plan_settings_missing", _user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         return
@@ -4565,7 +4565,7 @@ async def _send_buy_flow_for_server(
         if not renew_svc_gate:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ سرویس انتخاب‌شده برای تمدید یافت نشد.",
+                text=i18n.t("renew_service_missing", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return
@@ -4604,7 +4604,7 @@ async def _send_buy_flow_for_server(
         context.user_data[f"wiz_{user_id}"] = {"gb": default_gb, "months": default_months}
         await context.bot.send_message(
             chat_id=chat_id,
-            text="📦بسته مورد نیاز خود را جهت خرید تنظیم کنید",
+            text=i18n.t("configure_package", _user_lang(user_id)),
             parse_mode="Markdown",
             reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent),
         )
@@ -4619,7 +4619,7 @@ async def _send_buy_flow_for_server(
         if not plans_all:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ پلن ثابت برای این سرور یافت نشد.",
+                text=i18n.t("fixed_plan_missing", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return
@@ -4648,13 +4648,13 @@ async def _send_buy_flow_for_server(
     if not categories:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ دسته‌بندی برای این سرور یافت نشد.",
+            text=i18n.t("category_missing", _user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         return
     await context.bot.send_message(
         chat_id=chat_id,
-        text="📂 **لطفاً دسته بندی مورد نظر را انتخاب کنید:**",
+        text=i18n.t("select_category", _user_lang(user_id)),
         parse_mode="Markdown",
         reply_markup=category_keyboard(categories, sid),
     )
@@ -4805,7 +4805,7 @@ async def _process_wallet_purchase(
     if not internal_user_id or amount <= 0 or sid <= 0 or gb <= 0 or days <= 0:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ اطلاعات خرید ناقص است. لطفاً دوباره اقدام کنید.",
+            text=i18n.t("buy_info_incomplete", _user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         return False
@@ -4816,7 +4816,7 @@ async def _process_wallet_purchase(
         if (not renew_service_pre) or int(renew_service_pre.get("user_id") or 0) != int(internal_user_id):
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ سرویس انتخاب‌شده برای تمدید یافت نشد.",
+                text=i18n.t("renew_service_missing", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -4834,7 +4834,7 @@ async def _process_wallet_purchase(
         if wallet_balance < amount:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ موجودی کیف پول شما کافی نیست. لطفاً ابتدا کیف پول را شارژ کنید.",
+                text=i18n.t("wallet_low", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -4846,7 +4846,7 @@ async def _process_wallet_purchase(
         if not userbot_db.decrease_user_wallet(internal_user_id, amount):
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ موجودی کیف پول شما کافی نیست. لطفاً ابتدا کیف پول را شارژ کنید.",
+                text=i18n.t("wallet_low", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -4856,7 +4856,7 @@ async def _process_wallet_purchase(
     if not server:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ سرور انتخاب‌شده یافت نشد. لطفاً دوباره خرید را انجام دهید.",
+            text=i18n.t("server_missing_restart_buy", _user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         return False
@@ -4878,7 +4878,7 @@ async def _process_wallet_purchase(
         if (not renew_service) or int(renew_service.get("user_id") or 0) != int(internal_user_id):
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ سرویس انتخاب‌شده برای تمدید یافت نشد.",
+                text=i18n.t("renew_service_missing", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -4919,7 +4919,7 @@ async def _process_wallet_purchase(
                     logger.exception("Refund after failed renewal also failed (user=%s)", internal_user_id)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ تمدید سرویس روی سرور/نودها انجام نشد.\nجزئیات خطا: {e}",
+                text=i18n.t("renew_panel_failed", _user_lang(user_id), error=e),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -4950,7 +4950,7 @@ async def _process_wallet_purchase(
                     logger.exception("Refund after failed purchase also failed (user=%s)", internal_user_id)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ ساخت سرویس روی سرور/نودها انجام نشد.\nجزئیات خطا: {e}\n\nدوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+                text=i18n.t("create_panel_failed", _user_lang(user_id), error=e),
                 reply_markup=_main_menu_keyboard(),
             )
             return False
@@ -5103,7 +5103,7 @@ async def _process_wallet_purchase(
         logger.exception("Failed to persist wallet purchase for telegram_id=%s", user_id)
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"⚠️ سرویس روی سرور ساخته شد اما ثبت نهایی خرید خطا داد: {e}\nمبلغ از کیف پول شما کسر شده و تا رفع مشکل نزد پشتیبانی نگاهداری می‌شود. لطفاً به پشتیبانی پیام دهید.",
+            text=i18n.t("created_db_error", _user_lang(user_id), error=e),
             reply_markup=_main_menu_keyboard(),
         )
         return False
@@ -5266,14 +5266,14 @@ async def _connect_panel_subscription_by_uuid(
     if internal_user_id <= 0:
         internal_user_id = int(userbot_db.upsert_user(user.id, user.username, user.full_name) or 0)
     if internal_user_id <= 0:
-        await msg_obj.reply_text("❌ کاربر یافت نشد.", reply_markup=_main_menu_keyboard())
+        await msg_obj.reply_text(i18n.t("user_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
         set_user_step(context, user_id, None)
         return True
 
     owner = userbot_db.get_service_owner_by_panel_uuid(parsed_uuid)
     if owner and int(owner.get("user_id") or 0) != int(internal_user_id):
         await msg_obj.reply_text(
-            "⛔ این اشتراک قبلاً توسط کاربر دیگری متصل شده است و قابل اتصال مجدد نیست.",
+            i18n.t("sub_linked_other", _user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         set_user_step(context, user_id, None)
@@ -5285,7 +5285,7 @@ async def _connect_panel_subscription_by_uuid(
         service = await _sync_service_runtime_from_panels(existing_self)
         settings = _get_subscription_settings()
         await msg_obj.reply_text(
-            "ℹ️ این اشتراک قبلاً به حساب شما متصل شده است.",
+            i18n.t("sub_already_linked_self", _user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         await msg_obj.reply_text(
@@ -5301,11 +5301,11 @@ async def _connect_panel_subscription_by_uuid(
         )
         return True
 
-    await msg_obj.reply_text("⏳ در حال بررسی اشتراک...")
+    await msg_obj.reply_text(i18n.t("sub_checking", _user_lang(user_id)))
     targets = await _find_panel_user_targets_by_uuid(parsed_uuid)
     if not targets:
         await msg_obj.reply_text(
-            "❌ اشتراکی با این UUID روی سرورهای ربات پیدا نشد.",
+            i18n.t("uuid_not_found_panels", _user_lang(user_id)),
             reply_markup=_main_menu_keyboard(),
         )
         set_user_step(context, user_id, None)
@@ -5357,7 +5357,7 @@ async def _connect_panel_subscription_by_uuid(
     except Exception as e:
         logger.exception("Failed persisting connected subscription (telegram_id=%s)", user_id)
         await msg_obj.reply_text(
-            f"❌ اتصال اشتراک با خطا مواجه شد: {e}",
+            i18n.t("sub_connect_failed", _user_lang(user_id), error=e),
             reply_markup=_main_menu_keyboard(),
         )
         set_user_step(context, user_id, None)
@@ -5384,7 +5384,7 @@ async def _connect_panel_subscription_by_uuid(
     service = await _sync_service_runtime_from_panels(service)
     settings = _get_subscription_settings()
     await msg_obj.reply_text(
-        "✅ اشتراک شما با موفقیت متصل شد.",
+        i18n.t("sub_linked_ok", _user_lang(user_id)),
         reply_markup=_main_menu_keyboard(),
     )
     await msg_obj.reply_text(
@@ -5529,14 +5529,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if update.callback_query:
                 try:
                     await update.callback_query.answer(
-                        f"⏳ لطفا {max(1, int(wait_s + 0.99))} ثانیه صبر کنید."
+                        i18n.t("please_wait_seconds", _user_lang(user_id), seconds=max(1, int(wait_s + 0.99)))
                     )
                 except Exception:
                     pass
             msg_obj = update.callback_query.message if update.callback_query else update.message
             if msg_obj:
                 await msg_obj.reply_text(
-                    f"⏳ لطفا {max(1, int(wait_s + 0.99))} ثانیه صبر کنید.",
+                    i18n.t("please_wait_seconds", _user_lang(user_id), seconds=max(1, int(wait_s + 0.99))),
                     reply_markup=_main_menu_keyboard(),
                 )
         elif update.callback_query:
@@ -5614,9 +5614,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             u_db = userbot_db.get_user_by_id(int(internal_user_id)) or {}
             balance = int(u_db.get("wallet_balance") or 0)
             await msg_obj.reply_text(
-                f"🎉 موجودی کیف پول شما افزایش یافت.\n\n"
-                f"🪄 مبلغ هدیه: {int(amount):,} تومان\n"
-                f"💰 موجودی جدید کیف پول: {balance:,} تومان"
+                i18n.t("gift_balance_added", _user_lang(user_id), amount=f"{int(amount):,}", balance=f"{balance:,}")
             )
         else:
             await msg_obj.reply_text(f"⚠️ {result_text}")
@@ -5697,7 +5695,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if now_ts - last_notice >= USERBOT_RATE_LIMIT_NOTICE_SECONDS:
             context.user_data[notice_key] = now_ts
             await update.message.reply_text(
-                f"⏳ لطفا {max(1, int(wait_s + 0.99))} ثانیه صبر کنید.",
+                i18n.t("please_wait_seconds", _user_lang(user_id), seconds=max(1, int(wait_s + 0.99))),
                 reply_markup=_main_menu_keyboard(),
             )
         return
@@ -5774,7 +5772,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         servers = _get_location_servers()
         if not servers:
             await update.message.reply_text(
-                "❌ سروری برای ارائه تست رایگان در دسترس نیست.",
+                i18n.t("no_trial_server", _user_lang(user_id)),
                 reply_markup=_main_menu_keyboard(),
             )
             return
@@ -5789,23 +5787,23 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(f"renew_target_{user_id}", None)
         br = _get_buy_renew_settings()
         if not bool(br.get("enable_renew", True)):
-            await update.message.reply_text("🚫 تمدید اشتراک در حال حاضر غیرفعال است.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("renew_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
         u_db = userbot_db.get_user_by_telegram_id(user_id)
         if not u_db:
-            await update.message.reply_text("❌ کاربر یافت نشد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("user_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         internal_user_id = u_db.get("id")
         services = userbot_db.get_services_for_user(internal_user_id)
         if not services:
-            await update.message.reply_text("❌ اشتراک وجود ندارد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("no_subscriptions", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         services, _ = await _filter_existing_services(services)
         visible_services = [s for s in services if int(s.get("days_left") or 0) > -30]
         if not visible_services:
-            await update.message.reply_text("❌ اشتراک وجود ندارد.", reply_markup=_main_menu_keyboard())
+            await update.message.reply_text(i18n.t("no_subscriptions", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             return
 
         # قوانین تمدید (حالت پیشرفته): فقط سرویس‌های نزدیک به اتمام حجم/زمان
@@ -5874,12 +5872,12 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[loading_key] = True
         loading_msg = None
         try:
-            loading_msg = await update.message.reply_text("⏳ لطفا صبر کنید...")
+            loading_msg = await update.message.reply_text(i18n.t("please_wait", _user_lang(user_id)))
 
             # دریافت اطلاعات کاربر
             u_db = userbot_db.get_user_by_telegram_id(user_id)
             if not u_db:
-                await update.message.reply_text("❌ کاربر یافت نشد.", reply_markup=_main_menu_keyboard())
+                await update.message.reply_text(i18n.t("user_not_found", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
                 return
 
             internal_user_id = u_db.get('id')
@@ -5889,7 +5887,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if not services:
                 await update.message.reply_text(
-                    "❌ هیچ سرویس فعال ندارید.\n\n💡 برای خرید سرویس جدید، روی دکمه «💳خرید اشتراک» کلیک کنید.",
+                    i18n.t("no_active_services", _user_lang(user_id)),
                     reply_markup=_main_menu_keyboard()
                 )
                 return
@@ -5910,7 +5908,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if not visible_services:
                 await update.message.reply_text(
-                    "❌ اشتراک وجود ندارد.",
+                    i18n.t("no_subscriptions", _user_lang(user_id)),
                     reply_markup=_main_menu_keyboard()
                 )
                 return
@@ -5918,12 +5916,12 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings = _get_subscription_settings()
             if len(visible_services) > 3:
                 await update.message.reply_text(
-                    "👇 لطفا یکی از اشتراک‌های خود را انتخاب نمایید",
+                    i18n.t("select_subscription", _user_lang(user_id)),
                     reply_markup=services_list_keyboard(visible_services),
                 )
                 if removed_count > 0:
                     await update.message.reply_text(
-                        f"🧹 {removed_count} سرویس حذف‌شده از پنل، از لیست ربات پاک شد.",
+                        i18n.t("panel_removed_cleanup", _user_lang(user_id), count=removed_count),
                         reply_markup=_main_menu_keyboard(),
                     )
                 return
@@ -5943,7 +5941,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             if removed_count > 0:
                 await update.message.reply_text(
-                    f"🧹 {removed_count} سرویس حذف‌شده از پنل، از لیست ربات پاک شد.",
+                    i18n.t("panel_removed_cleanup", _user_lang(user_id), count=removed_count),
                     reply_markup=_main_menu_keyboard(),
                 )
         finally:
@@ -6032,7 +6030,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_notice = float(context.user_data.get(notice_key) or 0.0)
             if now_ts - last_notice >= USERBOT_RATE_LIMIT_NOTICE_SECONDS:
                 context.user_data[notice_key] = now_ts
-                await query.answer(f"⏳ لطفا {max(1, int(wait_s + 0.99))} ثانیه صبر کنید.")
+                await query.answer(i18n.t("please_wait_seconds", _user_lang(user_id), seconds=max(1, int(wait_s + 0.99))))
             else:
                 await query.answer()
         except Exception:
@@ -6045,10 +6043,10 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "check":
             settings = _get_force_join_settings()
             if not bool(settings.get("enabled", False)):
-                await context.bot.send_message(chat_id=user_id, text="✅ عضویت اجباری غیرفعال است.", reply_markup=_main_menu_keyboard())
+                await context.bot.send_message(chat_id=user_id, text=i18n.t("force_join_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
                 return
             if await _user_joined_force_channel(context, user_id, settings):
-                await context.bot.send_message(chat_id=user_id, text="✅ عضویت شما تایید شد.", reply_markup=_main_menu_keyboard())
+                await context.bot.send_message(chat_id=user_id, text=i18n.t("force_join_ok", _user_lang(user_id)), reply_markup=_main_menu_keyboard())
             else:
                 await context.bot.send_message(
                     chat_id=user_id,
@@ -6062,7 +6060,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bool(settings_fj.get("enabled", False)):
         if not await _user_joined_force_channel(context, user_id, settings_fj):
             try:
-                await query.answer("ابتدا در کانال عضو شوید.", show_alert=True)
+                await query.answer(i18n.t("join_channel_first", _user_lang(user_id)), show_alert=True)
             except Exception:
                 pass
             await context.bot.send_message(
