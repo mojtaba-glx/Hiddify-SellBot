@@ -5933,7 +5933,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "دعوت دوستان" in text:
         u_db = userbot_db.get_user_by_telegram_id(user_id) or {}
         internal_uid = int(u_db.get("id") or 0)
-        invite_text = await _render_invite_home_text(context, internal_uid)
+        invite_text = await _render_invite_home_text(context, internal_uid, lang=_user_lang(user_id))
         await update.message.reply_text(
             invite_text,
             reply_markup=invite_banner_keyboard(lang=_user_lang(update.effective_user.id)),
