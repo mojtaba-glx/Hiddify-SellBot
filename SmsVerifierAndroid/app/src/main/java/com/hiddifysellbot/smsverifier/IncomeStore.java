@@ -96,6 +96,12 @@ public final class IncomeStore {
             if (isInLastDays(entry.time, 7)) {
                 stats.weekTotal += entry.amountToman;
             }
+            if (isInLastDays(entry.time, 30)) {
+                stats.last30Total += entry.amountToman;
+            }
+            if (isInLastDays(entry.time, 90)) {
+                stats.last90Total += entry.amountToman;
+            }
         }
         return stats;
     }
@@ -161,6 +167,8 @@ public final class IncomeStore {
         public long todayTotal;
         public long weekTotal;
         public long monthTotal;
+        public long last30Total;
+        public long last90Total;
         public int approvedCount;
     }
 

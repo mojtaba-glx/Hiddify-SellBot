@@ -53,6 +53,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -63,6 +64,8 @@ public class MainActivity extends Activity {
     private static final int REQ_IMPORT_BACKUP = 2002;
     private static final int MAX_VISIBLE_BANK_SMS = 50;
     private static final long AUTO_SYNC_MIN_INTERVAL_MS = 60L * 1000L;
+    private static final Locale FA_LOCALE = new Locale("fa", "IR");
+    private static final TimeZone TEHRAN_TZ = TimeZone.getTimeZone("Asia/Tehran");
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private ScrollView scrollView;
@@ -103,6 +106,7 @@ public class MainActivity extends Activity {
     private LinearLayout bankSmsListView;
     private TextView historyView;
     private TextView clockView;
+    private TextView dateView;
     private final Handler clockHandler = new Handler(Looper.getMainLooper());
     private final Runnable clockTicker = new Runnable() {
         @Override
@@ -200,8 +204,15 @@ public class MainActivity extends Activity {
         if (clockView == null) {
             return;
         }
-        String time = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
-        clockView.setText("🕐 " + time);
+        Date now = new Date();
+        SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", FA_LOCALE);
+        timeFmt.setTimeZone(TEHRAN_TZ);
+        clockView.setText("🕐 " + timeFmt.format(now));
+        if (dateView != null) {
+            SimpleDateFormat dateFmt = new SimpleDateFormat("EEEE، d MMMM yyyy", FA_LOCALE);
+            dateFmt.setTimeZone(TEHRAN_TZ);
+            dateView.setText("📅 " + dateFmt.format(now));
+        }
     }
 
     @Override
@@ -558,7 +569,11 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER_VERTICAL);
         topRow.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
-        // ساعت زنده — گوشه بالای منوی اصلی، کنار بج LIVE
+        // ساعت و تاریخ زنده (شمسی / منطقهٔ تهران) — گوشه بالای منوی اصلی، کنار بج LIVE
+        LinearLayout clockBox = new LinearLayout(this);
+        clockBox.setOrientation(LinearLayout.VERTICAL);
+        clockBox.setGravity(Gravity.CENTER);
+
         clockView = new TextView(this);
         clockView.setText("--:--:--");
         clockView.setTextSize(13);
@@ -568,10 +583,25 @@ public class MainActivity extends Activity {
         clockView.setPadding(dp(10), dp(5), dp(10), dp(5));
         clockView.setElevation(dp(2));
         styleRounded(clockView, goldColor, goldColor, dp(999));
+        clockBox.addView(clockView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        dateView = new TextView(this);
+        dateView.setText("—");
+        dateView.setTextSize(11);
+        dateView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        dateView.setTextColor(Color.parseColor("#07111F"));
+        dateView.setGravity(Gravity.CENTER);
+        dateView.setPadding(dp(10), dp(3), dp(10), dp(5));
+        dateView.setElevation(dp(2));
+        styleRounded(dateView, greenColor, greenColor, dp(999));
+        clockBox.addView(dateView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
         LinearLayout.LayoutParams clockLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         clockLp.setMargins(0, 0, dp(8), 0);
-        topRow.addView(clockView, clockLp);
+        topRow.addView(clockBox, clockLp);
         updateClockView();
 
         TextView liveBadge = new TextView(this);
@@ -1723,7 +1753,9 @@ public class MainActivity extends Activity {
                 review++;
             }
         }
-        dashboardStatsView.setText("وضعیت ربات: متصل و آماده ✅   |   آخرین بروزرسانی: " + new SimpleDateFormat("HH:mm", Locale.US).format(new Date()));
+        SimpleDateFormat updFmt = new SimpleDateFormat("HH:mm", FA_LOCALE);
+        updFmt.setTimeZone(TEHRAN_TZ);
+        dashboardStatsView.setText("وضعیت ربات: متصل و آماده ✅   |   آخرین بروزرسانی: " + updFmt.format(new Date()));
         todayMetricView.setText(String.valueOf(todayCount));
         approvedMetricView.setText(String.valueOf(approved));
         reviewMetricView.setText(String.valueOf(review));
@@ -1740,6 +1772,8 @@ public class MainActivity extends Activity {
         revenueStatsView.setText("💰 درآمد تاییدشده"
                 + "\n▫️ امروز: " + formatToman(stats.todayTotal)
                 + "\n▫️ ۷ روز اخیر: " + formatToman(stats.weekTotal)
+                + "\n▫️ ۳۰ روز اخیر: " + formatToman(stats.last30Total)
+                + "\n▫️ ۳ ماه اخیر: " + formatToman(stats.last90Total)
                 + "\n▫️ ماه جاری: " + formatToman(stats.monthTotal)
                 + "\n▫️ تعداد تاییدها: " + stats.approvedCount);
     }
