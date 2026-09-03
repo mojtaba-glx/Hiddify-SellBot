@@ -64,7 +64,6 @@ public class MainActivity extends Activity {
     private static final int REQ_IMPORT_BACKUP = 2002;
     private static final int MAX_VISIBLE_BANK_SMS = 50;
     private static final long AUTO_SYNC_MIN_INTERVAL_MS = 60L * 1000L;
-    private static final Locale FA_LOCALE = new Locale("fa", "IR");
     private static final TimeZone TEHRAN_TZ = TimeZone.getTimeZone("Asia/Tehran");
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -107,6 +106,7 @@ public class MainActivity extends Activity {
     private TextView historyView;
     private TextView clockView;
     private TextView dateView;
+    private TextView weekdayView;
     private final Handler clockHandler = new Handler(Looper.getMainLooper());
     private final Runnable clockTicker = new Runnable() {
         @Override
@@ -204,14 +204,29 @@ public class MainActivity extends Activity {
         if (clockView == null) {
             return;
         }
-        Date now = new Date();
-        SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", FA_LOCALE);
+        Calendar cal = Calendar.getInstance(TEHRAN_TZ);
+        SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", Locale.US);
         timeFmt.setTimeZone(TEHRAN_TZ);
-        clockView.setText("🕐 " + timeFmt.format(now));
+        clockView.setText("🕐 " + timeFmt.format(cal.getTime()));
+
+        if (weekdayView != null) {
+            String[] weekdays = {"یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه"};
+            int dow = cal.get(Calendar.DAY_OF_WEEK);
+            if (dow < 1 || dow > 7) {
+                dow = 1;
+            }
+            weekdayView.setText("امروز " + weekdays[dow - 1]);
+        }
+
         if (dateView != null) {
-            SimpleDateFormat dateFmt = new SimpleDateFormat("EEEE، d MMMM yyyy", FA_LOCALE);
-            dateFmt.setTimeZone(TEHRAN_TZ);
-            dateView.setText("📅 " + dateFmt.format(now));
+            // تقویم رسمی شمسی (ICU) — دقیق و مطابق تقویم ایران، منطقهٔ تهران
+            android.icu.util.Calendar icu = android.icu.util.Calendar.getInstance(
+                    android.icu.util.ULocale.forLanguageTag("fa-IR-u-ca-persian"),
+                    android.icu.util.TimeZone.getTimeZone("Asia/Tehran"));
+            int jy = icu.get(android.icu.util.Calendar.YEAR);
+            int jm = icu.get(android.icu.util.Calendar.MONTH) + 1;
+            int jd = icu.get(android.icu.util.Calendar.DAY_OF_MONTH);
+            dateView.setText(String.format(Locale.US, "%04d/%02d/%02d", jy, jm, jd));
         }
     }
 
@@ -569,7 +584,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER_VERTICAL);
         topRow.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
-        // ساعت و تاریخ زنده (شمسی / منطقهٔ تهران) — گوشه بالای منوی اصلی، کنار بج LIVE
+        // ساعت + تاریخ شمسی + روز هفته (منطقهٔ تهران) — گوشهٔ بالای منوی اصلی
         LinearLayout clockBox = new LinearLayout(this);
         clockBox.setOrientation(LinearLayout.VERTICAL);
         clockBox.setGravity(Gravity.CENTER);
@@ -598,21 +613,24 @@ public class MainActivity extends Activity {
         clockBox.addView(dateView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        weekdayView = new TextView(this);
+        weekdayView.setText("—");
+        weekdayView.setTextSize(11);
+        weekdayView.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        weekdayView.setTextColor(Color.parseColor("#07111F"));
+        weekdayView.setGravity(Gravity.CENTER);
+        weekdayView.setPadding(dp(10), dp(3), dp(10), dp(5));
+        weekdayView.setElevation(dp(2));
+        styleRounded(weekdayView, goldColor, goldColor, dp(999));
+        clockBox.addView(weekdayView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
         LinearLayout.LayoutParams clockLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         clockLp.setMargins(0, 0, dp(8), 0);
         topRow.addView(clockBox, clockLp);
         updateClockView();
 
-        TextView liveBadge = new TextView(this);
-        liveBadge.setText("LIVE ✅");
-        liveBadge.setTextSize(11);
-        liveBadge.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        liveBadge.setTextColor(Color.parseColor("#07111F"));
-        liveBadge.setGravity(Gravity.CENTER);
-        liveBadge.setPadding(dp(10), dp(5), dp(10), dp(5));
-        styleRounded(liveBadge, greenColor, greenColor, dp(999));
-        topRow.addView(liveBadge, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         TextView desc = new TextView(this);
         desc.setText("داشبورد هوشمند تایید پرداخت؛ SMS بانک را می‌خواند، با ربات هماهنگ می‌کند و نتیجه را شفاف نگه می‌دارد.");
@@ -1753,7 +1771,7 @@ public class MainActivity extends Activity {
                 review++;
             }
         }
-        SimpleDateFormat updFmt = new SimpleDateFormat("HH:mm", FA_LOCALE);
+        SimpleDateFormat updFmt = new SimpleDateFormat("HH:mm", Locale.US);
         updFmt.setTimeZone(TEHRAN_TZ);
         dashboardStatsView.setText("وضعیت ربات: متصل و آماده ✅   |   آخرین بروزرسانی: " + updFmt.format(new Date()));
         todayMetricView.setText(String.valueOf(todayCount));

@@ -18,10 +18,10 @@ android {
 
     defaultConfig {
         applicationId "com.hiddifysellbot.smsverifier"
-        minSdk 23
+        minSdk 24
         targetSdk 35
-        versionCode 53
-        versionName "1.7.1"
+        versionCode 54
+        versionName "1.7.2"
     }
 
     signingConfigs {
