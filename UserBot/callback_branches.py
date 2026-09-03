@@ -232,8 +232,9 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
 
         if action == "faq":
             faq_text = str(text_settings.get("faq_text") or "").strip()
-            if (not faq_text) or ("به‌زودی تکمیل می‌شود" in faq_text) or ("به زودی تکمیل می شود" in faq_text):
-                faq_text = _default_faq_text()
+            _faq_is_placeholder = (not faq_text) or ("به‌زودی تکمیل می‌شود" in faq_text) or ("به زودی تکمیل می شود" in faq_text)
+            if _faq_is_placeholder:
+                faq_text = _cfg_text(user_id, "faq_text", "cfg_faq_default", text_settings)
             try:
                 await query.message.edit_text(faq_text, reply_markup=support_panel_keyboard(lang=_user_lang(user_id)))
             except Exception:

@@ -944,7 +944,7 @@ def _build_zarinpal_links_keyboard(vouchers: List[Dict[str, Any]], lang: str = "
     return InlineKeyboardMarkup(rows)
 
 
-def _default_faq_text() -> str:
+def _default_faq_text(lang: str = "fa") -> str:
     return (
         "❓ سوالات متداول\n\n"
         "1) لینک اشتراک را کجا بزنم؟\n"
@@ -5398,8 +5398,12 @@ async def _render_invite_home_text(context: ContextTypes.DEFAULT_TYPE, internal_
 
     ref_settings_text = userbot_db.DEFAULT_REFERRAL_SETTINGS["invite_intro_text"]
     try:
-        intro = str(settings.get("invite_intro_text") or ref_settings_text)
-        intro = intro.format(
+        stored_intro = str(settings.get("invite_intro_text") or "").strip()
+        if lang == "fa":
+            intro_src = stored_intro or ref_settings_text
+        else:
+            intro_src = i18n.t("cfg_invite_intro", lang)
+        intro = intro_src.format(
             invite_link=invite_link or "—",
             trial_reward=f"{trial_amount}{i18n.t('word_toman2', lang)}",
             purchase_reward=f"{purchase_amount}{i18n.t('word_toman2', lang)}",
