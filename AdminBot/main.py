@@ -397,46 +397,61 @@ def _format_gb(value: float) -> str:
     return f"{v:.1f}"
 
 
+
+
+def i18n_user_t(lang: str, key: str, **kw) -> str:
+    from Shared.i18n import t as _t
+    return _t(key, lang, **kw)
+
+
+def _user_lang_of(tg_id: int) -> str:
+    try:
+        from Shared.i18n import get_user_lang
+        return get_user_lang(int(tg_id or 0))
+    except Exception:
+        return "fa"
+
 def _build_renewal_reminder_message(
     service_name: str,
     *,
     days_left: int | None = None,
     remaining_gb: float | None = None,
+    lang: str = "fa",
 ) -> str:
-    title = str(service_name or "").strip() or "اشتراک شما"
+    title = str(service_name or "").strip() or i18n_user_t(lang, "default_service_title")
     lines = [
-        "🚨 یادآوری تمدید اشتراک",
-        f"🔹 اشتراک: «{title}»",
+        i18n_user_t(lang, "renew_reminder_title"),
+        i18n_user_t(lang, "renew_reminder_service", title=title),
     ]
     if days_left is not None:
-        lines.append(f"📅 روز باقی‌مانده: {int(days_left)} روز")
+        lines.append(i18n_user_t(lang, "renew_reminder_days", days=int(days_left)))
     elif remaining_gb is not None:
-        lines.append(f"🚥 حجم باقی‌مانده: {_format_gb(remaining_gb)} گیگ")
-    lines.append("لطفاً برای جلوگیری از قطع سرویس، اشتراک را تمدید کنید.")
+        lines.append(i18n_user_t(lang, "renew_reminder_gb", gb=_format_gb(remaining_gb)))
+    lines.append(i18n_user_t(lang, "renew_reminder_cta"))
     return "\n".join(lines)
 
 
-def _build_expired_notice_message(service_name: str, *, reason: str = "time") -> str:
-    title = str(service_name or "").strip() or "اشتراک شما"
+def _build_expired_notice_message(service_name: str, *, reason: str = "time", lang: str = "fa") -> str:
+    title = str(service_name or "").strip() or i18n_user_t(lang, "default_service_title")
     if reason == "usage":
-        detail = "حجم اشتراک شما به اتمام رسیده است."
+        detail = i18n_user_t(lang, "expired_reason_usage")
     elif reason == "both":
-        detail = "حجم و مدت اشتراک شما به اتمام رسیده است."
+        detail = i18n_user_t(lang, "expired_reason_both")
     else:
-        detail = "مدت اشتراک شما به اتمام رسیده است."
+        detail = i18n_user_t(lang, "expired_reason_time")
     return "\n".join(
         [
-            "⚠️ اشتراک شما منقضی شد",
-            f"🔹 اشتراک: «{title}»",
-            f"متأسفانه {detail}",
-            "لطفاً جهت تمدید از دکمه زیر اقدام فرمایید.",
+            i18n_user_t(lang, "expired_notice_title"),
+            i18n_user_t(lang, "renew_reminder_service", title=title),
+            detail,
+            i18n_user_t(lang, "expired_notice_cta"),
         ]
     )
 
 
-def _build_renew_button_keyboard(service_id: int) -> InlineKeyboardMarkup:
+def _build_renew_button_keyboard(service_id: int, lang: str = "fa") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("تمدید اشتراک", callback_data=f"status:renew:{int(service_id or 0)}", style="danger")]]
+        [[InlineKeyboardButton(i18n_user_t(lang, "renew_btn_label"), callback_data=f"status:renew:{int(service_id or 0)}", style="danger")]]
     )
 
 
@@ -543,8 +558,8 @@ async def _run_subscription_reminder_cycle() -> dict:
                 if expire_key not in sent_expired_keys:
                     await bot.send_message(
                         chat_id=telegram_id,
-                        text=_build_expired_notice_message(service_name, reason=expire_reason),
-                        reply_markup=_build_renew_button_keyboard(service_id),
+                        text=_build_expired_notice_message(service_name, reason=expire_reason, lang=_user_lang_of(telegram_id)),
+                        reply_markup=_build_renew_button_keyboard(service_id, lang=_user_lang_of(telegram_id)),
                     )
                     sent_expired_keys.add(expire_key)
                     summary["expired_sent"] += 1
@@ -558,7 +573,7 @@ async def _run_subscription_reminder_cycle() -> dict:
                 if day_key not in sent_days_keys:
                     await bot.send_message(
                         chat_id=telegram_id,
-                        text=_build_renewal_reminder_message(service_name, days_left=days_left),
+                        text=_build_renewal_reminder_message(service_name, days_left=days_left, lang=_user_lang_of(telegram_id)),
                     )
                     sent_days_keys.add(day_key)
                     summary["days_sent"] += 1
@@ -572,7 +587,7 @@ async def _run_subscription_reminder_cycle() -> dict:
                 if usage_key not in sent_usage_keys:
                     await bot.send_message(
                         chat_id=telegram_id,
-                        text=_build_renewal_reminder_message(service_name, remaining_gb=remaining_bucket),
+                        text=_build_renewal_reminder_message(service_name, remaining_gb=remaining_bucket, lang=_user_lang_of(telegram_id)),
                     )
                     sent_usage_keys.add(usage_key)
                     summary["usage_sent"] += 1

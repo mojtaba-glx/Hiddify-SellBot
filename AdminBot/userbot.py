@@ -917,17 +917,11 @@ async def _notify_user_payment_status_change(pay: Dict[str, Any], new_status: st
             return
         user_bot = Bot(token=USER_BOT_TOKEN)
         tx_code = str(pay.get("tx_code") or pay.get("id") or "-")
+        _ulg = _user_lang_of(tg_id)
         if new_status == "rejected":
-            text = (
-                "❌ پرداخت شما رد شد.\n"
-                "در صورت نیاز با پشتیبانی تماس بگیرید.\n\n"
-                f"🎁 شناسه تراکنش: {tx_code}"
-            )
+            text = _i18n_user_t(_ulg, "pay_status_rejected_support", code=tx_code)
         elif new_status == "pending":
-            text = (
-                "⏳ وضعیت پرداخت شما به حالت «در انتظار» برگشت و در حال بررسی مجدد است.\n\n"
-                f"🎁 شناسه تراکنش: {tx_code}"
-            )
+            text = _i18n_user_t(_ulg, "pay_status_back_pending", code=tx_code)
         else:
             return
         await user_bot.send_message(chat_id=int(tg_id), text=text)
@@ -1026,11 +1020,7 @@ async def _notify_user_about_redelivery(pay: Dict[str, Any]) -> None:
         tx_code = str(pay.get("tx_code") or pay.get("id") or "-")
         await user_bot.send_message(
             chat_id=int(tg_id),
-            text=(
-                "✅ پرداخت شما دوباره بررسی و تایید شد.\n"
-                "اشتراک شما به‌زودی داخل ربات تحویل داده می‌شود.\n\n"
-                f"🎁 شناسه تراکنش: {tx_code}"
-            ),
+            text=_i18n_user_t(_user_lang_of(tg_id), "pay_reapproved_delivery", code=tx_code),
         )
     except Exception as e:
         logger.warning("Failed to notify user about re-approval of payment %s: %s", pay.get("id"), e)
@@ -2128,6 +2118,20 @@ def _adm_lang() -> str:
 def _adm_t(key: str, **kw) -> str:
     from Shared import i18n as _i18n
     return _i18n.t(key, _adm_lang(), **kw)
+
+
+def _user_lang_of(tg_id: int) -> str:
+    """زبان کاربرِ گیرنده (برای پیام‌هایی که ادمین از طریق ربات کاربران می‌فرستد)."""
+    try:
+        from Shared import i18n as _i18n
+        return _i18n.get_user_lang(int(tg_id or 0))
+    except Exception:
+        return "fa"
+
+
+def _i18n_user_t(lang: str, key: str, **kw) -> str:
+    from Shared import i18n as _i18n
+    return _i18n.t(key, lang, **kw)
 
 
 def build_userbot_settings_menu_keyboard(ui_settings: Optional[Dict[str, Any]] = None) -> InlineKeyboardMarkup:
@@ -6569,7 +6573,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if user and user.get('telegram_id') and USER_BOT_TOKEN:
             try:
                 user_bot = Bot(token=USER_BOT_TOKEN)
-                notify_text = f"💰 کیف پول\n\nموجودی حساب شما توسط مدیریت به {_format_toman(amount)} تومان تغییر یافت."
+                notify_text = _i18n_user_t(_user_lang_of(user['telegram_id']), "admin_wallet_set_notify", amount=_format_toman(amount))
                 await user_bot.send_message(chat_id=user['telegram_id'], text=notify_text)
             except Exception as e:
                 await msg.reply_text(f"⚠️ موجودی آپدیت شد ولی پیام به کاربر ارسال نشد: {e}")
@@ -6598,12 +6602,10 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if user and user.get('telegram_id') and USER_BOT_TOKEN:
             try:
                 user_bot = Bot(token=USER_BOT_TOKEN)
-                final_msg = (
-                    "📩 پیام جدیدی از سمت ادمین دریافت شد\n"
-                    f"📄 متن پیام: {text}"
-                )
+                _ulg = _user_lang_of(user['telegram_id'])
+                final_msg = _i18n_user_t(_ulg, "admin_new_msg_notify", text=text)
                 kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("📩پاسخ", callback_data="support:adminmsg:reply")]]
+                    [[InlineKeyboardButton(_i18n_user_t(_ulg, "btn_reply2"), callback_data="support:adminmsg:reply")]]
                 )
                 await user_bot.send_message(
                     chat_id=user['telegram_id'],
@@ -9039,17 +9041,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                             # می‌شود؛ از ارسال پیام تکراری «تراکنش تایید شد» در اینجا صرف‌نظر می‌کنیم.
                             notify_text = ""
                         else:
-                            notify_text = (
-                                "✅ پرداخت شما تایید شد.\n"
-                                f"💰 مبلغ شارژ: {amount_txt} تومان\n"
-                                "🎉 کیف پول شما با موفقیت شارژ شد."
-                            )
+                            notify_text = _i18n_user_t(_user_lang_of(tg_id), "pay_approved_wallet_topup", amount=amount_txt)
                     else:
-                        notify_text = (
-                            "❌ پرداخت شما رد شد.\n"
-                            "مبلغ به کیف پول شما اضافه نشد.\n"
-                            "در صورت نیاز با پشتیبانی تماس بگیرید."
-                        )
+                        notify_text = _i18n_user_t(_user_lang_of(tg_id), "pay_rejected_no_credit")
                     if notify_text:
                         await user_bot.send_message(chat_id=tg_id, text=notify_text)
             except Exception as e:
@@ -9310,12 +9304,10 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             if tg_id > 0 and USER_BOT_TOKEN:
                 try:
                     user_bot = Bot(token=USER_BOT_TOKEN)
-                    notify_text = (
-                        f"📩 پاسخ جدید برای تیکت #{ticket_code}\n\n"
-                        f"{reply_text or 'یک پاسخ جدید ارسال شد.'}"
-                    )
+                    _ulg = _user_lang_of(tg_id)
+                    notify_text = _i18n_user_t(_ulg, "ticket_new_reply_notify", code=ticket_code, reply=reply_text or _i18n_user_t(_ulg, "adm_default_reply_note"))
                     kb = InlineKeyboardMarkup(
-                        [[InlineKeyboardButton("📬 مشاهده تیکت", callback_data=f"support:view:{ticket_code}:1")]]
+                        [[InlineKeyboardButton(_i18n_user_t(_ulg, "btn_view_ticket2"), callback_data=f"support:view:{ticket_code}:1")]]
                     )
                     if photo_file_id:
                         try:
