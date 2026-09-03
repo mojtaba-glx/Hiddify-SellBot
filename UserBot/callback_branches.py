@@ -1,5 +1,7 @@
 """Callback branch handlers extracted verbatim from UserBot/main.py inline_handler."""
 
+import re
+
 from Shared import userbot_db
 from Shared.qr_utils import make_qr_image
 from UserBot.utils.helpers import _parse_service_comment
@@ -230,10 +232,16 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             await _send_support_panel(context=context, user_id=user_id, message=query.message, text_settings=text_settings)
             return
 
+        def _norm_txt(v: str) -> str:
+            v = (v or "").replace("\u200e", "").replace("\u200f", "")
+            v = v.replace("\ufe0f", "")  # strip emoji VS16 so ♾️ == ♾
+            return re.sub(r"\s+", " ", v).strip()
+
         if action == "faq":
             faq_text = str(text_settings.get("faq_text") or "").strip()
-            faq_db_default = str(userbot_db.DEFAULT_TEXT_SETTINGS.get("faq_text") or "").strip()
-            faq_is_admin_custom = bool(faq_text) and faq_text != faq_db_default
+            faq_norm = _norm_txt(faq_text)
+            faq_def_norm = _norm_txt(str(userbot_db.DEFAULT_TEXT_SETTINGS.get("faq_text") or ""))
+            faq_is_admin_custom = bool(faq_norm) and faq_norm != faq_def_norm
             if not faq_is_admin_custom:
                 faq_text = _cfg_text(user_id, "faq_text", "cfg_faq_default", text_settings)
             try:
