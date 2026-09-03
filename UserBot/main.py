@@ -1226,6 +1226,8 @@ def _cfg_text(user_id: int, settings_key: str, i18n_key: str, text_settings: Opt
         stored = ""
     if lang == "fa":
         return stored or i18n.t(i18n_key, "fa")
+    # برای کاربران غیرفارسی همیشه نسخه ترجمه‌شده ارسال می‌شود؛ متن‌های
+    # سفارشی ادمین فارسی‌اند و برای مخاطب فارسی نوشته شده‌اند.
     return i18n.t(i18n_key, lang)
 
 
