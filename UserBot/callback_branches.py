@@ -1524,7 +1524,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
         }
         set_user_step(context, user_id, "WAIT_RECEIPT_CONFIRM")
         await query.message.delete()
-        await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="HTML", reply_markup=confirm_payment_inline_keyboard())
+        await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="HTML", reply_markup=confirm_payment_inline_keyboard(lang=_user_lang(user_id)))
         return
 
     elif data.startswith("buy:pay_direct:"):
@@ -1610,7 +1610,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             chat_id=user_id,
             text=msg,
             parse_mode="HTML",
-            reply_markup=confirm_payment_inline_keyboard(),
+            reply_markup=confirm_payment_inline_keyboard(lang=_user_lang(user_id)),
         )
         return
 
@@ -2459,7 +2459,7 @@ async def _rs_wallet_topup_amount(update, context, user_id, text, step):
         if tx_marker > 0:
             msg = i18n.t("tx_marker_applied", _user_lang(user_id), marker=f"{tx_marker:,}", msg=msg)
         set_user_step(context, user_id, "WAIT_WALLET_TOPUP_CONFIRM")
-        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=confirm_payment_keyboard(_user_lang(user_id), lang=_user_lang(user_id)))
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=confirm_payment_keyboard(lang=_user_lang(user_id)))
         return
 
 

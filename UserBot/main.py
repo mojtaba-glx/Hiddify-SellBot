@@ -4530,7 +4530,7 @@ async def start_dynamic_wizard(query, context, sid, user_id, server_block):
     
     await _safe_edit_message_text(
         query,
-        "📦بسته مورد نیاز خود را جهت خرید تنظیم کنید", 
+        i18n.t("configure_package", _user_lang(user_id)),
         parse_mode="Markdown",
         reply_markup=buy_wizard_keyboard(sid, default_gb, default_months, price, off_percent=off_percent, lang=_user_lang(user_id))
     )
