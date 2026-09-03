@@ -1,10 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.RECEIVE_MMS" />
-    <uses-permission android:name="android.permission.RECEIVE_WAP_PUSH" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -26,15 +23,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- الزامی برای کاندید شدن به‌عنوان اپ پیش‌فرض پیامک (ROLE_SMS) -->
-            <intent-filter>
-                <action android:name="android.intent.action.SENDTO" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="sms" />
-                <data android:scheme="smsto" />
-                <data android:scheme="mms" />
-                <data android:scheme="mmsto" />
-            </intent-filter>
         </activity>
 
         <service
@@ -42,7 +30,7 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- حالت هم‌زمان: خواندن پرداخت‌ها از اعلان‌های پیامک وقتی اپ پیامک اصلی گوشی پیش‌فرض است -->
+        <!-- حالت اختیاری fallback: خواندن پرداخت‌ها از اعلان‌ها وقتی کاربر خودش بخواهد -->
         <service
             android:name=".PaymentNotificationListener"
             android:exported="false"
@@ -52,6 +40,9 @@
             </intent-filter>
         </service>
 
+        <!-- برادکست SMS_RECEIVED فقط به‌عنوان بوستر سریع؛ خواندن اصلی و real-time
+             از طریق ContentObserver روی صندوق پیامک در SmsMonitorService انجام می‌شود.
+             برای این کار فقط READ_SMS لازم است و اپ هرگز «پیش‌فرض پیامک» نمی‌شود. -->
         <receiver
             android:name=".SmsReceiver"
             android:enabled="true"
@@ -59,59 +50,6 @@
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter>
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.provider.Telephony.SMS_DELIVER" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </receiver>
-
-        <!-- سرویس الزامی پنجم ROLE_SMS: «پاسخ سریع با پیامک».
-             بدون این سرویس PermissionController اپ را کاندید اپ پیش‌فرض پیامک قبول نمی‌کند. -->
-        <service
-            android:name=".RespondViaMessageService"
-            android:exported="true"
-            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
-            <intent-filter>
-                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="sms" />
-                <data android:scheme="smsto" />
-                <data android:scheme="mms" />
-                <data android:scheme="mmsto" />
-            </intent-filter>
-        </service>
-
-        <!-- سرویس الزامی برای کاندید شدن به‌عنوان اپ پیش‌فرض پیامک (ROLE_SMS).
-             بدون این سرویس، اپ در تنظیمات «برنامه پیامک پیش‌فرض» اندروید ۱۲/۱۳
-             نمایش داده نمی‌شود و دیالوگ فعال‌سازی RoleManager خطا می‌دهد. -->
-        <service
-            android:name=".SmsConfigService"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.telephony.action.CONFIGURATION" />
-            </intent-filter>
-        </service>
-
-        <!-- گیرنده نتیجه ارسال SMS (الزام تکمیلی ROLE_SMS) -->
-        <receiver
-            android:name=".SmsSentReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.provider.Telephony.SMS_SENT" />
-                <action android:name="android.provider.Telephony.SMS_DELIVERED" />
-            </intent-filter>
-        </receiver>
-
-        <!-- الزامی برای کاندید شدن به‌عنوان اپ پیش‌فرض پیامک (ROLE_SMS) -->
-        <receiver
-            android:name=".WapPushReceiver"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.BROADCAST_WAP_PUSH">
-            <intent-filter>
-                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
-                <data android:mimeType="application/vnd.wap.mms-message" />
             </intent-filter>
         </receiver>
 

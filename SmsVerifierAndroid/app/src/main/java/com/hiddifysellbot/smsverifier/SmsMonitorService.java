@@ -8,6 +8,8 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.database.ContentObserver;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -17,8 +19,23 @@ public class SmsMonitorService extends Service {
     private static final String CHANNEL_ID = "sellbot_sms_monitor";
     private static final int NOTIFICATION_ID = 2107;
     private static final long AUTO_SYNC_INTERVAL_MS = 90L * 1000L;
+    private static final long INBOX_SCAN_INTERVAL_MS = 90L * 1000L;
+    private static final long OBSERVER_DEBOUNCE_MS = 1500L;
 
     private final Handler autoSyncHandler = new Handler(Looper.getMainLooper());
+    private final Handler inboxScanHandler = new Handler(Looper.getMainLooper());
+
+    private ContentObserver smsObserver;
+    private boolean observerRegistered = false;
+
+    // اسکن با تأخیر کوتاه تا پیامک‌های چندتکه در یک فراخوانی جمع شوند
+    private final Runnable debouncedInboxScan = new Runnable() {
+        @Override
+        public void run() {
+            triggerInboxScan();
+        }
+    };
+
     private final Runnable autoSyncTask = new Runnable() {
         @Override
         public void run() {
@@ -34,6 +51,16 @@ public class SmsMonitorService extends Service {
                 }
             }, "sellbot-auto-sync").start();
             autoSyncHandler.postDelayed(this, AUTO_SYNC_INTERVAL_MS);
+        }
+    };
+
+    // اسکن دوره‌ای جبرانی صندوق: اگر برادکست یا ContentObserver به‌دلیل محدودیت
+    // باتری/روم (مثلاً MIUI) از دست برود، این چرخه پیامک‌های جاافتاده را می‌گیرد
+    private final Runnable inboxScanTask = new Runnable() {
+        @Override
+        public void run() {
+            triggerInboxScan();
+            inboxScanHandler.postDelayed(this, INBOX_SCAN_INTERVAL_MS);
         }
     };
 
@@ -67,20 +94,72 @@ public class SmsMonitorService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        registerSmsObserver();
         autoSyncHandler.removeCallbacks(autoSyncTask);
         autoSyncHandler.post(autoSyncTask);
+        inboxScanHandler.removeCallbacks(inboxScanTask);
+        inboxScanHandler.postDelayed(inboxScanTask, INBOX_SCAN_INTERVAL_MS);
         return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
         autoSyncHandler.removeCallbacksAndMessages(null);
+        inboxScanHandler.removeCallbacksAndMessages(null);
+        unregisterSmsObserver();
         super.onDestroy();
     }
 
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    /**
+     * زنگ‌در روی صندوق پیامک: هر بار که پیامکی (توسط اپ پیامک اصلی) در
+     * content://sms درج/به‌روزرسانی شود، اسکن صندوق راه می‌افتد. این روش بدون
+     * «اپ پیش‌فرض پیامک» شدن و بدون دسترسی اعلان روی همهٔ نسخه‌ها کار می‌کند.
+     */
+    private void registerSmsObserver() {
+        if (observerRegistered) {
+            return;
+        }
+        try {
+            smsObserver = new ContentObserver(autoSyncHandler) {
+                @Override
+                public void onChange(boolean selfChange, Uri uri) {
+                    inboxScanHandler.removeCallbacks(debouncedInboxScan);
+                    inboxScanHandler.postDelayed(debouncedInboxScan, OBSERVER_DEBOUNCE_MS);
+                }
+            };
+            getContentResolver().registerContentObserver(Uri.parse("content://sms"), true, smsObserver);
+            observerRegistered = true;
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void unregisterSmsObserver() {
+        if (!observerRegistered || smsObserver == null) {
+            return;
+        }
+        try {
+            getContentResolver().unregisterContentObserver(smsObserver);
+        } catch (Exception ignored) {
+        }
+        observerRegistered = false;
+        smsObserver = null;
+    }
+
+    private void triggerInboxScan() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    SmsInboxScanner.scanRecent(SmsMonitorService.this, false);
+                } catch (Exception ignored) {
+                }
+            }
+        }, "sellbot-inbox-scan").start();
     }
 
     private void startForegroundCompat() {

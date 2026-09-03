@@ -4,7 +4,6 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
-import android.app.role.RoleManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -60,7 +59,6 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int REQ_SMS_PERMISSION = 1001;
     private static final int REQ_NOTIFICATION_PERMISSION = 1002;
-    private static final int REQ_DEFAULT_SMS = 1003;
     private static final int REQ_EXPORT_BACKUP = 2001;
     private static final int REQ_IMPORT_BACKUP = 2002;
     private static final int MAX_VISIBLE_BANK_SMS = 50;
@@ -104,9 +102,6 @@ public class MainActivity extends Activity {
     private TextView conversationsMetricView;
     private LinearLayout bankSmsListView;
     private TextView historyView;
-    private TextView smsDefaultStatusView;
-    private LinearLayout transactionSmsWarningCard;
-    private TextView smsTxnWarningView;
     private TextView clockView;
     private final Handler clockHandler = new Handler(Looper.getMainLooper());
     private final Runnable clockTicker = new Runnable() {
@@ -166,7 +161,6 @@ public class MainActivity extends Activity {
         super.onResume();
         maybeAskAppPassword();
         refreshHistory();
-        refreshTransactionSmsWarning();
         refreshNotificationListenerStatus();
         autoSyncPendingEntries();
         updateClockView();
@@ -233,18 +227,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_DEFAULT_SMS) {
-            refreshSmsRoleStatus();
-            refreshTransactionSmsWarning();
-            if (isDefaultSmsApp()) {
-                Toast.makeText(this,
-                        "✅ این اپ حالا اپ پیش‌فرض پیامک است. تشخیص پیامک فعال شد.",
-                        Toast.LENGTH_LONG).show();
-            } else {
-                showSmsRoleFailedDialog();
-            }
-            return;
-        }
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
@@ -931,76 +913,25 @@ public class MainActivity extends Activity {
             }
         });
 
-        // کارت «دسترسی کامل پیامک» فقط برای اندروید 12 به بالا معنی دارد؛
-        // روی اندروید 11 به پایین این بخش نمایش داده نمی‌شود
-        if (Build.VERSION.SDK_INT >= 31) {
-            LinearLayout smsRoleCard = addCard(securityContent);
-            addSectionTitle(smsRoleCard, "📨 دسترسی کامل پیامک (اندروید 12/13)");
-            TextView smsRoleHelp = new TextView(this);
-            smsRoleHelp.setText("از اندروید ۱۲/۱۳، سیستم‌عامل اجازه خواندن صندوق پیامک را فقط به «اپ پیش‌فرض پیامک» می‌دهد.\nروی MIUI، پیامک‌های بانکی/اعلانی یک مجوز جداگانه دارند که باید با دکمه «مجوز پیامک اعلانی MIUI» از امنیت گوشی فعال شود؛ در آن صفحه، مجوز «پیامک» را روی «همیشه اجازه بده» بگذار.");
-            smsRoleHelp.setTextColor(mutedColor);
-            smsRoleHelp.setTextSize(12);
-            smsRoleHelp.setLineSpacing(0, 1.15f);
-            smsRoleHelp.setPadding(0, 0, 0, dp(8));
-            smsRoleCard.addView(smsRoleHelp, matchWrap());
+        TextView permHint = new TextView(this);
+        permHint.setText("🔑 روی اندروید ۱۳+ (مخصوصاً شیائومی) مجوز «پیامک» را روی «همیشه اجازه بده» بگذار، وگرنه صندوق پیامک در پس‌زمینه خوانده نمی‌شود.");
+        permHint.setTextColor(mutedColor);
+        permHint.setTextSize(12);
+        permHint.setLineSpacing(0, 1.15f);
+        permHint.setPadding(0, dp(8), 0, dp(6));
+        securityCard.addView(permHint, matchWrap());
 
-            smsDefaultStatusView = new TextView(this);
-            smsDefaultStatusView.setTextSize(12);
-            smsDefaultStatusView.setTextColor(textColor);
-            smsDefaultStatusView.setPadding(dp(10), dp(10), dp(10), dp(10));
-            smsRoleCard.addView(smsDefaultStatusView, matchWrap());
+        Button permButton = new Button(this);
+        permButton.setText("🔑 تنظیمات مجوز پیامک (Allow all the time)");
+        styleButton(permButton, true);
+        securityCard.addView(permButton, matchWrap());
+        permButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openSmsPermissionSettings();
+            }
+        });
 
-            addButtonRow(smsRoleCard,
-                    new String[]{"📨 فعال‌سازی پیش‌فرض پیامک", "🔄 بررسی وضعیت"},
-                    new View.OnClickListener[]{
-                            new View.OnClickListener() {
-                                @Override
-                                public void onClick(View v) {
-                                    openSmsDefaultRole();
-                                }
-                            },
-                            new View.OnClickListener() {
-                                @Override
-                                public void onClick(View v) {
-                                    refreshSmsRoleStatus();
-                                }
-                            }
-                    });
-            refreshSmsRoleStatus();
-
-            addButtonRow(smsRoleCard,
-                    new String[]{"🔧 مجوز پیامک اعلانی MIUI"},
-                    new View.OnClickListener[]{
-                            new View.OnClickListener() {
-                                @Override
-                                public void onClick(View v) {
-                                    openMiuiSmsPermissionSettings();
-                                }
-                            }
-                    });
-
-            addButtonRow(smsRoleCard,
-                    new String[]{"🔍 تشخیص کامل الزامات پیش‌فرض پیامک"},
-                    new View.OnClickListener[]{
-                            new View.OnClickListener() {
-                                @Override
-                                public void onClick(View v) {
-                                    showSmsRoleDiagnosticsDialog();
-                                }
-                            }
-                    });
-
-            addButtonRow(smsRoleCard,
-                    new String[]{"↩️ بازگرداندن اپ پیامک اصلی گوشی"},
-                    new View.OnClickListener[]{
-                            new View.OnClickListener() {
-                                @Override
-                                public void onClick(View v) {
-                                    openDefaultAppsForRestore();
-                                }
-                            }
-                    });
-        }
 
         addButtonRow(securityCard,
                 new String[]{"🤖 تنظیمات تلگرام", "📊 گزارش‌ها"},
@@ -1020,9 +951,9 @@ public class MainActivity extends Activity {
                 });
 
         LinearLayout notificationCard = addCard(securityContent);
-        addSectionTitle(notificationCard, "🔔 حالت هم‌زمان با اپ پیامک اصلی (خواندن از اعلان‌ها)");
+        addSectionTitle(notificationCard, "🔔 حالت جایگزین: خواندن از اعلان‌ها (اختیاری)");
         TextView notificationHelp = new TextView(this);
-        notificationHelp.setText("هر دو اپ نمی‌توانند هم‌زمان «اپ پیش‌فرض پیامک» باشند (قانون اندروید). ولی اگر اپ پیامک اصلی گوشی پیش‌فرض بماند، این اپ می‌تواند پرداخت‌های بانکی را از اعلان‌های همان پیامک‌ها بخواند و به ربات اعلام کند:\n\n1️⃣ دکمه «دادن دسترسی اعلان‌ها» را بزنید و این اپ را در لیست مجاز کنید\n2️⃣ گزینه «خواندن پرداخت‌ها از اعلان‌ها» را روشن کنید\n3️⃣ روی اندروید ۱۲+ مجوز «پیامک اعلانی MIUI» بانک‌ها هم باید روشن باشد تا اعلان متن پیامک را نشان دهد\n\n💡 اگر این اپ خودش «اپ پیش‌فرض پیامک» است، این گزینه را خاموش بگذارید تا ارسال دوباره انجام نشود.");
+        notificationHelp.setText("روش اصلی، خواندن خودکار و لحظه‌ای صندوق پیامک با مجوز «خواندن پیامک» (READ_SMS) است و برای آن هیچ‌چیز اینجا لازم نیست.\n\nاین حالت فقط یک مسیر جایگزین/پشتیبان است: اگر بخواهی بدون مجوز SMS، پرداخت‌ها را از متن اعلان پیامک‌ها بخوانی:\n\n1️⃣ دکمه «دادن دسترسی اعلان‌ها» را بزن و این اپ را در لیست مجاز کن\n2️⃣ گزینه «خواندن پرداخت‌ها از اعلان‌ها» را روشن کن\n\n⚠️ روی برخی گوشی‌ها (مثل شیائومی) متن اعلان پیامک به‌صورت پیش‌فرض مخفی است و باید از تنظیمات گوشی نمایش محتوای اعلان را روشن کنی؛ به همین دلیل این حالت همیشه مطمئن نیست و پیشنهاد اصلی همان READ_SMS است.");
         notificationHelp.setTextColor(mutedColor);
         notificationHelp.setTextSize(12);
         notificationHelp.setLineSpacing(0, 1.15f);
@@ -1181,35 +1112,13 @@ public class MainActivity extends Activity {
         hint.setPadding(0, dp(6), 0, dp(10));
         smsCard.addView(hint, matchWrap());
 
-        // هشدار «دسترسی کامل پیامک» — فقط برای اندروید 12 به بالا (SDK 31+) نمایش داده می‌شود.
-        // روی اندروید 11 به پایین، خواندن پیامک بدون اپ پیش‌فرض هم کار می‌کند و هشدار لازم نیست.
-        transactionSmsWarningCard = new LinearLayout(this);
-        transactionSmsWarningCard.setOrientation(LinearLayout.VERTICAL);
-        smsCard.addView(transactionSmsWarningCard, matchWrap());
-
-        smsTxnWarningView = new TextView(this);
-        smsTxnWarningView.setTextSize(13);
-        smsTxnWarningView.setLineSpacing(0, 1.18f);
-        smsTxnWarningView.setPadding(dp(12), dp(12), dp(12), dp(12));
-        transactionSmsWarningCard.addView(smsTxnWarningView, matchWrap());
-
-        addButtonRow(transactionSmsWarningCard,
-                new String[]{"🚀 فعال‌سازی", "🗺️ راهنمای دستی"},
-                new View.OnClickListener[]{
-                        new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                openSmsDefaultRole();
-                            }
-                        },
-                        new View.OnClickListener() {
-                            @Override
-                            public void onClick(View v) {
-                                openSmsDefaultFallbackSettings();
-                            }
-                        }
-                });
-        refreshTransactionSmsWarning();
+        TextView smsReadHint = new TextView(this);
+        smsReadHint.setText("💡 پیامک‌ها به‌صورت خودکار و لحظه‌ای از صندوق خوانده می‌شوند؛ فقط مجوز «خواندن پیامک» (READ_SMS) لازم است و نیازی به «اپ پیش‌فرض پیامک» شدن نیست. برای پایداری روی شیائومی، باتری اپ را روی «بدون محدودیت» بگذار.");
+        smsReadHint.setTextColor(mutedColor);
+        smsReadHint.setTextSize(12);
+        smsReadHint.setLineSpacing(0, 1.15f);
+        smsReadHint.setPadding(dp(4), dp(4), dp(4), dp(10));
+        smsCard.addView(smsReadHint, matchWrap());
 
         addButtonRow(smsCard,
                 new String[]{"⬅️ داشبورد", "🔎 بررسی پیامک‌ها"},
@@ -1586,324 +1495,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean isDefaultSmsApp() {
-        try {
-            String currentDefault = Telephony.Sms.getDefaultSmsPackage(this);
-            return getPackageName().equals(currentDefault);
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private void openSmsDefaultRole() {
-        if (Build.VERSION.SDK_INT >= 29) {
-            try {
-                RoleManager roleManager = (RoleManager) getSystemService(ROLE_SERVICE);
-                if (roleManager == null || !roleManager.isRoleAvailable(RoleManager.ROLE_SMS)) {
-                    new AlertDialog.Builder(this)
-                            .setTitle("📨 اپ پیش‌فرض پیامک")
-                            .setMessage("روی این گوشی قابلیت انتخاب «اپ پیش‌فرض پیامک» در دسترس نیست (روم گوشی آن را محدود کرده).\n\nمسیر دستی: تنظیمات ← Apps ← Default apps ← SMS app")
-                            .setPositiveButton("باز کردن تنظیمات پیش‌فرض", new DialogInterface.OnClickListener() {
-                                @Override
-                                public void onClick(DialogInterface dialog, int which) {
-                                    openSmsDefaultFallbackSettings();
-                                }
-                            })
-                            .setNegativeButton("بستن", null)
-                            .show();
-                    return;
-                }
-                if (roleManager.isRoleHeld(RoleManager.ROLE_SMS)) {
-                    Toast.makeText(this, "✅ این اپ از قبل اپ پیش‌فرض پیامک است.", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                startActivityForResult(
-                        roleManager.createRequestRoleIntent(RoleManager.ROLE_SMS),
-                        REQ_DEFAULT_SMS
-                );
-                return;
-            } catch (Exception e) {
-                // fallback به تنظیمات دستی
-            }
-        }
-        openSmsDefaultFallbackSettings();
-    }
-
-    /**
-     * وقتی پنجره سیستمی انتخاب اپ پیش‌فرض پیامک بسته شد ولی اپ همچنان پیش‌فرض
-     * نشده بود، راهنمای کامل (و بدون بریدن متن) با دکمه‌های عملی نمایش داده می‌شود.
-     */
-    private void showSmsRoleFailedDialog() {
-        final LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(8), 0, dp(8), 0);
-
-        TextView text = new TextView(this);
-        text.setText("اپ پیش‌فرض پیامک نشد. مرحله به مرحله چک کن:\n\n"
-                + "1️⃣ نسخه اپ: تنظیمات ← Apps ← این اپ؛ باید نسخه 1.5.1 (کد 42) یا بالاتر نصب باشد. اگر نسخه قدیمی است، APK جدید را نصب کن.\n\n"
-                + "2️⃣ تنظیمات ← Apps ← Default apps ← SMS app ← این اپ (SellBot SMS Verifier) را انتخاب کن.\n\n"
-                + "3️⃣ گوشی شیائومی/ردمی: علاوه بر بالا، مجوز پیامک اعلانی MIUI را با دکمه مخصوص در بخش امنیت اپ روی «همیشه اجازه بده» بگذار.\n\n"
-                + "4️⃣ گوشی را یک‌بار ری‌استارت کن و دوباره تلاش کن.");
-        text.setTextSize(13);
-        text.setLineSpacing(0, 1.2f);
-        text.setPadding(dp(4), dp(4), dp(4), dp(8));
-        box.addView(text, matchWrap());
-
-        new AlertDialog.Builder(this)
-                .setTitle("⚠️ فعال‌سازی پیش‌فرض پیامک انجام نشد")
-                .setView(box)
-                .setPositiveButton("🔄 تلاش دوباره", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        openSmsDefaultRole();
-                    }
-                })
-                .setNeutralButton("🗺️ تنظیمات پیش‌فرض", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        openSmsDefaultFallbackSettings();
-                    }
-                })
-                .setNegativeButton("بستن", null)
-                .show();
-
-        Button diagButton = new Button(this);
-        diagButton.setText("🔍 نمایش گزارش تشخیص (برای اشکال‌زدایی)");
-        styleButton(diagButton, false);
-        box.addView(diagButton, matchWrap());
-        diagButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showSmsRoleDiagnosticsDialog();
-            }
-        });
-    }
-
-    private void showSmsRoleDiagnosticsDialog() {
-        TextView reportView = new TextView(this);
-        reportView.setText(buildSmsRoleDiagnostics());
-        reportView.setTextSize(12);
-        reportView.setLineSpacing(0, 1.2f);
-        reportView.setPadding(dp(16), dp(12), dp(16), dp(12));
-        reportView.setTextIsSelectable(true);
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(reportView);
-        new AlertDialog.Builder(this)
-                .setTitle("🔍 تشخیص کامل اپ پیش‌فرض پیامک")
-                .setView(scroll)
-                .setPositiveButton("بستن", null)
-                .show();
-    }
-
-    private String versionName() {
-        try {
-            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-        } catch (Exception e) {
-            return "-";
-        }
-    }
-
-    private String buildSmsRoleDiagnostics() {
-        StringBuilder report = new StringBuilder();
-        report.append("گوشی: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
-                .append(" | اندروید: ").append(Build.VERSION.RELEASE)
-                .append(" | بیلد: ").append(Build.VERSION.INCREMENTAL).append('\n');
-        report.append("SDK: ").append(Build.VERSION.SDK_INT)
-                .append(" | نسخه اپ: ").append(versionName()).append('\n');
-        String defaultPkg;
-        try {
-            defaultPkg = Telephony.Sms.getDefaultSmsPackage(this);
-        } catch (Exception e) {
-            defaultPkg = null;
-        }
-        report.append("اپ پیش‌فرض پیامک فعلی گوشی: ")
-                .append(defaultPkg == null || defaultPkg.trim().isEmpty() ? "-" : defaultPkg).append('\n');
-        report.append("این اپ پیش‌فرض پیامک است: ").append(isDefaultSmsApp() ? "بله ✅" : "خیر ❌").append('\n');
-        try {
-            RoleManager roleManager = (RoleManager) getSystemService(ROLE_SERVICE);
-            if (roleManager == null) {
-                report.append("RoleManager: در دسترس نیست ❌\n");
-            } else {
-                report.append("RoleManager: موجود | ROLE_SMS available: ")
-                        .append(roleManager.isRoleAvailable(RoleManager.ROLE_SMS) ? "بله ✅" : "خیر ❌")
-                        .append(" | held: ")
-                        .append(roleManager.isRoleHeld(RoleManager.ROLE_SMS) ? "بله ✅" : "خیر ❌")
-                        .append('\n');
-            }
-        } catch (Exception e) {
-            report.append("RoleManager خطا: ").append(e.getClass().getSimpleName()).append('\n');
-        }
-
-        report.append('\n').append("الزامات کاندید شدن به اپ پیش‌فرض پیامک:\n");
-        appendComponentCheck(report, "گیرنده SMS_DELIVER با مجوز BROADCAST_SMS",
-                "android.provider.Telephony.SMS_DELIVER", null, null,
-                "android.permission.BROADCAST_SMS", true, "SmsReceiver");
-        appendComponentCheck(report, "گیرنده WAP_PUSH_DELIVER با مجوز BROADCAST_WAP_PUSH",
-                "android.provider.Telephony.WAP_PUSH_DELIVER", "application/vnd.wap.mms-message", null,
-                "android.permission.BROADCAST_WAP_PUSH", true, "WapPushReceiver");
-        appendComponentCheck(report, "سرویس CONFIGURATION",
-                "android.telephony.action.CONFIGURATION", null, null,
-                null, false, "SmsConfigService");
-        appendComponentCheck(report, "سرویس RESPOND_VIA_MESSAGE با مجوز SEND_RESPOND_VIA_MESSAGE",
-                "android.intent.action.RESPOND_VIA_MESSAGE", null, "smsto:",
-                "android.permission.SEND_RESPOND_VIA_MESSAGE", false, "RespondViaMessageService");
-        try {
-            Intent sendto = new Intent(Intent.ACTION_SENDTO, Uri.parse("sms:"));
-            sendto.setPackage(getPackageName());
-            List<ResolveInfo> activities = getPackageManager().queryIntentActivities(sendto, 0);
-            report.append(activities != null && !activities.isEmpty() ? "✅" : "❌")
-                    .append(" اکتیویتی SENDTO (sms/smsto/mms/mmsto)\n");
-        } catch (Exception e) {
-            report.append("❌ اکتیویتی SENDTO (خطا: ").append(e.getClass().getSimpleName()).append(")\n");
-        }
-
-        report.append('\n').append("مجوزهای اعلان‌شده در مانیفست و وضعیت grant:\n");
-        report.append("بعد از فعال شدن «اپ پیش‌فرض پیامک»، مجوزهای grant نشده خودکار داده می‌شوند؛ پس ◻️ این‌ها مانع نیست.\n");
-        String[] perms = {
-                Manifest.permission.RECEIVE_SMS,
-                Manifest.permission.READ_SMS,
-                Manifest.permission.SEND_SMS,
-                Manifest.permission.RECEIVE_MMS,
-                Manifest.permission.RECEIVE_WAP_PUSH
-        };
-        for (String perm : perms) {
-            boolean declared = isPermissionDeclared(perm);
-            boolean granted = checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED;
-            report.append(declared ? "📄" : "❌").append(' ').append(perm)
-                    .append(" | grant: ").append(granted ? "✅" : "◻️").append('\n');
-        }
-        report.append('\n')
-                .append("راهنما: سه الزام بالا و اکتیویتی SENDTO باید ✅ باشند. 🟡 یعنی کامپوننت در APK هست ولی گوشی اجازه تطبیق اکشن را نداد (محدودیت query روم).\n")
-                .append("اگر همه ✅/🟡 بود ولی گوشی کاندید نمی‌کند، محدودیت روم است؛ با دستور adb زیر نقش پیش‌فرض پیامک مستقیم داده می‌شود:\n")
-                .append("adb shell cmd role add-role-holder android.app.role.SMS com.hiddifysellbot.smsverifier");
-        return report.toString();
-    }
-
-    private boolean isPermissionDeclared(String permission) {
-        try {
-            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_PERMISSIONS);
-            if (info.requestedPermissions != null) {
-                for (String declared : info.requestedPermissions) {
-                    if (permission.equals(declared)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return false;
-    }
-
-    private static final int COMPONENT_MATCHED = 2;
-    private static final int COMPONENT_EXISTS_UNVERIFIED = 1;
-    private static final int COMPONENT_MISSING = 0;
-
-    private void appendComponentCheck(StringBuilder report, String label, String action, String mimeType,
-                                      String dataScheme, String requiredPermission, boolean receiver, String className) {
-        int state = COMPONENT_MISSING;
-        PackageManager pm = getPackageManager();
-        try {
-            Intent intent = new Intent(action);
-            if (mimeType != null) {
-                intent.setType(mimeType);
-            }
-            if (dataScheme != null) {
-                intent.setData(Uri.parse(dataScheme));
-            }
-            intent.setPackage(getPackageName());
-            List<ResolveInfo> infos = receiver
-                    ? pm.queryBroadcastReceivers(intent, 0)
-                    : pm.queryIntentServices(intent, 0);
-            if (infos != null) {
-                for (ResolveInfo info : infos) {
-                    if (info == null) {
-                        continue;
-                    }
-                    // برای گیرنده‌ها activityInfo و برای سرویس‌ها serviceInfo مقدار دارد؛
-                    // فیلد permission هم روی ActivityInfo و ServiceInfo جداگانه تعریف شده است
-                    String componentPermission;
-                    ComponentInfo ci;
-                    if (info.activityInfo != null) {
-                        ci = info.activityInfo;
-                        componentPermission = info.activityInfo.permission;
-                    } else if (info.serviceInfo != null) {
-                        ci = info.serviceInfo;
-                        componentPermission = info.serviceInfo.permission;
-                    } else {
-                        continue;
-                    }
-                    if (requiredPermission == null || requiredPermission.equals(componentPermission)) {
-                        state = COMPONENT_MATCHED;
-                        break;
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        if (state != COMPONENT_MATCHED) {
-            // fallback: وجود خود کامپوننت در APK (برای روم‌هایی که query را محدود می‌کنند)
-            try {
-                PackageInfo pkg = pm.getPackageInfo(getPackageName(),
-                        PackageManager.GET_RECEIVERS | PackageManager.GET_SERVICES);
-                ComponentInfo[] comps = receiver ? pkg.receivers : pkg.services;
-                if (comps != null) {
-                    String suffix = "." + className;
-                    for (ComponentInfo ci : comps) {
-                        if (ci != null && ci.name != null && ci.name.endsWith(suffix)) {
-                            state = COMPONENT_EXISTS_UNVERIFIED;
-                            break;
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }
-        if (state == COMPONENT_MATCHED) {
-            report.append("✅ ").append(label).append('\n');
-        } else if (state == COMPONENT_EXISTS_UNVERIFIED) {
-            report.append("🟡 ").append(label)
-                    .append(" (کامپوننت ").append(className).append(" در APK هست؛ روم اجازه تطبیق اکشن را نداد)\n");
-        } else {
-            report.append("❌ ").append(label)
-                    .append(receiver
-                            ? "\n    (گیرنده‌ای با این اکشن و مجوز لازم پیدا نشد)"
-                            : "\n    (سرویسی با این اکشن پیدا نشد)").append('\n');
-        }
-    }
-
-    private void openSmsDefaultFallbackSettings() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
-                startActivity(new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS));
-            } else {
-                startActivity(new Intent(Settings.ACTION_SETTINGS));
-            }
-            Toast.makeText(this, "در لیست، پیامک را انتخاب کن و این اپ را به عنوان پیش‌فرض پیامک بگذار", Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            try {
-                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                        .setData(Uri.parse("package:" + getPackageName())));
-            } catch (Exception ignored) {
-                Toast.makeText(this, "با دستی به تنظیمات گوشی برو و این اپ را پیش‌فرض پیامک کن", Toast.LENGTH_LONG).show();
-            }
-        }
-    }
-
-    /**
-     * باز کردن صفحه اپ‌های پیش‌فرض برای برگرداندن اپ پیامک اصلی گوشی.
-     * فقط یک اپ می‌تواند پیش‌فرض پیامک باشد؛ با این کار اپ اصلی دوباره پیامک‌ها را
-     * نشان می‌دهد و تاریخچه پیامک‌ها دست‌نخورده می‌ماند.
-     */
-    private void openDefaultAppsForRestore() {
-        try {
-            startActivity(new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS));
-            Toast.makeText(this,
-                    "در صفحه باز شده «برنامه پیامک» را باز کن و اپ پیامک اصلی گوشی را انتخاب کن",
-                    Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            openSmsDefaultFallbackSettings();
-        }
-    }
 
     private boolean isNotificationListenerEnabled() {
         try {
@@ -1954,82 +1545,45 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void openMiuiSmsPermissionSettings() {
+    /**
+     * باز کردن صفحهٔ مجوزهای همین اپ تا کاربر (مخصوصاً روی شیائومی/HyperOS اندروید ۱۳+)
+     * مجوز «پیامک/SMS» را روی «همیشه اجازه بده / Allow all the time» بگذارد؛ بدون این
+     * تنظیم ممکن است صندوق پیامک در پس‌زمینه خوانده نشود.
+     */
+    private void openSmsPermissionSettings() {
         try {
             Intent intent = new Intent("miui.intent.action.APP_PERM_EDITOR");
             intent.setClassName("com.miui.securitycenter",
                     "com.miui.permcenter.permissions.PermissionsEditorActivity");
             intent.putExtra("extra_pkgname", getPackageName());
             startActivity(intent);
+            Toast.makeText(this, "مجوز «پیامک/SMS» را روی «همیشه اجازه بده» بگذار", Toast.LENGTH_LONG).show();
+            return;
+        } catch (Exception ignored) {
+        }
+        try {
+            Intent intent = new Intent("miui.intent.action.APP_PERM_EDITOR");
+            intent.setClassName("com.miui.securitycenter",
+                    "com.miui.permcenter.permissions.AppPermissionsEditorActivity");
+            intent.putExtra("extra_pkgname", getPackageName());
+            startActivity(intent);
+            Toast.makeText(this, "مجوز «پیامک/SMS» را روی «همیشه اجازه بده» بگذار", Toast.LENGTH_LONG).show();
+            return;
+        } catch (Exception ignored) {
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:" + getPackageName())));
+            Toast.makeText(this, "وارد Permissions شو و «SMS» را روی «Allow all the time» بگذار", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             try {
-                Intent intent = new Intent("miui.intent.action.APP_PERM_EDITOR");
-                intent.setClassName("com.miui.securitycenter",
-                        "com.miui.permcenter.permissions.AppPermissionsEditorActivity");
-                intent.putExtra("extra_pkgname", getPackageName());
-                startActivity(intent);
-            } catch (Exception e2) {
-                try {
-                    startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                            .setData(Uri.parse("package:" + getPackageName())));
-                } catch (Exception e3) {
-                    Toast.makeText(this, "دستی: تنظیمات ← اپها ← این اپ ← مجوزها ← پیامک ← همه را Allow کن", Toast.LENGTH_LONG).show();
-                }
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
+            } catch (Exception ignored) {
+                Toast.makeText(this, "دستی: تنظیمات ← اپ‌ها ← این اپ ← مجوزها ← پیامک ← همیشه اجازه بده", Toast.LENGTH_LONG).show();
             }
         }
     }
 
-    private void refreshSmsRoleStatus() {
-        if (smsDefaultStatusView == null) {
-            return;
-        }
-        boolean isDefault = isDefaultSmsApp();
-        if (isDefault) {
-            smsDefaultStatusView.setText("✅ این اپ اپ پیش‌فرض پیامک است.\nخواندن صندوق پیامک و تشخیص واریزی در اندروید ۱۲/۱۳ فعال است.");
-            styleGradientRounded(smsDefaultStatusView, softGreenColor, inputColor, greenColor, dp(18));
-        } else {
-            smsDefaultStatusView.setText("⚠️ این اپ اپ پیش‌فرض پیامک نیست.\nدر اندروید ۱۲/۱۳، بدون این حالت گاهی صندوق پیامک خوانده نمی‌شود و «مسیر پیامک» شناسایی نمی‌شود. با دکمه زیر فعالش کن.");
-            styleGradientRounded(smsDefaultStatusView, softGoldColor, inputColor, goldColor, dp(18));
-        }
-    }
-
-    private void refreshTransactionSmsWarning() {
-        if (transactionSmsWarningCard == null || smsTxnWarningView == null) {
-            return;
-        }
-        if (Build.VERSION.SDK_INT < 31) {
-            transactionSmsWarningCard.setVisibility(View.GONE);
-            return;
-        }
-        transactionSmsWarningCard.setVisibility(View.VISIBLE);
-        if (isDefaultSmsApp()) {
-            smsTxnWarningView.setText("✅ این اپ اپ پیش‌فرض پیامک است.\nتشخیص خودکار پیامک‌های بانکی در اندروید ۱۲/۱۳ فعال است.");
-            styleGradientRounded(smsTxnWarningView, softGreenColor, inputColor, greenColor, dp(18));
-        } else {
-            smsTxnWarningView.setText("⚠️ در اندروید 12/13 برای خواندن و تشخیص خودکار پیامک‌های بانکی، این اپ باید «اپ پیش‌فرض پیامک» باشد (مثل تلفن که فقط برای کار وصل است).\nدکمه «فعال‌سازی» را بزنید و در پنجره سیستم‌عامل، این اپ را انتخاب کنید.");
-            styleGradientRounded(smsTxnWarningView, softGoldColor, inputColor, goldColor, dp(18));
-        }
-    }
-
-    private void showSmsDefaultDialog() {
-        new AlertDialog.Builder(this)
-                .setTitle("📨 دسترسی کامل پیامک")
-                .setMessage("در اندروید ۱۲/۱۳ برای خواندن و تشخیص خودکار پیامک‌های بانکی، این اپ باید «اپ پیش‌فرض پیامک» باشد (مثل این تلفن که فقط برای همین کار وصل است).\n\nفعال‌سازی می‌کنید؟")
-                .setPositiveButton("✅ فعال‌سازی", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        openSmsDefaultRole();
-                    }
-                })
-                .setNegativeButton("بعداً", null)
-                .setNeutralButton("راهنمای دستی", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        openSmsDefaultFallbackSettings();
-                    }
-                })
-                .show();
-    }
 
     private void scanInboxNow() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
@@ -2038,12 +1592,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "اجازه READ_SMS را بده و دوباره دکمه بررسی پیامک‌ها را بزن", Toast.LENGTH_LONG).show();
             return;
         }
-        // فقط اندروید 12 (SDK 31) به بالا نیاز دارد اپ، پیش‌فرض پیامک شود؛
-        // روی اندروید 11 به پایین با مجوز READ_SMS صندوق خوانده می‌شود
-        if (Build.VERSION.SDK_INT >= 31 && !isDefaultSmsApp()) {
-            showSmsDefaultDialog();
-            return;
-        }
+        // خواندن صندوق فقط به مجوز READ_SMS نیاز دارد؛ «اپ پیش‌فرض پیامک» لازم نیست
         startInboxScan();
     }
 
@@ -2339,7 +1888,6 @@ public class MainActivity extends Activity {
 
     private void showSecurityScreen() {
         showOnly(securityContent);
-        refreshSmsRoleStatus();
         scrollToTop();
     }
 

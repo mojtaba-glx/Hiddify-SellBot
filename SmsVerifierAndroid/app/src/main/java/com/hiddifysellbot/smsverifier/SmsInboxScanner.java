@@ -18,6 +18,15 @@ public final class SmsInboxScanner {
     }
 
     public static int scanRecent(Context context) {
+        return scanRecent(context, true);
+    }
+
+    /**
+     * @param logSummary وقتی true باشد لاگ خلاصهٔ اسکن ثبت می‌شود (دکمهٔ دستی).
+     *                   وقتی false باشد (اسکن خودکار پس‌زمینه/ContentObserver) فقط در صورت
+     *                   پردازش پیامک جدید لاگ می‌گذارد تا گزارش پر از ورودی تکراری نشود.
+     */
+    public static int scanRecent(Context context, boolean logSummary) {
         Context appContext = context.getApplicationContext();
         long cutoff = System.currentTimeMillis() - DEFAULT_MAX_AGE_MS;
         int checked = 0;
@@ -35,7 +44,9 @@ public final class SmsInboxScanner {
                     "date DESC"
             );
             if (cursor == null) {
-                HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "امکان خواندن صندوق پیامک وجود ندارد.");
+                if (logSummary) {
+                    HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "امکان خواندن صندوق پیامک وجود ندارد.");
+                }
                 return 0;
             }
 
@@ -74,20 +85,26 @@ public final class SmsInboxScanner {
                 processed++;
             }
 
-            HistoryStore.add(
-                    appContext,
-                    "INBOX_SCAN_DONE",
-                    "همگام‌سازی صندوق پیامک انجام شد."
-                            + "\nپیامک‌های بانکی موجود: " + candidates.size()
-                            + "\nپیامک‌های جدید پردازش‌شده: " + processed
-                            + "\nپیامک‌های بررسی‌شده: " + checked
-            );
+            if (logSummary || processed > 0) {
+                HistoryStore.add(
+                        appContext,
+                        "INBOX_SCAN_DONE",
+                        "همگام‌سازی صندوق پیامک انجام شد."
+                                + "\nپیامک‌های بانکی موجود: " + candidates.size()
+                                + "\nپیامک‌های جدید پردازش‌شده: " + processed
+                                + "\nپیامک‌های بررسی‌شده: " + checked
+                );
+            }
             return processed;
         } catch (SecurityException e) {
-            HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "اجازه READ_SMS داده نشده است. از تنظیمات گوشی مجوز خواندن SMS را فعال کن.");
+            if (logSummary) {
+                HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "اجازه READ_SMS داده نشده است. از تنظیمات گوشی مجوز خواندن SMS را فعال کن.");
+            }
             return processed;
         } catch (Exception e) {
-            HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "خطا هنگام خواندن پیامک‌ها: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            if (logSummary) {
+                HistoryStore.add(appContext, "INBOX_SCAN_FAILED", "خطا هنگام خواندن پیامک‌ها: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
             return processed;
         } finally {
             if (cursor != null) {
