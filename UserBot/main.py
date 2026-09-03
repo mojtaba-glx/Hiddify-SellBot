@@ -5547,10 +5547,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         referral_consumed = _handle_referral_start_payload(start_payload, int(internal_user_id))
     text_settings = _get_text_settings()
     _u_lang = _user_lang(user_id)
-    welcome_text = (
-        text_settings.get("welcome_message")
-        or i18n.t("welcome", _u_lang, full_name=user.full_name)
-    )
+    welcome_text = _cfg_text(user_id, "welcome_message", "cfg_welcome", text_settings)
     formatted_text = _format_text_template(
         welcome_text,
         full_name=user.full_name,
