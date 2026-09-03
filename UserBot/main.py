@@ -5699,7 +5699,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 _cfg_text(user_id, "servers_list_text", "cfg_servers_list", text_settings),
                 parse_mode="Markdown",
-                reply_markup=location_keyboard(servers, columns=server_columns)
+                reply_markup=location_keyboard(servers, columns=server_columns, lang=_user_lang(user_id))
             )
             context.user_data[buy_open_key] = now_ts + BUY_MENU_HOLD_SECONDS
         finally:
@@ -5742,7 +5742,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             _cfg_text(user_id, "servers_list_text", "cfg_servers_list", text_settings),
             parse_mode="Markdown",
-            reply_markup=trial_location_keyboard(servers),
+            reply_markup=trial_location_keyboard(servers, lang=_user_lang(user_id)),
         )
 
     elif "تمدید اشتراک" in text:

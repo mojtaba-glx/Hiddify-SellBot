@@ -1193,7 +1193,7 @@ async def _cb_buy_back_main(update, context, query, data, user_id, br, text_sett
         query,
         _cfg_text(user_id, "servers_list_text", "cfg_servers_list", text_settings),
         parse_mode="Markdown",
-        reply_markup=location_keyboard(servers, columns=server_columns)
+        reply_markup=location_keyboard(servers, columns=server_columns, lang=_user_lang(user_id))
     )
     return
 
