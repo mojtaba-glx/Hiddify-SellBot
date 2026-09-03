@@ -232,8 +232,9 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
 
         if action == "faq":
             faq_text = str(text_settings.get("faq_text") or "").strip()
-            _faq_is_placeholder = (not faq_text) or ("به‌زودی تکمیل می‌شود" in faq_text) or ("به زودی تکمیل می شود" in faq_text)
-            if _faq_is_placeholder:
+            faq_db_default = str(userbot_db.DEFAULT_TEXT_SETTINGS.get("faq_text") or "").strip()
+            faq_is_admin_custom = bool(faq_text) and faq_text != faq_db_default
+            if not faq_is_admin_custom:
                 faq_text = _cfg_text(user_id, "faq_text", "cfg_faq_default", text_settings)
             try:
                 await query.message.edit_text(faq_text, reply_markup=support_panel_keyboard(lang=_user_lang(user_id)))
