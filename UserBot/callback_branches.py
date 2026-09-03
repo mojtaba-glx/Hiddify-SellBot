@@ -49,7 +49,7 @@ async def _cb_guide(update, context, query, data, user_id, text_settings):
             service = userbot_db.get_service_by_id(service_id)
             settings = _get_subscription_settings()
             if not service:
-                await _safe_edit_message_text(query, "❌ سرویس موردنظر یافت نشد یا حذف شده است.")
+                await _safe_edit_message_text(query, i18n.t("service_missing_deleted", _user_lang(user_id)))
                 return
             service = await _sync_service_runtime_from_panels(service)
             await _safe_edit_message_text(
@@ -68,7 +68,7 @@ async def _cb_guide(update, context, query, data, user_id, text_settings):
     if action in {"android", "ios", "windows", "mac", "linux"}:
         await context.bot.send_message(
             chat_id=user_id,
-            text=_guide_platform_text(action, text_settings),
+            text=_guide_platform_text(action, text_settings, lang=_user_lang(user_id)),
         )
         return
 
@@ -142,7 +142,7 @@ async def _cb_invite(update, context, query, data, user_id, text_settings):
             if not refs:
                 await context.bot.send_message(chat_id=user_id, text=i18n.t("no_invites_yet", _user_lang(user_id)))
                 return
-            lines = [f"👥 دعوت‌های من ({total} نفر)\n❖ ◈━━━━━━━━━━━━━━━◈ ❖"]
+            lines = [i18n.t("invite_list_header", _user_lang(user_id), count=total)]
             for idx, ref in enumerate(refs, start=1):
                 invitee_name = str(ref.get("invitee_full_name") or ref.get("invitee_username") or "—").strip()
                 status_icon = "✅" if str(ref.get("status") or "") == "active" else "❌"
@@ -180,14 +180,14 @@ async def _cb_invite(update, context, query, data, user_id, text_settings):
                 await context.bot.send_message(chat_id=user_id, text=i18n.t("no_rewards_yet", _user_lang(user_id)))
                 return
             labels = userbot_db.REFERRAL_REWARD_LABELS
-            lines = [f"📜 تاریخچه جوایز ({total} مورد)\n❖ ◈━━━━━━━━━━━━━━━◈ ❖"]
+            lines = [i18n.t("rewards_list_header", _user_lang(user_id), count=total)]
             for idx, rw in enumerate(rewards, start=1):
                 rtype = str(rw.get("reward_type") or "")
                 label = labels.get(rtype, rtype)
                 amount = int(rw.get("amount_toman") or 0)
                 status_icon = "✅" if str(rw.get("status") or "") == "paid" else "❌"
                 created = str(rw.get("created_at") or "")[:10]
-                lines.append(f"{idx}. {label} | {amount:,} تومان | {status_icon} {created}")
+                lines.append(f"{idx}. {label} | {amount:,}" + i18n.t("word_toman2", _user_lang(user_id)) + f" | {status_icon} {created}")
             await context.bot.send_message(chat_id=user_id, text="\n".join(lines))
             return
         return
@@ -266,11 +266,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             if page > total_pages:
                 page = total_pages
                 tickets, total = userbot_db.get_tickets_for_user(internal_uid, page=page, page_size=18)
-            header = (
-                "📬 تیکت‌های من\n"
-                f"🔸 تعداد کل تیکت‌ها: {int(total)}\n"
-                "شماره تیکت موردنظر را انتخاب کنید:"
-            )
+            header = i18n.t("tickets_list_header", _user_lang(user_id), total=int(total))
             kb = user_tickets_list_keyboard(tickets, page, total_pages, lang=_user_lang(user_id))
             try:
                 await query.message.edit_text(header, reply_markup=kb)
@@ -340,7 +336,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             detail_text = _ticket_detail_text(fresh, messages, screenshot_links=shot_links, lang=_user_lang(user_id))
             is_closed = str(fresh.get("status") or "").strip().lower() == "closed"
             can_reply = not is_closed
-            notice = "✅ تیکت بسته شد."
+            notice = i18n.t("ticket_closed_ok", _user_lang(user_id))
             try:
                 await query.answer(notice)
             except Exception:
@@ -481,7 +477,7 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                 detail_messages = userbot_db.get_ticket_messages(ticket_code)
                 detail_links = await _build_user_ticket_screenshot_links(context, ticket_code, detail_messages)
                 detail = _ticket_detail_text(fresh_ticket, detail_messages, screenshot_links=detail_links, lang=_user_lang(user_id))
-                out_text = "✅ پاسخ شما ثبت شد.\n\n" + detail
+                out_text = i18n.t("ticket_reply_saved", _user_lang(user_id)) + detail
                 try:
                     await query.message.delete()
                 except Exception:
@@ -567,9 +563,8 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
                     detail_messages = userbot_db.get_ticket_messages(code)
                     detail_links = await _build_user_ticket_screenshot_links(context, code, detail_messages)
                     detail = (
-                        "✅ تیکت شما با موفقیت ثبت شد.\n\n"
-                        "به زودی پاسخ داده می‌شود\n\n"
-                        + _ticket_detail_text(ticket, detail_messages, screenshot_links=detail_links)
+                        i18n.t("ticket_created_body", _user_lang(user_id))
+                        + _ticket_detail_text(ticket, detail_messages, screenshot_links=detail_links, lang=_user_lang(user_id))
                     )
                     try:
                         await query.message.edit_text(
@@ -662,7 +657,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             if probe_state == "unreachable":
                 await _safe_edit_message_text(
                     query,
-                    "⏳ این اشتراک موقتاً در دسترس نیست.\nپس از رفع مشکل سرور دوباره در لیست نمایش داده می‌شود.",
+                    i18n.t("sub_temp_unavailable", _user_lang(user_id)),
                 )
                 return
             sid = int(service.get("id") or 0)
@@ -813,29 +808,29 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                 if not settings.get("show_sub_link", True):
                     await context.bot.send_message(chat_id=user_id, text=i18n.t("sub_link_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
-                config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+                config_items.append((i18n.t("label_sub_link", _user_lang(user_id)), f"{base_url}/all.txt"))
             elif action == "auto_sub":
                 if not settings.get("show_auto_sub_link", False):
                     await context.bot.send_message(chat_id=user_id, text=i18n.t("auto_sub_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
-                config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+                config_items.append((i18n.t("label_auto_sub", _user_lang(user_id)), f"{base_url}/sub/?asn=unknown"))
             elif action == "sub_b64":
                 if not settings.get("show_sub_link_b64", False):
                     await context.bot.send_message(chat_id=user_id, text=i18n.t("b64_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
-                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+                config_items.append((i18n.t("label_sub_b64", _user_lang(user_id)), f"{base_url}/all.txt?base64=1"))
             elif action == "multi":
                 if not settings.get("show_multi_server", False):
                     await context.bot.send_message(chat_id=user_id, text=i18n.t("smart_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
                 managed_link, _ = _get_or_create_bot_sub_links(int(service_id), service=service)
-                config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
+                config_items.append((i18n.t("label_smart_link", _user_lang(user_id)), managed_link))
             elif action == "multi_b64":
                 if not settings.get("show_multi_server_b64", False):
                     await context.bot.send_message(chat_id=user_id, text=i18n.t("smart_b64_hidden", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
                     return
                 _, managed_link_b64 = _get_or_create_bot_sub_links(int(service_id), service=service)
-                config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
+                config_items.append((i18n.t("label_smart_b64", _user_lang(user_id)), managed_link_b64))
 
             if not config_items:
                 await context.bot.send_message(
@@ -848,8 +843,8 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
             primary_link = config_items[0][1]
             qr_image = make_qr_image(primary_link)
             qr_caption = (
-                "📄 جهت کپی شدن لینک اشتراک کافیست یک بار لینک زیر را لمس کنید 👇\n\n"
-                f"<code>{escape(primary_link)}</code>"
+                i18n.t("qr_copy_hint", _user_lang(user_id))
+                + f"{escape(primary_link)}</code>"
             )
             try:
                 await context.bot.send_photo(
@@ -868,7 +863,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                     disable_web_page_preview=True,
                 )
 
-            config_text_lines = ["📝 لینک‌های اشتراک", ""]
+            config_text_lines = [i18n.t("links_page_title", _user_lang(user_id)), ""]
             for title, value in config_items:
                 config_text_lines.append(title)
                 config_text_lines.append(f"<code>{escape(value)}</code>")
@@ -1032,7 +1027,7 @@ async def _cb_wallet(update, context, query, data, user_id):
         if ztxt.lower() in {"none", "null"}:
             ztxt = ""
         if not ztxt or ztxt == "0":
-            ztxt = _default_zarinpal_text()
+            ztxt = _default_zarinpal_text(_user_lang(user_id))
         vouchers = userbot_db.list_active_zarin_vouchers(limit=20)
         if not vouchers:
             await context.bot.send_message(
@@ -1410,7 +1405,7 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             + f"{price:,}"
         )
         if off_percent > 0:
-            text += f"\n🏷 تخفیف حجمی: {off_percent}٪"
+            text += i18n.t("plan_discount_line", _user_lang(user_id), percent=off_percent)
         await _safe_edit_message_text(query, text, reply_markup=selected_plan_keyboard(sid, gb, days, price, lang=_user_lang(user_id)))
         return
 

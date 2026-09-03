@@ -659,7 +659,7 @@ async def _enforce_force_join(
         return True
     if await _user_joined_force_channel(context, user_id, settings):
         return True
-    guide_text = str(settings.get("guide_text") or "").strip() or "🔒 لطفاً ابتدا در کانال عضو شوید."
+    guide_text = _cfg_text(user_id, "force_join_text", "force_join_guide_default", settings)
     await send_text(guide_text, reply_markup=force_join_keyboard(_force_join_url(settings), lang=_user_lang(user_id)))
     return False
 
@@ -921,7 +921,9 @@ async def _handle_user_ticket_shot_start(
     return True
 
 
-def _default_zarinpal_text() -> str:
+def _default_zarinpal_text(lang: str = "fa") -> str:
+    if lang != "fa":
+        return i18n.t("zarinpal_default_en", lang)
     return (
         "🌼 لطفا روی دکمه زیر کلیک کنید تا به درگاه پرداخت منتقل شوید و پرداخت را انجام دهید.\n"
         "⚠️ توجه: پس از پرداخت، فیلترشکن خود را روشن کرده و روی «دریافت محصول» بزنید "
@@ -999,7 +1001,7 @@ def _default_guide_platform_text(platform: str) -> str:
     return guides.get(p, "❌ راهنمای این سیستم‌عامل یافت نشد.")
 
 
-def _guide_platform_text(platform: str, text_settings: dict) -> str:
+def _guide_platform_text(platform: str, text_settings: dict, lang: str = "fa") -> str:
     key_map = {
         "android": "guide_android_text",
         "ios": "guide_ios_text",
@@ -1009,9 +1011,13 @@ def _guide_platform_text(platform: str, text_settings: dict) -> str:
     }
     field = key_map.get(str(platform or "").strip().lower())
     if not field:
-        return "❌ راهنمای این سیستم‌عامل یافت نشد."
+        return i18n.t("guide_os_missing", lang)
     custom = str((text_settings or {}).get(field) or "").strip()
-    return custom or _default_guide_platform_text(platform)
+    if custom:
+        return custom
+    if lang != "fa":
+        return i18n.t(f"guide_{platform}_en", lang) or _default_guide_platform_text(platform)
+    return _default_guide_platform_text(platform)
 
 
 def _ticket_status_title(status: str, lang: str = "fa") -> str:
@@ -4508,7 +4514,7 @@ async def show_main_buy_menu(query, sid, server_block, user_id, context):
     # نمایش صفحه ترکیبی با ویزارد داینامیک و دکمه پلن‌های آماده (بددون نمایش پلن‌ها)
     await _safe_edit_message_text(
         query,
-        "🛒 **خرید اشتراک**\n\n🎛 **بسته دلخواه خود را بسازید یا از پلن‌های آماده استفاده کنید:**", 
+        i18n.t("buy_menu_title", _user_lang(user_id)),
         parse_mode="Markdown",
         reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent, lang=_user_lang(user_id))
     )
@@ -4580,7 +4586,7 @@ async def _send_buy_flow_for_server(
         context.user_data[f"wiz_{user_id}"] = {"gb": default_gb, "months": default_months}
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🛒 **{title}**\n\n🎛 **بسته دلخواه خود را بسازید یا از پلن‌های آماده استفاده کنید:**",
+            text=i18n.t("buy_menu_title_named", _user_lang(user_id), title=title),
             parse_mode="Markdown",
             reply_markup=mixed_buy_keyboard(sid, default_gb, default_months, price, off_percent=off_percent, lang=_user_lang(user_id)),
         )
@@ -5278,7 +5284,7 @@ async def _connect_panel_subscription_by_uuid(
         return True
 
     primary_server, primary_user = targets[0]
-    service_name = str(primary_user.get("name") or "اشتراک متصل‌شده").strip() or "اشتراک متصل‌شده"
+    service_name = str(primary_user.get("name") or i18n.t("default_service_name", _user_lang(user_id))).strip() or i18n.t("default_service_name", _user_lang(user_id))
     usage_limit = _to_float(primary_user.get("usage_limit_GB"), 0.0)
     total_usage = 0.0
     min_days_left: Optional[int] = None
@@ -5785,7 +5791,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_line = ""
         if bool(mkt.get("show_user_status", True)):
             is_banned = int((u_db or {}).get("is_banned") or 0)
-            status_line = f"\n👤 وضعیت کاربر: {'🔴 مسدود' if is_banned else '🟢 فعال'}"
+            status_line = i18n.t("user_status_line", _user_lang(user_id), status=(i18n.t("user_status_blocked", _user_lang(user_id)) if is_banned else i18n.t("user_status_active", _user_lang(user_id))))
         if not any(
             [
                 bool(pay_settings.get("enable_card_to_card", True)),
@@ -5990,7 +5996,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=str(settings.get("guide_text") or "🔒 لطفاً ابتدا در کانال عضو شوید."),
+                    text=_cfg_text(user_id, "force_join_text", "force_join_guide_default", settings),
                     reply_markup=force_join_keyboard(_force_join_url(settings), lang=_user_lang(update.effective_user.id)),
                 )
         return
@@ -6005,7 +6011,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             await context.bot.send_message(
                 chat_id=user_id,
-                text=str(settings_fj.get("guide_text") or "🔒 لطفاً ابتدا در کانال عضو شوید."),
+                text=_cfg_text(user_id, "force_join_text", "force_join_guide_default", settings_fj),
                 reply_markup=force_join_keyboard(_force_join_url(settings_fj), lang=_user_lang(update.effective_user.id)),
             )
             return
