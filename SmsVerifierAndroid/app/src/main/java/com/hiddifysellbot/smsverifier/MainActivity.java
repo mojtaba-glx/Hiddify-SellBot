@@ -221,8 +221,8 @@ public class MainActivity extends Activity {
         if (dateView != null) {
             // تقویم رسمی شمسی (ICU) — دقیق و مطابق تقویم ایران، منطقهٔ تهران
             android.icu.util.Calendar icu = android.icu.util.Calendar.getInstance(
-                    android.icu.util.ULocale.forLanguageTag("fa-IR-u-ca-persian"),
-                    android.icu.util.TimeZone.getTimeZone("Asia/Tehran"));
+                    android.icu.util.ULocale.forLanguageTag("fa-IR-u-ca-persian"));
+            icu.setTimeZone(android.icu.util.TimeZone.getTimeZone("Asia/Tehran"));
             int jy = icu.get(android.icu.util.Calendar.YEAR);
             int jm = icu.get(android.icu.util.Calendar.MONTH) + 1;
             int jd = icu.get(android.icu.util.Calendar.DAY_OF_MONTH);
