@@ -84,6 +84,14 @@ def _fmt_gb(value: float) -> str:
     return f"{v:g}"
 
 
+def _t(key: str, **kw) -> str:
+    return _i18n_mod.t(key, userbot_db.get_admin_language(), **kw)
+
+
+def _adm_t(key: str, **kw) -> str:
+    return _t(key, **kw)
+
+
 _FA_MONTHS = {
     1: "ژانویه", 2: "فوریه", 3: "مارس", 4: "آوریل", 5: "مه", 6: "ژوئن",
     7: "ژوئیه", 8: "آگوست", 9: "سپتامبر", 10: "اکتبر", 11: "نوامبر", 12: "دسامبر",
@@ -151,7 +159,7 @@ def _fmt_agent_display(agent: Dict[str, Any]) -> str:
     elif username:
         ident = f"@{username}"
     else:
-        ident = f"نماینده #{agent_id}"
+        ident = f"{_adm_t('ub_lit_d416fa44016d')}{agent_id}"
 
     return f"{active} {ident}"
 
@@ -185,23 +193,25 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
 
 
 def _agent_detail_kb(agent_id: int) -> InlineKeyboardMarkup:
+    _lg = userbot_db.get_admin_language()
+    _t = lambda key: _i18n_mod.t(key, _lg)
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("💰 شارژ کیف پول", callback_data=f"agency:charge:{agent_id}"),
-                InlineKeyboardButton("💳 کیف پول", callback_data=f"agency:wallet:{agent_id}"),
+                InlineKeyboardButton(_t("ag_detail_charge"), callback_data=f"agency:charge:{agent_id}"),
+                InlineKeyboardButton(_t("ag_detail_wallet"), callback_data=f"agency:wallet:{agent_id}"),
             ],
-            [InlineKeyboardButton("📦 سرویس‌ها", callback_data=f"agency:services:{agent_id}:1")],
-            [InlineKeyboardButton("💵 تعرفه عمده", callback_data=f"agency:prices:{agent_id}:1")],
-            [InlineKeyboardButton("🤖 ربات مشتری", callback_data=f"agency:bots:{agent_id}")],
-            [InlineKeyboardButton("🔄 بازنشانی تست رایگان", callback_data=f"agency:resettrial:{agent_id}")],
-            [InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"agency:editname:{agent_id}")],
-            [InlineKeyboardButton("✏️ ویرایش تلفن", callback_data=f"agency:editphone:{agent_id}")],
+            [InlineKeyboardButton(_t("ag_detail_services"), callback_data=f"agency:services:{agent_id}:1")],
+            [InlineKeyboardButton(_t("ag_detail_prices"), callback_data=f"agency:prices:{agent_id}:1")],
+            [InlineKeyboardButton(_t("ag_detail_customer_bot"), callback_data=f"agency:bots:{agent_id}")],
+            [InlineKeyboardButton(_t("ag_detail_reset_trial"), callback_data=f"agency:resettrial:{agent_id}")],
+            [InlineKeyboardButton(_t("ag_detail_edit_name"), callback_data=f"agency:editname:{agent_id}")],
+            [InlineKeyboardButton(_t("ag_detail_edit_phone"), callback_data=f"agency:editphone:{agent_id}")],
             [
-                InlineKeyboardButton("🔁 فعال/غیرفعال", callback_data=f"agency:toggle:{agent_id}"),
-                InlineKeyboardButton("🗑 حذف", callback_data=f"agency:delete:{agent_id}"),
+                InlineKeyboardButton(_t("ag_detail_toggle"), callback_data=f"agency:toggle:{agent_id}"),
+                InlineKeyboardButton(_t("ag_detail_delete"), callback_data=f"agency:delete:{agent_id}"),
             ],
-            [InlineKeyboardButton("🔙 لیست نماینده‌ها", callback_data="agency:list:1")],
+            [InlineKeyboardButton(_t("ag_detail_back_list"), callback_data="agency:list:1")],
         ]
     )
 
@@ -259,12 +269,12 @@ async def send_agents_list(
     total_pages = max(1, (total + AGENCIES_PAGE_SIZE - 1) // AGENCIES_PAGE_SIZE)
 
     lines = [
-        f"📋 <b>لیست نماینده‌ها</b>\n"
+        f"{_t('ag_list_header')}\n"
         f"{SEPARATOR}\n"
-        f"صفحه {page} از {total_pages} | مجموع: {total} نفر\n"
+        f"{_t('ag_list_page', page=page, pages=total_pages, total=total)}\n"
     ]
     if not agents:
-        lines.append("\nهیچ نماینده‌ای ثبت نشده است.\nبرای افزودن، روی «➕ افزودن نماینده» بزنید.")
+        lines.append("\n" + _t("ag_list_empty"))
 
     rows: List[List[Any]] = []
     # دکمه‌های هر نماینده
@@ -275,14 +285,14 @@ async def send_agents_list(
     # صفحه‌بندی
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"agency:list:{page - 1}"))
+        nav.append(InlineKeyboardButton(_t("ag_prev"), callback_data=f"agency:list:{page - 1}"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"agency:list:{page + 1}"))
+        nav.append(InlineKeyboardButton(_t("ag_next"), callback_data=f"agency:list:{page + 1}"))
     if nav:
         rows.append(nav)
 
-    rows.append([InlineKeyboardButton("➕ افزودن نماینده", callback_data="agency:add")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="agency:root")])
+    rows.append([InlineKeyboardButton(_t("ag_add_agent"), callback_data="agency:add")])
+    rows.append([InlineKeyboardButton(_t("btn_back"), callback_data="agency:root")])
 
     kb = InlineKeyboardMarkup(rows)
     text = "\n".join(lines)
@@ -310,34 +320,19 @@ async def send_agent_detail(
     if not agent:
         query = update.callback_query
         if query:
-            await query.answer("نماینده پیدا نشد.", show_alert=True)
+            await query.answer(_t("ag_agent_not_found"), show_alert=True)
         return
 
     stats = agent_db.get_agent_stats(agent_id)
     context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
 
-    active = "فعال ✅" if int(agent.get("is_active", 0)) else "غیرفعال ❌"
+    active = _adm_t('ub_lit_3d635dbbe56d') if int(agent.get("is_active", 0)) else _adm_t('ub_lit_4e52e06f8fc2')
     name = _escape(agent.get('full_name')) or "—"
     username = f"@{_escape(agent.get('username'))}" if agent.get('username') else "—"
     phone = _escape(agent.get('phone')) or "—"
 
     text = (
-        f"👤 <b>جزئیات نماینده</b>\n"
-        f"{SEPARATOR}\n"
-        f"📱 <b>تلگرام:</b> <code>{agent.get('telegram_id', '?')}</code>\n"
-        f"🔢 <b>شناسه:</b> <code>{agent['id']}</code>\n"
-        f"👤 <b>نام:</b> {name}\n"
-        f"🔗 <b>یوزرنیم:</b> {username}\n"
-        f"📞 <b>تلفن:</b> {phone}\n"
-        f"📍 <b>وضعیت:</b> {active}\n"
-        f"🕒 <b>عضویت:</b> {_escape(agent.get('created_at'))}\n"
-        f"{SEPARATOR}\n"
-        f"💰 <b>کیف پول:</b> {_fmt_toman(stats['wallet_balance'])} تومان\n"
-        f"👥 <b>مشتریان:</b> {stats['customers_count']}\n"
-        f"📦 <b>سرویس‌ها:</b> {stats['services_total']} (فعال: {stats['services_active']})\n"
-        f"🔥 <b>ترایال:</b> {stats['trials_count']}\n"
-        f"💵 <b>فروش کل:</b> {_fmt_toman(stats['total_sales'])} تومان\n"
-        f"🏷 <b>سود نماینده:</b> {_fmt_toman(stats['total_profit'])} تومان"
+        f"{_adm_t('ub_lit_77392d1beff3')}{SEPARATOR}{_adm_t('ub_lit_3d9f1e17231e')}{agent.get('telegram_id', '?')}{_adm_t('ub_lit_8c2d7e21a4fe')}{agent['id']}{_adm_t('ub_lit_c92ebfa7431d')}{name}{_adm_t('ub_lit_2a31060a3872')}{username}{_adm_t('ub_lit_f6032c00b389')}{phone}{_adm_t('ub_lit_1166000020cd')}{active}{_adm_t('ub_lit_95db50b3622a')}{_escape(agent.get('created_at'))}\n{SEPARATOR}{_adm_t('ub_lit_c010039df0c2')}{_fmt_toman(stats['wallet_balance'])}{_adm_t('ub_lit_4f5fcb755df8')}{stats['customers_count']}{_adm_t('ub_lit_22bea4a64ad8')}{stats['services_total']}{_adm_t('ub_lit_3c9fea9e8888')}{stats['services_active']}{_adm_t('ub_lit_9c006db3aa5b')}{stats['trials_count']}{_adm_t('ub_lit_70511c55ac9e')}{_fmt_toman(stats['total_sales'])}{_adm_t('ub_lit_f7999257c3fc')}{_fmt_toman(stats['total_profit'])}{_adm_t('ub_lit_f6ac3483a71a')}"
     )
 
     kb = _agent_detail_kb(agent_id)
@@ -362,15 +357,9 @@ async def start_add_agent(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     query = update.callback_query
     text = (
-        "➕ <b>افزودن نماینده جدید</b>\n"
-        f"{SEPARATOR}\n\n"
-        "مرحله ۱ از ۳\n\n"
-        "لطفاً <b>آیدی عددی تلگرام</b> کاربر را ارسال کنید.\n\n"
-        "💡 برای پیدا کردن آیدی، کاربر می‌تواند به @userinfobot پیام بدهد.\n\n"
-        "یا کاربر ابتدا به ربات نمایندگی /start بزند تا شناسایی شود.\n\n"
-        "برای لغو /cancel را بفرستید."
+        f"{_adm_t('ub_lit_d6884ce9dec6')}{SEPARATOR}{_adm_t('ub_lit_fde8850b23e6')}"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data="agency:root")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_t("btn_cancel"), callback_data="agency:root")]])
 
     if query:
         try:
@@ -398,7 +387,7 @@ async def handle_add_agent_text(update: Update, context: ContextTypes.DEFAULT_TY
                 raise ValueError
         except ValueError:
             await update.message.reply_text(
-                "❌ آیدی تلگرام نامعتبر است. لطفاً عدد صحیح ارسال کنید."
+                _adm_t("agency_add_invalid_telegram")
             )
             return True
 
@@ -406,7 +395,7 @@ async def handle_add_agent_text(update: Update, context: ContextTypes.DEFAULT_TY
         existing = agent_db.get_agent_by_telegram_id(telegram_id)
         if existing:
             await update.message.reply_text(
-                f"⚠️ این کاربر قبلاً به‌عنوان نماینده ثبت شده است (شناسه {existing['id']})."
+                _adm_t("agency_add_duplicate", id=existing["id"])
             )
             context.user_data.pop("state", None)
             await send_agent_detail(update, context, existing["id"])
@@ -431,16 +420,12 @@ async def handle_add_agent_text(update: Update, context: ContextTypes.DEFAULT_TY
 
         auto_info = ""
         if full_name:
-            auto_info += f"\n👤 نام خودکار: <b>{_escape(full_name)}</b>"
+            auto_info += f"{_adm_t('ub_lit_990cb441f734')}{_escape(full_name)}</b>"
         if username:
-            auto_info += f"\n🔗 یوزرنیم خودکار: <b>@{_escape(username)}</b>"
+            auto_info += f"{_adm_t('ub_lit_b45b0c9c8439')}{_escape(username)}</b>"
 
         await update.message.reply_text(
-            f"✅ آیدی تلگرام ثبت شد: <code>{telegram_id}</code>{auto_info}\n\n"
-            "مرحله ۲ از ۳\n\n"
-            "لطفاً <b>نام کامل</b> نماینده را ارسال کنید.\n"
-            f"یا برای استفاده از نام خودکار «—» بفرستید.\n\n"
-            "برای لغو /cancel را بفرستید."
+            _adm_t("agency_add_name_prompt", id=telegram_id, auto_info=auto_info)
         )
         return True
 
@@ -453,11 +438,7 @@ async def handle_add_agent_text(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["state"] = AGENCY_ADD_PHONE
 
         await update.message.reply_text(
-            f"✅ نام ثبت شد: <b>{_escape(full_name) or '—'}</b>\n\n"
-            "مرحله ۳ از ۳\n\n"
-            "لطفاً <b>شماره تلفن</b> نماینده را ارسال کنید.\n"
-            "برای رد کردن «—» بفرستید.\n\n"
-            "برای لغو /cancel را بفرستید."
+            _adm_t("agency_add_phone_prompt", name=_escape(full_name) or "—")
         )
         return True
 
@@ -491,12 +472,7 @@ async def handle_add_agent_text(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop("agency_new_username", None)
 
         await update.message.reply_text(
-            f"✅ <b>نماینده با موفقیت ثبت شد!</b>\n"
-            f"{SEPARATOR}\n\n"
-            f"🆔 شناسه: <code>{agent_id}</code>\n"
-            f"👤 نام: {_escape(full_name) or '—'}\n"
-            f"🔗 یوزرنیم: @{_escape(username) if username else '—'}\n\n"
-            "نماینده باید به ربات نمایندگی (AgentBot) بزند /start تا اطلاعات‌اش کامل شود.",
+            _adm_t("agency_add_saved", id=agent_id, name=_escape(full_name) or "—", username=_escape(username) if username else "—"),
             reply_markup=admin_main_keyboard(),
         )
         await send_agent_detail(update, context, agent_id)
@@ -513,7 +489,7 @@ async def start_wallet_charge(update: Update, context: ContextTypes.DEFAULT_TYPE
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
         if update.callback_query:
-            await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+            await update.callback_query.answer(_t("ag_agent_not_found"), show_alert=True)
         return
 
     wallet = agent_db.get_wallet(agent_id)
@@ -521,13 +497,9 @@ async def start_wallet_charge(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
 
     text = (
-        f"💰 <b>شارژ کیف پول</b>\n\n"
-        f"👤 نماینده: {_escape(agent.get('full_name')) or agent.get('telegram_id')}\n"
-        f"💳 موجودی فعلی: <b>{_fmt_toman(wallet['balance'])}</b> تومان\n\n"
-        "مبلغ شارژ (به تومان) را ارسال کنید.\n"
-        "برای لغو /cancel را بفرستید."
+        _adm_t("agency_wallet_charge_prompt", name=_escape(agent.get("full_name")) or agent.get("telegram_id"), balance=_fmt_toman(wallet["balance"]))
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data=f"agency:view:{agent_id}")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_t("btn_cancel"), callback_data=f"agency:view:{agent_id}")]])
 
     query = update.callback_query
     if query:
@@ -557,16 +529,14 @@ async def handle_wallet_charge_text(update: Update, context: ContextTypes.DEFAUL
         if amount <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("❌ مبلغ نامعتبر است. لطفاً عدد صحیح مثبت ارسال کنید.")
+        await update.message.reply_text(_t("ag_amount_invalid"))
         return True
 
-    wallet = agent_db.charge_wallet(agent_id, amount, description="شارژ توسط ادمین")
+    wallet = agent_db.charge_wallet(agent_id, amount, description=_adm_t('ub_lit_a23a4bcdcff5'))
     context.user_data.pop("state", None)
 
     await update.message.reply_text(
-        f"✅ کیف پول شارژ شد!\n"
-        f"💰 مبلغ: <b>{_fmt_toman(amount)}</b> تومان\n"
-        f"💳 موجودی جدید: <b>{_fmt_toman(wallet['balance'])}</b> تومان",
+        _adm_t("agency_wallet_charged", amount=_fmt_toman(amount), balance=_fmt_toman(wallet["balance"])),
         reply_markup=admin_main_keyboard(),
         parse_mode="HTML",
     )
@@ -580,12 +550,12 @@ async def handle_wallet_charge_text(update: Update, context: ContextTypes.DEFAUL
 async def toggle_agent_active(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_t("ag_agent_not_found"), show_alert=True)
         return
     new_active = not bool(int(agent.get("is_active", 0)))
     agent_db.set_agent_active(agent_id, new_active)
     await update.callback_query.answer(
-        f"نماینده {'فعال شد ✅' if new_active else 'غیرفعال شد ❌'}"
+        _adm_t("agency_agent_status_changed", status=_adm_t("ag_active") if new_active else _adm_t("ag_inactive"))
     )
     await send_agent_detail(update, context, agent_id)
 
@@ -594,22 +564,17 @@ async def confirm_delete_agent(update: Update, context: ContextTypes.DEFAULT_TYP
     """نمایش تأیید حذف نماینده."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_t("ag_agent_not_found"), show_alert=True)
         return
     stats = agent_db.get_agent_stats(agent_id)
     text = (
-        f"⚠️ <b>تأیید حذف نماینده</b>\n\n"
-        f"👤 {_escape(agent.get('full_name')) or agent.get('telegram_id')}\n\n"
-        f"📦 سرویس‌ها: {stats['services_total']}\n"
-        f"👥 مشتریان: {stats['customers_count']}\n\n"
-        "❗️ با حذف، تمام داده‌های این نماینده (مشتریان، سرویس‌ها، کیف پول و...) پاک خواهد شد.\n"
-        "آیا مطمئن هستید؟"
+        _adm_t("agency_delete_confirm", name=_escape(agent.get("full_name")) or agent.get("telegram_id"), services=stats["services_total"], customers=stats["customers_count"])
     )
     kb = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🗑 بله، حذف کن", callback_data=f"agency:dodelete:{agent_id}"),
-                InlineKeyboardButton("❌ خیر", callback_data=f"agency:view:{agent_id}"),
+                InlineKeyboardButton(_t("ag_yes_delete"), callback_data=f"agency:dodelete:{agent_id}"),
+                InlineKeyboardButton(_t("ag_no"), callback_data=f"agency:view:{agent_id}"),
             ],
         ]
     )
@@ -622,9 +587,9 @@ async def confirm_delete_agent(update: Update, context: ContextTypes.DEFAULT_TYP
 async def do_delete_agent(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
     ok = agent_db.delete_agent(agent_id)
     if ok:
-        await update.callback_query.answer("نماینده حذف شد.")
+        await update.callback_query.answer(_t("ag_deleted"))
     else:
-        await update.callback_query.answer("حذف ناموفق بود.", show_alert=True)
+        await update.callback_query.answer(_t("ag_delete_failed"), show_alert=True)
     await send_agents_list(update, context, page=1)
 
 
@@ -634,17 +599,16 @@ async def do_delete_agent(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
 async def start_edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_t("ag_agent_not_found"), show_alert=True)
         return
     context.user_data["state"] = AGENCY_EDIT_NAME
     context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
     text = (
-        f"✏️ <b>ویرایش نام نماینده</b>\n"
+        f"✏️ <b>{_adm_t('agency_edit_name')}</b>\n"
         f"{SEPARATOR}\n\n"
-        f"نام فعلی: <b>{_escape(agent.get('full_name')) or '—'}</b>\n\n"
-        "نام جدید را ارسال کنید (برای خالی کردن «—» بفرستید)."
+        + _adm_t("agency_edit_name_prompt", name=_escape(agent.get("full_name")) or "—")
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data=f"agency:view:{agent_id}")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_t("btn_cancel"), callback_data=f"agency:view:{agent_id}")]])
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
@@ -665,7 +629,7 @@ async def handle_edit_name_text(update: Update, context: ContextTypes.DEFAULT_TY
     agent_db.update_agent(agent_id, {"full_name": name})
     context.user_data.pop("state", None)
     await update.message.reply_text(
-        f"✅ نام نماینده بروزرسانی شد: <b>{_escape(name) or '—'}</b>",
+        _adm_t("agency_name_updated", name=_escape(name) or "—"),
         reply_markup=admin_main_keyboard(),
         parse_mode="HTML",
     )
@@ -679,17 +643,14 @@ async def handle_edit_name_text(update: Update, context: ContextTypes.DEFAULT_TY
 async def start_edit_phone(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_t("ag_agent_not_found"), show_alert=True)
         return
     context.user_data["state"] = AGENCY_EDIT_PHONE
     context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
     text = (
-        f"✏️ <b>ویرایش تلفن</b>\n"
-        f"{SEPARATOR}\n\n"
-        f"تلفن فعلی: <b>{_escape(agent.get('phone') or '—')}</b>\n\n"
-        "تلفن جدید را ارسال کنید (برای خالی کردن «—» بفرستید)."
+        f"{_adm_t('ub_lit_8b14ed2aa3fb')}{SEPARATOR}{_adm_t('ub_lit_ef52123a2755')}{_escape(agent.get('phone') or '—')}{_adm_t('ub_lit_abb2369d5134')}"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data=f"agency:view:{agent_id}")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_t("btn_cancel"), callback_data=f"agency:view:{agent_id}")]])
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
@@ -709,7 +670,7 @@ async def handle_edit_phone_text(update: Update, context: ContextTypes.DEFAULT_T
         phone = ""
     agent_db.update_agent(agent_id, {"phone": phone})
     context.user_data.pop("state", None)
-    await update.message.reply_text("✅ تلفن بروزرسانی شد.", reply_markup=admin_main_keyboard())
+    await update.message.reply_text(_t("ag_phone_updated"), reply_markup=admin_main_keyboard())
     await send_agent_detail(update, context, agent_id)
     return True
 
@@ -720,26 +681,26 @@ async def handle_edit_phone_text(update: Update, context: ContextTypes.DEFAULT_T
 async def send_agent_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_t("ag_agent_not_found"), show_alert=True)
         return
     wallet = agent_db.get_wallet(agent_id)
     transactions, total = agent_db.get_transactions(agent_id, page=1, page_size=10)
 
     lines = [
-        f"💳 <b>کیف پول نماینده</b>\n\n",
+        f"{_adm_t('ub_lit_5bb4883a9530')}",
         f"👤 {_escape(agent.get('full_name')) or agent.get('telegram_id')}\n",
-        f"💰 موجودی: <b>{_fmt_toman(wallet['balance'])}</b> تومان\n",
-        f"🕒 بروزرسانی: {_escape(wallet.get('updated_at'))}\n",
-        f"\n━━━━━━━━━━━━━\n📜 <b>آخرین تراکنش‌ها</b> ({total})\n",
+        f"{_adm_t('ub_lit_5edf215212b2')}{_fmt_toman(wallet['balance'])}{_adm_t('ub_lit_95dfbec8e0e7')}",
+        f"{_adm_t('ub_lit_fc09de89a02b')}{_escape(wallet.get('updated_at'))}\n",
+        f"{_adm_t('ub_lit_7890e1df5666')}{total})\n",
     ]
     if not transactions:
-        lines.append("تراکنشی ثبت نشده است.")
+        lines.append(_adm_t('ub_lit_3c4f3687f478'))
     else:
         for tx in transactions:
             tx_type = tx.get("tx_type", "")
             amount = int(tx.get("amount", 0))
             sign = "+" if tx_type == "charge" else "-"
-            type_fa = {"charge": "شارژ", "purchase": "خرید", "refund": "بازگشت"}.get(tx_type, tx_type)
+            type_fa = {"charge": _adm_t('ub_lit_44253ef99979'), "purchase": _adm_t('ub_lit_149670029304'), "refund": _adm_t('ub_lit_a7976da7948a')}.get(tx_type, tx_type)
             lines.append(
                 f"{sign}{_fmt_toman(amount)} · {type_fa} · {_escape(tx.get('description') or '—')[:40]}\n"
                 f"   {_escape(tx.get('created_at'))}"
@@ -747,8 +708,8 @@ async def send_agent_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💰 شارژ", callback_data=f"agency:charge:{agent_id}")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")],
+            [InlineKeyboardButton(_adm_t("ag_detail_charge"), callback_data=f"agency:charge:{agent_id}")],
+            [InlineKeyboardButton(_t("btn_back"), callback_data=f"agency:view:{agent_id}")],
         ]
     )
     try:
@@ -763,18 +724,9 @@ async def send_agent_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def send_global_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     stats = agent_db.get_global_agency_stats()
     text = (
-        "📊 <b>آمار کلی سیستم نمایندگی</b>\n\n"
-        f"👥 نماینده‌ها: <b>{stats['agents_total']}</b> (فعال: {stats['agents_active']})\n"
-        f"👤 مشتریان: <b>{stats['customers_total']}</b>\n"
-        f"📦 سرویس‌ها: <b>{stats['services_total']}</b> (فعال: {stats['services_active']})\n"
-        f"🤖 ربات فعال: <b>{stats['bots_active']}</b>\n"
-        f"\n━━━━━━━━━━━━━\n"
-        f"💰 فروش کل: <b>{_fmt_toman(stats['total_sales'])}</b> تومان\n"
-        f"🏷 هزینه عمده: <b>{_fmt_toman(stats['total_wholesale'])}</b> تومان\n"
-        f"💵 سود سیستم: <b>{_fmt_toman(stats['total_profit'])}</b> تومان\n"
-        f"📥 شارژ کیف پول: <b>{_fmt_toman(stats['total_charges'])}</b> تومان\n"
+        f"{_adm_t('ub_lit_1084dd7a2890')}{stats['agents_total']}{_adm_t('ub_lit_29382728386d')}{stats['agents_active']}{_adm_t('ub_lit_502cf8ab4ed7')}{stats['customers_total']}{_adm_t('ub_lit_4ebaeafa5148')}{stats['services_total']}{_adm_t('ub_lit_29382728386d')}{stats['services_active']}{_adm_t('ub_lit_20a786a76f75')}{stats['bots_active']}{_adm_t('ub_lit_a387876e6778')}{_fmt_toman(stats['total_sales'])}{_adm_t('ub_lit_386469d4182c')}{_fmt_toman(stats['total_wholesale'])}{_adm_t('ub_lit_c544262de44a')}{_fmt_toman(stats['total_profit'])}{_adm_t('ub_lit_66b89d22405e')}{_fmt_toman(stats['total_charges'])}{_adm_t('ub_lit_95dfbec8e0e7')}"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="agency:root")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t("ag_main_menu_back"), callback_data="agency:root")]])
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
@@ -796,22 +748,17 @@ def _agent_payment_report_text(payment: Dict[str, Any], agent: Dict[str, Any]) -
     last4 = _escape(payment.get("card_last4") or meta.get("card_last4") or "----")
     ref_id = _escape(payment.get("ref_id") or payment.get("id"))
     return (
-        "🕊 <b>گزارش تایید پرداخت نماینده</b> 🕊\n\n"
-        "💸 شیوه پرداخت: کارت به کارت\n"
-        f"🔑 شناسه تراکنش: <code>{ref_id}</code>\n"
-        f"👤 نماینده: <b>{name}</b>\n"
-        f"💰 مبلغ پرداخت: <b>{_fmt_toman(amount)}</b> تومان\n"
-        f"💳 4 رقم آخر کارت مبدا: <code>{last4}</code>"
+        f"{_adm_t('ub_lit_9e83e9206cf2')}{ref_id}{_adm_t('ub_lit_d77136a2d677')}{name}{_adm_t('ub_lit_118f43e620ec')}{_fmt_toman(amount)}{_adm_t('ub_lit_c21051965173')}{last4}</code>"
     )
 
 
 def _agent_payment_action_kb(payment_id: int, agent_id: int) -> InlineKeyboardMarkup:
     agent = agent_db.get_agent_by_id(agent_id) or {}
-    name = _escape(agent.get("full_name") or agent.get("username") or f"نماینده #{agent_id}")
+    name = _escape(agent.get("full_name") or agent.get("username") or f"{_adm_t('ub_lit_d416fa44016d')}{agent_id}")
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("رد ❌", callback_data=f"agency:payno:{payment_id}"),
-            InlineKeyboardButton("تایید ✅", callback_data=f"agency:payok:{payment_id}"),
+            InlineKeyboardButton(_adm_t("ag_payment_reject"), callback_data=f"agency:payno:{payment_id}"),
+            InlineKeyboardButton(_adm_t("ag_payment_approve"), callback_data=f"agency:payok:{payment_id}"),
         ],
         [InlineKeyboardButton(f"{name} 👤", callback_data=f"agency:view:{agent_id}")],
     ])
@@ -821,25 +768,25 @@ async def send_pending_agent_payments(update: Update, context: ContextTypes.DEFA
     payments, total = agentbot_db.get_pending_wallet_charge_payments(page=page, page_size=8)
     total_pages = max(1, (total + 7) // 8)
     lines = [
-        "⏳ <b>شارژهای نماینده در انتظار تایید</b>\n\n",
-        f"تعداد: <b>{total}</b> | صفحه {page}/{total_pages}\n",
+        _adm_t('ub_lit_7339c054a52b'),
+        f"{_adm_t('ub_lit_9c7f18f36e4f')}{total}{_adm_t('ub_lit_a7fe259bdda9')}{page}/{total_pages}\n",
     ]
     rows: List[List[Any]] = []
     if not payments:
-        lines.append("موردی برای تایید وجود ندارد.")
+        lines.append(_adm_t('ub_lit_ec6e0317d9b3'))
     for p in payments:
         agent = agent_db.get_agent_by_id(int(p.get("agent_id") or 0)) or {}
-        name = agent.get("full_name") or agent.get("username") or p.get("customer_name") or f"نماینده #{p.get('agent_id')}"
-        lines.append(f"• {_escape(name)} | {_fmt_toman(p.get('amount'))} تومان | کد {p.get('ref_id')}")
+        name = agent.get("full_name") or agent.get("username") or p.get("customer_name") or f"{_adm_t('ub_lit_d416fa44016d')}{p.get('agent_id')}"
+        lines.append(f"• {_escape(name)} | {_fmt_toman(p.get('amount'))}{_adm_t('ub_lit_79e4c1ead1f5')}{p.get('ref_id')}")
         rows.append([InlineKeyboardButton(f"{name} - {_fmt_toman(p.get('amount'))}", callback_data=f"agency:payview:{p['id']}")])
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("قبلی", callback_data=f"agency:payments:{page-1}"))
+        nav.append(InlineKeyboardButton(_adm_t("ag_prev"), callback_data=f"agency:payments:{page-1}"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("بعدی", callback_data=f"agency:payments:{page+1}"))
+        nav.append(InlineKeyboardButton(_adm_t("ag_next"), callback_data=f"agency:payments:{page+1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="agency:root")])
+    rows.append([InlineKeyboardButton(_adm_t("ag_main_menu_back"), callback_data="agency:root")])
     try:
         await update.callback_query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
     except BadRequest:
@@ -850,7 +797,7 @@ async def show_agent_payment_detail(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     payment = agentbot_db.get_payment_by_id(payment_id)
     if not payment:
-        await query.answer("پرداخت پیدا نشد.", show_alert=True)
+        await query.answer(_adm_t("agency_payment_not_found"), show_alert=True)
         return
     agent_id = int(payment.get("agent_id") or 0)
     agent = agent_db.get_agent_by_id(agent_id) or {}
@@ -872,34 +819,40 @@ async def approve_agent_payment(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     payment = agentbot_db.get_payment_by_id(payment_id)
     if not payment:
-        await query.answer("پرداخت پیدا نشد.", show_alert=True)
+        await query.answer(_adm_t("agency_payment_not_found"), show_alert=True)
         return
-    if str(payment.get("status") or "") != "pending":
-        await query.answer("این پرداخت قبلاً بررسی شده است.", show_alert=True)
+    if str(payment.get("status") or "").strip().lower() not in {"pending", "processing"}:
+        await query.answer(_adm_t("agency_payment_already_checked"), show_alert=True)
         return
     agent_id = int(payment.get("agent_id") or 0)
     amount = int(payment.get("amount") or 0)
-    agentbot_db.set_payment_status(payment_id, agent_id, "approved")
-    wallet = agent_db.charge_wallet(agent_id, amount, description=f"شارژ کارت به کارت نماینده - تراکنش {payment.get('ref_id')}")
+    result = agentbot_db.approve_wallet_charge_payment_once(payment_id, source="manual")
+    if not result.get("ok"):
+        await query.answer(
+            _adm_t("agency_payment_approval_failed", reason=str(result.get("reason") or "unknown")[:120]),
+            show_alert=True,
+        )
+        return
+    wallet = result.get("wallet") or agent_db.get_wallet(agent_id)
     agent = agent_db.get_agent_by_id(agent_id) or {}
     try:
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()
         agent_tg_id = int(agent.get("telegram_id") or 0)
-        if token and agent_tg_id:
+        if result.get("credited_now") and token and agent_tg_id:
             from telegram import Bot
             bot = Bot(token=token)
             await bot.send_message(
                 chat_id=agent_tg_id,
-                text=f"✅ پرداخت شما تایید شد.\n\nمبلغ {_fmt_toman(amount)} تومان به کیف پول شما اضافه شد.",
+                text=_adm_t("agency_payment_customer_approved", amount=_fmt_toman(amount)),
             )
     except Exception as e:
         logger.warning("Failed notifying agent payment approval: %s", e)
-    await query.answer("پرداخت تایید و کیف پول شارژ شد.", show_alert=True)
+    await query.answer(_adm_t("agency_payment_approved"), show_alert=True)
     try:
-        await query.edit_message_caption(caption=f"✅ پرداخت تایید شد.\nموجودی جدید: {_fmt_toman(wallet['balance'])} تومان", parse_mode="HTML")
+        await query.edit_message_caption(caption=_adm_t("agency_payment_approved_balance", balance=_fmt_toman(wallet["balance"])), parse_mode="HTML")
     except BadRequest:
         try:
-            await query.edit_message_text(f"✅ پرداخت تایید شد.\nموجودی جدید: {_fmt_toman(wallet['balance'])} تومان", parse_mode="HTML")
+            await query.edit_message_text(_adm_t("agency_payment_approved_balance", balance=_fmt_toman(wallet["balance"])), parse_mode="HTML")
         except BadRequest:
             pass
 
@@ -908,14 +861,18 @@ async def reject_agent_payment(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     payment = agentbot_db.get_payment_by_id(payment_id)
     if not payment:
-        await query.answer("پرداخت پیدا نشد.", show_alert=True)
+        await query.answer(_adm_t("agency_payment_not_found"), show_alert=True)
         return
     if str(payment.get("status") or "") != "pending":
-        await query.answer("این پرداخت قبلاً بررسی شده است.", show_alert=True)
+        await query.answer(_adm_t("agency_payment_already_checked"), show_alert=True)
         return
     agent_id = int(payment.get("agent_id") or 0)
     amount = int(payment.get("amount") or 0)
-    agentbot_db.set_payment_status(payment_id, agent_id, "rejected")
+    if not agentbot_db.set_payment_status(
+        payment_id, agent_id, "rejected", expected_status="pending"
+    ):
+        await query.answer(_adm_t("agency_payment_concurrent"), show_alert=True)
+        return
     agent = agent_db.get_agent_by_id(agent_id) or {}
     try:
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()
@@ -923,15 +880,15 @@ async def reject_agent_payment(update: Update, context: ContextTypes.DEFAULT_TYP
         if token and agent_tg_id:
             from telegram import Bot
             bot = Bot(token=token)
-            await bot.send_message(chat_id=agent_tg_id, text=f"❌ پرداخت شما به مبلغ {_fmt_toman(amount)} تومان رد شد.")
+            await bot.send_message(chat_id=agent_tg_id, text=_adm_t("agency_payment_customer_rejected", amount=_fmt_toman(amount)))
     except Exception as e:
         logger.warning("Failed notifying agent payment rejection: %s", e)
-    await query.answer("پرداخت رد شد.", show_alert=True)
+    await query.answer(_adm_t("agency_payment_rejected"), show_alert=True)
     try:
-        await query.edit_message_caption(caption="❌ پرداخت رد شد.", parse_mode="HTML")
+        await query.edit_message_caption(caption=_adm_t("agency_payment_rejected_short"), parse_mode="HTML")
     except BadRequest:
         try:
-            await query.edit_message_text("❌ پرداخت رد شد.", parse_mode="HTML")
+            await query.edit_message_text(_adm_t("agency_payment_rejected_short"), parse_mode="HTML")
         except BadRequest:
             pass
 
@@ -948,26 +905,26 @@ async def send_agent_prices(
     """نمایش تعرفه عمده حجم/زمان نماینده."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_adm_t("ag_agent_not_found"), show_alert=True)
         return
 
     rates = agent_db.get_wholesale_pricing(agent_id)
 
     lines = [
-        f"💵 <b>تعرفه عمده نماینده</b>\n\n",
+        f"{_adm_t('ub_lit_39f45e862d93')}",
         f"👤 {_escape(agent.get('full_name')) or agent.get('telegram_id')}\n",
-        f"📊 هر گیگ: <b>{_fmt_toman(rates['price_per_gb'])}</b> تومان\n",
-        f"⏰ هر ۳۰ روز: <b>{_fmt_toman(rates['price_per_30_days'])}</b> تومان\n\n",
-        "وقتی نماینده پرداخت مشتری را تایید می‌کند، این مبلغ از کیف پول نماینده کم می‌شود.\n",
-        "کیف پول نماینده تاریخ انقضا ندارد و فقط با سفارش‌های تاییدشده مصرف می‌شود.\n\n",
-        "🧮 <b>فرمول کسر</b>\n",
-        "<code>حجم سرویس × قیمت هر گیگ + ماه سرویس × قیمت هر ۳۰ روز</code>\n\n",
-        "مثال: اگر سرویس ۱۰ گیگ و ۴۵ روز باشد، زمان آن ۲ ماه حساب می‌شود.",
+        f"{_adm_t('ub_lit_a59a5803e202')}{_fmt_toman(rates['price_per_gb'])}{_adm_t('ub_lit_95dfbec8e0e7')}",
+        f"{_adm_t('ub_lit_4e4e07908b21')}{_fmt_toman(rates['price_per_30_days'])}{_adm_t('ub_lit_fd2dd3161775')}",
+        _adm_t('ub_lit_84efebe257e9'),
+        _adm_t('ub_lit_76e87afbec2c'),
+        _adm_t('ub_lit_a44089e5d231'),
+        _adm_t('ub_lit_b325865f566a'),
+        _adm_t('ub_lit_a920ffb5dfa1'),
     ]
 
     kb_rows = [
-        [InlineKeyboardButton("⚙️ تنظیم تعرفه عمده", callback_data=f"agency:rates:{agent_id}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")],
+        [InlineKeyboardButton(_adm_t("agency_wholesale_rates"), callback_data=f"agency:rates:{agent_id}")],
+        [InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:view:{agent_id}")],
     ]
     kb = InlineKeyboardMarkup(kb_rows)
     try:
@@ -980,7 +937,7 @@ async def start_wholesale_rates_input(update: Update, context: ContextTypes.DEFA
     """شروع ویزارد مرحله‌ای تعرفه عمده."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_adm_t("ag_agent_not_found"), show_alert=True)
         return
     rates = agent_db.get_wholesale_pricing(agent_id)
     context.user_data["state"] = AGENCY_SET_WHOLESALE_GB
@@ -988,16 +945,9 @@ async def start_wholesale_rates_input(update: Update, context: ContextTypes.DEFA
     context.user_data.pop("agency_wholesale_price_per_gb", None)
     context.user_data.pop("agency_wholesale_price_per_30_days", None)
     text = (
-        "⚙️ <b>تنظیم تعرفه عمده</b>\n\n"
-        "مرحله ۱ از ۳\n\n"
-        "قیمت هر گیگ را به تومان وارد کنید.\n"
-        "این مبلغ برای هر گیگ سرویس مشتری از کیف پول نماینده کسر می‌شود.\n\n"
-        "تعرفه فعلی:\n"
-        f"📊 هر گیگ: <b>{_fmt_toman(rates['price_per_gb'])}</b> تومان\n"
-        f"⏰ هر ۳۰ روز: <b>{_fmt_toman(rates['price_per_30_days'])}</b> تومان\n\n"
-        "مثال: <code>2000</code>"
+        f"{_adm_t('ub_lit_e843d5887b86')}{_fmt_toman(rates['price_per_gb'])}{_adm_t('ub_lit_66e2bd36389b')}{_fmt_toman(rates['price_per_30_days'])}{_adm_t('ub_lit_d5e673f53cec')}"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data=f"agency:view:{agent_id}")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t("btn_cancel"), callback_data=f"agency:view:{agent_id}")]])
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
@@ -1018,22 +968,17 @@ async def handle_wholesale_rates_text(update: Update, context: ContextTypes.DEFA
     try:
         value = int(raw.replace(",", ""))
     except ValueError:
-        await update.message.reply_text("❌ لطفاً فقط عدد ارسال کنید.")
+        await update.message.reply_text(_adm_t("ag_number_only"))
         return True
     if value < 0:
-        await update.message.reply_text("❌ اعداد نباید منفی باشند.")
+        await update.message.reply_text(_adm_t("ag_nonnegative"))
         return True
 
     if state == AGENCY_SET_WHOLESALE_GB:
         context.user_data["agency_wholesale_price_per_gb"] = value
         context.user_data["state"] = AGENCY_SET_WHOLESALE_DAYS
         await update.message.reply_text(
-            "⚙️ <b>تنظیم تعرفه عمده</b>\n\n"
-            "مرحله ۲ از ۳\n\n"
-            f"📊 قیمت هر گیگ: <b>{_fmt_toman(value)}</b> تومان\n\n"
-            "حالا قیمت هر ۳۰ روز را به تومان وارد کنید.\n"
-            "اگر سرویس ۴۵ روزه باشد، زمان آن ۲ ماه حساب می‌شود.\n\n"
-            "مثال: <code>10000</code>",
+            _adm_t("agency_wholesale_days_prompt", value=_fmt_toman(value)),
             parse_mode="HTML",
         )
         return True
@@ -1043,17 +988,12 @@ async def handle_wholesale_rates_text(update: Update, context: ContextTypes.DEFA
     price_per_30_days = value
     context.user_data["state"] = "agency:confirm_wholesale_rates"
     text = (
-        "⚙️ <b>تایید تعرفه عمده</b>\n\n"
-        "مرحله ۳ از ۳\n\n"
-        f"📊 هر گیگ: <b>{_fmt_toman(price_per_gb)}</b> تومان\n"
-        f"⏰ هر ۳۰ روز: <b>{_fmt_toman(price_per_30_days)}</b> تومان\n\n"
-        "این تعرفه از سفارش‌های بعدی مشتریان نماینده کسر می‌شود.\n"
-        "آیا ذخیره شود؟"
+        f"{_adm_t('ub_lit_18408a5e8107')}{_fmt_toman(price_per_gb)}{_adm_t('ub_lit_66e2bd36389b')}{_fmt_toman(price_per_30_days)}{_adm_t('ub_lit_302c98ebc96b')}"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید و ذخیره", callback_data=f"agency:ratesave:{agent_id}")],
-        [InlineKeyboardButton("✏️ ویرایش از اول", callback_data=f"agency:rates:{agent_id}")],
-        [InlineKeyboardButton("❌ لغو", callback_data=f"agency:view:{agent_id}")],
+        [InlineKeyboardButton(_adm_t("agency_rates_save"), callback_data=f"agency:ratesave:{agent_id}")],
+        [InlineKeyboardButton(_adm_t("agency_rates_edit"), callback_data=f"agency:rates:{agent_id}")],
+        [InlineKeyboardButton(_adm_t("btn_cancel"), callback_data=f"agency:view:{agent_id}")],
     ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
     return True
@@ -1069,22 +1009,20 @@ async def confirm_wholesale_rates(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.pop("agency_wholesale_price_per_gb", None)
     context.user_data.pop("agency_wholesale_price_per_30_days", None)
     text = (
-        "✅ تعرفه عمده ثبت شد.\n"
-        f"📊 هر گیگ: <b>{_fmt_toman(rates['price_per_gb'])}</b> تومان\n"
-        f"⏰ هر ۳۰ روز: <b>{_fmt_toman(rates['price_per_30_days'])}</b> تومان"
+        f"{_adm_t('ub_lit_825f91675b46')}{_fmt_toman(rates['price_per_gb'])}{_adm_t('ub_lit_66e2bd36389b')}{_fmt_toman(rates['price_per_30_days'])}{_adm_t('ub_lit_3f6bcfd76ac7')}"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به نماینده", callback_data=f"agency:view:{agent_id}")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t("agency_back_agent"), callback_data=f"agency:view:{agent_id}")]])
     try:
         await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
-        await query.answer("تعرفه ذخیره شد.", show_alert=True)
+        await query.answer(_adm_t("agency_rates_saved"), show_alert=True)
 
 
 async def start_add_price_server_select(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
     """انتخاب سرور برای قیمت‌گذاری جدید."""
     servers = database.get_servers() or []
     if not servers:
-        await update.callback_query.answer("هیچ سروری ثبت نشده است.", show_alert=True)
+        await update.callback_query.answer(_adm_t("agency_no_servers"), show_alert=True)
         return
 
     rows: List[List[Any]] = []
@@ -1095,10 +1033,10 @@ async def start_add_price_server_select(update: Update, context: ContextTypes.DE
             stitle,
             callback_data=f"agency:pricesrv:{agent_id}:{sid}",
         )])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:prices:{agent_id}:1")])
+    rows.append([InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:prices:{agent_id}:1")])
 
     kb = InlineKeyboardMarkup(rows)
-    text = f"🖥 <b>انتخاب سرور</b>\n\nسروری که می‌خواهید قیمت عمده تعیین کنید را انتخاب کنید:"
+    text = f"{_adm_t('ub_lit_e8b591d7b40c')}"
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
@@ -1117,14 +1055,9 @@ async def start_add_price_input(
     context.user_data["agency_price_server_id"] = server_id
 
     text = (
-        "💵 <b>افزودن قیمت عمده</b>\n\n"
-        "مشخصات پلن را به این شکل ارسال کنید:\n\n"
-        "<code>روز حجم قیمت_عمده</code>\n\n"
-        "مثال: <code>30 50 80000</code>\n"
-        "یعنی ۳۰ روز، ۵۰ گیگ، قیمت عمده ۸۰٬۰۰۰ تومان\n\n"
-        "(قیمت فروش بعداً توسط خود نماینده تعیین می‌شود)"
+        _adm_t('ub_lit_8a53dd8f9fc4')
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data=f"agency:prices:{agent_id}:1")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t("btn_cancel"), callback_data=f"agency:prices:{agent_id}:1")]])
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
@@ -1148,7 +1081,7 @@ async def handle_wholesale_price_text(update: Update, context: ContextTypes.DEFA
     parts = raw.replace(",", " ").replace("،", " ").split()
     if len(parts) != 3:
         await update.message.reply_text(
-            "❌ فرمت نامعتبر. مثال صحیح:\n<code>30 50 80000</code>\n(روز حجم قیمت_عمده)"
+            _adm_t("agency_invalid_price_format")
         )
         return True
 
@@ -1157,11 +1090,11 @@ async def handle_wholesale_price_text(update: Update, context: ContextTypes.DEFA
         gb = float(parts[1])
         wholesale = int(parts[2])
     except ValueError:
-        await update.message.reply_text("❌ اعداد نامعتبر هستند.")
+        await update.message.reply_text(_adm_t("agency_invalid_numbers"))
         return True
 
     if days <= 0 or gb <= 0 or wholesale < 0:
-        await update.message.reply_text("❌ مقادیر باید مثبت باشند.")
+        await update.message.reply_text(_adm_t("agency_positive_values"))
         return True
 
     plan = agent_db.set_agent_plan(
@@ -1171,17 +1104,14 @@ async def handle_wholesale_price_text(update: Update, context: ContextTypes.DEFA
         gb=gb,
         wholesale_price=wholesale,
         sale_price=0,
-        plan_title=f"{days} روز / {gb}GB",
+        plan_title=f"{days}{_adm_t('ub_lit_9f224154c8b7')}{gb}GB",
     )
 
     context.user_data.pop("state", None)
     context.user_data.pop("agency_price_server_id", None)
 
     await update.message.reply_text(
-        f"✅ قیمت عمده ثبت شد!\n"
-        f"📦 {days} روز / {gb}GB\n"
-        f"🏷 قیمت عمده: <b>{_fmt_toman(wholesale)}</b> تومان\n\n"
-        "نماینده باید قیمت فروش را خودش تعیین کند.",
+        _adm_t("agency_wholesale_price_saved", days=days, gb=gb, price=_fmt_toman(wholesale)),
         reply_markup=admin_main_keyboard(),
     )
     await send_agent_prices(update, context, agent_id)
@@ -1200,7 +1130,7 @@ async def send_agent_services(
     """نمایش ساده سرویس‌های یک نماینده: آمار + دکمه‌های شماره."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_adm_t("ag_agent_not_found"), show_alert=True)
         return
 
     if page < 1:
@@ -1222,14 +1152,14 @@ async def send_agent_services(
 
     filter_label = {"active": " 🟢", "inactive": " 🔴"}.get(filter_mode, "")
     blocks: List[str] = [
-        f"📦 <b>سرویس‌های نماینده</b>{filter_label}",
+        f"{_adm_t('ub_lit_cb76db05e9c6')}{filter_label}",
         f"👤 {_escape(agent_name)}",
-        f"🟢 {stats['active']} فعال · 🔴 {stats['inactive']} غیرفعال · ⏳ {stats['near_expiry']} نزدیک انقضا",
-        f"📊 مجموع: <b>{total}</b> سرویس",
+        f"🟢 {stats['active']}{_adm_t('ub_lit_2b556e077f6f')}{stats['inactive']}{_adm_t('ub_lit_0201a74950fe')}{stats['near_expiry']}{_adm_t('ub_lit_20125174c820')}",
+        f"{_adm_t('ub_lit_c50ad34309d2')}{total}{_adm_t('ub_lit_dd53580def27')}",
     ]
     if not services:
         blocks.append("")
-        blocks.append("سرویسی ثبت نشده است.")
+        blocks.append(_adm_t('ub_lit_fb99774e3cc9'))
 
     text = "\n".join(blocks)
 
@@ -1251,8 +1181,8 @@ async def send_agent_services(
             rows_kb.append(chunk)
 
     rows_kb.append([
-        InlineKeyboardButton("🔍 جستجو", callback_data=f"agency:svcsearch:{agent_id}"),
-        InlineKeyboardButton("🔽 فیلتر", callback_data=f"agency:svcfilter:{agent_id}:{page}"),
+        InlineKeyboardButton(_adm_t("agency_search"), callback_data=f"agency:svcsearch:{agent_id}"),
+        InlineKeyboardButton(_adm_t("agency_filter"), callback_data=f"agency:svcfilter:{agent_id}:{page}"),
     ])
 
     nav: List[Any] = []
@@ -1263,7 +1193,7 @@ async def send_agent_services(
         nav.append(InlineKeyboardButton("➡️", callback_data=f"agency:services:{agent_id}:{page + 1}"))
     rows_kb.append(nav)
 
-    rows_kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")])
+    rows_kb.append([InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:view:{agent_id}")])
 
     kb = InlineKeyboardMarkup(rows_kb)
     try:
@@ -1285,10 +1215,10 @@ async def send_agent_service_detail(
     """نمایش جزئیات فشرده یک سرویس نماینده."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
-        await update.callback_query.answer("سرویس پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_adm_t("agency_service_not_found"), show_alert=True)
         return
 
-    name = str(svc.get("name") or "بی‌نام").strip()
+    name = str(svc.get("name") or _adm_t('ub_lit_b55e872162f6')).strip()
     server_title = str(svc.get("server_title") or "—").strip()
     usage_cur = float(svc.get("usage_current") or 0)
     usage_lim = float(svc.get("usage_limit") or 0)
@@ -1301,7 +1231,7 @@ async def send_agent_service_detail(
     sale = int(svc.get("sale_price") or 0)
     customer_id = int(svc.get("customer_id") or 0)
 
-    status = "🟢 فعال" if is_active else "🔴 غیرفعال"
+    status = _adm_t('ub_lit_0c90fe92316c') if is_active else _adm_t('ub_lit_f33c272eee0a')
     cust_name = "—"
     if customer_id:
         try:
@@ -1314,25 +1244,25 @@ async def send_agent_service_detail(
         except Exception:
             cust_name = f"#{customer_id}"
 
-    trial_txt = " · 🔥 ترایال" if is_trial else ""
+    trial_txt = _adm_t('ub_lit_e4d4509db0ca') if is_trial else ""
     blocks = [
-        f"📦 <b>جزئیات سرویس #{service_id}</b>{trial_txt}",
+        f"{_adm_t('ub_lit_8f9a55ab3ff0')}{service_id}</b>{trial_txt}",
         SEPARATOR,
-        f"🔖 <b>نام:</b> {_escape(name)}",
-        f"📍 <b>وضعیت:</b> {status}",
-        f"🖥 <b>سرور:</b> {_escape(_server_flag_title(server_title))}",
-        f"👤 <b>مشتری:</b> {_escape(cust_name)}",
-        f"💾 <b>حجم:</b> {_usage_text(usage_cur, usage_lim)}",
-        f"⏳ <b>انقضا:</b> {_fmt_fa_date(end)} ({days} روز)",
+        f"{_adm_t('ub_lit_c93f3c57e0ab')}{_escape(name)}",
+        f"{_adm_t('ub_lit_aaf70720ab98')}{status}",
+        f"{_adm_t('ub_lit_9369bb287a3a')}{_escape(_server_flag_title(server_title))}",
+        f"{_adm_t('ub_lit_84e582bd13c2')}{_escape(cust_name)}",
+        f"{_adm_t('ub_lit_6edb33274ec9')}{_usage_text(usage_cur, usage_lim)}",
+        f"{_adm_t('ub_lit_146f724603ab')}{_fmt_fa_date(end)} ({days}{_adm_t('ub_lit_e20f93b0d19d')}",
     ]
     if start:
-        blocks.append(f"📅 <b>شروع:</b> {_fmt_fa_date(start)}")
-    blocks.append(f"💰 <b>عمده:</b> {_fmt_toman(wholesale)} | 💵 <b>فروش:</b> {_fmt_toman(sale)}")
+        blocks.append(f"{_adm_t('ub_lit_efc1deba10e7')}{_fmt_fa_date(start)}")
+    blocks.append(f"{_adm_t('ub_lit_3f2e80adfba3')}{_fmt_toman(wholesale)}{_adm_t('ub_lit_638581aad6a9')}{_fmt_toman(sale)}")
 
     kb = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:{page}"),
+                InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:services:{agent_id}:{page}"),
             ]
         ]
     )
@@ -1349,18 +1279,18 @@ async def send_agent_bots(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
     """نمایش ربات‌های مشتری یک نماینده."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_adm_t("ag_agent_not_found"), show_alert=True)
         return
 
     bots = agent_db.get_customer_bots(agent_id)
     lines = [
-        f"🤖 <b>ربات‌های مشتری نماینده</b>\n\n",
+        f"{_adm_t('ub_lit_9b4fad462641')}",
         f"👤 {_escape(agent.get('full_name')) or agent.get('telegram_id')}\n",
-        f"📦 تعداد: <b>{len(bots)}</b>\n\n",
+        f"{_adm_t('ub_lit_efc6704ad4d4')}{len(bots)}</b>\n\n",
     ]
     if not bots:
-        lines.append("رباتی ثبت نشده است.\n")
-        lines.append("نماینده از ربات AgentBot خودش توکن ربات مشتری را ثبت می‌کند.")
+        lines.append(_adm_t('ub_lit_eb27ea4bc5ce'))
+        lines.append(_adm_t('ub_lit_c7e0012c05a6'))
     else:
         for b in bots:
             active = "✅" if int(b.get("is_active", 0)) else "❌"
@@ -1369,7 +1299,7 @@ async def send_agent_bots(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
 
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:view:{agent_id}")],
+            [InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:view:{agent_id}")],
         ]
     )
     try:
@@ -1385,7 +1315,7 @@ async def show_reset_trial_confirm(update: Update, context: ContextTypes.DEFAULT
     """نمایش پیام تأیید برای بازنشانی همه تست‌های رایگان یک نماینده."""
     agent = agent_db.get_agent_by_id(agent_id)
     if not agent:
-        await update.callback_query.answer("نماینده پیدا نشد.", show_alert=True)
+        await update.callback_query.answer(_adm_t("ag_agent_not_found"), show_alert=True)
         return
 
     try:
@@ -1395,18 +1325,13 @@ async def show_reset_trial_confirm(update: Update, context: ContextTypes.DEFAULT
 
     name = _escape(agent.get('full_name')) or str(agent.get('telegram_id'))
     text = (
-        f"🔄 <b>بازنشانی تست رایگان</b>\n"
-        f"{SEPARATOR}\n"
-        f"👤 نماینده: <b>{name}</b>\n"
-        f"🔢 شناسه: <code>{agent_id}</code>\n\n"
-        f"🧮 تعداد مشتریانی که تست رایگان گرفته‌اند: <b>{trial_users}</b>\n\n"
-        f"⚠️ با تأیید، همه این کاربران دوباره مجاز به ساخت سرویس تست رایگان می‌شوند."
+        f"{_adm_t('ub_lit_f9e3f3beaf03')}{SEPARATOR}{_adm_t('ub_lit_8d5d8fb6558c')}{name}{_adm_t('ub_lit_a462cd6a7ce9')}{agent_id}{_adm_t('ub_lit_064c4039dd87')}{trial_users}{_adm_t('ub_lit_7f9444e882d4')}"
     )
     kb = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("✅ تأیید و بازنشانی", callback_data=f"agency:resettrialdo:{agent_id}"),
-                InlineKeyboardButton("❌ انصراف", callback_data=f"agency:view:{agent_id}"),
+                InlineKeyboardButton(_adm_t("agency_trial_reset_confirm"), callback_data=f"agency:resettrialdo:{agent_id}"),
+                InlineKeyboardButton(_adm_t("agency_cancel"), callback_data=f"agency:view:{agent_id}"),
             ],
         ]
     )
@@ -1422,19 +1347,15 @@ async def do_reset_free_trials(update: Update, context: ContextTypes.DEFAULT_TYP
         count = customerbot_db.reset_all_free_trials(agent_id)
     except Exception as e:
         logger.exception("Failed to reset free trials for agent %s: %s", agent_id, e)
-        await update.callback_query.answer("خطا در بازنشانی. دوباره تلاش کنید.", show_alert=True)
+        await update.callback_query.answer(_adm_t("agency_trial_reset_error"), show_alert=True)
         return
 
     text = (
-        f"✅ <b>بازنشانی انجام شد</b>\n"
-        f"{SEPARATOR}\n"
-        f"🔢 شناسه نماینده: <code>{agent_id}</code>\n"
-        f"🧮 تعداد رکوردهای بازنشانی‌شده: <b>{count}</b>\n\n"
-        f"کاربران این نمایندگی دوباره می‌توانند سرویس تست رایگان بسازند."
+        f"{_adm_t('ub_lit_200282c2bffd')}{SEPARATOR}{_adm_t('ub_lit_6ed74b663f86')}{agent_id}{_adm_t('ub_lit_c287fa7ddd5a')}{count}{_adm_t('ub_lit_680beec77a43')}"
     )
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🔙 جزئیات نماینده", callback_data=f"agency:view:{agent_id}")],
+            [InlineKeyboardButton(_adm_t("agency_agent_details"), callback_data=f"agency:view:{agent_id}")],
         ]
     )
     try:
@@ -1491,35 +1412,23 @@ async def send_agent_token_menu(update: Update, context: ContextTypes.DEFAULT_TY
     if token:
         masked = token[:8] + "..." + token[-6:] if len(token) > 14 else "••••••••"
         text = (
-            "⚙️ <b>تنظیمات توکن ربات نماینده</b>\n"
-            f"{SEPARATOR}\n\n"
-            f"🔑 <b>توکن فعلی:</b>\n"
-            f"<code>{masked}</code>\n\n"
-            f"✅ توکن ثبت شده و آماده استفاده است.\n"
-            f"برای تغییر، توکن جدید را ارسال کنید."
+            f"{_adm_t('ub_lit_4b9f9c9a8546')}{SEPARATOR}{_adm_t('ub_lit_dcec50bb1d99')}{masked}{_adm_t('ub_lit_e83e786c8cb3')}"
         )
         kb = InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("✏️ تغییر توکن", callback_data="agency:agenttoken:change")],
-                [InlineKeyboardButton("🔄 ریستارت ربات", callback_data="agency:agenttoken:restart")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="agency:root")],
+                [InlineKeyboardButton(_adm_t("agency_token_change"), callback_data="agency:agenttoken:change")],
+                [InlineKeyboardButton(_adm_t("agency_bot_restart"), callback_data="agency:agenttoken:restart")],
+                [InlineKeyboardButton(_adm_t("btn_back"), callback_data="agency:root")],
             ]
         )
     else:
         text = (
-            "⚙️ <b>تنظیمات توکن ربات نماینده</b>\n"
-            f"{SEPARATOR}\n\n"
-            "⚠️ <b>هنوز توکنی ثبت نشده!</b>\n\n"
-            "برای فعال‌سازی سیستم نمایندگی:\n"
-            "۱. به @BotFather بروید\n"
-            "۲. یک ربات جدید بسازید\n"
-            "۳. توکن را کپی کنید\n"
-            "۴. روی دکمه زیر بزنید و توکن را بفرستید"
+            f"{_adm_t('ub_lit_4b9f9c9a8546')}{SEPARATOR}{_adm_t('ub_lit_67e16bf6fd0a')}"
         )
         kb = InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("➕ افزودن توکن", callback_data="agency:agenttoken:change")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="agency:root")],
+                [InlineKeyboardButton(_adm_t("agency_add_token"), callback_data="agency:agenttoken:change")],
+                [InlineKeyboardButton(_adm_t("btn_back"), callback_data="agency:root")],
             ]
         )
 
@@ -1546,18 +1455,9 @@ async def start_set_agent_token(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["state"] = AGENCY_SET_AGENT_TOKEN
 
     text = (
-        "✏️ <b>تغییر توکن ربات نماینده</b>\n"
-        f"{SEPARATOR}\n\n"
-        "توکن جدید ربات نماینده را ارسال کنید.\n\n"
-        "💡 <b>راهنما:</b>\n"
-        "• به @BotFather بروید\n"
-        "• /newbot بزنید و ربات بسازید\n"
-        "• توکن را کپی کنید\n\n"
-        "فرمت توکن:\n"
-        "<code>1234567890:ABCdefGhIJKlmNoPQRsTUVwxyz</code>\n\n"
-        "❌ برای لغو /cancel بفرستید"
+        f"{_adm_t('ub_lit_ecc996f20326')}{SEPARATOR}{_adm_t('ub_lit_adff40d55672')}"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data="agency:agenttoken")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t("btn_cancel"), callback_data="agency:agenttoken")]])
 
     query = update.callback_query
     if query:
@@ -1629,21 +1529,21 @@ async def restart_agent_bot_callback(update: Update, context: ContextTypes.DEFAU
     await query.answer()
 
     msg = await query.edit_message_text(
-        "🔄 <b>در حال ریستارت ربات نماینده...</b>",
+        _adm_t("agency_restart_progress"),
         parse_mode="HTML",
     )
 
     success = _restart_agent_bot()
 
     text = (
-        "✅ <b>ربات نماینده با موفقیت ریستارت شد.</b>"
+        _adm_t('ub_lit_233cf6dbed47')
         if success
-        else "❌ <b>خطا در ریستارت ربات نماینده.</b>\nلطفاً به صورت دستی ریستارت کنید."
+        else _adm_t('ub_lit_85fb60563229')
     )
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🔙 بازگشت به تنظیمات توکن", callback_data="agency:agenttoken")],
-            [InlineKeyboardButton("🏠 منوی اصلی", callback_data="agency:exit")],
+            [InlineKeyboardButton(_adm_t("agency_token_settings_back"), callback_data="agency:agenttoken")],
+            [InlineKeyboardButton(_adm_t("ag_main_menu_back"), callback_data="agency:exit")],
         ]
     )
     await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -1663,11 +1563,7 @@ async def handle_set_agent_token_text(update: Update, context: ContextTypes.DEFA
     # بررسی فرمت توکن (باید شامل : باشد و حداقل ۳۰ کاراکتر)
     if ":" not in text or len(text) < 30:
         await update.message.reply_text(
-            "❌ <b>فرمت توکن نامعتبر است!</b>\n"
-            f"{SEPARATOR}\n\n"
-            "توکن باید به این شکل باشد:\n"
-            "<code>1234567890:ABCdefGhIJKlmNoPQRsTUVwxyz</code>\n\n"
-            "💡 دوباره توکن را از @BotFather کپی کنید.",
+            f"{_adm_t('ub_lit_cdc41462ce22')}{SEPARATOR}{_adm_t('ub_lit_bd418c7890ad')}",
             parse_mode="HTML",
         )
         return True
@@ -1685,22 +1581,20 @@ async def handle_set_agent_token_text(update: Update, context: ContextTypes.DEFA
 
     masked = text[:8] + "..." + text[-6:] if len(text) > 14 else "••••••••"
     kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🔙 بازگشت", callback_data="agency:root")]]
+        [[InlineKeyboardButton(_adm_t("btn_back"), callback_data="agency:root")]]
     )
     msg = (
-        "✅ <b>توکن ربات نماینده ذخیره شد!</b>\n"
-        f"{SEPARATOR}\n\n"
-        f"🔑 توکن: <code>{masked}</code>\n\n"
+        f"{_adm_t('ub_lit_6a33859ebc7b')}{SEPARATOR}{_adm_t('ub_lit_54592c266820')}{masked}</code>\n\n"
     )
     if env_updated:
-        msg += "📄 فایل .env بروزرسانی شد.\n"
+        msg += _adm_t('ub_lit_f246d98c3952')
     else:
-        msg += "⚠️ خطا در بروزرسانی فایل .env.\n"
+        msg += _adm_t('ub_lit_3c891a0fb8f2')
 
     if agent_restarted:
-        msg += "🔄 ربات AgentBot ریستارت شد."
+        msg += _adm_t('ub_lit_379e341cfea9')
     else:
-        msg += "⚠️ ریستارت خودکار انجام نشد. لطفاً دستی ریستارت کنید."
+        msg += _adm_t('ub_lit_62eebb084750')
 
     await update.message.reply_text(msg, reply_markup=kb, parse_mode="HTML")
     return True
@@ -1714,23 +1608,13 @@ async def send_agent_svc_add_help(update: Update, context: ContextTypes.DEFAULT_
     agent = agent_db.get_agent_by_id(agent_id)
     name = _escape(agent.get('full_name')) if agent else f"#{agent_id}"
     text = (
-        "➕ <b>ساخت سرویس جدید</b>\n"
-        f"{SEPARATOR}\n\n"
-        f"👤 نماینده: <b>{name}</b>\n\n"
-        "🛠 ساخت سرویس جدید مستقیماً توسط <b>خودِ نماینده</b> از طریق ربات اختصاصی‌اش "
-        "(AgentBot) انجام می‌شود؛ ادمین نیازی به ساخت دستی ندارد.\n\n"
-        "🧭 برای نماینده:\n"
-        "• وارد AgentBot شود\n"
-        "• گزینه «ساخت سرویس» را بزند\n"
-        "• سرور، حجم و مدت را انتخاب کند\n\n"
-        "✅ پس از ساخت، سرویس به‌صورت خودکار اینجا نمایش داده می‌شود.\n\n"
-        "⚙️ برای مدیریت قیمت‌ها از دکمه «قیمت‌گذاری» استفاده کنید."
+        f"{_adm_t('ub_lit_58ac18a28b6d')}{SEPARATOR}{_adm_t('ub_lit_1241b3ec98ee')}{name}{_adm_t('ub_lit_b61930a1ffec')}"
     )
     kb = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("💵 قیمت‌گذاری", callback_data=f"agency:prices:{agent_id}:1"),
-                InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:1"),
+                InlineKeyboardButton(_adm_t("agency_pricing"), callback_data=f"agency:prices:{agent_id}:1"),
+                InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:services:{agent_id}:1"),
             ]
         ]
     )
@@ -1746,13 +1630,9 @@ async def start_agent_service_search(update: Update, context: ContextTypes.DEFAU
     context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
     context.user_data.pop(f"agency_svc_filter_{agent_id}", None)
     text = (
-        "🔍 <b>جستجوی سرویس</b>\n"
-        f"{SEPARATOR}\n\n"
-        "نام یا بخشی از نام سرویس را بنویسید.\n\n"
-        "مثال: <code>vpn</code> یا <code>تست</code>\n\n"
-        "برای لغو /cancel را بفرستید."
+        f"{_adm_t('ub_lit_ceebd4cc7a9a')}{SEPARATOR}{_adm_t('ub_lit_796f058d6921')}"
     )
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data=f"agency:services:{agent_id}:1")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t("btn_cancel"), callback_data=f"agency:services:{agent_id}:1")]])
     try:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
@@ -1765,7 +1645,7 @@ async def handle_agent_service_search_text(update: Update, context: ContextTypes
     agent_id = int(context.user_data.get(AGENCY_VIEWING_ID_KEY) or 0)
     context.user_data.pop("state", None)
     if agent_id <= 0 or not text:
-        await update.message.reply_text("جستجو لغو شد.")
+        await update.message.reply_text(_adm_t("agency_search_cancelled"))
         return True
 
     services, total = agent_db.search_services_by_name(agent_id, text, page=1, page_size=SERVICES_PAGE_SIZE)
@@ -1773,17 +1653,17 @@ async def handle_agent_service_search_text(update: Update, context: ContextTypes
     agent = agent_db.get_agent_by_id(agent_id) or {}
 
     blocks = [
-        f"🔍 <b>نتایج جستجو: «{_escape(text)}»</b>",
+        f"{_adm_t('ub_lit_a407bea472bd')}{_escape(text)}»</b>",
         f"👤 {_escape(agent.get('full_name') or '')}",
-        f"📊 <b>{total}</b> سرویس پیدا شد",
+        f"📊 <b>{total}{_adm_t('ub_lit_ad6448a480af')}",
         "",
     ]
     if not services:
-        blocks.append("سرویسی با این نام پیدا نشد.")
+        blocks.append(_adm_t('ub_lit_19686e2dfcce'))
         blocks.append("")
-        blocks.append("با دکمه 🔙 به لیست بازگردید.")
+        blocks.append(_adm_t('ub_lit_edc5f934800b'))
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:1")]]
+            [[InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:services:{agent_id}:1")]]
         )
         try:
             await update.message.reply_text("\n".join(blocks), reply_markup=kb, parse_mode="HTML")
@@ -1794,9 +1674,9 @@ async def handle_agent_service_search_text(update: Update, context: ContextTypes
     kb_rows: List[List[Any]] = []
     for svc in services[:8]:
         sid = int(svc.get("id") or 0)
-        nm = str(svc.get("name") or "؟").strip()
+        nm = str(svc.get("name") or _adm_t('ub_lit_494367d01a08')).strip()
         kb_rows.append([InlineKeyboardButton(f"🔹 {sid} · {nm[:20]}", callback_data=f"agency:svcview:{agent_id}:{sid}:1")])
-    kb_rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"agency:services:{agent_id}:1")])
+    kb_rows.append([InlineKeyboardButton(_adm_t("btn_back"), callback_data=f"agency:services:{agent_id}:1")])
     kb = InlineKeyboardMarkup(kb_rows)
     try:
         await update.message.reply_text("\n".join(blocks), reply_markup=kb, parse_mode="HTML")
@@ -1849,7 +1729,7 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
             pass
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="به منوی اصلی بازگشتید.",
+            text=_adm_t("back_to_main_menu"),
             reply_markup=admin_main_keyboard(),
         )
         return
@@ -1862,9 +1742,9 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
         sub = parts[2]
         if sub == "toggle":
             ev = userbot_db.toggle_agency_event_enabled()
-            state_txt = "فعال شد ✅ — گزارش‌ها به کانال رویداد ارسال می‌شود." if ev.get("event_channel_enabled") else "غیرفعال شد ❌ — گزارش‌ها به چت ادمین ارسال می‌شود."
+            state_txt = _adm_t('ub_lit_2ecce95c9038') if ev.get("event_channel_enabled") else _adm_t('ub_lit_fcf97591e49b')
             if ev.get("event_channel_enabled") and not str(ev.get("event_channel_id") or "").strip():
-                state_txt += "\n⚠️ هنوز کانالی تنظیم نشده است؛ دکمه «تنظیم کانال رویداد» را بزنید."
+                state_txt += _adm_t('ub_lit_2714b881cee2')
             await query.answer(state_txt, show_alert=True)
             await handle_agencies_entry(update, context)
             return
@@ -1872,22 +1752,16 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
             context.user_data["state"] = AGENCY_EVENT_CHANNEL_STATE
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text=(
-                    "📢 تنظیم کانال رویداد نمایندگی\n\n"
-                    "یک پیام از کانال مورد نظر را فوروارد کنید\n"
-                    "یا آیدی کانال را بفرستید (@channel یا -100...)\n\n"
-                    "❗️ ربات ادمین باید در کانال ادمین باشد.\n"
-                    "برای لغو: لغو"
-                ),
+                text=_adm_t("agency_event_channel_prompt"),
                 reply_markup=admin_main_keyboard(),
             )
             return
         if sub == "status":
             ev = userbot_db.get_agency_event_settings()
-            status_txt = "✅ فعال" if ev.get("event_channel_enabled") else "❌ غیرفعال"
-            channel = str(ev.get("event_channel_id") or "—تنظیم نشده—")
+            status_txt = _adm_t('ub_lit_f1bc469f39f7') if ev.get("event_channel_enabled") else _adm_t('ub_lit_fcc2f9a81e87')
+            channel = str(ev.get("event_channel_id") or _adm_t('ub_lit_ce1bb87c0d4e'))
             await query.answer(
-                f"وضعیت: {status_txt}\nکانال: {channel}",
+                f"{_adm_t('ub_lit_b368ed422a72')}{status_txt}{_adm_t('ub_lit_f51733a0dd1f')}{channel}",
                 show_alert=True,
             )
             return
@@ -1997,7 +1871,7 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
         service_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1
         if service_id <= 0:
-            await query.answer("سرویس نامعتبر.", show_alert=True)
+            await query.answer(_adm_t("agency_service_invalid"), show_alert=True)
             return
         await send_agent_service_detail(update, context, agent_id, service_id, page=page)
         return
@@ -2022,7 +1896,7 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
     if action == "pricesrv":
         server_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         if server_id <= 0:
-            await query.answer("سرور نامعتبر.", show_alert=True)
+            await query.answer(_adm_t("agency_server_invalid"), show_alert=True)
             return
         await start_add_price_input(update, context, agent_id, server_id)
         return
@@ -2057,7 +1931,7 @@ async def handle_agencies_text(update: Update, context: ContextTypes.DEFAULT_TYP
     text = (update.message.text or "").strip()
     if text in {"/cancel", "لغو", "لغو❌", "❌لغو"}:
         context.user_data.pop("state", None)
-        await update.message.reply_text("عملیات لغو شد.", reply_markup=admin_main_keyboard())
+        await update.message.reply_text(_adm_t("operation_cancelled"), reply_markup=admin_main_keyboard())
         return True
 
     if state in {AGENCY_ADD_TELEGRAM, AGENCY_ADD_PHONE, AGENCY_ADD_NAME}:
@@ -2116,8 +1990,7 @@ async def handle_agencies_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if not channel_target:
             await update.message.reply_text(
-                "❌ ورودی معتبر نیست.\n"
-                "لطفاً یک پیام از کانال فوروارد کنید یا @channel / -100... را بفرستید.",
+                _adm_t("agency_event_channel_invalid"),
                 reply_markup=admin_main_keyboard(),
             )
             return True
@@ -2128,12 +2001,12 @@ async def handle_agencies_text(update: Update, context: ContextTypes.DEFAULT_TYP
                 "event_channel_enabled": userbot_db.get_agency_event_settings().get("event_channel_enabled", False),
             })
         except Exception as e:
-            await update.message.reply_text(f"❌ خطا در ذخیره کانال رویداد:\n{e}", reply_markup=admin_main_keyboard())
+            await update.message.reply_text(f"{_adm_t('ub_lit_04623a2f0eec')}{e}", reply_markup=admin_main_keyboard())
             return True
 
         title_part = f" ({channel_title})" if channel_title else ""
         await update.message.reply_text(
-            f"✅ کانال رویداد نمایندگی ذخیره شد:\n{channel_target}{title_part}",
+            f"{_adm_t('ub_lit_c43e4b41cc11')}{channel_target}{title_part}",
             reply_markup=admin_main_keyboard(),
         )
         return True

@@ -404,6 +404,12 @@ def i18n_user_t(lang: str, key: str, **kw) -> str:
     return _t(key, lang, **kw)
 
 
+def _admin_t(key: str, **kw) -> str:
+    from Shared.i18n import t as _t
+    from Shared import userbot_db as _udb
+    return _t(key, _udb.get_admin_language(), **kw)
+
+
 def _user_lang_of(tg_id: int) -> str:
     try:
         from Shared.i18n import get_user_lang
@@ -633,7 +639,7 @@ async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not user or not message:
         return
     if user.id != ADMIN_ID:
-        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        await message.reply_text(_admin_t("admin_access_denied"))
         return
     from AdminBot.keyboards import language_keyboard
     from Shared import userbot_db as _udb
@@ -652,7 +658,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if user.id != ADMIN_ID:
-        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        await message.reply_text(_admin_t("admin_access_denied"))
         return
 
     payload = ""
@@ -665,11 +671,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if handled:
             return
 
-    text = (
-        "به ربات مدیریت هیدیفای خوش آمدید 👑\n"
-        "از منوی زیر یکی از گزینه‌ها را انتخاب کنید."
-    )
-    await message.reply_text(text, reply_markup=admin_main_keyboard())
+    await message.reply_text(_admin_t("admin_welcome"), reply_markup=admin_main_keyboard())
 
 
 async def enforce_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -678,22 +680,21 @@ async def enforce_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not user or not message:
         return
     if user.id != ADMIN_ID:
-        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        await message.reply_text(_admin_t("admin_access_denied"))
         return
 
-    await message.reply_text("⏳ در حال اجرای جمع مصرف سراسری و کنترل محدودیت...")
+    await message.reply_text(_admin_t("admin_enforce_running"))
     summary = await service_enforcer.run_global_usage_enforcer(scan_all=True)
     reminder_summary = await _run_subscription_reminder_cycle()
-    await message.reply_text(
-        "✅ اجرای کنترل سراسری تمام شد.\n"
-        f"سرویس بررسی‌شده: {summary['services_scanned']} از {summary.get('services_total', summary['services_scanned'])}\n"
-        f"سرویس همگام‌شده: {summary['services_synced']}\n"
-        f"سرویس قطع‌شده: {summary['services_disabled']}\n"
-        f"نود قطع‌شده: {summary['nodes_disabled']}\n"
-        f"نود قطع‌ناموفق: {summary['nodes_disable_failed']}\n"
-        f"خطا: {summary['errors']}\n\n"
-        f"🔔 یادآور تمدید: روز={reminder_summary['days_sent']} | حجم={reminder_summary['usage_sent']} | منقضی‌شده={reminder_summary['expired_sent']} | دسترسی‌ندارد={reminder_summary['unreachable']} | خطا={reminder_summary['errors']}"
-    )
+    await message.reply_text(_admin_t(
+        "admin_enforce_done",
+        scanned=summary['services_scanned'], total=summary.get('services_total', summary['services_scanned']),
+        synced=summary['services_synced'], disabled=summary['services_disabled'], nodes=summary['nodes_disabled'],
+        node_failures=summary['nodes_disable_failed'], errors=summary['errors'],
+        reminder_days=reminder_summary['days_sent'], reminder_usage=reminder_summary['usage_sent'],
+        reminder_expired=reminder_summary['expired_sent'], unreachable=reminder_summary['unreachable'],
+        reminder_errors=reminder_summary['errors'],
+    ))
 
 
 async def agent_enforce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -702,19 +703,16 @@ async def agent_enforce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not user or not message:
         return
     if user.id != ADMIN_ID:
-        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        await message.reply_text(_admin_t("admin_access_denied"))
         return
 
-    await message.reply_text("⏳ در حال بررسی مصرف سرویس‌های نمایندگی...")
+    await message.reply_text(_admin_t("admin_agent_enforce_running"))
     summary = await agent_enforcer.run_agent_usage_enforcer(scan_all=True)
-    await message.reply_text(
-        "✅ بررسی مصرف نمایندگی تمام شد.\n"
-        f"سرویس بررسی‌شده: {summary['services_scanned']} از {summary['services_total']}\n"
-        f"سرویس همگام‌شده: {summary['services_synced']}\n"
-        f"سرویس قطع‌شده: {summary['services_disabled']}\n"
-        f"نود قطع‌شده: {summary['nodes_disabled']}\n"
-        f"خطا: {summary['errors']}"
-    )
+    await message.reply_text(_admin_t(
+        "admin_agent_enforce_done", scanned=summary['services_scanned'], total=summary['services_total'],
+        synced=summary['services_synced'], disabled=summary['services_disabled'], nodes=summary['nodes_disabled'],
+        errors=summary['errors'],
+    ))
 
 
 async def _enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -762,18 +760,14 @@ async def nodes_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not user or not message:
         return
     if user.id != ADMIN_ID:
-        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        await message.reply_text(_admin_t("admin_access_denied"))
         return
-    await message.reply_text("⏳ در حال بررسی سلامت نودها و تلاش بازیابی...")
+    await message.reply_text(_admin_t("admin_nodes_health_running"))
     summary = await node_ops.monitor_and_recover_nodes()
-    await message.reply_text(
-        "✅ بررسی نودها انجام شد.\n"
-        f"نود بررسی‌شده: {summary['nodes_scanned']}\n"
-        f"نود Up: {summary['nodes_up']}\n"
-        f"نود Down: {summary['nodes_down']}\n"
-        f"ریکاوری انجام‌شده: {summary['recoveries']}\n"
-        f"خطا: {summary['errors']}"
-    )
+    await message.reply_text(_admin_t(
+        "admin_nodes_health_done", scanned=summary['nodes_scanned'], up=summary['nodes_up'],
+        down=summary['nodes_down'], recoveries=summary['recoveries'], errors=summary['errors'],
+    ))
 
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -782,14 +776,14 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not message:
         return
     if user.id != ADMIN_ID:
-        await message.reply_text("🚫 شما دسترسی ادمین ندارید.")
+        await message.reply_text(_admin_t("admin_access_denied"))
         return
-    await message.reply_text("⏳ در حال جمع‌آوری گزارش اشکال‌زدایی...")
+    await message.reply_text(_admin_t("admin_debug_running"))
     try:
         report = _build_debug_report(context)
     except Exception as e:
         logger.exception("Debug report build failed: %s", e)
-        await message.reply_text(f"❌ خطا در تهیه گزارش: {e}")
+        await message.reply_text(_admin_t("admin_debug_error", error=e))
         return
 
     for part in _split_text(report):

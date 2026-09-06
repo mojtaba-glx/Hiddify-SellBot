@@ -11,6 +11,7 @@ from telegram import InlineKeyboardMarkup
 from AgentBot.constants import UD_STATE
 from AgentBot.handlers.base import get_agent_id
 from CustomerBot.database import get_force_join_settings, set_force_join_settings
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -20,26 +21,30 @@ _BACK_CB = "agbot:set:cfg:forcejoin:menu"
 _BACK_CONFIG_CB = "agbot:set:cfg:back"
 
 
-def _forcejoin_menu_keyboard(enabled: bool, has_channel: bool):
-    toggle_label = "✅ عضویت اجباری | فعال" if enabled else "✖️ عضویت اجباری | غیرفعال"
+def _forcejoin_menu_keyboard(enabled: bool, has_channel: bool, lang: str = "fa"):
+    _lg = lang
+    toggle_label = i18n.t('✅ عضویت اجباری | فعال', _lg) if enabled else i18n.t('✖️ عضویت اجباری | غیرفعال', _lg)
     rows = [
-        [IButton("🧩راهنما", callback_data="agbot:set:cfg:forcejoin:help")],
+        [IButton(i18n.t('🧩راهنما', _lg), callback_data="agbot:set:cfg:forcejoin:help")],
         [IButton(toggle_label, callback_data="agbot:set:cfg:forcejoin:toggle",
                  style="success" if enabled else "danger")],
-        [IButton("تنظیم کانال پشتیبانی📢", callback_data="agbot:set:cfg:forcejoin:setchannel")],
-        [IButton("🔙بازگشت", callback_data=_BACK_CONFIG_CB)],
+        [IButton(i18n.t('تنظیم کانال پشتیبانی📢', _lg), callback_data="agbot:set:cfg:forcejoin:setchannel")],
+        [IButton(i18n.t('🔙بازگشت', _lg), callback_data=_BACK_CONFIG_CB)],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def _build_status_text(agent_id: int) -> str:
+    try:
+        _lg = i18n.get_agent_lang(int(agent_id or 0))
+    except Exception:
+        _lg = "fa"
     fjs = get_force_join_settings(agent_id)
     enabled = fjs.get("enabled", False)
     username = fjs.get("channel_username", "") or ""
     channel_display = f"@{username}" if username else "—"
     return (
-        f"🔒تنظیمات عضویت اجباری\n"
-        f"کانال فعلی: {channel_display} 📢"
+        f"{i18n.t('🔒تنظیمات عضویت اجباری\nکانال فعلی: ', _lg)}{channel_display} 📢"
     )
 
 
@@ -60,6 +65,11 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -74,14 +84,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # راهنما — پیام جدید پایین می‌آید، دکمه‌های بالا دست نخورده می‌مانند
     if data == "agbot:set:cfg:forcejoin:help":
         help_text = (
-            "📋 <b>راهنمای عضویت اجباری</b>\n\n"
-            "برای فعال‌سازی صحیح:\n"
-            "1️⃣ کانال مورد نظر را با دکمه «تنظیم کانال» وارد کنید.\n"
-            "2️⃣ <b>ربات مشتری را ادمین کانال کنید</b> — بدون این قدم، سیستم کار نمی‌کند.\n"
-            "   (ربات را به کانال اضافه کنید → روی «ادمین‌ها» بزنید → ربات را ادمین کنید)\n"
-            "3️⃣ عضویت اجباری را با دکمه toggle فعال کنید.\n\n"
-            "⚠️ <b>اگر ربات ادمین نباشد:</b>\n"
-            "کاربران پیام «سرویس موقتاً در دسترس نیست» می‌بینند و نمی‌توانند از ربات استفاده کنند."
+            i18n.t('📋 <b>راهنمای عضویت اجباری</b>\n\nبرای فعال‌سازی صحیح:\n1️⃣ کانال مورد نظر را با دکمه «تنظیم کانال» وارد کنید.\n2️⃣ <b>ربات مشتری را ادمین کانال کنید</b> — بدون این قدم، سیستم کار نمی‌کند.\n   (ربات را به کانال اضافه کنید → روی «ادمین‌ها» بزنید → ربات را ادمین کنید)\n3️⃣ عضویت اجباری را با دکمه toggle فعال کنید.\n\n⚠️ <b>اگر ربات ادمین نباشد:</b>\nکاربران پیام «سرویس موقتاً در دسترس نیست» می‌بینند و نمی‌توانند از ربات استفاده کنند.', _lg)
         )
         await query.answer()
         await query.message.reply_text(help_text)
@@ -92,12 +95,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         fjs = get_force_join_settings(agent_id)
         new_enabled = not bool(fjs.get("enabled", False))
         if new_enabled and not fjs.get("channel_username", ""):
-            await query.answer("⚠️ ابتدا کانال را تنظیم کنید.", show_alert=True)
+            await query.answer(i18n.t('⚠️ ابتدا کانال را تنظیم کنید.', _lg), show_alert=True)
             return
         fjs["enabled"] = new_enabled
         set_force_join_settings(agent_id, fjs)
-        label = "فعال ✅" if new_enabled else "غیرفعال ❌"
-        await query.answer(f"عضویت اجباری {label} شد.")
+        label = i18n.t('فعال ✅', _lg) if new_enabled else i18n.t('غیرفعال ❌', _lg)
+        await query.answer(f"{i18n.t('عضویت اجباری ', _lg)}{label}{i18n.t(' شد.', _lg)}")
         await show_menu(update, context)
         return
 
@@ -107,11 +110,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data[UD_STATE] = STATE_FJ_SET_USERNAME
         fjs = get_force_join_settings(agent_id)
         current = fjs.get("channel_username", "") or ""
-        current_display = f"@{current}" if current else "تنظیم نشده"
+        current_display = f"@{current}" if current else i18n.t('تنظیم نشده', _lg)
         try:
             await query.message.reply_text(
-                f"📢 <b>تنظیم کانال پشتیبانی برای عضویت اجباری</b>\n\n"
-                f"یک پیام از کانال فوروارد کنید یا <code>@channel</code> / <code>-100...</code> ارسال کنید.",
+                f"{i18n.t('📢 <b>تنظیم کانال پشتیبانی برای عضویت اجباری</b>\n\nیک پیام از کانال فوروارد کنید یا <code>@channel</code> / <code>-100...</code> ارسال کنید.', _lg)}",
                 parse_mode="HTML",
             )
         except Exception:
@@ -120,6 +122,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     state = context.user_data.get(UD_STATE)
     if state != STATE_FJ_SET_USERNAME:
         return False
@@ -150,7 +157,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         text = (update.message.text or "").strip()
         if text in ("/cancel", "❌ لغو", "لغو"):
             context.user_data.pop(UD_STATE, None)
-            await update.message.reply_text("لغو شد.")
+            await update.message.reply_text(i18n.t('لغو شد.', _lg))
             return True
         # channel_id عددی مثل -1001234567890
         if text.lstrip("-").isdigit():
@@ -160,8 +167,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
     if not username and not channel_id:
         await update.message.reply_text(
-            "❌ ورودی نامعتبر است.\n"
-            "یک پیام از کانال فوروارد کنید یا <code>@channel</code> / <code>-100...</code> ارسال کنید.",
+            i18n.t('❌ ورودی نامعتبر است.\nیک پیام از کانال فوروارد کنید یا <code>@channel</code> / <code>-100...</code> ارسال کنید.', _lg),
             parse_mode="HTML",
         )
         return True
@@ -182,8 +188,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     enabled = bool(fjs.get("enabled", False))
     kb = _forcejoin_menu_keyboard(enabled, True)
     await update.message.reply_text(
-        f"✅ کانال <b>{display}</b> تنظیم شد.\n\n"
-        f"{_build_status_text(agent_id)}",
+        f"{i18n.t('✅ کانال <b>', _lg)}{display}{i18n.t('</b> تنظیم شد.\n\n', _lg)}{_build_status_text(agent_id)}",
         parse_mode="HTML",
         reply_markup=kb,
     )

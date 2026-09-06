@@ -39,7 +39,8 @@ from CustomerBot.constants import (
     ACTION_COOLDOWN,
 )
 from CustomerBot.database import (
-    get_buy_renew_settings, get_text_settings, get_subs_settings,
+    get_buy_renew_settings, get_text_settings, get_subs_settings, get_faq_text,
+    get_localized_text, get_localized_forcejoin_guide,
     get_payment_settings, get_marketing_settings, get_trial_spec_settings,
     get_force_join_settings, get_user, create_order, create_payment,
     get_user_tickets, get_ticket, get_ticket_messages,
@@ -233,7 +234,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     agent_id = context.bot_data.get("agent_id", 0)
     if not agent_id:
-        await query.answer("❌ خطا در پیکربندی", show_alert=True)
+        await query.answer(i18n.t("cb_config_error", "fa"), show_alert=True)
         return
 
     # دکمه‌های ویزارد (+/-) را نباید با rate limit قوی بلاک کرد؛ کاربر باید سریع بزند
@@ -242,7 +243,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"cb_{user.id}_{data}",
         cooldown=0.25 if is_wizard_tap else ACTION_COOLDOWN,
     ):
-        await query.answer("⏳ لطفاً کمی صبر کنید.")
+        await query.answer(i18n.t("rate_limit_wait", i18n.get_customer_lang(agent_id, user.id)))
         return
 
     try:
@@ -288,16 +289,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- Direct agent message reply ----
     elif data == CB_AGENT_MSG_REPLY:
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         context.user_data[UD_STATE] = STATE_AGENT_MSG_WAITING
         try:
             await query.message.edit_text(
-                "📩 لطفا پاسخ خود را برای نماینده بنویسید:",
+                i18n.t("agent_msg_edit_prompt", _lg),
                 reply_markup=None,
             )
         except Exception:
             pass
         await query.message.reply_text(
-            "📩 پاسخ شما برای نماینده ارسال خواهد شد. متن پاسخ را بنویسید:",
+            i18n.t("agent_msg_prompt", _lg),
         )
 
     # ---- Status ----
@@ -328,22 +330,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== HANDLERS ====================
 
-async def _back_to_main_menu(msg, text: str = "🔙 بازگشت به منوی اصلی"):
+async def _back_to_main_menu(msg, text: str = "", lang: str = "fa"):
     """Callback messages cannot be edited with ReplyKeyboardMarkup, so send it separately."""
+    if not text:
+        text = i18n.t("main_menu_title", lang)
     try:
         await msg.edit_text(text)
     except Exception:
         pass
     try:
-        await msg.reply_text("منوی اصلی:", reply_markup=main_menu_keyboard())
+        await msg.reply_text(i18n.t("welcome_back", lang), reply_markup=main_menu_keyboard(lang=lang))
     except Exception:
         pass
 
 
 async def _handle_force_join_check(query, context, agent_id, user):
+    _lg = i18n.get_customer_lang(agent_id, user.id)
     fjs = get_force_join_settings(agent_id)
     if not fjs.get("enabled") or not fjs.get("channel_username"):
-        await _back_to_main_menu(query.message, "✅ عضویت شما تایید شد!")
+        await _back_to_main_menu(query.message, i18n.t("member_confirmed", _lg), lang=_lg)
         return
     ch = str(fjs["channel_username"])
     chat_target = ch if ch.lstrip("-").isdigit() else f"@{ch}"
@@ -354,30 +359,30 @@ async def _handle_force_join_check(query, context, agent_id, user):
         status = str(getattr(member, "status", "")).lower()
         if status not in allowed_statuses:
             await query.edit_message_text(
-                fjs.get("guide_text", "شما هنوز عضو نشده‌اید."),
-                reply_markup=force_join_keyboard(link),
+                get_localized_forcejoin_guide(agent_id, _lg) or i18n.t("not_member_yet", _lg),
+                reply_markup=force_join_keyboard(link, lang=_lg),
             )
             return
     except Exception:
         await query.edit_message_text(
-            fjs.get("guide_text", "شما هنوز عضو نشده‌اید."),
-            reply_markup=force_join_keyboard(link),
+            get_localized_forcejoin_guide(agent_id, _lg) or i18n.t("not_member_yet", _lg),
+            reply_markup=force_join_keyboard(link, lang=_lg),
         )
         return
     try:
         await query.message.delete()
     except Exception:
         try:
-            await query.edit_message_text("✅ عضویت شما تایید شد!")
+            await query.edit_message_text(i18n.t("member_confirmed", _lg))
         except Exception:
             pass
     try:
-        await query.message.reply_text("✅ عضویت شما تایید شد!", reply_markup=main_menu_keyboard())
+        await query.message.reply_text(i18n.t("member_confirmed", _lg), reply_markup=main_menu_keyboard(lang=_lg))
     except Exception:
         pass
 
 
-async def _handle_guide(query, context, agent_id, data):
+async def _handle_guide(query, context, agent_id, data, lang: str = "fa"):
     text_settings = get_text_settings(agent_id)
     parts = data.split(":", 2)
     if len(parts) < 2:
@@ -385,17 +390,18 @@ async def _handle_guide(query, context, agent_id, data):
     action = parts[1]
     back_token = parts[2] if len(parts) > 2 else "m"
 
+    _gl = i18n.get_customer_lang(agent_id, user.id)
     guide_map = {
-        "android": text_settings.get("guide_android_text", ""),
-        "ios": text_settings.get("guide_ios_text", ""),
-        "windows": text_settings.get("guide_windows_text", ""),
-        "mac": text_settings.get("guide_mac_text", ""),
-        "linux": text_settings.get("guide_linux_text", ""),
+        "android": get_localized_text(agent_id, "guide_android_text", _gl),
+        "ios": get_localized_text(agent_id, "guide_ios_text", _gl),
+        "windows": get_localized_text(agent_id, "guide_windows_text", _gl),
+        "mac": get_localized_text(agent_id, "guide_mac_text", _gl),
+        "linux": get_localized_text(agent_id, "guide_linux_text", _gl),
     }
 
     if action == "back":
         if back_token == "m":
-            await _back_to_main_menu(query.message, text_settings.get("guide_text", "انتخاب سیستم عامل ⬇️"))
+            await _back_to_main_menu(query.message, get_localized_text(agent_id, "guide_text", lang), lang=lang)
         elif back_token.startswith("s:"):
             try:
                 svc_id = int(back_token.split(":", 1)[1])
@@ -404,16 +410,16 @@ async def _handle_guide(query, context, agent_id, data):
             svc = get_service_by_id(svc_id)
             if svc:
                 await query.message.edit_text(
-                    _build_service_status_text(svc),
+                    _build_service_status_text(svc, lang=lang),
                     parse_mode="Markdown",
-                    reply_markup=subscription_status_keyboard(svc_id),
+                    reply_markup=subscription_status_keyboard(svc_id, lang=lang),
                 )
         return
 
     if action in guide_map and guide_map[action]:
         await query.edit_message_text(
             guide_map[action],
-            reply_markup=guide_os_keyboard(back_token),
+            reply_markup=guide_os_keyboard(back_token, lang=lang),
         )
 
 
@@ -423,7 +429,7 @@ async def _handle_support(query, context, agent_id, user, data):
     _lg = i18n.get_customer_lang(agent_id, user.id)
 
     if data == CB_SUPPORT_FAQ:
-        faq = text_settings.get("faq_text", "❗️ سوالات متداول\n\nبه‌زودی تکمیل می‌شود.")
+        faq = get_faq_text(agent_id, _lg)
         await msg.edit_text(faq, reply_markup=support_panel_keyboard(_lg))
 
     elif data.startswith(CB_SUPPORT_MY):
@@ -451,8 +457,8 @@ async def _handle_support(query, context, agent_id, user, data):
             parse_mode="HTML",
         )
         await msg.reply_text(
-            "✍️ موضوع تیکت:",
-            reply_markup=cancel_keyboard(),
+            i18n.t("ticket_send_confirm", _lg),
+            reply_markup=cancel_keyboard(lang=_lg),
         )
 
     elif data.startswith(CB_SUPPORT_VIEW):
@@ -462,36 +468,36 @@ async def _handle_support(query, context, agent_id, user, data):
         code = int(parts[2])
         ticket = get_ticket(agent_id, code)
         if not ticket:
-            await msg.edit_text("❌ تیکت یافت نشد.", reply_markup=support_panel_keyboard(_lg))
+            await msg.edit_text(i18n.t("ticket_not_found_local", _lg), reply_markup=support_panel_keyboard(_lg))
             return
         is_closed = ticket["status"] == "closed"
         can_reply = not is_closed
         messages = get_ticket_messages(agent_id, code)
-        status_map = {"pending": "⏳ در انتظار", "open": "📬 باز", "closed": "✅ بسته"}
+        status_map = {"pending": i18n.t("status_pending", _lg), "open": i18n.t("status_open", _lg), "closed": i18n.t("status_closed", _lg)}
         status_fa = status_map.get(ticket.get("status", ""), ticket.get("status", ""))
-        title = ticket.get("title", "") or ticket.get("question", "")[:50] or "بدون موضوع"
+        title = ticket.get("title", "") or ticket.get("question", "")[:50] or i18n.t("no_subject_label", _lg)
         text = (
-            f"📩 <b>تیکت #{code}</b>\n"
-            f"📋 موضوع: {title}\n"
+            f"📩 <b>{i18n.t('ticket_id_label', _lg)}#{code}</b>\n"
+            f"📋 {i18n.t('ticket_subject_label', _lg)}{title}\n"
             f"📅 {str(ticket.get('created_at', ''))[:16]}\n"
-            f"📌 وضعیت: {status_fa}\n\n"
-            f"━━━ پیام‌ها ━━━\n"
+            f"📌 {i18n.t('ticket_status_label', _lg)}{status_fa}\n\n"
+            f"{i18n.t('msgs_header', _lg)}\n"
         )
         if not messages:
-            text += "(پیامی وجود ندارد)"
+            text += i18n.t("no_messages_yet", _lg)
         else:
             for m in messages:
-                sender = "👤 شما" if m.get("sender_type") == "user" else f"🤖 {m.get('sender_name', 'پشتیبان')}"
+                sender = "👤 " + i18n.t("you_label", _lg) if m.get("sender_type") == "user" else f"🤖 {m.get('sender_name') or i18n.t('support_label', _lg)}"
                 msg_text = m.get("message_text", "")
-                has_photo = "📷 [عکس]" if m.get("photo_file_id") else ""
+                has_photo = i18n.t("photo_label", _lg) if m.get("photo_file_id") else ""
                 ts = str(m.get("created_at", ""))[:16]
                 text += f"\n{sender} ({ts}):\n{msg_text}\n{has_photo}\n"
         await msg.edit_text(text, reply_markup=user_ticket_detail_keyboard(code, can_reply, is_closed, lang=_lg), parse_mode="HTML")
         for m in messages:
             photo_fid = m.get("photo_file_id", "")
             if photo_fid:
-                sender = "شما" if m.get("sender_type") == "user" else m.get("sender_name", "پشتیبان")
-                caption = f"📷 عکس تیکت #{code} - {sender}\n{m.get('message_text', '') or ''}"
+                sender = i18n.t("you_label", _lg) if m.get("sender_type") == "user" else m.get("sender_name") or i18n.t("support_label", _lg)
+                caption = f"📷 {i18n.t('ticket_photo_of_label', _lg, c=code, s=sender)}\n{m.get('message_text', '') or ''}"
                 try:
                     await msg.reply_photo(photo=photo_fid, caption=caption[:1024])
                 except Exception:
@@ -503,12 +509,12 @@ async def _handle_support(query, context, agent_id, user, data):
             if _reply_sub == "skip":
                 pending = context.user_data.get("pending_reply", {})
                 if not pending or not pending.get("ticket_code"):
-                    await query.answer("اطلاعات پاسخ پیدا نشد.", show_alert=True)
+                    await query.answer(i18n.t("reply_info_missing", _lg), show_alert=True)
                     return
                 pending["photo_file_id"] = ""
                 context.user_data["pending_reply"] = pending
                 context.user_data[UD_STATE] = STATE_TICKET_CONFIRM
-                preview_text = f"📩 <b>تایید اطلاعات پاسخ تیکت</b>\n\n📝 پاسخ: {pending.get('reply_text', '')}\n\n❗️در صورت تایید، دکمه «✅ارسال» را بزنید."
+                preview_text = i18n.t("ticket_reply_confirm", _lg, t=pending.get('reply_text', ''))
                 try:
                     await msg.edit_text(preview_text, reply_markup=ticket_confirm_keyboard("reply", lang=_lg), parse_mode="HTML")
                 except Exception:
@@ -520,37 +526,37 @@ async def _handle_support(query, context, agent_id, user, data):
                 context.user_data[UD_TICKET_MODE] = f"reply:{code}"
                 context.user_data.pop("pending_reply", None)
                 try:
-                    await msg.edit_text("✍️ لطفا پاسخ خود را به صورت کامل ارسال نمایید:", parse_mode="HTML")
+                    await msg.edit_text(i18n.t("reply_prompt_full", _lg), parse_mode="HTML")
                 except Exception:
                     pass
-                await msg.reply_text("✍️ پاسخ خود را بنویسید:", reply_markup=cancel_keyboard())
+                await msg.reply_text(i18n.t("reply_prompt", _lg), reply_markup=cancel_keyboard(lang=_lg))
             elif _reply_sub == "cancel":
                 context.user_data.pop(UD_STATE, None)
                 context.user_data.pop(UD_TICKET_MODE, None)
                 context.user_data.pop("pending_reply", None)
-                await msg.edit_text("❌ ارسال پاسخ لغو شد.", reply_markup=support_panel_keyboard(_lg))
+                await msg.edit_text(i18n.t("reply_cancelled", _lg), reply_markup=support_panel_keyboard(_lg))
             else:  # send
                 from CustomerBot.handlers.receipt import _build_ticket_detail_text, _notify_agent_ticket_reply
                 pending = context.user_data.get("pending_reply", {})
                 if not pending or not pending.get("ticket_code"):
-                    await query.answer("اطلاعات پاسخ پیدا نشد.", show_alert=True)
+                    await query.answer(i18n.t("reply_info_missing", _lg), show_alert=True)
                     return
                 code = int(pending["ticket_code"])
                 reply_text = str(pending.get("reply_text") or "").strip()
                 photo_fid = str(pending.get("photo_file_id") or "").strip()
                 ticket = get_ticket(agent_id, code)
                 if not ticket:
-                    await query.answer("تیکت یافت نشد.", show_alert=True)
+                    await query.answer(i18n.t("ticket_not_found_local", _lg), show_alert=True)
                     return
                 if str(ticket.get("status") or "").strip().lower() == "closed":
-                    await query.answer("این تیکت بسته شده است.", show_alert=True)
+                    await query.answer(i18n.t("ticket_closed_local", _lg), show_alert=True)
                     return
                 add_ticket_message(
                     agent_id=agent_id,
                     ticket_code=code,
                     sender_type="user",
-                    sender_name=user.full_name or user.username or "کاربر",
-                    message_text=reply_text or "[عکس]",
+                    sender_name=user.full_name or user.username or i18n.t("user_label", _lg),
+                    message_text=reply_text or i18n.t("photo_label", _lg),
                     photo_file_id=photo_fid,
                 )
                 try:
@@ -570,55 +576,54 @@ async def _handle_support(query, context, agent_id, user, data):
                     fresh = get_ticket(agent_id, code)
                     msgs = get_ticket_messages(agent_id, code) if fresh else []
                     detail_text = _build_ticket_detail_text(fresh, msgs)
-                    out_text = "✅ پاسخ شما ثبت شد.\n\n" + detail_text
+                    out_text = i18n.t("ticket_reply_sent", _lg) + detail_text
                     await msg.edit_text(out_text, reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False, lang=_lg), parse_mode="HTML")
                     for m in msgs:
                         pfid = m.get("photo_file_id", "")
                         if pfid:
                             try:
-                                await msg.reply_photo(photo=pfid, caption=f"📷 عکس تیکت #{code}")
+                                await msg.reply_photo(photo=pfid, caption=i18n.t("photo_ticket_label", _lg, c=code))
                             except Exception:
                                 pass
                 except Exception:
-                    await msg.edit_text("✅ پاسخ شما ثبت شد.", reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False, lang=_lg))
+                    await msg.edit_text(i18n.t("ticket_reply_sent", _lg).strip(), reply_markup=user_ticket_detail_keyboard(code, can_reply=True, is_closed=False, lang=_lg))
             return
         else:
             try:
                 code = int(_reply_sub)
             except (TypeError, ValueError):
-                await query.answer("درخواست نامعتبر.", show_alert=True)
+                await query.answer(i18n.t("invalid_request", _lg), show_alert=True)
                 return
             context.user_data[UD_STATE] = STATE_TICKET_WAITING_TEXT
             context.user_data[UD_TICKET_MODE] = f"reply:{code}"
             await msg.edit_text(
-                "📩 <b>پاسخ به تیکت</b>\n\n"
-                "متن یا عکس خود را ارسال کنید:",
+                i18n.t("ticket_reply_header", _lg),
                 parse_mode="HTML",
             )
-            await msg.reply_text("✍️ پاسخ خود را بنویسید:", reply_markup=cancel_keyboard())
+            await msg.reply_text(i18n.t("reply_prompt", _lg), reply_markup=cancel_keyboard(lang=_lg))
             return
 
     elif data.startswith(CB_SUPPORT_CLOSE):
         code = int(data.split(":")[-1])
         update_ticket_status(agent_id, code, "closed")
-        await msg.edit_text("✅ تیکت بسته شد.", reply_markup=support_panel_keyboard(_lg))
+        await msg.edit_text(i18n.t("ticket_closed_ok", _lg), reply_markup=support_panel_keyboard(_lg))
 
     elif data == "support:new:skip":
         pending = context.user_data.get("pending_ticket", {})
         if not pending:
-            await query.answer("اطلاعات تیکت پیدا نشد.", show_alert=True)
+            await query.answer(i18n.t("ticket_info_missing", _lg), show_alert=True)
             return
         context.user_data[UD_STATE] = STATE_TICKET_CONFIRM
         from CustomerBot.handlers.receipt import _format_ticket_confirm_text
-        await msg.edit_text(_format_ticket_confirm_text(pending), reply_markup=ticket_confirm_keyboard("new", lang=_lg), parse_mode="HTML")
+        await msg.edit_text(_format_ticket_confirm_text(pending, lang=_lg), reply_markup=ticket_confirm_keyboard("new", lang=_lg), parse_mode="HTML")
 
     elif data == "support:new:send":
         pending = context.user_data.get("pending_ticket", {})
         if not pending:
-            await query.answer("اطلاعات تیکت پیدا نشد.", show_alert=True)
+            await query.answer(i18n.t("ticket_info_missing", _lg), show_alert=True)
             return
         from CustomerBot.handlers.receipt import _notify_agent_new_ticket
-        title = pending.get("title", "بدون موضوع")
+        title = pending.get("title") or i18n.t("no_subject_label", _lg)
         question = pending.get("question", "")
         photo_fid = pending.get("photo_file_id", "")
         ticket = create_ticket(
@@ -634,7 +639,7 @@ async def _handle_support(query, context, agent_id, user, data):
                 agent_id=agent_id,
                 ticket_code=ticket["ticket_code"],
                 sender_type="user",
-                sender_name=user.full_name or user.username or "کاربر",
+                sender_name=user.full_name or user.username or i18n.t("user_label", _lg),
                 message_text=question,
                 photo_file_id=photo_fid,
             )
@@ -648,54 +653,55 @@ async def _handle_support(query, context, agent_id, user, data):
                 fresh = get_ticket(agent_id, ticket["ticket_code"])
                 msgs = get_ticket_messages(agent_id, ticket["ticket_code"])
                 links = await build_ticket_screenshot_links(context, ticket["ticket_code"], msgs)
-                detail_text = _build_ticket_detail_text(fresh, msgs, screenshot_links=links)
+                detail_text = _build_ticket_detail_text(fresh, msgs, screenshot_links=links, lang=_lg)
             except Exception:
                 detail_text = ""
-            header = "✅ <b>تیکت شما با موفقیت ثبت شد.</b>\n\nبه زودی پاسخ داده می‌شود\n\n"
+            header = i18n.t("ticket_created_header", _lg)
             out_text = header + detail_text
             await msg.edit_text(
                 out_text,
-                reply_markup=user_ticket_detail_keyboard(ticket["ticket_code"], can_reply=True, is_closed=False),
+                reply_markup=user_ticket_detail_keyboard(ticket["ticket_code"], can_reply=True, is_closed=False, lang=_lg),
                 parse_mode="HTML",
             )
         else:
-            await query.answer("خطا در ثبت تیکت.", show_alert=True)
+            await query.answer(i18n.t("ticket_create_error", _lg), show_alert=True)
 
     elif data == "support:new:edit":
         context.user_data[UD_STATE] = STATE_TICKET_WAITING_TITLE
         context.user_data[UD_TICKET_MODE] = "new"
         context.user_data.pop("pending_ticket", None)
-        await msg.edit_text(i18n.t("ticket_title_prompt", i18n.get_customer_lang(agent_id, user.id)), reply_markup=cancel_keyboard())
+        await msg.edit_text(i18n.t("ticket_title_prompt", i18n.get_customer_lang(agent_id, user.id)), reply_markup=cancel_keyboard(lang=_lg))
 
     elif data == "support:new:cancel":
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_TICKET_MODE, None)
         context.user_data.pop(UD_TICKET_QUESTION, None)
         context.user_data.pop("pending_ticket", None)
-        await msg.edit_text("❌ ایجاد تیکت لغو شد.", reply_markup=support_panel_keyboard(_lg))
+        await msg.edit_text(i18n.t("ticket_cancelled", _lg), reply_markup=support_panel_keyboard(_lg))
 
     elif data == CB_SUPPORT_BACK_MAIN or data == CB_SUPPORT_MENU:
         await msg.edit_text(
-            text_settings.get("ticket_panel_text", "📩 برای ارتباط با پشتیبانی، پیام خود را ارسال کنید."),
+            get_localized_text(agent_id, "ticket_panel_text", _lg),
             reply_markup=support_panel_keyboard(_lg),
         )
 
 
-async def _show_subscription_status(msg, agent_id, svc_id):
+async def _show_subscription_status(msg, agent_id, svc_id, lang: str = "fa"):
     """نمایش «📄اطلاعات اشتراک شما» + کیبورد وضعیت (مطابق ربات کاربران)"""
     subs_settings = get_subs_settings(agent_id)
     br = get_buy_renew_settings(agent_id)
     svc = get_service_by_id(svc_id)
     if not svc:
-        await msg.edit_text("❌ سرویس یافت نشد.")
+        await msg.edit_text(i18n.t("service_not_found_local", lang))
         return None
     show_detach = bool(svc.get("comment") == "connected")
-    svc_text = build_subscription_status_text(svc, subs_settings, br)
+    svc_text = build_subscription_status_text(svc, subs_settings, br, lang=lang)
     kb = subscription_status_keyboard(
         svc_id,
         show_direct_config=subs_settings.get("show_direct_config", True),
         show_sub_link=subs_settings.get("show_sub_link", True),
         show_detach=show_detach,
+        lang=lang,
     )
     try:
         await msg.edit_text(svc_text, parse_mode="Markdown", reply_markup=kb)
@@ -707,7 +713,7 @@ async def _show_subscription_status(msg, agent_id, svc_id):
     return svc
 
 
-async def _send_service_direct_configs(msg, svc):
+async def _send_service_direct_configs(msg, svc, lang: str = "fa"):
     """کانفیگ‌های مستقیم: استخراج از لینک اشتراک همه نودها (بدون API پنل).
 
     فقط از sub-link واقعی هر نود استخراج می‌شود تا همان تنظیمات
@@ -762,7 +768,7 @@ async def _send_service_direct_configs(msg, svc):
             if supplemented:
                 links = api_links
                 if not source_hint:
-                    source_hint = "⚠️ برخی کانفیگ‌ها از API پنل تکمیل شد (لینک مستقیم X-UI در دسترس نبود).\n\n"
+                    source_hint = i18n.t("xui_api_supplement", lang)
         except Exception as e:
             import logging
             logging.getLogger(__name__).debug("X-UI supplement failed: %s", e)
@@ -788,21 +794,21 @@ async def _send_service_direct_configs(msg, svc):
                     api_links.append(raw)
             if api_links:
                 links = api_links
-                source_hint = "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ کانفیگ‌ها از API پنل خوانده شد.\n\n"
+                source_hint = i18n.t("xui_api_fallback", lang)
         except Exception:
             pass
         if not links:
-            msg_text = "❌ کانفیگی از لینک اشتراک استخراج نشد."
+            msg_text = i18n.t("direct_config_extract_failed", lang)
             if fallback_base:
                 if is_xui_fallback:
-                    msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}"
+                    msg_text += i18n.t("can_use_sub_link", lang, u=fallback_base)
                 else:
-                    msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}/all.txt"
+                    msg_text += i18n.t("can_use_sub_link", lang, u=f"{fallback_base}/all.txt")
             await msg.reply_text(msg_text, disable_web_page_preview=True)
             return
 
     server_title = _resolve_live_server_title(svc, default="")
-    header = "🔗 کانفیگ‌های مستقیم"
+    header = i18n.t("direct_configs_title", lang)
     if server_title:
         header = f"{header} | {server_title}"
     clean_links = [str(x).strip() for x in links if str(x).strip()]
@@ -810,7 +816,7 @@ async def _send_service_direct_configs(msg, svc):
     all_links_text = "\n".join(clean_links)
     one_block_text = (
         f"{source_hint}{header}\n"
-        "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
+        f"{i18n.t('direct_configs_hint', lang)}\n"
         f"<pre><code class=\"language-shell\">{escape(all_links_text)}</code></pre>"
     )
     if len(one_block_text) <= 3900:
@@ -836,13 +842,13 @@ async def _send_service_direct_configs(msg, svc):
         part_header = header if len(parts_list) == 1 else f"{header} ({idx}/{len(parts_list)})"
         part_text = (
             f"{source_hint if idx == 1 else ''}{part_header}\n"
-            "برای کپی، باکس زیر را کپی کنید:\n"
+            f"{i18n.t('direct_configs_hint_paged', lang)}\n"
             f"<pre><code class=\"language-shell\">{escape(chr(10).join(chunk))}</code></pre>"
         )
         await msg.reply_text(part_text, parse_mode="HTML", disable_web_page_preview=True)
 
 
-async def _send_subscription_link_with_qr(query, agent_id, svc, data):
+async def _send_subscription_link_with_qr(query, agent_id, svc, data, lang: str = "fa"):
     """ارسال لینک‌های اشتراک همراه با QR بارکد (مثل ربات کاربران)"""
     parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
@@ -852,47 +858,47 @@ async def _send_subscription_link_with_qr(query, agent_id, svc, data):
 
     base_urls = get_service_node_base_urls(svc)
     if not base_urls:
-        await msg.edit_text("❌ برای این سرویس لینک کانفیگ در دسترس نیست.")
+        await msg.edit_text(i18n.t("no_config_link", lang))
         return
     base_url = base_urls[0]
 
     config_items = []
     if action == "sub_link":
         if not ss.get("show_sub_link", True):
-            await msg.edit_text("❌ نمایش لینک اشتراک خاموش است.")
+            await msg.edit_text(i18n.t("sub_link_disabled", lang))
             return
-        config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+        config_items.append((i18n.t("label_sub_link", lang), f"{base_url}/all.txt"))
     elif action == "auto_sub":
         if not ss.get("show_auto_sub_link", False):
-            await msg.edit_text("❌ نمایش اشتراک خودکار خاموش است.")
+            await msg.edit_text(i18n.t("auto_sub_disabled", lang))
             return
-        config_items.append(("🤖 لینک اشتراک خودکار:", f"{base_url}/sub/?asn=unknown"))
+        config_items.append((i18n.t("auto_sub_link_label", lang), f"{base_url}/sub/?asn=unknown"))
     elif action == "sub_b64":
         if not ss.get("show_sub_link_b64", False):
-            await msg.edit_text("❌ نمایش لینک b64 خاموش است.")
+            await msg.edit_text(i18n.t("sub_b64_disabled", lang))
             return
-        config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+        config_items.append((i18n.t("sub_b64_label", lang), f"{base_url}/all.txt?base64=1"))
     elif action == "multi":
         if not ss.get("show_multi_server", False):
-            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند خاموش است.")
+            await msg.edit_text(i18n.t("multi_disabled", lang))
             return
         managed_link, _ = get_or_create_bot_sub_links(svc)
-        config_items.append(("🌐 لینک اشتراک هوشمند:", managed_link))
+        config_items.append((i18n.t("config_smart", lang) + ":", managed_link))
     elif action == "multi_b64":
         if not ss.get("show_multi_server_b64", False):
-            await msg.edit_text("❌ نمایش لینک اشتراک هوشمند b64 خاموش است.")
+            await msg.edit_text(i18n.t("multi_b64_disabled", lang))
             return
         _, managed_link_b64 = get_or_create_bot_sub_links(svc)
-        config_items.append(("🌐 لینک اشتراک هوشمند b64:", managed_link_b64))
+        config_items.append((i18n.t("smart_sub_b64_btn", lang) + ":", managed_link_b64))
 
     if not config_items:
-        await msg.edit_text("❌ در حال حاضر هیچ لینکی برای نمایش فعال نیست.")
+        await msg.edit_text(i18n.t("no_links_available", lang))
         return
 
     primary_link = config_items[0][1]
     qr_image = make_qr_image(primary_link)
     qr_caption = (
-        "📄 جهت کپی شدن لینک اشتراک کافیست یک بار لینک زیر را لمس کنید 👇\n\n"
+        f"{i18n.t('copy_link_hint', lang)}\n\n"
         f"<code>{escape(primary_link)}</code>"
     )
     try:
@@ -900,20 +906,20 @@ async def _send_subscription_link_with_qr(query, agent_id, svc, data):
             photo=qr_image,
             caption=qr_caption,
             parse_mode="HTML",
-            reply_markup=subscription_links_keyboard(svc_id),
+            reply_markup=subscription_links_keyboard(svc_id, lang=lang),
         )
     except Exception:
         try:
             await msg.reply_text(
                 qr_caption,
                 parse_mode="HTML",
-                reply_markup=subscription_links_keyboard(svc_id),
+                reply_markup=subscription_links_keyboard(svc_id, lang=lang),
                 disable_web_page_preview=True,
             )
         except Exception:
             pass
 
-    config_text_lines = ["📝 لینک‌های اشتراک", ""]
+    config_text_lines = [i18n.t("sub_links_title", lang), ""]
     for title, value in config_items:
         config_text_lines.append(title)
         config_text_lines.append(f"<code>{escape(value)}</code>")
@@ -928,6 +934,7 @@ async def _send_subscription_link_with_qr(query, agent_id, svc, data):
 async def _handle_status(query, context, agent_id, user, data):
     msg = query.message
     parts = data.split(":")
+    _lg = i18n.get_customer_lang(agent_id, user.id)
 
     if data.startswith(CB_STATUS_LIST):
         svc_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
@@ -942,19 +949,19 @@ async def _handle_status(query, context, agent_id, user, data):
             services = get_services_by_customer(cust["id"])
             visible = [s for s in services if is_customer_service_visible(s)]
             if not visible:
-                await msg.edit_text("❌ سرویس فعالی ندارید.")
+                await msg.edit_text(i18n.t("no_active_service", _lg))
                 return
             await msg.edit_text(
-                "👇 یکی از اشتراک‌ها را انتخاب کنید:",
-                reply_markup=services_list_keyboard(visible),
+                i18n.t("status_pick_prompt", _lg),
+                reply_markup=services_list_keyboard(visible, lang=_lg),
             )
             return
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.edit_text(i18n.t("service_not_found_local", _lg))
             return
         await sync_service_status_from_panels(svc_id)
-        await _show_subscription_status(msg, agent_id, svc_id)
+        await _show_subscription_status(msg, agent_id, svc_id, lang=_lg)
         return
 
     elif data.startswith(CB_STATUS_CONFIGS):
@@ -972,12 +979,13 @@ async def _handle_status(query, context, agent_id, user, data):
                     show_sub_link_b64=ss.get("show_sub_link_b64", False),
                     show_multi_server=ss.get("show_multi_server", False),
                     show_multi_server_b64=ss.get("show_multi_server_b64", False),
+                    lang=_lg,
                 )
             )
         except Exception:
             try:
                 await msg.edit_text(
-                    "🔗 لطفا نوع اتصال را انتخاب کنید:",
+                    i18n.t("kb_choose_connection", _lg),
                     reply_markup=subscription_configs_keyboard(
                         svc_id,
                         show_direct_config=ss.get("show_direct_config", True),
@@ -986,6 +994,7 @@ async def _handle_status(query, context, agent_id, user, data):
                         show_sub_link_b64=ss.get("show_sub_link_b64", False),
                         show_multi_server=ss.get("show_multi_server", False),
                         show_multi_server_b64=ss.get("show_multi_server_b64", False),
+                        lang=_lg,
                     ),
                 )
             except Exception:
@@ -996,9 +1005,9 @@ async def _handle_status(query, context, agent_id, user, data):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.edit_text(i18n.t("service_not_found_local", _lg))
             return
-        await _send_service_direct_configs(msg, svc)
+        await _send_service_direct_configs(msg, svc, lang=_lg)
 
     elif data.startswith(CB_STATUS_SUB_LINK) or data.startswith(CB_STATUS_AUTO_SUB) \
             or data.startswith(CB_STATUS_SUB_B64) or data.startswith(CB_STATUS_MULTI) \
@@ -1007,32 +1016,32 @@ async def _handle_status(query, context, agent_id, user, data):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.edit_text(i18n.t("service_not_found_local", _lg))
             return
-        await _send_subscription_link_with_qr(query, agent_id, svc, data)
+        await _send_subscription_link_with_qr(query, agent_id, svc, data, lang=_lg)
 
     elif data.startswith(CB_STATUS_MENU):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
-        await _show_subscription_status(msg, agent_id, svc_id)
+        await _show_subscription_status(msg, agent_id, svc_id, lang=_lg)
 
     elif data.startswith(CB_STATUS_REFRESH):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.edit_text(i18n.t("service_not_found_local", _lg))
             return
         try:
-            await msg.edit_text("� در حال به‌روزرسانی اطلاعات اشتراک...")
+            await msg.edit_text(i18n.t("st_update", _lg))
         except Exception:
             pass
         await sync_service_status_from_panels(svc_id)
-        await _show_subscription_status(msg, agent_id, svc_id)
+        await _show_subscription_status(msg, agent_id, svc_id, lang=_lg)
 
     elif data.startswith(CB_STATUS_RENAME):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.edit_text(i18n.t("service_not_found_local", _lg))
             return
         context.user_data[UD_STATE] = f"rename:{svc_id}"
         _lg = i18n.get_customer_lang(agent_id, user.id)
@@ -1050,16 +1059,16 @@ async def _handle_status(query, context, agent_id, user, data):
             svc_id = int(parts[2]) if len(parts) > 2 else 0
             svc = get_service_by_id(svc_id)
             if not svc:
-                await msg.edit_text("❌ سرویس یافت نشد.")
+                await msg.edit_text(i18n.t("service_not_found_local", _lg))
                 return
             try:
-                await msg.edit_text(i18n.t("changing_link", i18n.get_customer_lang(agent_id, user.id)))
+                await msg.edit_text(i18n.t("changing_link", _lg))
             except Exception:
                 pass
-            ok, result_text, _new_uuid = await regenerate_service_uuid(svc)
-            await msg.reply_text(result_text, reply_markup=main_menu_keyboard())
+            ok, result_text, _new_uuid = await regenerate_service_uuid(svc, lang=_lg)
+            await msg.reply_text(result_text, reply_markup=main_menu_keyboard(lang=_lg))
             if ok:
-                await _show_subscription_status(msg, agent_id, svc_id)
+                await _show_subscription_status(msg, agent_id, svc_id, lang=_lg)
         else:
             svc_id = int(parts[2]) if len(parts) > 2 else 0
             _lg = i18n.get_customer_lang(agent_id, user.id)
@@ -1073,31 +1082,31 @@ async def _handle_status(query, context, agent_id, user, data):
         svc = get_service_by_id(svc_id)
         if svc:
             set_service_active(svc_id, False)
-            await msg.edit_text("✅ اشتراک جدا شد.")
+            await msg.edit_text(i18n.t("svc_detached", _lg))
 
     elif data.startswith(CB_STATUS_GUIDE):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         text_settings = get_text_settings(agent_id)
         _lg = i18n.get_customer_lang(agent_id, user.id)
-        guide_txt = text_settings.get("guide_text") or i18n.t("guide_os_title", _lg)
+        guide_txt = get_localized_text(agent_id, "guide_text", _lg)
         # دکمه «راهنمای اتصال» روی پیام عکس (QR) قرار دارد؛ به همین دلیل نمی‌توان
         # با edit_text ویرایشش کرد و باید پیام جدیدی ارسال شود.
         try:
             await msg.reply_text(
                 guide_txt,
-                reply_markup=guide_os_keyboard(f"s:{svc_id}"),
+                reply_markup=guide_os_keyboard(f"s:{svc_id}", lang=_lg),
             )
         except Exception:
             await msg.edit_text(
                 guide_txt,
-                reply_markup=guide_os_keyboard(f"s:{svc_id}"),
+                reply_markup=guide_os_keyboard(f"s:{svc_id}", lang=_lg),
             )
 
     elif data.startswith(CB_STATUS_RENEW):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.edit_text("❌ سرویس یافت نشد.")
+            await msg.edit_text(i18n.t("service_not_found_local", _lg))
             return
         _lg = i18n.get_customer_lang(agent_id, user.id)
         br = get_buy_renew_settings(agent_id)
@@ -1118,7 +1127,7 @@ async def _handle_status(query, context, agent_id, user, data):
             await _edit_or_reply(
                 msg,
                 i18n.t("renew_choose_plan", _lg),
-                reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
+                reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew", lang=_lg),
             )
         else:
             context.user_data.pop(UD_BUY_PLAN_ID, None)
@@ -1139,22 +1148,23 @@ async def _handle_status(query, context, agent_id, user, data):
             )
 
     elif data.startswith(CB_STATUS_LIST_BACK):
-        await _back_to_main_menu(msg, "🔙 بازگشت")
+        await _back_to_main_menu(msg, i18n.t("back", _lg), lang=_lg)
 
 
 async def _handle_renew(query, context, agent_id, user, data):
     msg = query.message
     parts = data.split(":")
+    _lg0 = i18n.get_customer_lang(agent_id, user.id)
 
     if data.startswith(CB_RENEW_SVC):
         svc_id = int(parts[2]) if len(parts) > 2 else 0
         svc = get_service_by_id(svc_id)
         if not svc:
-            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("service_not_found_local", _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         # قوانین تمدید (حالت پیشرفته): حجم/زمان باقی‌مانده باید کمتر از حد مجاز باشد
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
-            await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
+            await _edit_or_reply(msg, renew_not_allowed_text(agent_id, _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         context.user_data["renew_target_service_id"] = int(svc_id)
         context.user_data.pop(UD_BUY_GB, None)
@@ -1164,12 +1174,12 @@ async def _handle_renew(query, context, agent_id, user, data):
         if mode == "fixed":
             plans = get_fixed_plans(agent_id)
             if not plans:
-                await _edit_or_reply(msg, "❌ هیچ پلنی برای این نماینده تعریف نشده است.", reply_markup=main_menu_keyboard())
+                await _edit_or_reply(msg, i18n.t("no_plans_for_agent", _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
                 return
             await _edit_or_reply(
                 msg,
-                "📋 پلن تمدید را انتخاب کنید:",
-                reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew"),
+                i18n.t("renew_plan_choose", _lg0),
+                reply_markup=plans_keyboard(plans, server_id, 0, callback_prefix="renew", lang=_lg0),
             )
         else:
             context.user_data.pop(UD_BUY_PLAN_ID, None)
@@ -1185,8 +1195,8 @@ async def _handle_renew(query, context, agent_id, user, data):
             price, off_pct = _calc_dynamic_price(gb, months, dyn)
             await _edit_or_reply(
                 msg,
-                "🎛 بسته تمدید را انتخاب کنید:",
-                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct),
+                i18n.t("renew_pkg_choose", _lg0),
+                reply_markup=renew_wizard_keyboard(server_id, gb, months, price, off_pct, lang=_lg0),
             )
 
     elif data.startswith("rwiz:"):
@@ -1226,12 +1236,12 @@ async def _handle_renew(query, context, agent_id, user, data):
             gb = max(min_gb, gb - step_gb)
         elif wiz_action == "month_inc":
             if months >= max_month:
-                await msg.answer("⏳ حداکثر دوره {max_month} ماه می‌باشد.".replace("{max_month}", str(max_month)), show_alert=True)
+                await msg.answer(i18n.t("max_period_alert", _lg0, m=max_month), show_alert=True)
                 return
             months = min(max_month, months + step_month)
         elif wiz_action == "month_dec":
             if months <= min_month:
-                await msg.answer("⏳ حداقل دوره {min_month} ماه می‌باشد.".replace("{min_month}", str(min_month)), show_alert=True)
+                await msg.answer(i18n.t("min_period_alert", _lg0, m=min_month), show_alert=True)
                 return
             months = max(min_month, months - step_month)
         context.user_data[UD_BUY_GB] = gb
@@ -1252,20 +1262,20 @@ async def _handle_renew(query, context, agent_id, user, data):
         server_id_cb = int(parts[2]) if len(parts) > 2 else 0
         service_id = int(context.user_data.get("renew_target_service_id") or 0)
         if not service_id:
-            await msg.reply_text("❌ سرویس مورد نظر برای تمدید پیدا نشد.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("renew_service_not_found", _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         svc = get_service_by_id(service_id)
         if not svc:
-            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("service_not_found_local", _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
-            await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
+            await _edit_or_reply(msg, renew_not_allowed_text(agent_id, _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         if _wizard_expired(context):
             _reset_buy_wizard(context)
             await msg.edit_text(
-                "⏳ نشست تمدید منقضی شده است. لطفاً تمدید را از ابتدا شروع کنید.",
-                reply_markup=_ikb([[InlineKeyboardButton("🔙 بازگشت", callback_data=f"status:menu:{service_id}")]]),
+                i18n.t("renew_session_expired_btn", _lg0),
+                reply_markup=_ikb([[InlineKeyboardButton(i18n.t("back", _lg0), callback_data=f"status:menu:{service_id}")]]),
             )
             return
         server_id = int(svc.get("server_id") or 0) or server_id_cb
@@ -1296,18 +1306,18 @@ async def _handle_renew(query, context, agent_id, user, data):
         plan_id = int(parts[3]) if len(parts) > 3 else 0
         service_id = int(context.user_data.get("renew_target_service_id") or 0)
         if not service_id:
-            await msg.reply_text("❌ سرویس مورد نظر برای تمدید پیدا نشد.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("renew_service_not_found", _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         svc = get_service_by_id(service_id)
         if not svc:
-            await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("service_not_found_local", _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
-            await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
+            await _edit_or_reply(msg, renew_not_allowed_text(agent_id, _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         plan = get_fixed_plan(agent_id, plan_id)
         if not plan:
-            await msg.reply_text("❌ پلن انتخابی نامعتبر است.", reply_markup=main_menu_keyboard())
+            await msg.reply_text(i18n.t("invalid_plan", _lg0), reply_markup=main_menu_keyboard(lang=_lg0))
             return
         price = safe_int(plan.get("price", 0))
         gb = int(safe_float(plan.get("gb", 0)))
@@ -1345,15 +1355,15 @@ async def _handle_renew(query, context, agent_id, user, data):
         # بررسی مالکیت سرویس (ضد دستکاری callback data)
         cust = get_customer_by_telegram_id(agent_id, user.id)
         if not cust or int(svc.get("customer_id") or 0) != int(cust.get("id") or 0):
-            await msg.reply_text(i18n.t("service_not_owned", _lg), reply_markup=main_menu_keyboard(lang=_lg))
+            await msg.reply_text(i18n.t("svc_not_owned", _lg), reply_markup=main_menu_keyboard(lang=_lg))
             return
         # قوانین تمدید — گیت نهایی سمت سرور (ضد پرش مراحل)
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             try:
-                await query.answer("🛑 این سرویس هنوز شرایط تمدید ندارد.", show_alert=True)
+                await query.answer(i18n.t("st_renew_not_allowed", _lg), show_alert=True)
             except Exception:
                 pass
-            await _back_to_main_menu(msg, renew_not_allowed_text(agent_id))
+            await _back_to_main_menu(msg, renew_not_allowed_text(agent_id, _lg), lang=_lg)
             return
         # قیمت نمایشی سفارش همیشه سمت سرور دوباره محاسبه می‌شود —
         # ضد دستکاری callback data (قیمت جعلی می‌تواند نماینده را در تایید رسید گول بزند)
@@ -1368,10 +1378,10 @@ async def _handle_renew(query, context, agent_id, user, data):
             recomputed_price, _off = _calc_dynamic_price(gb, days // 30, dyn_settings_renew)
         if recomputed_price is None or recomputed_price <= 0:
             try:
-                await query.answer("❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً تمدید را از نو انجام دهید.", show_alert=True)
+                await query.answer(i18n.t("btn_expired_renew", _lg), show_alert=True)
             except Exception:
                 pass
-            await _back_to_main_menu(msg, "❌ اطلاعات این دکمه منقضی است. لطفاً تمدید را از نو انجام دهید.")
+            await _back_to_main_menu(msg, i18n.t("btn_expired_renew", _lg), lang=_lg)
             return
         price = int(recomputed_price)
         card = _random_active_agent_card(agent_id)
@@ -1380,7 +1390,7 @@ async def _handle_renew(query, context, agent_id, user, data):
                 await query.answer(i18n.t("no_card", _lg), show_alert=True)
             except Exception:
                 pass
-            await _back_to_main_menu(msg, i18n.t("no_card", _lg))
+            await _back_to_main_menu(msg, i18n.t("no_card", _lg), lang=_lg)
             return
         wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
         order = create_order(
@@ -1389,7 +1399,7 @@ async def _handle_renew(query, context, agent_id, user, data):
             volume_gb=float(gb),
             days=days,
             price=price,
-            plan_title=f"تمدید بسته {gb}GB-{days}D",
+            plan_title=i18n.t("order_title_renew", _lg, g=gb, d=days),
             server_location=(get_server_by_id(server_id) or {}).get("title", ""),
             username=user.username or "",
             full_name=user.full_name or "",
@@ -1434,15 +1444,16 @@ async def _handle_renew(query, context, agent_id, user, data):
                     f"{card_text}"
                 )
         context.user_data.pop("renew_target_service_id", None)
-        await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
+        await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard(lang=_lg))
 
     elif data.startswith(CB_RENEW_BACK):
         context.user_data.pop("renew_target_service_id", None)
-        await _back_to_main_menu(msg, "🔙 بازگشت")
+        await _back_to_main_menu(msg, i18n.t("back", _lg0), lang=_lg0)
 
 
 async def _handle_pay(query, context, agent_id, user, data):
     msg = query.message
+    _lg = i18n.get_customer_lang(agent_id, user.id)
 
     if data == CB_PAY_RECEIPT_DONE:
         context.user_data[UD_STATE] = "wallet_receipt_photo"
@@ -1453,8 +1464,8 @@ async def _handle_pay(query, context, agent_id, user, data):
             pass
         await query.get_bot().send_message(
             chat_id=query.from_user.id,
-            text="⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:",
-            reply_markup=receipt_cancel_keyboard(),
+            text=i18n.t("receipt_prompt", _lg),
+            reply_markup=receipt_cancel_keyboard(lang=_lg),
         )
 
     elif data == CB_PAY_CANCEL:
@@ -1465,26 +1476,27 @@ async def _handle_pay(query, context, agent_id, user, data):
         context.user_data.pop("pending_amount", None)
         context.user_data.pop("pending_order_id", None)
         context.user_data.pop("renew_target_service_id", None)
-        await _back_to_main_menu(msg, "❌ پرداخت لغو شد.")
+        await _back_to_main_menu(msg, i18n.t("purchase_cancelled", _lg), lang=_lg)
 
 
 async def _handle_trial(query, context, agent_id, user, data):
     msg = query.message
     parts = data.split(":")
+    _lg = i18n.get_customer_lang(agent_id, user.id)
 
     if data.startswith(CB_TRIAL_LOC):
         server_id = int(parts[2]) if len(parts) > 2 else 0
         u_db = get_user(agent_id, user.id)
         if u_db and u_db.get("got_free_trial"):
-            await msg.edit_text("🚫 شما قبلا تست رایگان دریافت کرده‌اید.")
+            await msg.edit_text(i18n.t("trial_already_used", _lg))
             return
         server = get_server_by_id(server_id)
         if not server:
-            await msg.edit_text("❌ سرور یافت نشد.")
+            await msg.edit_text(i18n.t("service_not_found_local", _lg))
             return
         trial = get_trial_spec_settings(agent_id)
         if not trial.get("enabled", True):
-            await msg.edit_text("🚫 تست رایگان در حال حاضر غیرفعال است.")
+            await msg.edit_text(i18n.t("trial_disabled_msg", _lg))
             return
         context.user_data[UD_STATE] = STATE_TRIAL_WAITING_NAME
         context.user_data["pending_trial_server_id"] = server_id
@@ -1497,15 +1509,15 @@ async def _handle_trial(query, context, agent_id, user, data):
             from CustomerBot.keyboards import cancel_keyboard
             await query.get_bot().send_message(
                 chat_id=query.from_user.id,
-                text="⬇️ لطفا نام خود را ارسال کنید:",
-                reply_markup=cancel_keyboard(),
+                text=i18n.t("trial_name_prompt", _lg),
+                reply_markup=cancel_keyboard(lang=_lg),
             )
         except Exception:
             pass
         return
 
     elif data == CB_TRIAL_BACK:
-        await _back_to_main_menu(msg, "🔙 بازگشت")
+        await _back_to_main_menu(msg, i18n.t("back", _lg), lang=_lg)
 
 
 async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer_id: int, service_name: str, gb: float, days: int, server_title: str) -> None:
@@ -1519,16 +1531,17 @@ async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()
         if not agent_tg_id or not token:
             return
+        _alg = i18n.get_agent_lang(int(agent_id or 0))
         name = getattr(user, "full_name", "") or getattr(user, "username", "") or str(getattr(user, "id", ""))
         btn_custom = str((get_customer_by_id(customer_id) or {}).get("full_name") or name or f"#{customer_id}").strip()
         btn_label = f"\U0001f464 {btn_custom} | \U0001f511 {customer_id}"
         text = (
-            "\U0001f4c4 <b>\u06af\u0632\u0627\u0631\u0634 \u0627\u06cc\u062c\u0627\u062f \u0627\u0634\u062a\u0631\u0627\u06a9 \u062a\u0633\u062a\u06cc</b>\n\n"
-            f"\U0001f464\u0627\u0634\u062a\u0631\u0627\u06a9: {service_name}\n"
-            f"\U0001f4f0\u0633\u0631\u0648\u0631: {server_title or '-'}\n"
-            f"\U0001f4ca\u062d\u062c\u0645: {float(gb):g} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a\n"
-            f"\u23f3\u0632\u0645\u0627\u0646: {int(days)} \u0631\u0648\u0632\n"
-            f"\U0001f511\u0634\u0646\u0627\u0633\u0647 \u0627\u0634\u062a\u0631\u0627\u06a9:{service_id}"
+            i18n.t("ag_trial_report_title", _alg) + "\n\n"
+            + i18n.t("ag_trial_report_svc", _alg, s=service_name) + "\n"
+            + i18n.t("ag_trial_report_srv", _alg, s=server_title or "-") + "\n"
+            + i18n.t("ag_trial_report_gb", _alg, g=f"{float(gb):g}") + "\n"
+            + i18n.t("ag_trial_report_days", _alg, d=int(days)) + "\n"
+            + i18n.t("ag_trial_report_sid", _alg, s=service_id)
         )
         kb = InlineKeyboardMarkup(
             [[InlineKeyboardButton(btn_label, callback_data=f"agbot:set:users:detail:{customer_id}")]]
@@ -1544,15 +1557,15 @@ async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer
                 or "—"
             )
             event_text = (
-                "🏬 <b>گزارش نمایندگی — ایجاد اشتراک تست رایگان</b>\n"
-                f"👤 نماینده: {escape(agent_name)}\n"
-                f"👥 مشتری: {escape(btn_custom)}\n"
-                "📄 گزارش ایجاد اشتراک تستی\n\n"
-                f"👤اشتراک: {escape(str(service_name))}\n"
-                f"🛰سرور: {escape(str(server_title or '-'))}\n"
-                f"📊حجم: {float(gb):g} گیگابایت\n"
-                f"⏳زمان: {int(days)} روز\n"
-                f"🔑شناسه اشتراک:{service_id}"
+                i18n.t("ag_trial_event_title", _alg) + "\n"
+                + i18n.t("ag_trial_event_agent", _alg, n=escape(agent_name)) + "\n"
+                + i18n.t("ag_trial_event_customer", _alg, n=escape(btn_custom)) + "\n"
+                + i18n.t("ag_trial_event_body", _alg) + "\n\n"
+                + i18n.t("ag_trial_report_svc", _alg, s=escape(str(service_name))) + "\n"
+                + i18n.t("ag_trial_report_srv", _alg, s=escape(str(server_title or "-"))) + "\n"
+                + i18n.t("ag_trial_event_gb", _alg, g=f"{float(gb):g}") + "\n"
+                + i18n.t("ag_trial_event_days", _alg, d=int(days)) + "\n"
+                + i18n.t("ag_trial_report_sid", _alg, s=service_id)
             )
             await send_agency_event_report(event_text)
         except Exception:
@@ -1575,13 +1588,14 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
     context.user_data.pop("pending_trial_server", None)
 
     service_name = (service_name or "").strip()
+    _lg = i18n.get_customer_lang(agent_id, user.id)
     if not server or not server_id:
-        await update.message.reply_text("❌ اطلاعات تست رایگان ناقص است. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(i18n.t("trial_info_incomplete", _lg), reply_markup=main_menu_keyboard(lang=_lg))
         return
 
     u_db = get_user(agent_id, user.id)
     if u_db and u_db.get("got_free_trial"):
-        await update.message.reply_text("🚫 شما قبلا تست رایگان دریافت کرده‌اید.", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(i18n.t("trial_already_used", _lg), reply_markup=main_menu_keyboard(lang=_lg))
         return
 
     # ثبت کاربر در جدول متون و فلگ تست رایگان (upsert) تا از ساخت دوباره جلوگیری شود.
@@ -1598,7 +1612,7 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
     new_uuid = str(uuid.uuid4())
     note = make_service_note(agent_id)
     payload = {
-        "name": service_name or f"تست رایگان {gb}GB",
+        "name": service_name or i18n.t("trial_default_name", _lg, g=gb),
         "usage_limit_GB": gb,
         "package_days": days,
         "uuid": new_uuid,
@@ -1611,7 +1625,7 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         logger.exception("customer trial create_user failed uid=%s: %s", user.id, exc)
         result = None
     if not result:
-        await update.message.reply_text("❌ خطا در ایجاد سرویس تست.", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(i18n.t("trial_create_failed", _lg), reply_markup=main_menu_keyboard(lang=_lg))
         return
 
     cust_id = None
@@ -1626,7 +1640,7 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         customer_id=cust_id,
         server_id=server_id,
         server_title=server.get("title", ""),
-        name=service_name or f"تست رایگان {gb}GB",
+        name=service_name or i18n.t("trial_default_name", _lg, g=gb),
         panel_user_uuid=new_uuid,
         usage_limit=float(gb),
         days=days,
@@ -1668,16 +1682,15 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         user,
         svc.get("id"),
         cust_id,
-        service_name or f"\u062a\u0633\u062a \u0631\u0627\u06cc\u06af\u0627\u0646 {gb}GB",
+        service_name or i18n.t("trial_default_name", _lg, g=gb),
         gb,
         days,
         server.get("title", ""),
     )
 
     await update.message.reply_text(
-        "✅ اکانت تست رایگان شما با موفقیت ثبت شد\n"
-        "از طریق دکمه [📊وضعیت اشتراک📊] میتوانید به اطلاعات اشتراک خود دسترسی داشته باشید.",
-        reply_markup=main_menu_keyboard(),
+        i18n.t("trial_created_ok", _lg),
+        reply_markup=main_menu_keyboard(lang=_lg),
     )
 
     if svc:
@@ -1685,12 +1698,13 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         try:
             subs_settings = get_subs_settings(agent_id)
             await update.message.reply_text(
-                build_subscription_status_text(svc, subs_settings, None),
+                build_subscription_status_text(svc, subs_settings, None, lang=_lg),
                 parse_mode="Markdown",
                 reply_markup=subscription_status_keyboard(
                     svc["id"],
                     show_direct_config=subs_settings.get("show_direct_config", True),
                     show_sub_link=subs_settings.get("show_sub_link", True),
+                    lang=_lg,
                 ),
             )
         except Exception:
@@ -1728,6 +1742,7 @@ async def _handle_buy(query, context, agent_id, user, data):
     action = parts[0]
     text_settings = get_text_settings(agent_id)
     br = get_buy_renew_settings(agent_id)
+    _lg = i18n.get_customer_lang(agent_id, user.id)
 
     if action == "wiz":
         server_id = int(parts[1]) if len(parts) > 1 else 0
@@ -1742,10 +1757,10 @@ async def _handle_buy(query, context, agent_id, user, data):
             months = min_month
             total, off_pct = _calc_dynamic_price(gb, months, dyn)
             mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
-            kb = (mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct)
-                  if mode == "mixed" else buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct))
+            kb = (mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct, lang=_lg)
+                  if mode == "mixed" else buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct, lang=_lg))
             await msg.edit_text(
-                "⏳ نشست ساخت بسته به پایان رسیده بود؛ بسته از ابتدا ساخته میشود:\n\n🎛 بسته دلخواه خود را بسازید:",
+                i18n.t("buy_session_expired", _lg) + i18n.t("buy_hint", _lg),
                 reply_markup=kb,
             )
             context.user_data[UD_BUY_GB] = gb
@@ -1767,12 +1782,12 @@ async def _handle_buy(query, context, agent_id, user, data):
             gb = max(safe_float(dyn.get("min_gb", 1), 1.0), gb - step_gb)
         elif wiz_action == "month_inc":
             if months >= max_month:
-                await msg.answer("⏳ حداکثر دوره {max_month} ماه می‌باشد.".replace("{max_month}", str(max_month)), show_alert=True)
+                await msg.answer(i18n.t("max_period_alert", _lg, m=max_month), show_alert=True)
                 return
             months = min(max_month, months + step_month)
         elif wiz_action == "month_dec":
             if months <= min_month:
-                await msg.answer("⏳ حداقل دوره {min_month} ماه می‌باشد.".replace("{min_month}", str(min_month)), show_alert=True)
+                await msg.answer(i18n.t("min_period_alert", _lg, m=min_month), show_alert=True)
                 return
             months = max(min_month, months - step_month)
         elif wiz_action == "show_fixed":
@@ -1780,13 +1795,13 @@ async def _handle_buy(query, context, agent_id, user, data):
             plans = get_fixed_plans(agent_id)
             if not plans:
                 await msg.edit_text(
-                    "❌ هیچ پلنی برای این نماینده تعریف نشده است.",
-                    reply_markup=_ikb([[InlineKeyboardButton("🔙 بازگشت", callback_data=CB_BUY_BACK_MAIN)]])
+                    i18n.t("no_plans_for_agent", _lg),
+                    reply_markup=_ikb([[InlineKeyboardButton(i18n.t("back", _lg), callback_data=CB_BUY_BACK_MAIN)]])
                 )
                 return
             await msg.edit_text(
-                "📋 پلن مورد نظر را انتخاب کنید:",
-                reply_markup=plans_keyboard(plans, server_id, 0),
+                i18n.t("choose_plan", _lg),
+                reply_markup=plans_keyboard(plans, server_id, 0, lang=_lg),
             )
             return
 
@@ -1797,13 +1812,13 @@ async def _handle_buy(query, context, agent_id, user, data):
         mode = str(get_setting(agent_id, "plan_display_mode", "dynamic") or "dynamic").strip().lower()
         if mode == "mixed":
             await msg.edit_text(
-                "🎛 بسته دلخواه خود را بسازید:",
-                reply_markup=mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct),
+                i18n.t("buy_hint", _lg),
+                reply_markup=mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct, lang=_lg),
             )
         else:
             await msg.edit_text(
-                "🎛 بسته دلخواه خود را بسازید:",
-                reply_markup=buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct),
+                i18n.t("buy_hint", _lg),
+                reply_markup=buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct, lang=_lg),
             )
 
     elif data.startswith(CB_BUY_LOC):
@@ -1816,18 +1831,18 @@ async def _handle_buy(query, context, agent_id, user, data):
             plans = get_fixed_plans(agent_id)
             if not plans:
                 await msg.edit_text(
-                    "❌ هیچ پلنی برای این نماینده تعریف نشده است.",
-                    reply_markup=_ikb([[InlineKeyboardButton("🔙 بازگشت", callback_data=CB_BUY_BACK_MAIN)]])
+                    i18n.t("no_plans_for_agent", _lg),
+                    reply_markup=_ikb([[InlineKeyboardButton(i18n.t("back", _lg), callback_data=CB_BUY_BACK_MAIN)]])
                 )
                 return
             await msg.edit_text(
-                text_settings.get("plans_list_text", "🛒 لطفاً پلن مورد نظر را انتخاب کنید:"),
-                reply_markup=plans_keyboard(plans, server_id, 0),
+                get_localized_text(agent_id, "plans_list_text", _lg),
+                reply_markup=plans_keyboard(plans, server_id, 0, lang=_lg),
             )
         elif mode == "mixed":
             await msg.edit_text(
-                text_settings.get("plans_list_text", "🛒 لطفاً روش خرید را انتخاب کنید:"),
-                reply_markup=mixed_mode_keyboard(server_id),
+                get_localized_text(agent_id, "plans_list_text", _lg),
+                reply_markup=mixed_mode_keyboard(server_id, lang=_lg),
             )
         else:
             dyn = _agent_dyn_settings(agent_id, server_id)
@@ -1843,8 +1858,8 @@ async def _handle_buy(query, context, agent_id, user, data):
             context.user_data[UD_BUY_MONTHS] = months
             total, off_pct = _calc_dynamic_price(gb, months, dyn)
             await msg.edit_text(
-                "🎛 بسته دلخواه خود را بسازید:",
-                reply_markup=buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct),
+                i18n.t("buy_hint", _lg),
+                reply_markup=buy_wizard_keyboard(server_id, gb, months, total, off_percent=off_pct, lang=_lg),
             )
 
     elif data.startswith(CB_BUY_CAT):
@@ -1854,10 +1869,11 @@ async def _handle_buy(query, context, agent_id, user, data):
         all_plans = get_fixed_plans(agent_id, category_id=cat_id)
         tx = get_tx_plans_settings(agent_id)
         await msg.edit_text(
-            "📋 پلن مورد نظر را انتخاب کنید:",
+            i18n.t("choose_plan", _lg),
             reply_markup=plans_keyboard(
                 all_plans, server_id, cat_id,
                 sort_by_priority=tx.get("plan_sort_by_priority", True),
+                lang=_lg,
             ),
         )
 
@@ -1867,21 +1883,20 @@ async def _handle_buy(query, context, agent_id, user, data):
         # جستجو در پلن‌های نماینده
         p = get_fixed_plan(agent_id, plan_id)
         if not p:
-            await msg.edit_text("❌ پلن یافت نشد.")
+            await msg.edit_text(i18n.t("invalid_plan", _lg))
             return
         price = safe_int(p.get("price", 0))
         gb = safe_float(p.get("gb", 0))
         days = safe_int(p.get("days", 0))
         context.user_data[UD_BUY_SERVER_ID] = server_id
         context.user_data[UD_BUY_PLAN_ID] = plan_id
-        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
             i18n.t("buy_plan_title", _lg) + "\n\n"
             + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
             + i18n.t("pkg_days_line", _lg, d=days) + "\n"
             + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
             + i18n.t("buy_choose_method", _lg),
-            reply_markup=selected_plan_keyboard(server_id, int(gb), days, price),
+            reply_markup=selected_plan_keyboard(server_id, int(gb), days, price, lang=_lg),
         )
 
     elif data.startswith(CB_BUY_CONFIRM_DYN):
@@ -1891,8 +1906,8 @@ async def _handle_buy(query, context, agent_id, user, data):
         if _wizard_expired(context):
             _reset_buy_wizard(context)
             await msg.edit_text(
-                "⏳ نشست ساخت بسته به پایان رسیده و منقضی شده است. لطفاً دوباره از منوی خرید شروع کنید.",
-                reply_markup=_ikb([[InlineKeyboardButton("🔙 بازگشت", callback_data=CB_BUY_BACK_MAIN)]]),
+                i18n.t("pkg_session_expired", _lg),
+                reply_markup=_ikb([[InlineKeyboardButton(i18n.t("back", _lg), callback_data=CB_BUY_BACK_MAIN)]]),
             )
             return
 
@@ -1907,14 +1922,13 @@ async def _handle_buy(query, context, agent_id, user, data):
         context.user_data[UD_BUY_GB] = gb
         context.user_data[UD_BUY_MONTHS] = months
         context.user_data.pop(UD_WIZARD_START_TS, None)
-        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
             i18n.t("buy_plan_title", _lg) + "\n\n"
             + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
             + i18n.t("pkg_days_line", _lg, d=days) + "\n"
             + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
             + i18n.t("buy_choose_method", _lg),
-            reply_markup=selected_plan_keyboard(server_id, int(gb), days, price),
+            reply_markup=selected_plan_keyboard(server_id, int(gb), days, price, lang=_lg),
         )
 
     elif data.startswith(CB_BUY_CONFIRM):
@@ -1927,14 +1941,13 @@ async def _handle_buy(query, context, agent_id, user, data):
         price = safe_int(p.get("price", 0))
         gb = safe_float(p.get("gb", 0))
         days = safe_int(p.get("days", 0))
-        _lg = i18n.get_customer_lang(agent_id, user.id)
         await msg.edit_text(
             i18n.t("buy_plan_title", _lg) + "\n\n"
             + i18n.t("pkg_volume_line", _lg, g=gb) + "\n"
             + i18n.t("pkg_days_line", _lg, d=days) + "\n"
             + i18n.t("pkg_price_line", _lg, p=f"{price:,}") + "\n\n"
             + i18n.t("buy_choose_method", _lg),
-            reply_markup=selected_plan_keyboard(server_id, int(gb), days, price),
+            reply_markup=selected_plan_keyboard(server_id, int(gb), days, price, lang=_lg),
         )
 
     elif data.startswith(CB_BUY_PAY_DIRECT):
@@ -1956,19 +1969,19 @@ async def _handle_buy(query, context, agent_id, user, data):
             recomputed_price, _off = _calc_dynamic_price(gb, days // 30, dyn_settings_buy)
         if recomputed_price is None or recomputed_price <= 0:
             try:
-                await query.answer("❌ اطلاعات این دکمه منقضی یا نامعتبر است. لطفاً خرید را از نو انجام دهید.", show_alert=True)
+                await query.answer(i18n.t("btn_expired_buy", _lg), show_alert=True)
             except Exception:
                 pass
-            await _back_to_main_menu(msg, "❌ اطلاعات این دکمه منقضی است. لطفاً خرید را از نو انجام دهید.")
+            await _back_to_main_menu(msg, i18n.t("btn_expired_buy", _lg), lang=_lg)
             return
         price = int(recomputed_price)
         card = _random_active_agent_card(agent_id)
         if not card.get("number"):
             try:
-                await query.answer("❌ کارتی برای پرداخت ثبت نشده است", show_alert=True)
+                await query.answer(i18n.t("no_card_registered", _lg), show_alert=True)
             except Exception:
                 pass
-            await _back_to_main_menu(msg, "❌ کارتی برای پرداخت ثبت نشده است.")
+            await _back_to_main_menu(msg, i18n.t("no_card_registered", _lg), lang=_lg)
             return
         wholesale_price = calculate_wholesale_price(agent_id, gb, days, server_id)
         order = create_order(
@@ -1977,7 +1990,7 @@ async def _handle_buy(query, context, agent_id, user, data):
             volume_gb=float(gb),
             days=days,
             price=price,
-            plan_title=f"بسته {gb}GB-{days}D",
+            plan_title=i18n.t("order_title_buy", _lg, g=gb, d=days),
             server_location=(get_server_by_id(server_id) or {}).get("title", ""),
             username=user.username or "",
             full_name=user.full_name or "",
@@ -2007,19 +2020,19 @@ async def _handle_buy(query, context, agent_id, user, data):
         if card_text == "0":
             rial_price = pay_price * 10
             card_text = (
-                f"💰 لطفا دقیقا مبلغ: `{rial_price}` ریال\n"
-                f"💰 معادل: `{pay_price}` تومان\n"
-                f"💳 به شماره کارت: `{card.get('number', '?')}`\n"
-                f"👤 به نام: {card.get('owner', '?')}\n"
-                f"❗️ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.\n\n"
-                f"⚡️ پس از تایید پرداخت، اشتراک شما به‌صورت خودکار ساخته و ارسال می‌شود."
+                i18n.t("pay_exact_rial", _lg, r=f"{rial_price:,}") + "\n"
+                + i18n.t("pay_equiv_toman", _lg, p=f"{pay_price:,}") + "\n"
+                + i18n.t("pay_card_number", _lg, c=card.get("number", "?")) + "\n"
+                + i18n.t("pay_card_owner", _lg, o=card.get("owner", "?")) + "\n"
+                + i18n.t("card_receipt_intro", _lg) + "\n\n"
+                + i18n.t("buy_auto_done", _lg)
             )
             if tx_marker > 0:
                 card_text = (
-                    f"🔢 مشخصه تراکنش اعمال شد: +{tx_marker} تومان\n\n"
+                    i18n.t("tx_spec_applied", _lg, m=tx_marker) + "\n\n"
                     f"{card_text}"
                 )
-        await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard())
+        await msg.edit_text(card_text, parse_mode="Markdown", reply_markup=confirm_payment_inline_keyboard(lang=_lg))
 
     elif data == CB_BUY_BACK_MAIN:
         context.user_data.pop(UD_BUY_GB, None)
@@ -2028,15 +2041,15 @@ async def _handle_buy(query, context, agent_id, user, data):
         if servers:
             sc = int(br.get("server_columns", 1))
             await msg.edit_text(
-                text_settings.get("servers_list_text", "📡 لطفاً لوکیشن را انتخاب کنید:"),
+                get_localized_text(agent_id, "servers_list_text", _lg),
                 parse_mode="Markdown",
-                reply_markup=location_keyboard(servers, columns=sc),
+                reply_markup=location_keyboard(servers, columns=sc, lang=_lg),
             )
 
     elif data == CB_BUY_EXIT_MAIN:
         context.user_data.pop(UD_BUY_GB, None)
         context.user_data.pop(UD_BUY_MONTHS, None)
-        await _back_to_main_menu(msg, "🔙 بازگشت به منوی اصلی")
+        await _back_to_main_menu(msg, i18n.t("main_menu_title", _lg), lang=_lg)
 
     elif data.startswith(CB_BUY_MIXED_FIXED):
         server_id = int(parts[3]) if len(parts) > 3 else 0
@@ -2044,13 +2057,13 @@ async def _handle_buy(query, context, agent_id, user, data):
         plans = get_fixed_plans(agent_id)
         if not plans:
             await msg.edit_text(
-                "❌ هیچ پلنی برای این نماینده تعریف نشده است.",
-                reply_markup=_ikb([[InlineKeyboardButton("🔙 بازگشت", callback_data=CB_BUY_BACK_MAIN)]])
+                i18n.t("no_plans_for_agent", _lg),
+                reply_markup=_ikb([[InlineKeyboardButton(i18n.t("back", _lg), callback_data=CB_BUY_BACK_MAIN)]])
             )
             return
         await msg.edit_text(
-            "📋 پلن مورد نظر را انتخاب کنید:",
-            reply_markup=plans_keyboard(plans, server_id, 0),
+            i18n.t("choose_plan", _lg),
+            reply_markup=plans_keyboard(plans, server_id, 0, lang=_lg),
         )
 
     elif data.startswith(CB_BUY_MIXED_DYN):
@@ -2068,11 +2081,11 @@ async def _handle_buy(query, context, agent_id, user, data):
         context.user_data[UD_BUY_MONTHS] = months
         total, off_pct = _calc_dynamic_price(gb, months, dyn)
         await msg.edit_text(
-            "🎛 بسته دلخواه خود را بسازید:",
-            reply_markup=mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct),
+            i18n.t("buy_hint", _lg),
+            reply_markup=mixed_buy_keyboard(server_id, gb, months, total, off_percent=off_pct, lang=_lg),
         )
 
 
-def _build_service_status_text(svc: dict) -> str:
+def _build_service_status_text(svc: dict, lang: str = "fa") -> str:
     """متن «📄اطلاعات اشتراک شما» با فرمت ربات کاربران"""
-    return build_subscription_status_text(svc, {}, {})
+    return build_subscription_status_text(svc, {}, {}, lang=lang)

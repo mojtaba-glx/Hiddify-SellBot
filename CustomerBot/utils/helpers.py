@@ -46,10 +46,13 @@ def format_price(price: int) -> str:
     return f"{price:,}"
 
 
-def format_gb(gb: float) -> str:
+def format_gb(gb: float, lang: str = "fa") -> str:
+    from Shared import i18n
+    unit_tb = i18n.t("unit_tb", lang)
+    unit_gb = i18n.t("unit_gb", lang)
     if gb >= 1024:
-        return f"{gb / 1024:.1f} ترابایت"
-    return f"{gb:g} گیگابایت"
+        return f"{gb / 1024:.1f} {unit_tb}"
+    return f"{gb:g} {unit_gb}"
 
 
 def parse_deep_link(payload: str) -> Optional[Tuple[str, str]]:
@@ -71,13 +74,28 @@ def parse_deep_link(payload: str) -> Optional[Tuple[str, str]]:
 
 
 def is_cancel_text(text: str) -> bool:
+    """دکمه بازگشت/لغو در همه زبان‌ها + لیبل مرجع فارسی."""
     t = text.strip()
-    return t in ("بازگشت", "/cancel", "لغو", "❌ لغو", "❌لغو")
+    if t in ("بازگشت", "/cancel", "لغو", "❌ لغو", "❌لغو"):
+        return True
+    try:
+        from Shared import i18n
+        key = i18n.resolve_button(t, ("btn_back", "btn_cancel", "back", "btn_back_plain", "cancel_btn2", "back_red"))
+        return key is not None or t == "/cancel"
+    except Exception:
+        return False
 
 
 def is_pay_done_text(text: str) -> bool:
     t = text.strip()
-    return "پرداخت کردم" in t or "ارسال رسید" in t
+    if "پرداخت کردم" in t or "ارسال رسید" in t:
+        return True
+    try:
+        from Shared import i18n
+        key = i18n.resolve_button(t, ("paid_send_receipt",))
+        return key is not None
+    except Exception:
+        return False
 
 
 def build_service_name(plan_title: str, server_title: str) -> str:

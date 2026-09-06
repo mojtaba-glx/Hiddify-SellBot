@@ -1,3 +1,4 @@
+from Shared import i18n
 CALLBACK_PREFIX = "agbot:"
 
 MENU_MAIN = "menu"

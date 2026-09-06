@@ -21,27 +21,32 @@ logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 8
 
-_STATUS_TITLES = {
-    "approved": "\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647",
-    "rejected": "\u274c \u0631\u062f \u0634\u062f\u0647",
-    "pending": "\u23f3 \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631",
-}
+def _tx_status_title(status: str, lang: str = "fa") -> str:
+    """عنوان وضعیت تراکنش به زبان نماینده."""
+    key = {"approved": "tx_approved", "rejected": "tx_rejected", "pending": "tx_pending"}.get(
+        str(status or "").strip().lower(), "")
+    if key:
+        return i18n.t(key, lang)
+    return str(status or "")
 
-_METHOD_TITLES = {
-    "card": "\u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a",
-}
+
+def _tx_method_title(method: str, lang: str = "fa") -> str:
+    """عنوان روش پرداخت به زبان نماینده."""
+    if str(method or "").strip().lower() == "card":
+        return i18n.t("pay_card2card", lang)
+    return str(method or "") or "-"
 
 
 def _payment_customer_name(pay: Dict[str, Any]) -> str:
+    _lg = "fa"
     name = (pay.get("full_name") or pay.get("username") or "").strip()
     if not name:
-        name = f"\u06a9\u0627\u0631\u0628\u0631 #{pay.get('user_id', '-')}"
+        name = f"{i18n.t('کاربر #', _lg)}{pay.get('user_id', '-')}"
     return name
 
 
-def _payment_method_title(pay: Dict[str, Any]) -> str:
-    method = str(pay.get("method") or "").strip()
-    return _METHOD_TITLES.get(method, method or "-")
+def _payment_method_title(pay: Dict[str, Any], lang: str = "fa") -> str:
+    return _tx_method_title(str(pay.get("method") or "").strip(), lang)
 
 
 def _parse_receipt_meta(raw: str) -> Dict[str, Any]:
@@ -84,24 +89,25 @@ def _parse_receipt_card_last4(pay: Dict[str, Any]) -> str:
 
 
 def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
+    _lg = "fa"
     tx_code = str(pay.get("tx_code") or "").strip() or str(pay.get("id") or "-")
     username = (str(pay.get("username") or "").strip()) or "-"
     if username != "-":
         username = f"@{username}"
     lines = [
-        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(tx_code)}",
-        f"\U0001f464 \u06a9\u0627\u0631\u0628\u0631: {_escape((pay.get('full_name') or '-').strip() or '-')}",
-        f"\u25c8 \u0646\u0627\u0645 \u06a9\u0627\u0631\u0628\u0631\u06cc: {_escape(username)}",
-        f"\u25c8 \u0634\u0646\u0627\u0633\u0647 \u06a9\u0627\u0631\u0628\u0631: {_escape(str(pay.get('user_id') or '-'))}",
-        f"\u25c8 \u062a\u0627\u0631\u06cc\u062e \u062a\u0631\u0627\u06a9\u0646\u0634: {_escape(pay.get('created_at', '') or '-')}",
-        f"\u25c8 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634: {_fmt_toman(pay.get('amount', 0))} \u062a\u0648\u0645\u0627\u0646",
+        f"{i18n.t('◈ شناسه تراکنش: ', _lg)}{_escape(tx_code)}",
+        f"{i18n.t('👤 کاربر: ', _lg)}{_escape((pay.get('full_name') or '-').strip() or '-')}",
+        f"{i18n.t('◈ نام کاربری: ', _lg)}{_escape(username)}",
+        f"{i18n.t('◈ شناسه کاربر: ', _lg)}{_escape(str(pay.get('user_id') or '-'))}",
+        f"{i18n.t('◈ تاریخ تراکنش: ', _lg)}{_escape(pay.get('created_at', '') or '-')}",
+        f"{i18n.t('◈ مبلغ تراکنش: ', _lg)}{_fmt_toman(pay.get('amount', 0))}{i18n.t(' تومان', _lg)}",
         "\u2756 \u2022 -------------------------- \u2022 \u2756",
-        f"\u25c8 \u0648\u0636\u0639\u06cc\u062a: {_STATUS_TITLES.get(str(pay.get('status')), pay.get('status'))}",
-        f"\u25c8 \u0631\u0648\u0634 \u062a\u0631\u0627\u06a9\u0646\u0634: {_payment_method_title(pay)}",
+        f"{i18n.t('◈ وضعیت: ', _lg)}{_tx_status_title(str(pay.get('status')), _lg)}",
+        f"{i18n.t('◈ روش تراکنش: ', _lg)}{_payment_method_title(pay, lang=_lg)}",
     ]
     card_last4 = _parse_receipt_card_last4(pay)
     if card_last4:
-        lines.append(f"\u25c8 \u06f4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a \u0645\u0628\u062f\u0627: {_escape(card_last4)}")
+        lines.append(f"{i18n.t('◈ ۴ رقم آخر کارت مبدا: ', _lg)}{_escape(card_last4)}")
     return "\n".join(lines)
 
 
@@ -113,19 +119,21 @@ def _payment_receipt_fid(pay: Dict[str, Any]) -> str:
 
 
 def _payment_user_button_title(pay: Dict[str, Any]) -> str:
+    _lg = "fa"
     name = (str(pay.get("full_name") or pay.get("username") or "").strip())
     if name:
         return name
     uid = pay.get("user_id")
-    return f"\u06a9\u0627\u0631\u0628\u0631 #{uid}" if uid else "\u067e\u0631\u0648\u0641\u0627\u06cc\u0644 \u06a9\u0627\u0631\u0628\u0631"
+    return f"{i18n.t('کاربر #', _lg)}{uid}" if uid else i18n.t('پروفایل کاربر', _lg)
 
 
-def _tx_detail_keyboard(pay: Dict[str, Any]):
+def _tx_detail_keyboard(pay: Dict[str, Any], lang: str = "fa"):
+    _lg = lang
     from AgentBot.keyboards import _ikb, IButton
 
     rows = []
     if str(pay.get("status") or "").strip().lower() != "approved":
-        rows.append([IButton("\u270f\ufe0f \u062a\u063a\u06cc\u06cc\u0631 \u0648\u0636\u0639\u06cc\u062a", callback_data=f"agbot:custpay:chg:{pay.get('id', 0)}")])
+        rows.append([IButton(i18n.t('✏️ تغییر وضعیت', _lg), callback_data=f"agbot:custpay:chg:{pay.get('id', 0)}")])
     rows.append([IButton(f"\U0001f464 {_payment_user_button_title(pay)}", callback_data=f"agbot:custpay:profile:{pay.get('user_id', 0)}")])
     return _ikb(rows)
 
@@ -212,6 +220,11 @@ def _filter_params(p3: str) -> Dict[str, Any]:
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -225,7 +238,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if p1 == "set" and p2 == "tx" and not p3:
         await query.edit_message_text(
-            "\U0001f4b3 <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a</b>",
+            i18n.t('💳 <b>مدیریت تراکنشات</b>', _lg),
             reply_markup=tx_menu_keyboard(), parse_mode="HTML",
         )
         return
@@ -233,7 +246,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if (p2 == "back" and p1 == "set") or (p2 == "tx" and p3 == "back"):
         from AgentBot.keyboards import settings_menu_keyboard
         await query.edit_message_text(
-            "\u2699\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u0631\u0628\u0627\u062a</b>",
+            i18n.t('⚙️ <b>تنظیمات ربات</b>', _lg),
             reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
         )
         return
@@ -249,21 +262,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             agent_id, status=fp["status"], method=fp["method"], page=page, page_size=_PAGE_SIZE,
         )
         header_titles = {
-            "approved": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647 \u2705",
-            "rejected": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0631\u062f \u0634\u062f\u0647 \u274c",
-            "pending": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631 \u23f3",
-            "card": "\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a \U0001f4b3",
+            "approved": i18n.t('لیست تراکنشات تایید شده ✅', _lg),
+            "rejected": i18n.t('لیست تراکنشات رد شده ❌', _lg),
+            "pending": i18n.t('لیست تراکنشات در انتظار ⏳', _lg),
+            "card": i18n.t('لیست تراکنشات کارت به کارت 💳', _lg),
         }
         text = (
-            f"\U0001f539 {header_titles[p3]}\n"
-            f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a: {stats['total_count']}\n"
-            f"\U0001f538 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a: {_fmt_toman(stats['total_amount'])} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\u2756 \u2b2c----------------------------------\u2b2c \u2756\n"
-            f"\U0001f538 \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {stats['last30_count']}\n"
-            f"\U0001f538 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {_fmt_toman(stats['last30_amount'])} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\u2756 \u2b2c----------------------------------\u2b2c \u2756\n"
-            f"\U0001f538 \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {stats['month_count']}\n"
-            f"\U0001f538 \u0645\u0628\u0644\u063a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {_fmt_toman(stats['month_amount'])} \u062a\u0648\u0645\u0627\u0646"
+            f"🔹 {header_titles[p3]}{i18n.t('\n🔸 تعداد تراکنشات: ', _lg)}{stats['total_count']}{i18n.t('\n🔸 مبلغ تراکنشات: ', _lg)}{_fmt_toman(stats['total_amount'])}{i18n.t(' تومان\n❖ ⬬----------------------------------⬬ ❖\n🔸 تراکنشات 30 روز گذشته: ', _lg)}{stats['last30_count']}{i18n.t('\n🔸 مبلغ تراکنشات 30 روز گذشته: ', _lg)}{_fmt_toman(stats['last30_amount'])}{i18n.t(' تومان\n❖ ⬬----------------------------------⬬ ❖\n🔸 تراکنشات این ماه: ', _lg)}{stats['month_count']}{i18n.t('\n🔸 مبلغ تراکنشات این ماه: ', _lg)}{_fmt_toman(stats['month_amount'])}{i18n.t(' تومان', _lg)}"
         )
         try:
             await query.edit_message_text(
@@ -283,7 +288,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         pay_id = int(p4) if p4 and p4.isdigit() else 0
         pay = get_customer_payment_detail(pay_id)
         if not pay:
-            await query.answer("\u274c \u062a\u0631\u0627\u06a9\u0646\u0634 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", show_alert=True)
+            await query.answer(i18n.t('❌ تراکنش یافت نشد.', _lg), show_alert=True)
             return
         await _send_payment_detail(context, agent_id, query.message.chat_id, pay, source_message=query.message)
         return
@@ -296,8 +301,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
         try:
             await query.message.reply_text(
-                "\U0001f50d <b>\u062c\u0633\u062a\u062c\u0648\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634</b>\n"
-                "\u0634\u0646\u0627\u0633\u0647 \u062a\u0631\u0627\u06a9\u0646\u0634 (\u0639\u062f\u062f) \u06cc\u0627 \u0646\u0627\u0645 \u0645\u0634\u062a\u0631\u06cc \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+                i18n.t('🔍 <b>جستجوی تراکنش</b>\nشناسه تراکنش (عدد) یا نام مشتری را وارد کنید:', _lg),
                 reply_markup=cancel_keyboard(), parse_mode="HTML",
             )
         except Exception:
@@ -306,6 +310,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if not agent_id:
         return False
@@ -324,7 +333,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         pay = get_customer_payment_detail(pid)
         context.user_data.pop(UD_STATE, None)
         if not pay or int(pay.get("agent_id") or 0) != agent_id:
-            await update.message.reply_text(f"❌ تراکنشی با شناسه {pid} یافت نشد.", reply_markup=tx_menu_keyboard(), parse_mode="HTML")
+            await update.message.reply_text(f"{i18n.t('❌ تراکنشی با شناسه ', _lg)}{pid}{i18n.t(' یافت نشد.', _lg)}", reply_markup=tx_menu_keyboard(), parse_mode="HTML")
             return True
         await _send_payment_detail(context, agent_id, update.message.chat_id, pay)
         return True
@@ -333,15 +342,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     context.user_data.pop(UD_STATE, None)
     if not payments:
         await update.message.reply_text(
-            "❌ هیچ تراکنشی با این مشخصات پیدا نشد.",
+            i18n.t('❌ هیچ تراکنشی با این مشخصات پیدا نشد.', _lg),
             reply_markup=tx_menu_keyboard(), parse_mode="HTML",
         )
         return True
-    lines = [f"\U0001f50d <b>نتایج جستجو برای \"{_escape(text)}\"</b> ({len(payments)}):\n"]
+    lines = [f"{i18n.t('🔍 <b>نتایج جستجو برای "', _lg)}{_escape(text)}\"</b> ({len(payments)}):\n"]
     for p in payments:
         lines.append(
-            f"{_status_icon(p.get('status', ''))} #{p.get('id')} \u2022 {_escape(_payment_customer_name(p))} \u2022 "
-            f"{_fmt_toman(p.get('amount', 0))} تومان"
+            f"{_status_icon(p.get('status', ''))} #{p.get('id')} • {_escape(_payment_customer_name(p))} • {_fmt_toman(p.get('amount', 0))}{i18n.t(' تومان', _lg)}"
         )
     await update.message.reply_text(
         "\n".join(lines),

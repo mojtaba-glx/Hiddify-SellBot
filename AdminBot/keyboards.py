@@ -54,8 +54,9 @@ def language_keyboard():
 
 
 def cancel_keyboard() -> ReplyKeyboardMarkup:
+    lg = _admin_lang()
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("❌ لغو")]],
+        [[KeyboardButton(i18n.t("btn_cancel", lg))]],
         resize_keyboard=True,
         one_time_keyboard=True,
         selective=True,
@@ -63,10 +64,11 @@ def cancel_keyboard() -> ReplyKeyboardMarkup:
 
 
 def confirm_add_user_keyboard() -> ReplyKeyboardMarkup:
+    lg = _admin_lang()
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("✅ تایید")],
-            [KeyboardButton("❌ لغو")],
+            [KeyboardButton(i18n.t("confirm", lg))],
+            [KeyboardButton(i18n.t("btn_cancel", lg))],
         ],
         resize_keyboard=True,
         selective=True,

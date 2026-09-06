@@ -39,6 +39,10 @@ def _admin_bot_lang() -> str:
 def _T(lang: str, key: str, **kw) -> str:
     return _i18n.t(key, lang, **kw)
 
+
+def _adm_t(key: str, **kw) -> str:
+    return _T(_admin_bot_lang(), key, **kw)
+
 # استیت‌های ویزارد نود
 NODES_STATE_ADD_TYPE = "nodes_add_type"
 NODES_STATE_ADD_TITLE = "nodes_add_title"
@@ -650,7 +654,7 @@ async def handle_add_node_flow(
         context.user_data.pop("nodes_server_id", None)
         context.user_data.pop("new_node", None)
         await message.reply_text(
-            "❌ افزودن نود لغو شد.",
+            _T(_admin_bot_lang(), "adm_nd_add_cancelled"),
             reply_markup=admin_main_keyboard(),
         )
         return
@@ -660,7 +664,7 @@ async def handle_add_node_flow(
         context.user_data.pop("state", None)
         context.user_data.pop("new_node", None)
         await message.reply_text(
-            "❌ وضعیت سرور برای افزودن نود نامشخص است. دوباره از منوی «لیست نودها» اقدام کنید.",
+            _T(_admin_bot_lang(), "adm_nd_add_server_state"),
             reply_markup=admin_main_keyboard(),
         )
         return
@@ -670,7 +674,7 @@ async def handle_add_node_flow(
     # مرحله ۱: گرفتن عنوان
     if state == NODES_STATE_ADD_TITLE:
         if not text:
-            await message.reply_text("❌ عنوان نود نمی‌تواند خالی باشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_title_required"), reply_markup=cancel_keyboard())
             return
         new_node["title"] = text
         context.user_data["new_node"] = new_node
@@ -678,13 +682,12 @@ async def handle_add_node_flow(
         is_xui = str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
         if is_xui:
             await message.reply_text(
-                "🌐 آدرس پنل نود را وارد کنید:\nمثال: https://node.example.com/E6xNPh2XZF5A6UO\n"
-                "اگر پورت غیر استاندارد است: https://node.example.com:2056/E6xNPh2XZF5A6UO",
+                _T(_admin_bot_lang(), "adm_nd_panel_url_xui"),
                 reply_markup=cancel_keyboard(),
             )
         else:
             await message.reply_text(
-                "🌐 آدرس پنل نود را وارد کنید:\nمثال: https://node.example.com",
+                _T(_admin_bot_lang(), "adm_nd_panel_url"),
                 reply_markup=cancel_keyboard(),
             )
         return
@@ -695,12 +698,12 @@ async def handle_add_node_flow(
         if not (panel_url.startswith("http://") or panel_url.startswith("https://")):
             if is_xui_panel:
                 await message.reply_text(
-                    "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com/E6xNPh2XZF5A6UO",
+                    _T(_admin_bot_lang(), "adm_nd_panel_url_invalid_xui"),
                     reply_markup=cancel_keyboard(),
                 )
             else:
                 await message.reply_text(
-                    "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com",
+                    _T(_admin_bot_lang(), "adm_nd_panel_url_invalid"),
                     reply_markup=cancel_keyboard(),
                 )
             return
@@ -710,13 +713,13 @@ async def handle_add_node_flow(
         if str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
             context.user_data["state"] = NODES_STATE_ADD_XUI_USERNAME
             await message.reply_text(
-                "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
+                _T(_admin_bot_lang(), "adm_addsrv_xui_username"),
                 reply_markup=cancel_keyboard(),
             )
         else:
             context.user_data["state"] = NODES_STATE_ADD_ADMIN_PROXY
             await message.reply_text(
-                "🔐 Proxy Path ادمین را وارد کنید (بدون /):",
+                _T(_admin_bot_lang(), "adm_nd_admin_proxy"),
                 reply_markup=cancel_keyboard(),
             )
         return
@@ -726,7 +729,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_PASSWORD
         await message.reply_text(
-            "🔑 لطفاً «رمز عبور» پنل X-UI را وارد کنید:",
+            _T(_admin_bot_lang(), "adm_addsrv_xui_password"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -736,10 +739,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_TOKEN
         await message.reply_text(
-            "🔑 توکن API پنل X-UI (اختیاری - برای 3x-ui سنایی):\n"
-            "از مسیر Settings → Security → API Token بسازید.\n"
-            "اگر پنل علیرضا دارید یا نمی‌خواهید استفاده کنید، «0» یا «skip» بفرستید.\n\n"
-            "برای گذشتن: «0» یا «skip» یا «-»",
+            _T(_admin_bot_lang(), "adm_addsrv_xui_token"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -752,9 +752,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_SUB_DOMAIN
         await message.reply_text(
-            "🌐 دامنه سابسکریپشن (Subscription Domain) را وارد کنید (اختیاری):\n"
-            "اگر خالی گذاشته شود، از آدرس پنل استفاده می‌شود.\n\n"
-            "برای گذشتن از این مرحله، «0» یا «skip» یا «-» را بفرستید.",
+            _T(_admin_bot_lang(), "adm_addsrv_xui_sub_domain"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -771,10 +769,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XUI_INBOUND
         await message.reply_text(
-            "🧩 شناسه اینباند فروش (Inbound ID) را وارد کنید (اختیاری):\n"
-            "اگر خالی/skip باشد، اولین اینباند فعال انتخاب می‌شود.\n"
-            "`0` = همه اینباندهای فعال، `1` = تک اینباند، `1,2,3` = چند اینباند\n\n"
-            "مثال: `0` یا `1` یا `1,2,3`",
+            _T(_admin_bot_lang(), "adm_addsrv_xui_inbound"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -802,8 +797,7 @@ async def handle_add_node_flow(
                         new_node["xui_inbound_id"] = ",".join(ids)
                     except ValueError:
                         await message.reply_text(
-                            "❌ شناسه اینباند باید عدد باشد.\n"
-                            "مثال: `1` (تک)، `1,2,3` (چندتا)، `0` (همه)",
+                            _T(_admin_bot_lang(), "adm_addsrv_inbound_invalid"),
                             reply_markup=cancel_keyboard(),
                         )
                         return
@@ -811,7 +805,7 @@ async def handle_add_node_flow(
         # X-UI: دقیقا مثل افزودن سرور X-UI، مستقیم به محدودیت برو (دامنه جدا نمی‌پرسیم)
         context.user_data["state"] = NODES_STATE_ADD_LIMIT
         await message.reply_text(
-            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            _T(_admin_bot_lang(), "adm_addsrv_users_limit"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -819,13 +813,13 @@ async def handle_add_node_flow(
     if state == NODES_STATE_ADD_ADMIN_PROXY:
         val = text.strip().strip("/")
         if not val:
-            await message.reply_text("❌ Proxy Path ادمین خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_admin_proxy_required"), reply_markup=cancel_keyboard())
             return
         new_node["admin_proxy_path"] = val
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_ADMIN_UUID
         await message.reply_text(
-            "🔑 UUID/API Key ادمین را وارد کنید:",
+            _T(_admin_bot_lang(), "adm_nd_admin_uuid"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -833,13 +827,13 @@ async def handle_add_node_flow(
     if state == NODES_STATE_ADD_ADMIN_UUID:
         val = text.strip()
         if not val:
-            await message.reply_text("❌ UUID/API Key ادمین خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_admin_uuid_required"), reply_markup=cancel_keyboard())
             return
         new_node["admin_uuid"] = val
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_USER_PROXY
         await message.reply_text(
-            "🔐 Proxy Path کاربر را وارد کنید (بدون /):",
+            _T(_admin_bot_lang(), "adm_addsrv_user_proxy"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -847,15 +841,13 @@ async def handle_add_node_flow(
     if state == NODES_STATE_ADD_USER_PROXY:
         val = text.strip().strip("/")
         if not val:
-            await message.reply_text("❌ Proxy Path کاربر خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_user_proxy_required"), reply_markup=cancel_keyboard())
             return
         new_node["user_proxy_path"] = val
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_DOMAIN
         await message.reply_text(
-            "🌍 دامنه ساب نود را وارد کنید:\n"
-            "مثال: user.node-example.com\n"
-            "یا: https://user.node-example.com",
+            _T(_admin_bot_lang(), "adm_nd_domain"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -864,8 +856,7 @@ async def handle_add_node_flow(
         val = _normalize_domain_input(text)
         if not val:
             await message.reply_text(
-                "❌ دامنه معتبر نیست.\n"
-                "مثال صحیح: user.node-example.com",
+                _T(_admin_bot_lang(), "adm_nd_domain_invalid"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -873,7 +864,7 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_LIMIT
         await message.reply_text(
-            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            _T(_admin_bot_lang(), "adm_addsrv_users_limit"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -885,7 +876,7 @@ async def handle_add_node_flow(
                 raise ValueError
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً عدد معتبر بزرگ‌تر از صفر وارد کنید.",
+                _T(_admin_bot_lang(), "adm_nd_positive_number"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -939,7 +930,7 @@ async def handle_add_node_flow(
             }
 
         try:
-            await message.reply_text("⏳ در حال تست اتصال پنل نود...")
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_testing"))
             if is_xui_node:
                 from Shared import xui_api
 
@@ -948,7 +939,7 @@ async def handle_add_node_flow(
                 await hiddify_api.list_users(new_server_payload)
         except Exception as e:
             await message.reply_text(
-                f"❌ اتصال به پنل نود برقرار نشد:\n{_short_error(e)}",
+                _adm_t("adm_nd_connect_failed", err=_short_error(e)),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -971,7 +962,7 @@ async def handle_add_node_flow(
         except Exception as e:
             logger.exception("Error saving manual node: %s", e)
             await message.reply_text(
-                f"❌ خطا در ذخیره نود:\n{_short_error(e)}",
+                _adm_t("adm_nd_save_failed", err=_short_error(e)),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -981,9 +972,7 @@ async def handle_add_node_flow(
         context.user_data.pop("new_node", None)
 
         await message.reply_text(
-            f"✅ نود «{title}» با موفقیت اضافه شد و اتصال آن تایید شد.\n"
-            f"🆔 سرور نود: {child_server_id}\n"
-            f"🌐 آدرس: {host}",
+            _adm_t("adm_nd_added", title=title, server_id=child_server_id, host=host),
             reply_markup=admin_main_keyboard(),
         )
         await send_nodes_menu(server_id, message.chat_id, context)
@@ -992,7 +981,7 @@ async def handle_add_node_flow(
     # اگر state شناخته نشد
     context.user_data.pop("state", None)
     await message.reply_text(
-        "❌ وضعیت افزودن نود نامعتبر است. دوباره از منوی «لیست نودها» اقدام کنید.",
+        _adm_t("adm_nd_add_invalid_state"),
         reply_markup=admin_main_keyboard(),
     )
 
@@ -1015,7 +1004,7 @@ async def handle_auto_add_node_flow(
         context.user_data.pop("nodes_server_id", None)
         context.user_data.pop("new_auto_node", None)
         await message.reply_text(
-            "❌ ساخت خودکار نود لغو شد.",
+            _T(_admin_bot_lang(), "adm_nd_auto_cancelled"),
             reply_markup=admin_main_keyboard(),
         )
         return
@@ -1025,7 +1014,7 @@ async def handle_auto_add_node_flow(
         context.user_data.pop("state", None)
         context.user_data.pop("new_auto_node", None)
         await message.reply_text(
-            "❌ سرور مبدا برای ساخت نود مشخص نیست. دوباره از منوی «لیست نودها» اقدام کنید.",
+            _T(_admin_bot_lang(), "adm_nd_auto_server_state"),
             reply_markup=admin_main_keyboard(),
         )
         return
@@ -1034,13 +1023,13 @@ async def handle_auto_add_node_flow(
 
     if state == NODES_STATE_AUTO_TITLE:
         if not text:
-            await message.reply_text("❌ عنوان نود نمی‌تواند خالی باشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_title_required"), reply_markup=cancel_keyboard())
             return
         new_node["title"] = text
         context.user_data["new_auto_node"] = new_node
         context.user_data["state"] = NODES_STATE_AUTO_PANEL
         await message.reply_text(
-            "🌐 آدرس پنل نود را وارد کنید:\nمثال: https://node.example.com",
+            _T(_admin_bot_lang(), "adm_nd_panel_url"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1049,7 +1038,7 @@ async def handle_auto_add_node_flow(
         panel_url = text.strip()
         if not (panel_url.startswith("http://") or panel_url.startswith("https://")):
             await message.reply_text(
-                "❌ آدرس پنل باید با http/https باشد.\nمثال: https://node.example.com",
+                _T(_admin_bot_lang(), "adm_nd_panel_url_invalid"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -1057,7 +1046,7 @@ async def handle_auto_add_node_flow(
         context.user_data["new_auto_node"] = new_node
         context.user_data["state"] = NODES_STATE_AUTO_ADMIN_PROXY
         await message.reply_text(
-            "🔐 Proxy Path ادمین را وارد کنید (بدون /):",
+            _T(_admin_bot_lang(), "adm_nd_admin_proxy"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1065,13 +1054,13 @@ async def handle_auto_add_node_flow(
     if state == NODES_STATE_AUTO_ADMIN_PROXY:
         val = text.strip().strip("/")
         if not val:
-            await message.reply_text("❌ Proxy Path ادمین خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_admin_proxy_required"), reply_markup=cancel_keyboard())
             return
         new_node["admin_proxy_path"] = val
         context.user_data["new_auto_node"] = new_node
         context.user_data["state"] = NODES_STATE_AUTO_ADMIN_UUID
         await message.reply_text(
-            "🔑 UUID/API Key ادمین را وارد کنید:",
+            _T(_admin_bot_lang(), "adm_nd_admin_uuid"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1079,13 +1068,13 @@ async def handle_auto_add_node_flow(
     if state == NODES_STATE_AUTO_ADMIN_UUID:
         val = text.strip()
         if not val:
-            await message.reply_text("❌ UUID/API Key ادمین خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_admin_uuid_required"), reply_markup=cancel_keyboard())
             return
         new_node["admin_uuid"] = val
         context.user_data["new_auto_node"] = new_node
         context.user_data["state"] = NODES_STATE_AUTO_USER_PROXY
         await message.reply_text(
-            "🔐 Proxy Path کاربر را وارد کنید (بدون /):",
+            _T(_admin_bot_lang(), "adm_addsrv_user_proxy"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1093,15 +1082,13 @@ async def handle_auto_add_node_flow(
     if state == NODES_STATE_AUTO_USER_PROXY:
         val = text.strip().strip("/")
         if not val:
-            await message.reply_text("❌ Proxy Path کاربر خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_user_proxy_required"), reply_markup=cancel_keyboard())
             return
         new_node["user_proxy_path"] = val
         context.user_data["new_auto_node"] = new_node
         context.user_data["state"] = NODES_STATE_AUTO_DOMAIN
         await message.reply_text(
-            "🌍 دامنه ساب نود را وارد کنید:\n"
-            "مثال: user.node-example.com\n"
-            "یا: https://user.node-example.com",
+            _T(_admin_bot_lang(), "adm_nd_domain"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1110,8 +1097,7 @@ async def handle_auto_add_node_flow(
         val = _normalize_domain_input(text)
         if not val:
             await message.reply_text(
-                "❌ دامنه معتبر نیست.\n"
-                "مثال صحیح: user.node-example.com",
+                _T(_admin_bot_lang(), "adm_nd_domain_invalid"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -1119,7 +1105,7 @@ async def handle_auto_add_node_flow(
         context.user_data["new_auto_node"] = new_node
         context.user_data["state"] = NODES_STATE_AUTO_LIMIT
         await message.reply_text(
-            "👤 محدودیت تعداد کاربران این نود را وارد کنید (عدد):",
+            _T(_admin_bot_lang(), "adm_nd_node_users_limit"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1131,14 +1117,14 @@ async def handle_auto_add_node_flow(
                 raise ValueError
         except ValueError:
             await message.reply_text(
-                "❌ لطفاً یک عدد صحیح بزرگ‌تر از صفر وارد کنید.",
+                _T(_admin_bot_lang(), "adm_nd_positive_number"),
                 reply_markup=cancel_keyboard(),
             )
             return
 
         panel_url = str(new_node.get("panel_url") or "").rstrip("/")
         host = urlparse(panel_url).hostname or panel_url
-        title = str(new_node.get("title") or f"نود {host}")
+        title = str(new_node.get("title") or _T(_admin_bot_lang(), "adm_nd_auto_title", host=host))
         domain = str(new_node.get("domain") or "").strip()
 
         new_server_payload = {
@@ -1157,11 +1143,11 @@ async def handle_auto_add_node_flow(
         }
 
         try:
-            await message.reply_text("⏳ در حال تست اتصال نود...")
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_testing"))
             await hiddify_api.list_users(new_server_payload)
         except Exception as e:
             await message.reply_text(
-                f"❌ اتصال به پنل نود برقرار نشد:\n{_short_error(e)}",
+            _adm_t("adm_nd_connect_failed", err=_short_error(e)),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -1184,7 +1170,7 @@ async def handle_auto_add_node_flow(
         except Exception as e:
             logger.exception("Auto node creation failed: %s", e)
             await message.reply_text(
-                f"❌ خطا در ذخیره نود خودکار:\n{_short_error(e)}",
+                _adm_t("adm_nd_auto_save_failed", err=_short_error(e)),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -1194,9 +1180,7 @@ async def handle_auto_add_node_flow(
         context.user_data.pop("new_auto_node", None)
 
         await message.reply_text(
-            f"✅ نود خودکار «{title}» با موفقیت ساخته شد.\n"
-            f"🆔 سرور نود: {child_server_id}\n"
-            f"🌐 آدرس: {host}",
+            _adm_t("adm_nd_auto_added", title=title, server_id=child_server_id, host=host),
             reply_markup=admin_main_keyboard(),
         )
         await send_nodes_menu(int(parent_server_id), message.chat_id, context)
@@ -1204,7 +1188,7 @@ async def handle_auto_add_node_flow(
 
     context.user_data.pop("state", None)
     await message.reply_text(
-        "❌ وضعیت ساخت خودکار نود نامعتبر است.",
+        _adm_t("adm_nd_auto_invalid_state"),
         reply_markup=admin_main_keyboard(),
     )
 
@@ -1225,7 +1209,7 @@ async def handle_real_add_node_flow(
         context.user_data.pop("state", None)
         context.user_data.pop("nodes_server_id", None)
         context.user_data.pop("new_real_node", None)
-        await message.reply_text("❌ ساخت VPS لغو شد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_T(_admin_bot_lang(), "adm_nd_vps_cancelled"), reply_markup=admin_main_keyboard())
         return
 
     parent_server_id = context.user_data.get("nodes_server_id")
@@ -1233,7 +1217,7 @@ async def handle_real_add_node_flow(
         context.user_data.pop("state", None)
         context.user_data.pop("new_real_node", None)
         await message.reply_text(
-            "❌ سرور مبدا نامشخص است. دوباره از منوی نودها اقدام کنید.",
+            _adm_t("adm_nd_parent_missing"),
             reply_markup=admin_main_keyboard(),
         )
         return
@@ -1242,13 +1226,13 @@ async def handle_real_add_node_flow(
 
     if state == NODES_STATE_REAL_TITLE:
         if not text:
-            await message.reply_text("❌ عنوان نود خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_title_required"), reply_markup=cancel_keyboard())
             return
         new_real["title"] = text
         context.user_data["new_real_node"] = new_real
         context.user_data["state"] = NODES_STATE_REAL_LIMIT
         await message.reply_text(
-            "👤 محدودیت کاربران نود را وارد کنید (عدد):",
+            _adm_t("adm_nd_users_limit_prompt"),
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1259,11 +1243,11 @@ async def handle_real_add_node_flow(
             if users_limit <= 0:
                 raise ValueError
         except ValueError:
-            await message.reply_text("❌ لطفاً عدد معتبر بزرگ‌تر از صفر وارد کنید.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_positive_number"), reply_markup=cancel_keyboard())
             return
 
         title = str(new_real.get("title") or "Node")
-        await message.reply_text("⏳ در حال ساخت VPS + DNS + ثبت نود. این عملیات ممکن است زمان‌بر باشد...")
+        await message.reply_text(_T(_admin_bot_lang(), "adm_nd_vps_building"))
         try:
             result = await node_ops.provision_and_register_node(
                 parent_server_id=int(parent_server_id),
@@ -1273,7 +1257,7 @@ async def handle_real_add_node_flow(
         except Exception as e:
             logger.exception("Real node provisioning failed: %s", e)
             await message.reply_text(
-                f"❌ ساخت VPS واقعی ناموفق بود:\n{_short_error(e)}",
+                _adm_t("adm_nd_vps_failed", err=_short_error(e)),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -1283,18 +1267,14 @@ async def handle_real_add_node_flow(
         context.user_data.pop("new_real_node", None)
 
         await message.reply_text(
-            "✅ VPS واقعی ساخته شد و نود ثبت شد.\n"
-            f"🆔 سرور نود: {result['child_server_id']}\n"
-            f"🌐 دامنه: {result['fqdn']}\n"
-            f"🧭 IP: {result['ip']}\n"
-            f"📡 Panel: {result['panel_url']}",
+            _adm_t("adm_nd_vps_added", server_id=result['child_server_id'], fqdn=result['fqdn'], ip=result['ip'], panel=result['panel_url']),
             reply_markup=admin_main_keyboard(),
         )
         await send_nodes_menu(int(parent_server_id), message.chat_id, context)
         return
 
     context.user_data.pop("state", None)
-    await message.reply_text("❌ وضعیت ساخت VPS نامعتبر است.", reply_markup=admin_main_keyboard())
+    await message.reply_text(_T(_admin_bot_lang(), "adm_nd_vps_state_invalid"), reply_markup=admin_main_keyboard())
 
 
 async def handle_edit_node_flow(
@@ -1309,7 +1289,7 @@ async def handle_edit_node_flow(
         context.user_data.pop("state", None)
         context.user_data.pop("nodes_edit_server_id", None)
         context.user_data.pop("nodes_edit_node_id", None)
-        await message.reply_text("❌ ویرایش نود لغو شد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_T(_admin_bot_lang(), "adm_nd_edit_cancelled"), reply_markup=admin_main_keyboard())
         return
 
     try:
@@ -1321,13 +1301,13 @@ async def handle_edit_node_flow(
 
     if server_id <= 0 or node_id <= 0:
         context.user_data.pop("state", None)
-        await message.reply_text("❌ وضعیت ویرایش نود نامعتبر است.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_T(_admin_bot_lang(), "adm_nd_edit_state_invalid"), reply_markup=admin_main_keyboard())
         return
 
     nodes, node, idx = _find_node(server_id, node_id)
     if not node or idx < 0:
         context.user_data.pop("state", None)
-        await message.reply_text("❌ نود برای ویرایش پیدا نشد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_T(_admin_bot_lang(), "adm_nd_edit_node_missing"), reply_markup=admin_main_keyboard())
         return
 
     target_sid = int(node.get("target_server_id") or 0)
@@ -1335,7 +1315,7 @@ async def handle_edit_node_flow(
 
     if state == NODES_STATE_EDIT_TITLE:
         if not text:
-            await message.reply_text("❌ عنوان نود نمی‌تواند خالی باشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_title_required"), reply_markup=cancel_keyboard())
             return
         node["title"] = text
         nodes[idx] = node
@@ -1346,40 +1326,40 @@ async def handle_edit_node_flow(
     elif state == NODES_STATE_EDIT_USER_PROXY:
         val = text.strip().strip("/")
         if not val:
-            await message.reply_text("❌ Proxy Path کاربر خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_user_proxy_required"), reply_markup=cancel_keyboard())
             return
         if not child:
-            await message.reply_text("❌ سرور نود پیدا نشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_err_node_server"), reply_markup=cancel_keyboard())
             return
         database.update_server(target_sid, {"user_proxy_path": val})
 
     elif state == NODES_STATE_EDIT_ADMIN_PROXY:
         val = text.strip().strip("/")
         if not val:
-            await message.reply_text("❌ Proxy Path ادمین خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_admin_proxy_required"), reply_markup=cancel_keyboard())
             return
         if not child:
-            await message.reply_text("❌ سرور نود پیدا نشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_err_node_server"), reply_markup=cancel_keyboard())
             return
         database.update_server(target_sid, {"admin_proxy_path": val})
 
     elif state == NODES_STATE_EDIT_ADMIN_UUID:
         val = text.strip()
         if not val:
-            await message.reply_text("❌ UUID/API Key ادمین خالی است.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_admin_uuid_required"), reply_markup=cancel_keyboard())
             return
         if not child:
-            await message.reply_text("❌ سرور نود پیدا نشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_err_node_server"), reply_markup=cancel_keyboard())
             return
         database.update_server(target_sid, {"admin_uuid": val})
 
     elif state == NODES_STATE_EDIT_PANEL_URL:
         val = text.strip().rstrip("/")
         if not (val.startswith("http://") or val.startswith("https://")):
-            await message.reply_text("❌ آدرس پنل باید با http/https باشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_panel_scheme_required"), reply_markup=cancel_keyboard())
             return
         if not child:
-            await message.reply_text("❌ سرور نود پیدا نشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_err_node_server"), reply_markup=cancel_keyboard())
             return
         database.update_server(target_sid, {"panel_url": val})
         node["host"] = urlparse(val).hostname or node.get("host")
@@ -1392,22 +1372,22 @@ async def handle_edit_node_flow(
             if val <= 0:
                 raise ValueError
         except ValueError:
-            await message.reply_text("❌ لطفاً عدد معتبر بزرگ‌تر از صفر وارد کنید.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_positive_number"), reply_markup=cancel_keyboard())
             return
         if not child:
-            await message.reply_text("❌ سرور نود پیدا نشد.", reply_markup=cancel_keyboard())
+            await message.reply_text(_T(_admin_bot_lang(), "adm_nd_err_node_server"), reply_markup=cancel_keyboard())
             return
         database.update_server(target_sid, {"users_limit": val})
 
     else:
         context.user_data.pop("state", None)
-        await message.reply_text("❌ وضعیت ویرایش نود نامعتبر است.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_T(_admin_bot_lang(), "adm_nd_edit_state_invalid"), reply_markup=admin_main_keyboard())
         return
 
     context.user_data.pop("state", None)
     context.user_data.pop("nodes_edit_server_id", None)
     context.user_data.pop("nodes_edit_node_id", None)
-    await message.reply_text("✅ تغییرات نود ذخیره شد.", reply_markup=admin_main_keyboard())
+    await message.reply_text(_T(_admin_bot_lang(), "adm_nd_changes_saved"), reply_markup=admin_main_keyboard())
     await send_node_edit_menu(server_id, node_id, message.chat_id, context)
 
 
@@ -1436,7 +1416,7 @@ async def handle_nodes_state_message(
     message = update.message
     if message:
         await message.reply_text(
-            "❌ وضعیت نود نامعتبر است. دوباره تلاش کنید.",
+            _T(_admin_bot_lang(), "adm_nd_state_invalid"),
             reply_markup=admin_main_keyboard(),
         )
 
@@ -1468,13 +1448,13 @@ async def handle_nodes_inline_callback(
             server_id = int(sid_str)
             node_id = int(nid_str)
         except ValueError:
-            await msg.edit_text("❌ داده‌ی عملیات نود نامعتبر است.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_callback_invalid"))
             return
 
         _, node, _ = _find_node(server_id, node_id)
         target_sid = int((node or {}).get("target_server_id") or 0)
         if not node or target_sid <= 0 or not database.get_server_by_id(target_sid):
-            await msg.edit_text("❌ سرور نود پیدا نشد.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_err_node_server"))
             return
 
         if action == "users":
@@ -1496,7 +1476,7 @@ async def handle_nodes_inline_callback(
             await send_node_add_with_plan_menu(server_id, node_id, chat_id, context, message=msg)
             return
 
-        await msg.edit_text("❌ گزینه‌ی عملیات نود نامعتبر است.")
+        await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_action_invalid"))
         return
 
     # ------ نمایش منوی ویرایش نود (nodeinfo:SERVER_ID:NODE_ID) ------
@@ -1507,7 +1487,7 @@ async def handle_nodes_inline_callback(
             server_id = int(sid_str)
             node_id = int(nid_str)
         except ValueError:
-            await msg.edit_text("❌ داده‌ی دکمه نود نامعتبر است.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_callback_invalid"))
             return
 
         await send_node_edit_menu(server_id, node_id, chat_id, context, message=msg)
@@ -1521,12 +1501,12 @@ async def handle_nodes_inline_callback(
             server_id = int(sid_str)
             node_id = int(nid_str)
         except ValueError:
-            await msg.edit_text("❌ داده‌ی ویرایش نود نامعتبر است.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_callback_invalid"))
             return
 
         _, node, _ = _find_node(server_id, node_id)
         if not node:
-            await msg.edit_text("❌ نود مورد نظر پیدا نشد.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_err_node_not_found"))
             return
 
         context.user_data["nodes_edit_server_id"] = server_id
@@ -1536,32 +1516,32 @@ async def handle_nodes_inline_callback(
         next_state = ""
         if field == "title":
             next_state = NODES_STATE_EDIT_TITLE
-            prompt = "✏️ عنوان جدید نود را ارسال کنید:"
+            prompt = _T(_admin_bot_lang(), "adm_nd_prompt_title")
         elif field == "user_proxy":
             next_state = NODES_STATE_EDIT_USER_PROXY
-            prompt = "🔐 Proxy Path کاربر جدید را ارسال کنید (بدون /):"
+            prompt = _T(_admin_bot_lang(), "adm_nd_prompt_user_proxy")
         elif field == "admin_proxy":
             next_state = NODES_STATE_EDIT_ADMIN_PROXY
-            prompt = "🔐 Proxy Path ادمین جدید را ارسال کنید (بدون /):"
+            prompt = _T(_admin_bot_lang(), "adm_nd_prompt_admin_proxy")
         elif field == "admin_uuid":
             next_state = NODES_STATE_EDIT_ADMIN_UUID
-            prompt = "🔑 UUID/API Key ادمین جدید را ارسال کنید:"
+            prompt = _T(_admin_bot_lang(), "adm_nd_prompt_admin_uuid")
         elif field == "panel_url":
             next_state = NODES_STATE_EDIT_PANEL_URL
-            prompt = "🌐 آدرس پنل جدید را ارسال کنید (با http/https):"
+            prompt = _T(_admin_bot_lang(), "adm_nd_prompt_panel_url")
         elif field == "users_limit":
             next_state = NODES_STATE_EDIT_USERS_LIMIT
-            prompt = "👤 محدودیت کاربران جدید را ارسال کنید (عدد):"
+            prompt = _T(_admin_bot_lang(), "adm_nd_prompt_users_limit")
         elif field == "domains":
             target_sid = int((node or {}).get("target_server_id") or 0)
             if target_sid <= 0:
-                await msg.edit_text("❌ سرور نود برای مدیریت دامنه پیدا نشد.")
+                await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_domain_server_missing"))
                 return
             from AdminBot.servers import send_domains_menu  # import lazy to avoid circular import at module load
             await send_domains_menu(target_sid, chat_id, context, message=msg)
             return
         else:
-            await msg.edit_text("❌ فیلد ویرایش نود نامعتبر است.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_field_invalid"))
             return
 
         context.user_data["state"] = next_state
@@ -1579,7 +1559,7 @@ async def handle_nodes_inline_callback(
             _, sid_str, action = data.split(":", 2)
             server_id = int(sid_str)
         except ValueError:
-            await msg.edit_text("❌ داده‌ی دکمه نود نامعتبر است.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_callback_invalid"))
             return
 
         # برگشت از منوی حذف به منوی اصلی نودها
@@ -1597,17 +1577,17 @@ async def handle_nodes_inline_callback(
             except Exception:
                 pass
             await msg.reply_text(
-                "نوع پنل نود را انتخاب کنید:",
+                _T(_admin_bot_lang(), "adm_nd_choose_panel_type"),
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [
-                            InlineKeyboardButton("هیدیفای (Hiddify)", callback_data=f"nodes:{server_id}:add_type:hiddify"),
+                            InlineKeyboardButton(_T(_admin_bot_lang(), "adm_addsrv_type_hiddify"), callback_data=f"nodes:{server_id}:add_type:hiddify"),
                         ],
                         [
-                            InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data=f"nodes:{server_id}:add_type:xui_alireza"),
-                            InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data=f"nodes:{server_id}:add_type:xui_sanaei"),
+                            InlineKeyboardButton(_T(_admin_bot_lang(), "adm_addsrv_type_xui_alireza"), callback_data=f"nodes:{server_id}:add_type:xui_alireza"),
+                            InlineKeyboardButton(_T(_admin_bot_lang(), "adm_addsrv_type_xui_sanaei"), callback_data=f"nodes:{server_id}:add_type:xui_sanaei"),
                         ],
-                        [InlineKeyboardButton("🔙بازگشت", callback_data=f"nodes:{server_id}:back")],
+                        [InlineKeyboardButton(_T(_admin_bot_lang(), "btn_back"), callback_data=f"nodes:{server_id}:back")],
                     ]
                 ),
             )
@@ -1618,7 +1598,7 @@ async def handle_nodes_inline_callback(
             if ptype in {"xui_alireza", "xui_sanaei"}:
                 ptype = "xui"
             if ptype not in {"hiddify", "xui"}:
-                await query.answer("نوع پنل نامعتبر است.")
+                await query.answer(_T(_admin_bot_lang(), "adm_nd_panel_type_invalid"))
                 return
             new_node = context.user_data.get("new_node") or {}
             new_node["panel_type"] = ptype
@@ -1629,8 +1609,7 @@ async def handle_nodes_inline_callback(
             except Exception:
                 pass
             await msg.edit_text(
-                "➕ افزودن دستی نود (با تست اتصال)\n"
-                "برای نود یک عنوان وارد کنید:",
+                _T(_admin_bot_lang(), "adm_nd_manual_add_prompt"),
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -1640,7 +1619,7 @@ async def handle_nodes_inline_callback(
             await send_nodes_delete_menu(server_id, chat_id, context, message=msg)
             return
 
-        await msg.edit_text("❌ گزینه‌ی نود نامعتبر است.")
+        await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_option_invalid"))
         return
 
     # ------ حذف نود (delnode:SERVER_ID:NODE_ID) ------
@@ -1651,7 +1630,7 @@ async def handle_nodes_inline_callback(
             server_id = int(sid_str)
             node_id = int(nid_str)
         except ValueError:
-            await msg.edit_text("❌ داده‌ی دکمه حذف نود نامعتبر است.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_callback_invalid"))
             return
 
         nodes = _load_nodes_for_server(server_id)
@@ -1666,7 +1645,7 @@ async def handle_nodes_inline_callback(
         new_nodes = [n for n in nodes if n["id"] != node_id]
 
         if len(new_nodes) == len(nodes):
-            await msg.edit_text("❌ نود مورد نظر پیدا نشد یا قبلاً حذف شده است.")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_delete_missing"))
             return
 
         # شناسه‌ها را مرتب می‌کنیم که مرتب بماند
@@ -1688,9 +1667,9 @@ async def handle_nodes_inline_callback(
                     logger.warning("Failed deleting child server %s after delnode: %s", deleted_target_id, e)
         except Exception as e:
             logger.exception("Error deleting node: %s", e)
-            await msg.edit_text(f"❌ خطا در حذف نود:\n{_short_error(e)}")
+            await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_delete_error", err=_short_error(e)))
             return
 
-        await msg.edit_text("✅ نود با موفقیت حذف شد.")
+        await msg.edit_text(_T(_admin_bot_lang(), "adm_nd_deleted"))
         await send_nodes_menu(server_id, chat_id, context)
         return

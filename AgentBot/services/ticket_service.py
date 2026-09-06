@@ -7,6 +7,7 @@ from AgentBot.database import (
     add_ticket_message as db_add_ticket_message,
     get_ticket_messages as db_get_ticket_messages,
 )
+from Shared import i18n
 
 
 def create_ticket(agent_id: int, customer_id: int, customer_name: str, subject: str) -> Dict[str, Any]:

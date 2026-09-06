@@ -17,24 +17,21 @@ _PAGE_SIZE = 9
 
 def _build_order_detail_text(order) -> str:
     """متن جزئیات سفارش (هماهنگ با customer_orders)."""
+    _lg = "fa"
     oid = order.get('order_id') or order.get('id') or '?'
     name = order.get('full_name') or order.get('customer_name') or '-'
     amt = order.get('price') or order.get('amount') or 0
     return (
-        f"◈ شناسه سفارش: {oid}\n"
-        f"👤 مشتری: {_escape(name)}\n"
-        f"◈ تاریخ سفارش: {_escape(order.get('created_at', '') or '-')}\n"
-        f"◈ مبلغ سفارش: {_fmt_toman(amt)} تومان\n"
-        f"⬖ حجم: {_fmt_gb(order.get('volume_gb', 0))}GB\n"
-        f"⬖ مدت: {order.get('days', 0)} روز\n"
-        f"⬖ پلن: {_escape(order.get('plan_title', '') or '-')}\n"
-        f"⬖ سرور: {_escape(order.get('server_location', '') or '-')}\n"
-        f"⬖ نوع سفارش: {_escape(order.get('order_type', '') or '-')}\n"
-        f"⬖ وضعیت: {_status_icon(order.get('status', ''))} {_escape(order.get('status', ''))}\n"
+        f"{i18n.t('◈ شناسه سفارش: ', _lg)}{oid}{i18n.t('\n👤 مشتری: ', _lg)}{_escape(name)}{i18n.t('\n◈ تاریخ سفارش: ', _lg)}{_escape(order.get('created_at', '') or '-')}{i18n.t('\n◈ مبلغ سفارش: ', _lg)}{_fmt_toman(amt)}{i18n.t(' تومان\n⬖ حجم: ', _lg)}{_fmt_gb(order.get('volume_gb', 0))}{i18n.t('GB\n⬖ مدت: ', _lg)}{order.get('days', 0)}{i18n.t(' روز\n⬖ پلن: ', _lg)}{_escape(order.get('plan_title', '') or '-')}{i18n.t('\n⬖ سرور: ', _lg)}{_escape(order.get('server_location', '') or '-')}{i18n.t('\n⬖ نوع سفارش: ', _lg)}{_escape(order.get('order_type', '') or '-')}{i18n.t('\n⬖ وضعیت: ', _lg)}{_status_icon(order.get('status', ''))} {_escape(order.get('status', ''))}\n"
     )
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -48,7 +45,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if p1 == "set" and p2 == "orders" and not p3:
         await query.edit_message_text(
-            "\U0001f4e6 <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u0633\u0641\u0627\u0631\u0634\u0627\u062a</b>",
+            i18n.t('📦 <b>مدیریت سفارشات</b>', _lg),
             reply_markup=orders_menu_keyboard(), parse_mode="HTML",
         )
         return
@@ -56,7 +53,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if (p2 == "back" and p1 == "set") or (p2 == "orders" and p3 == "back"):
         from AgentBot.keyboards import settings_menu_keyboard
         await query.edit_message_text(
-            "\u2699\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u0631\u0628\u0627\u062a</b>",
+            i18n.t('⚙️ <b>تنظیمات ربات</b>', _lg),
             reply_markup=settings_menu_keyboard(), parse_mode="HTML",
         )
         return
@@ -73,18 +70,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             page = total_pages
         orders, _ = get_orders(agent_id, page=page, page_size=_PAGE_SIZE)
         text = (
-            f"\U0001f539 \u0644\u06cc\u0633\u062a \u0633\u0641\u0627\u0631\u0634\u0627\u062a\n"
-            f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u0633\u0641\u0627\u0631\u0634\u0627\u062a: {stats['total_count']}\n"
-            f"\U0001f538 \u0645\u062c\u0645\u0648\u0639 \u062d\u062c\u0645 \u0633\u0641\u0627\u0631\u0634\u0627\u062a(GB): {_fmt_gb(stats['total_gb'])}\n"
-            f"\U0001f538 \u0645\u062c\u0645\u0648\u0639 \u0627\u0631\u0632\u0634 \u0633\u0641\u0627\u0631\u0634\u0627\u062a: {_fmt_toman(stats['total_amount'])}\u062a\u0648\u0645\u0627\u0646\n"
-            f"\u2756 \u2b29----------------------------------\u2b29 \u2756\n"
-            f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {stats['last30_count']}\n"
-            f"\U0001f538 \u062d\u062c\u0645 \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647(GB): {_fmt_gb(stats['last30_gb'])}\n"
-            f"\U0001f538 \u0627\u0631\u0632\u0634 \u0633\u0641\u0627\u0631\u0634\u0627\u062a 30 \u0631\u0648\u0632 \u06af\u0630\u0634\u062a\u0647: {_fmt_toman(stats['last30_amount'])}\u062a\u0648\u0645\u0627\u0646\n"
-            f"\u2756 \u2b29----------------------------------\u2b29 \u2756\n"
-            f"\U0001f538 \u062a\u0639\u062f\u0627\u062f \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {stats['month_count']}\n"
-            f"\U0001f538 \u062d\u062c\u0645 \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647(GB): {_fmt_gb(stats['month_gb'])}\n"
-            f"\U0001f538 \u0627\u0631\u0632\u0634 \u0633\u0641\u0627\u0631\u0634\u0627\u062a \u0627\u06cc\u0646 \u0645\u0627\u0647: {_fmt_toman(stats['month_amount'])}\u062a\u0648\u0645\u0627\u0646"
+            f"{i18n.t('🔹 لیست سفارشات\n🔸 تعداد سفارشات: ', _lg)}{stats['total_count']}{i18n.t('\n🔸 مجموع حجم سفارشات(GB): ', _lg)}{_fmt_gb(stats['total_gb'])}{i18n.t('\n🔸 مجموع ارزش سفارشات: ', _lg)}{_fmt_toman(stats['total_amount'])}{i18n.t('تومان\n❖ ⬩----------------------------------⬩ ❖\n🔸 تعداد سفارشات 30 روز گذشته: ', _lg)}{stats['last30_count']}{i18n.t('\n🔸 حجم سفارشات 30 روز گذشته(GB): ', _lg)}{_fmt_gb(stats['last30_gb'])}{i18n.t('\n🔸 ارزش سفارشات 30 روز گذشته: ', _lg)}{_fmt_toman(stats['last30_amount'])}{i18n.t('تومان\n❖ ⬩----------------------------------⬩ ❖\n🔸 تعداد سفارشات این ماه: ', _lg)}{stats['month_count']}{i18n.t('\n🔸 حجم سفارشات این ماه(GB): ', _lg)}{_fmt_gb(stats['month_gb'])}{i18n.t('\n🔸 ارزش سفارشات این ماه: ', _lg)}{_fmt_toman(stats['month_amount'])}{i18n.t('تومان', _lg)}"
         )
         try:
             await query.edit_message_text(
@@ -100,7 +86,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         order_id = int(p4) if p4.isdigit() else 0
         order = get_order_by_id(agent_id, order_id)
         if not order:
-            await query.answer("\u274c \u0633\u0641\u0627\u0631\u0634 \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", show_alert=True)
+            await query.answer(i18n.t('❌ سفارش یافت نشد.', _lg), show_alert=True)
             return
         text = _build_order_detail_text(order)
         try:
@@ -121,8 +107,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
         try:
             await query.message.reply_text(
-                "\U0001f50d <b>\u062c\u0633\u062a\u062c\u0648\u06cc \u0633\u0641\u0627\u0631\u0634</b>\n"
-                "\u0634\u0646\u0627\u0633\u0647 \u0633\u0641\u0627\u0631\u0634 (\u0639\u062f\u062f) \u06cc\u0627 \u0646\u0627\u0645 \u0645\u0634\u062a\u0631\u06cc \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+                i18n.t('🔍 <b>جستجوی سفارش</b>\nشناسه سفارش (عدد) یا نام مشتری را وارد کنید:', _lg),
                 reply_markup=cancel_keyboard(), parse_mode="HTML",
             )
         except Exception:
@@ -131,6 +116,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if not agent_id:
         return False
@@ -151,7 +141,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         context.user_data.pop(UD_STATE, None)
         if not order:
             await update.message.reply_text(
-                f"❌ سفارشی با شناسه {oid} یافت نشد.",
+                f"{i18n.t('❌ سفارشی با شناسه ', _lg)}{oid}{i18n.t(' یافت نشد.', _lg)}",
                 reply_markup=orders_menu_keyboard(), parse_mode="HTML",
             )
             return True
@@ -167,18 +157,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     context.user_data.pop(UD_STATE, None)
     if not orders:
         await update.message.reply_text(
-            "❌ هیچ سفارشی با این مشخصات پیدا نشد.",
+            i18n.t('❌ هیچ سفارشی با این مشخصات پیدا نشد.', _lg),
             reply_markup=orders_menu_keyboard(), parse_mode="HTML",
         )
         return True
-    lines = [f"\U0001f50d <b>نتایج جستجو برای \"{_escape(text)}\"</b> ({len(orders)}):\n"]
+    lines = [f"{i18n.t('🔍 <b>نتایج جستجو برای "', _lg)}{_escape(text)}\"</b> ({len(orders)}):\n"]
     for o in orders:
         oid = o.get('order_id') or o.get('id') or '?'
         name = o.get('full_name') or o.get('customer_name') or '-'
         amt = o.get('price') or o.get('amount') or 0
         lines.append(
-            f"{_status_icon(o.get('status', ''))} #{oid} • {_escape(name)} • "
-            f"{_fmt_toman(amt)} تومان"
+            f"{_status_icon(o.get('status', ''))} #{oid} • {_escape(name)} • {_fmt_toman(amt)}{i18n.t(' تومان', _lg)}"
         )
     await update.message.reply_text(
         "\n".join(lines),

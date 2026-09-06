@@ -3,9 +3,14 @@ from __future__ import annotations
 import sqlite3
 import json
 import random
+import re
+import threading
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+from Shared import i18n
 
 DB_FILE_NAME = "customer_bot.db"
 DB_PATH = Path(__file__).resolve().parent.parent / DB_FILE_NAME
@@ -13,6 +18,7 @@ _AGENCY_DB_PATH = Path(__file__).resolve().parent.parent / "Shared" / "agency.db
 
 _db_initialized = False
 _init_db_path = ""
+_init_db_lock = threading.RLock()
 
 DEFAULT_BUY_RENEW_SETTINGS = {
     "enable_buy": True,
@@ -83,6 +89,109 @@ DEFAULT_TEXT_SETTINGS = {
     "zarinpal_pro_text": "0",
 }
 
+# FAQ is stored per language. Legacy installations may still contain a single
+# string; the accessors below treat that value as the Persian entry.
+DEFAULT_FAQ_TEXTS = {
+    "fa": DEFAULT_TEXT_SETTINGS["faq_text"],
+    "en": "❗️ FAQ\n\n1) Where can I find my subscription link?\nOpen Subscription status, select a service, then choose Subscription link.\n\n2) What should I do if the config does not connect?\nCheck your internet connection and phone date/time, then refresh the service.\n\n3) How do I renew?\nOpen Renew subscription, select a service, and purchase a renewal plan.\n\n4) How can I contact support?\nOpen Support and send your message.",
+    "ru": "❗️ Частые вопросы\n\n1) Где найти ссылку подписки?\nОткройте Статус подписки, выберите сервис и нажмите Ссылка подписки.\n\n2) Что делать, если конфигурация не подключается?\nПроверьте интернет и дату/время телефона, затем обновите сервис.\n\n3) Как продлить подписку?\nОткройте Продление подписки, выберите сервис и купите тариф продления.\n\n4) Как связаться с поддержкой?\nОткройте Поддержку и отправьте сообщение.",
+}
+
+# Per-language DEFAULTS for agent-customizable texts.
+# get_localized_text() returns the agent's custom text when set,
+# otherwise the default in the customer's language (fa/en/ru).
+DEFAULT_TEXT_I18N = {
+    "welcome_message": {
+        "en": "Hello {full_name} 👋\nWelcome to our bot.",
+        "ru": "Привет, {full_name} 👋\nДобро пожаловать в наш бот.",
+    },
+    "guide_text": {
+        "en": "Choose your OS ⬇️",
+        "ru": "Выберите ОС ⬇️",
+    },
+    "guide_android_text": {
+        "en": "📱 Android Guide\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) v2rayNG:\nhttps://github.com/2dust/v2rayNG/releases\n\n3) NekoBox for Android:\nhttps://github.com/MatsuriDayo/NekoBoxForAndroid/releases",
+        "ru": "📱 Инструкция для Android\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) v2rayNG:\nhttps://github.com/2dust/v2rayNG/releases\n\n3) NekoBox for Android:\nhttps://github.com/MatsuriDayo/NekoBoxForAndroid/releases",
+    },
+    "guide_ios_text": {
+        "en": "📱 iOS Guide\n\n1) Streisand:\nhttps://apps.apple.com/app/streisand/id6450534064\n\n2) Hiddify (iOS):\nhttps://apps.apple.com/app/hiddify-proxy-vpn/id6596777532",
+        "ru": "📱 Инструкция для iOS\n\n1) Streisand:\nhttps://apps.apple.com/app/streisand/id6450534064\n\n2) Hiddify (iOS):\nhttps://apps.apple.com/app/hiddify-proxy-vpn/id6596777532",
+    },
+    "guide_windows_text": {
+        "en": "🖥️ Windows Guide\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases\n\n3) v2rayN:\nhttps://github.com/2dust/v2rayN/releases",
+        "ru": "🖥️ Инструкция для Windows\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases\n\n3) v2rayN:\nhttps://github.com/2dust/v2rayN/releases",
+    },
+    "guide_mac_text": {
+        "en": "💻 macOS Guide\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases",
+        "ru": "💻 Инструкция для macOS\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases",
+    },
+    "guide_linux_text": {
+        "en": "🖥️ Linux Guide\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases",
+        "ru": "🖥️ Инструкция для Linux\n\n1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases",
+    },
+    "servers_list_text": {
+        "en": "📡 **Server list**\nPlease choose your desired location:",
+        "ru": "📡 **Список серверов**\nВыберите нужную локацию:",
+    },
+    "plans_list_text": {
+        "en": "🛒 **Please choose your desired plan:**",
+        "ru": "🛒 **Выберите нужный тариф:**",
+    },
+    "ticket_panel_text": {
+        "en": "📩 To contact support, send your message.",
+        "ru": "📩 Для связи с поддержкой отправьте сообщение.",
+    },
+}
+
+DEFAULT_FORCEJOIN_GUIDE_I18N = {
+    "en": "🔒 To use the bot, first join the support channel.\nAfter joining, tap «✅ Check Membership».",
+    "ru": "🔒 Чтобы пользоваться ботом, сначала подпишитесь на канал.\nЗатем нажмите «✅ Проверить».",
+}
+
+
+def get_localized_text(agent_id: int, name: str, lang: str = "fa") -> str:
+    """Agent-customizable text in the customer's language.
+
+    Returns the agent's custom text when they set one; otherwise the
+    built-in default translated to ``lang`` (fa/en/ru). This keeps the
+    ``or i18n.t(...)`` fallbacks in handlers meaningful: merged settings
+    always contain the Persian default, which would otherwise shadow them.
+    """
+    lg = str(lang or "fa").strip().lower()
+    if lg not in ("fa", "en", "ru"):
+        lg = "fa"
+    fa_default = str(DEFAULT_TEXT_SETTINGS.get(name, "") or "")
+    try:
+        stored = _get_setting(agent_id, "text_settings", {}) or {}
+    except Exception:
+        stored = {}
+    if isinstance(stored, dict):
+        custom = str(stored.get(name) or "")
+        if custom.strip() and (lg == "fa" or custom.strip() != fa_default.strip()):
+            return str(stored.get(name))
+    if lg == "fa":
+        return fa_default
+    return str((DEFAULT_TEXT_I18N.get(name) or {}).get(lg) or fa_default)
+
+
+def get_localized_forcejoin_guide(agent_id: int, lang: str = "fa") -> str:
+    """Force-join guide text: agent custom text wins, else localized default."""
+    lg = str(lang or "fa").strip().lower()
+    if lg not in ("fa", "en", "ru"):
+        lg = "fa"
+    fa_default = str(DEFAULT_FORCE_JOIN_SETTINGS.get("guide_text", "") or "")
+    try:
+        stored = _get_setting(agent_id, "force_join_settings", {}) or {}
+    except Exception:
+        stored = {}
+    if isinstance(stored, dict):
+        custom = str(stored.get("guide_text") or "")
+        if custom.strip() and (lg == "fa" or custom.strip() != fa_default.strip()):
+            return str(stored.get("guide_text"))
+    if lg == "fa":
+        return fa_default
+    return str(DEFAULT_FORCEJOIN_GUIDE_I18N.get(lg) or fa_default)
+
 DEFAULT_MARKETING_SETTINGS = {
     "enable_discount_code": False,
     "enable_increase_code": False,
@@ -140,20 +249,37 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def _ensure_column(cur: sqlite3.Cursor, table: str, column: str, definition: str) -> None:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        raise ValueError(f"invalid table name: {table!r}")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", column):
+        raise ValueError(f"invalid column name: {column!r}")
+    columns = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})")}
+    if column in columns:
+        return
     try:
-        cur.execute(f"SELECT {column} FROM {table} LIMIT 1")
-    except sqlite3.OperationalError:
         cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError:
+        # A second process may complete the same additive migration after the
+        # PRAGMA check but before this connection obtains the schema lock.
+        columns = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            raise
 
 
 def init_db() -> None:
     global _db_initialized, _init_db_path
     current_path = str(DB_PATH)
-    # اگر مسیر دیتابیس تغییر کرده (مثلاً در تست‌ها)، دوباره جداول را می‌سازیم.
-    if _db_initialized and current_path == _init_db_path:
-        return
-    _db_initialized = True
-    _init_db_path = current_path
+    with _init_db_lock:
+        # اگر مسیر دیتابیس تغییر کرده (مثلاً در تست‌ها)، دوباره جداول را می‌سازیم.
+        if _db_initialized and current_path == _init_db_path:
+            return
+        _initialize_db()
+        # Publish readiness only after every table, column and index committed.
+        _db_initialized = True
+        _init_db_path = current_path
+
+
+def _initialize_db() -> None:
     conn = _get_conn()
     cur = conn.cursor()
 
@@ -217,6 +343,14 @@ def init_db() -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_cust_pay_idem
         ON customer_payments(agent_id, idempotency_key)
     """)
+    for column, definition in (
+        ("processing_token", "TEXT DEFAULT ''"),
+        ("processing_started_at", "TEXT DEFAULT ''"),
+        ("processing_previous_status", "TEXT DEFAULT ''"),
+        ("processing_stage", "TEXT DEFAULT ''"),
+        ("processing_note", "TEXT DEFAULT ''"),
+    ):
+        _ensure_column(cur, "customer_payments", column, definition)
 
     # صف تایید خودکار وب‌هوک SMS بانکی: وب‌هوک (پروسه UserBot) پرداخت تطبیق‌یافته را
     # اینجا صف می‌کند و پروسه AgentBot با رویداد لوپ خودش سرویس را می‌سازد و تحویل می‌دهد
@@ -231,9 +365,44 @@ def init_db() -> None:
             created_at TEXT,
             processed INTEGER DEFAULT 0,
             note TEXT DEFAULT '',
-            processed_at TEXT DEFAULT ''
+            processed_at TEXT DEFAULT '',
+            state TEXT DEFAULT 'pending',
+            attempt_count INTEGER DEFAULT 0,
+            next_attempt_at TEXT DEFAULT '',
+            lease_token TEXT DEFAULT '',
+            lease_expires_at TEXT DEFAULT '',
+            last_attempt_at TEXT DEFAULT '',
+            last_error TEXT DEFAULT '',
+            updated_at TEXT DEFAULT '',
+            completed_at TEXT DEFAULT ''
         )
     """)
+    for column, definition in (
+        ("state", "TEXT DEFAULT 'pending'"),
+        ("attempt_count", "INTEGER DEFAULT 0"),
+        ("next_attempt_at", "TEXT DEFAULT ''"),
+        ("lease_token", "TEXT DEFAULT ''"),
+        ("lease_expires_at", "TEXT DEFAULT ''"),
+        ("last_attempt_at", "TEXT DEFAULT ''"),
+        ("last_error", "TEXT DEFAULT ''"),
+        ("updated_at", "TEXT DEFAULT ''"),
+        ("completed_at", "TEXT DEFAULT ''"),
+    ):
+        _ensure_column(cur, "customer_payment_sms_queue", column, definition)
+    # One-way compatibility migration from the old processed flag.
+    cur.execute(
+        "UPDATE customer_payment_sms_queue SET state='succeeded', "
+        "completed_at=CASE WHEN completed_at='' THEN processed_at ELSE completed_at END "
+        "WHERE processed=1 AND COALESCE(state, '') IN ('', 'pending')"
+    )
+    cur.execute(
+        "UPDATE customer_payment_sms_queue SET state='pending' "
+        "WHERE processed=0 AND COALESCE(state, '')=''"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cust_sms_queue_ready "
+        "ON customer_payment_sms_queue(processed, state, next_attempt_at, id)"
+    )
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS customer_tickets (
@@ -1016,25 +1185,54 @@ def get_payment_by_idempotency_key(agent_id: int, idempotency_key: str) -> Optio
     return dict(row) if row else None
 
 
-def update_payment_status(agent_id: int, payment_id: int, status: str, receipt_image: str = "") -> bool:
+def update_payment_status(
+    agent_id: int,
+    payment_id: int,
+    status: str,
+    receipt_image: str = "",
+    *,
+    expected_status: Optional[str] = None,
+) -> bool:
+    """Update a mutable payment using an optional compare-and-swap guard.
+
+    Customer-side receipt handling must never modify a payment after an
+    approval worker has claimed it. Therefore approved and processing rows
+    are protected even when a legacy caller omits expected_status.
+    """
+    target_status = str(status or "").strip().lower()
+    if not target_status:
+        return False
+
     init_db()
     conn = _get_conn()
-    cur = conn.cursor()
-    now = _now()
-    if receipt_image:
-        cur.execute(
-            "UPDATE customer_payments SET status = ?, receipt_image = ?, updated_at = ? WHERE agent_id = ? AND id = ?",
-            (status, receipt_image, now, agent_id, payment_id),
+    try:
+        cur = conn.cursor()
+        now = _now()
+        where = (
+            "agent_id = ? AND id = ? "
+            "AND lower(trim(COALESCE(status, ''))) NOT IN ('approved', 'processing')"
         )
-    else:
-        cur.execute(
-            "UPDATE customer_payments SET status = ?, updated_at = ? WHERE agent_id = ? AND id = ?",
-            (status, now, agent_id, payment_id),
-        )
-    affected = cur.rowcount
-    conn.commit()
-    conn.close()
-    return affected > 0
+        where_params: list[Any] = [agent_id, payment_id]
+        if expected_status is not None:
+            expected = str(expected_status or "").strip().lower()
+            where += " AND lower(trim(COALESCE(status, ''))) = ?"
+            where_params.append(expected)
+
+        if receipt_image:
+            cur.execute(
+                f"UPDATE customer_payments SET status = ?, receipt_image = ?, updated_at = ? WHERE {where}",
+                [target_status, receipt_image, now, *where_params],
+            )
+        else:
+            cur.execute(
+                f"UPDATE customer_payments SET status = ?, updated_at = ? WHERE {where}",
+                [target_status, now, *where_params],
+            )
+        affected = cur.rowcount
+        conn.commit()
+        return affected > 0
+    finally:
+        conn.close()
 
 
 def get_pending_payments(agent_id: int) -> List[Dict[str, Any]]:
@@ -1053,66 +1251,292 @@ def get_pending_payments(agent_id: int) -> List[Dict[str, Any]]:
 # ---- SMS webhook auto-approval queue ----
 
 def enqueue_sms_auto_approval(agent_id: int, pay_id: int, event_id: str, amount_toman: int = 0, card_last4: str = "") -> bool:
+    """Reserve one pending payment for one SMS event, atomically.
+
+    The ownership check and the active-job check intentionally live in the
+    same BEGIN IMMEDIATE transaction as the insert.  This prevents two webhook
+    processes from reserving one customer payment at the same time.
+    """
     init_db()
+    aid = int(agent_id or 0)
+    pid = int(pay_id or 0)
+    eid = str(event_id or "").strip()
+    if aid <= 0 or pid <= 0 or not eid:
+        return False
     conn = _get_conn()
-    cur = conn.cursor()
     try:
-        cur.execute(
-            "INSERT OR IGNORE INTO customer_payment_sms_queue (agent_id, pay_id, event_id, amount_toman, card_last4, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (int(agent_id or 0), int(pay_id or 0), str(event_id or ""), int(amount_toman or 0), str(card_last4 or ""), _now()),
+        conn.execute("BEGIN IMMEDIATE")
+        pay = conn.execute(
+            "SELECT status, method FROM customer_payments WHERE agent_id=? AND id=? LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        if not pay or str(pay["status"] or "").strip().lower() != "pending":
+            conn.rollback()
+            return False
+        if str(pay["method"] or "").strip().lower() not in {"card", "card_to_card"}:
+            conn.rollback()
+            return False
+        active = conn.execute(
+            "SELECT 1 FROM customer_payment_sms_queue "
+            "WHERE agent_id=? AND pay_id=? AND processed=0 "
+            "AND state IN ('pending', 'retry', 'waiting_wallet', 'processing') LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        if active:
+            conn.rollback()
+            return False
+        now = _now()
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO customer_payment_sms_queue "
+            "(agent_id, pay_id, event_id, amount_toman, card_last4, created_at, "
+            "state, next_attempt_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (aid, pid, eid, int(amount_toman or 0), str(card_last4 or ""), now, now, now),
         )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
         conn.commit()
-        return cur.rowcount > 0
+        return True
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 def fetch_pending_sms_auto_queue(limit: int = 10) -> List[Dict[str, Any]]:
+    """Compatibility/read-only view. Workers must use claim_sms_auto_queue."""
     init_db()
     conn = _get_conn()
-    cur = conn.cursor()
     try:
-        cur.execute(
-            "SELECT * FROM customer_payment_sms_queue WHERE processed = 0 ORDER BY id LIMIT ?",
-            (max(1, min(50, int(limit or 10))),),
+        now = _now()
+        cur = conn.execute(
+            "SELECT * FROM customer_payment_sms_queue WHERE processed=0 "
+            "AND state IN ('pending', 'retry', 'waiting_wallet') "
+            "AND (COALESCE(next_attempt_at, '')='' OR next_attempt_at<=?) "
+            "ORDER BY id LIMIT ?",
+            (now, max(1, min(50, int(limit or 10)))),
         )
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
 
-def mark_sms_auto_queue_processed(queue_id: int, note: str = "") -> None:
+def claim_sms_auto_queue(limit: int = 10, lease_seconds: int = 120) -> List[Dict[str, Any]]:
+    """Atomically lease ready jobs. Each returned row has its own lease token."""
+    init_db()
+    take = max(1, min(50, int(limit or 10)))
+    lease_for = max(30, min(900, int(lease_seconds or 120)))
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    expires = (now_dt + timedelta(seconds=lease_for)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE customer_payment_sms_queue SET state='retry', lease_token='', "
+            "lease_expires_at='', next_attempt_at=?, updated_at=?, "
+            "last_error=CASE WHEN last_error='' THEN 'worker lease expired' ELSE last_error END "
+            "WHERE processed=0 AND state='processing' AND lease_expires_at!='' AND lease_expires_at<=?",
+            (now, now, now),
+        )
+        candidates = conn.execute(
+            "SELECT id FROM customer_payment_sms_queue WHERE processed=0 "
+            "AND state IN ('pending', 'retry', 'waiting_wallet') "
+            "AND (COALESCE(next_attempt_at, '')='' OR next_attempt_at<=?) "
+            "ORDER BY id LIMIT ?",
+            (now, take),
+        ).fetchall()
+        claimed: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            qid = int(candidate["id"])
+            token = uuid.uuid4().hex
+            cur = conn.execute(
+                "UPDATE customer_payment_sms_queue SET state='processing', lease_token=?, "
+                "lease_expires_at=?, last_attempt_at=?, updated_at=?, attempt_count=attempt_count+1 "
+                "WHERE id=? AND processed=0 AND state IN ('pending', 'retry', 'waiting_wallet') "
+                "AND (COALESCE(next_attempt_at, '')='' OR next_attempt_at<=?)",
+                (token, expires, now, now, qid, now),
+            )
+            if cur.rowcount == 1:
+                row = conn.execute(
+                    "SELECT * FROM customer_payment_sms_queue WHERE id=?",
+                    (qid,),
+                ).fetchone()
+                if row:
+                    claimed.append(dict(row))
+        conn.commit()
+        return claimed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def complete_sms_auto_queue(queue_id: int, lease_token: str, note: str = "", *, state: str = "succeeded") -> bool:
+    terminal_state = str(state or "succeeded").strip().lower()
+    if terminal_state not in {"succeeded", "obsolete"}:
+        return False
+    token = str(lease_token or "").strip()
+    if not token:
+        return False
     init_db()
     conn = _get_conn()
-    cur = conn.cursor()
     try:
-        cur.execute(
-            "UPDATE customer_payment_sms_queue SET processed = 1, note = ?, processed_at = ? WHERE id = ?",
-            (str(note or "")[:500], _now(), int(queue_id or 0)),
+        now = _now()
+        cur = conn.execute(
+            "UPDATE customer_payment_sms_queue SET processed=1, state=?, note=?, "
+            "processed_at=?, completed_at=?, updated_at=?, lease_token='', lease_expires_at='' "
+            "WHERE id=? AND processed=0 AND state='processing' AND lease_token=?",
+            (
+                terminal_state,
+                str(note or "")[:500],
+                now,
+                now,
+                now,
+                int(queue_id or 0),
+                token,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def retry_sms_auto_queue(
+    queue_id: int,
+    lease_token: str,
+    error: str,
+    delay_seconds: int,
+    *,
+    state: str = "retry",
+) -> bool:
+    retry_state = str(state or "retry").strip().lower()
+    if retry_state not in {"retry", "waiting_wallet"}:
+        return False
+    token = str(lease_token or "").strip()
+    if not token:
+        return False
+    init_db()
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    next_at = (now_dt + timedelta(seconds=max(1, int(delay_seconds or 1)))).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE customer_payment_sms_queue SET state=?, note=?, last_error=?, "
+            "next_attempt_at=?, updated_at=?, lease_token='', lease_expires_at='' "
+            "WHERE id=? AND processed=0 AND state='processing' AND lease_token=?",
+            (
+                retry_state,
+                str(error or "")[:500],
+                str(error or "")[:500],
+                next_at,
+                now,
+                int(queue_id or 0),
+                token,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def dead_letter_sms_auto_queue(queue_id: int, lease_token: str, error: str) -> bool:
+    token = str(lease_token or "").strip()
+    if not token:
+        return False
+    init_db()
+    conn = _get_conn()
+    try:
+        now = _now()
+        cur = conn.execute(
+            "UPDATE customer_payment_sms_queue SET processed=1, state='dead', note=?, "
+            "last_error=?, processed_at=?, completed_at=?, updated_at=?, "
+            "lease_token='', lease_expires_at='' "
+            "WHERE id=? AND processed=0 AND state='processing' AND lease_token=?",
+            (
+                str(error or "")[:500],
+                str(error or "")[:500],
+                now,
+                now,
+                now,
+                int(queue_id or 0),
+                token,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def mark_sms_auto_queue_processed(queue_id: int, note: str = "") -> None:
+    """Legacy terminal marker retained for old callers."""
+    init_db()
+    conn = _get_conn()
+    try:
+        now = _now()
+        conn.execute(
+            "UPDATE customer_payment_sms_queue SET processed=1, state='succeeded', note=?, "
+            "processed_at=?, completed_at=?, updated_at=?, lease_token='', lease_expires_at='' WHERE id=?",
+            (str(note or "")[:500], now, now, now, int(queue_id or 0)),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_sms_auto_queue_by_event(event_id: str) -> Optional[Dict[str, Any]]:
-    """ردیف صف مربوط به یک رویداد SMS را برمی‌گرداند (برای تشخیص duplicate در وب‌هوک)."""
+def get_sms_auto_queue_by_event(
+    event_id: str,
+    *,
+    agent_id: Optional[int] = None,
+    legacy_event_id: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Return an event scoped to its agent, optionally checking its legacy raw id."""
     init_db()
     eid = str(event_id or "").strip()
     if not eid:
         return None
     conn = _get_conn()
-    cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM customer_payment_sms_queue WHERE event_id = ? LIMIT 1", (eid,))
+        ids = [eid]
+        legacy = str(legacy_event_id or "").strip()
+        if legacy and legacy not in ids:
+            ids.append(legacy)
+        placeholders = ",".join("?" for _ in ids)
+        params: List[Any] = list(ids)
+        sql = f"SELECT * FROM customer_payment_sms_queue WHERE event_id IN ({placeholders})"
+        if agent_id is not None:
+            sql += " AND agent_id=?"
+            params.append(int(agent_id or 0))
+        sql += " ORDER BY id DESC LIMIT 1"
+        cur = conn.execute(sql, params)
         row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
+def get_payment_status(agent_id: int, pay_id: int) -> str:
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT status FROM customer_payments WHERE agent_id=? AND id=? LIMIT 1",
+            (int(agent_id or 0), int(pay_id or 0)),
+        ).fetchone()
+        return str(row["status"] or "") if row else ""
+    finally:
+        conn.close()
+
+
 def get_payment_status_any_agent(pay_id: int) -> str:
+    """Deprecated: use get_payment_status so tenant ownership is explicit."""
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
@@ -1124,24 +1548,45 @@ def get_payment_status_any_agent(pay_id: int) -> str:
         conn.close()
 
 
+def _normalized_card_last4(value: Any) -> str:
+    translated = str(value or "").strip().translate(
+        str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    )
+    digits = "".join(ch for ch in translated if ch in "0123456789")
+    return digits if len(digits) == 4 else ""
+
+
+def _receipt_card_last4(receipt_image: Any) -> tuple[str, bool]:
+    try:
+        json_part = str(receipt_image or "").split("|", 1)[0].strip()
+        meta = json.loads(json_part) if json_part.startswith("{") else {}
+        raw = str(meta.get("card_last4") or "").strip() if isinstance(meta, dict) else ""
+        return _normalized_card_last4(raw), bool(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return "", False
+
+
 def find_pending_card_payments_by_amount(
     amount_toman: int,
+    *,
+    agent_id: int,
+    card_last4: str = "",
+    require_last4: bool = False,
     max_age_minutes: int = 360,
     sms_time_ms: int = 0,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
-    """پرداخت‌های کارت‌به‌کارت pending همه نمایندگی‌ها با مبلغ مشخص (وب‌هوک SMS بانکی).
-
-    پنجره زمانی مثل منطق ربات اصلی: SMS ممکن است کمی قبل از ثبت تراکنش بیاید
-    (مشتری اول واریز می‌کند بعد سفارش می‌سازد — تا ۳۰ دقیقه) یا کمی بعد (۵ دقیقه).
-    """
+    """Find only this agent's unreserved pending card payments."""
     init_db()
     amount = int(amount_toman or 0)
-    if amount <= 0:
+    aid = int(agent_id or 0)
+    incoming_raw = str(card_last4 or "").strip()
+    incoming_last4 = _normalized_card_last4(incoming_raw)
+    if amount <= 0 or aid <= 0 or (incoming_raw and not incoming_last4):
         return []
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff = now - timedelta(minutes=max(5, int(max_age_minutes or 360)))
-    params: List[Any] = [amount, cutoff.strftime("%Y-%m-%d %H:%M:%S")]
+    params: List[Any] = [aid, amount, cutoff.strftime("%Y-%m-%d %H:%M:%S")]
     sms_window_sql = ""
     if sms_time_ms and int(sms_time_ms) > 0:
         try:
@@ -1153,19 +1598,39 @@ def find_pending_card_payments_by_amount(
             not_after = (sms_dt + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
             sms_window_sql = " AND cp.created_at >= ? AND cp.created_at <= ? "
             params += [not_before, not_after]
-    params.append(max(1, min(50, int(limit or 20))))
+    wanted = max(1, min(50, int(limit or 20)))
+    params.append(max(50, min(250, wanted * 5)))
     conn = _get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
             "SELECT cp.* FROM customer_payments cp "
-            "WHERE cp.status = 'pending' AND cp.method IN ('card', 'card_to_card') AND cp.amount = ? "
+            "WHERE cp.agent_id=? AND cp.status='pending' "
+            "AND cp.method IN ('card', 'card_to_card') AND cp.amount=? "
             "AND COALESCE(cp.created_at, '') >= ? "
+            "AND NOT EXISTS (SELECT 1 FROM customer_payment_sms_queue q "
+            "WHERE q.agent_id=cp.agent_id AND q.pay_id=cp.id AND q.processed=0 "
+            "AND q.state IN ('pending', 'retry', 'waiting_wallet', 'processing')) "
             + sms_window_sql +
             "ORDER BY cp.created_at DESC LIMIT ?",
             params,
         )
-        return [dict(r) for r in cur.fetchall()]
+        matched: List[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            item = dict(row)
+            receipt_last4, receipt_had_value = _receipt_card_last4(item.get("receipt_image"))
+            if receipt_had_value and not receipt_last4:
+                continue
+            if require_last4:
+                if not incoming_last4 or not receipt_last4 or incoming_last4 != receipt_last4:
+                    continue
+            elif incoming_last4 or receipt_last4:
+                if not incoming_last4 or not receipt_last4 or incoming_last4 != receipt_last4:
+                    continue
+            matched.append(item)
+            if len(matched) >= wanted:
+                break
+        return matched
     finally:
         conn.close()
 
@@ -1394,6 +1859,44 @@ def set_text_setting(agent_id: int, name: str, value: str) -> Dict[str, str]:
     return set_text_settings(agent_id, s)
 
 
+def get_faq_text(agent_id: int, lang: str = "fa") -> str:
+    """Return the FAQ for a language, migrating legacy string values safely."""
+    lg = str(lang or "fa").strip().lower()
+    if lg not in DEFAULT_FAQ_TEXTS:
+        lg = "fa"
+    settings = get_text_settings(agent_id)
+    value = settings.get("faq_text")
+    if isinstance(value, dict):
+        selected = str(value.get(lg) or "").strip()
+        if selected:
+            return selected
+        for fallback in ("fa", "en", "ru"):
+            selected = str(value.get(fallback) or "").strip()
+            if selected:
+                return selected
+    elif str(value or "").strip():
+        # Keep old custom FAQs useful while the agent starts filling locales.
+        return str(value).strip() if lg == "fa" else DEFAULT_FAQ_TEXTS[lg]
+    return DEFAULT_FAQ_TEXTS[lg]
+
+
+def set_faq_text(agent_id: int, lang: str, value: str) -> Dict[str, Any]:
+    """Save one localized FAQ without overwriting the other languages."""
+    lg = str(lang or "fa").strip().lower()
+    if lg not in DEFAULT_FAQ_TEXTS:
+        raise ValueError("unsupported FAQ language")
+    settings = get_text_settings(agent_id)
+    current = settings.get("faq_text")
+    localized = dict(DEFAULT_FAQ_TEXTS)
+    if isinstance(current, dict):
+        localized.update({str(k): str(v) for k, v in current.items() if k in localized})
+    elif str(current or "").strip():
+        localized["fa"] = str(current)
+    localized[lg] = str(value or "")
+    settings["faq_text"] = localized
+    return set_text_settings(agent_id, settings)
+
+
 def get_marketing_settings(agent_id: int) -> Dict[str, Any]:
     return _load_settings_dict(agent_id, "marketing_settings", DEFAULT_MARKETING_SETTINGS)
 
@@ -1465,7 +1968,7 @@ def get_zarin_voucher(agent_id: int, code: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def redeem_zarin_voucher(agent_id: int, code: str, user_id: int) -> Tuple[bool, str]:
+def redeem_zarin_voucher(agent_id: int, code: str, user_id: int, lang: str = "fa") -> Tuple[bool, str]:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
@@ -1477,20 +1980,20 @@ def redeem_zarin_voucher(agent_id: int, code: str, user_id: int) -> Tuple[bool, 
     row = cur.fetchone()
     if not row:
         conn.close()
-        return False, "کد نامعتبر است"
+        return False, i18n.t("voucher_invalid", lang)
     if not row["is_active"]:
         conn.close()
-        return False, "این کد غیرفعال شده است"
+        return False, i18n.t("voucher_inactive", lang)
     if row["used_count"] >= row["max_uses"]:
         conn.close()
-        return False, "ظرفیت استفاده از این کد به پایان رسیده"
+        return False, i18n.t("voucher_capacity", lang)
     expires = str(row["expires_at"] or "").strip()
     if expires:
         try:
             exp_dt = datetime.strptime(expires, "%Y-%m-%d %H:%M:%S")
             if datetime.now(timezone.utc).replace(tzinfo=None) > exp_dt:
                 conn.close()
-                return False, "این کد منقضی شده است"
+                return False, i18n.t("voucher_expired", lang)
         except ValueError:
             pass
 
@@ -1500,7 +2003,7 @@ def redeem_zarin_voucher(agent_id: int, code: str, user_id: int) -> Tuple[bool, 
     )
     if cur.rowcount == 0:
         conn.close()
-        return False, "ظرفیت استفاده از این کد به پایان رسیده"
+        return False, i18n.t("voucher_capacity", lang)
 
     cur.execute(
         "INSERT INTO customer_zarin_voucher_redemptions (agent_id, code, user_id, redeemed_at) VALUES (?, ?, ?, ?)",

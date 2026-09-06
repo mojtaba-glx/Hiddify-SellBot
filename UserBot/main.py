@@ -316,6 +316,14 @@ def get_user_step(context, user_id):
     context.user_data.pop(f"pending_rename_service_{user_id}", None)
     return None
 
+
+def _admin_lang() -> str:
+    """Return the language selected for the AdminBot."""
+    try:
+        return userbot_db.get_admin_language()
+    except Exception:
+        return "fa"
+
 def set_user_step(context, user_id, step):
     step_key = f"step_{user_id}"
     ts_key = f"step_ts_{user_id}"
@@ -659,7 +667,7 @@ async def _enforce_force_join(
         return True
     if await _user_joined_force_channel(context, user_id, settings):
         return True
-    guide_text = _cfg_text(user_id, "force_join_text", "force_join_guide_default", settings)
+    guide_text = _cfg_text(user_id, "guide_text", "force_join_guide_default", settings)
     await send_text(guide_text, reply_markup=force_join_keyboard(_force_join_url(settings), lang=_user_lang(user_id)))
     return False
 
@@ -945,6 +953,8 @@ def _build_zarinpal_links_keyboard(vouchers: List[Dict[str, Any]], lang: str = "
 
 
 def _default_faq_text(lang: str = "fa") -> str:
+    if lang != "fa":
+        return i18n.t("cfg_faq_default", lang)
     return (
         "❓ سوالات متداول\n\n"
         "1) لینک اشتراک را کجا بزنم؟\n"
@@ -958,11 +968,25 @@ def _default_faq_text(lang: str = "fa") -> str:
     )
 
 
-def _default_guide_intro_text() -> str:
-    return "انتخاب سیستم عامل ⬇️"
+def _voucher_error_text(result_text: str, lang: str = "fa") -> str:
+    """Translate stable voucher failures returned by the database layer."""
+    key = {
+        "کد نامعتبر است.": "coupon_invalid",
+        "کد یافت نشد.": "coupon_not_found",
+        "کد غیرفعال است.": "coupon_inactive",
+        "کد منقضی شده است.": "coupon_expired",
+        "ظرفیت استفاده از این کد تکمیل شده است.": "coupon_capacity_reached",
+        "این کد قبلاً برای حساب شما ثبت شده است.": "coupon_already_used",
+        "مبلغ هدیه این کد نامعتبر است.": "coupon_invalid_amount",
+    }.get(str(result_text or "").strip(), "coupon_check_error")
+    return i18n.t(key, lang)
 
 
-def _default_guide_platform_text(platform: str) -> str:
+def _default_guide_intro_text(lang: str = "fa") -> str:
+    return i18n.t("cfg_guide_intro", lang)
+
+
+def _default_guide_platform_text(platform: str, lang: str = "fa") -> str:
     p = str(platform or "").strip().lower()
     guides = {
         "android": (
@@ -998,7 +1022,23 @@ def _default_guide_platform_text(platform: str) -> str:
             "پس از نصب، لینک اشتراک را در برنامه وارد کنید و Connect بزنید."
         ),
     }
+    if lang != "fa":
+        return i18n.t(f"guide_{p}_en", lang)
     return guides.get(p, "❌ راهنمای این سیستم‌عامل یافت نشد.")
+
+
+def _localized_setting(text_settings: dict, field: str, lang: str) -> str:
+    """Read both the new localized dict and *_fa/*_en/*_ru settings."""
+    settings = text_settings if isinstance(text_settings, dict) else {}
+    value = settings.get(field)
+    if isinstance(value, dict):
+        selected = str(value.get(lang) or "").strip()
+        if selected:
+            return selected
+    selected = str(settings.get(f"{field}_{lang}") or "").strip()
+    if selected:
+        return selected
+    return str(value or "").strip() if isinstance(value, str) else ""
 
 
 def _guide_platform_text(platform: str, text_settings: dict, lang: str = "fa") -> str:
@@ -1012,12 +1052,18 @@ def _guide_platform_text(platform: str, text_settings: dict, lang: str = "fa") -
     field = key_map.get(str(platform or "").strip().lower())
     if not field:
         return i18n.t("guide_os_missing", lang)
-    custom = str((text_settings or {}).get(field) or "").strip()
-    if custom:
+    settings = text_settings if isinstance(text_settings, dict) else {}
+    custom = _localized_setting(settings, field, lang)
+    if custom and lang == "fa":
         return custom
-    if lang != "fa":
-        return i18n.t(f"guide_{platform}_en", lang) or _default_guide_platform_text(platform)
-    return _default_guide_platform_text(platform)
+    # Non-Persian users get a translated default unless that locale has its own
+    # explicitly saved value.  A legacy scalar is intentionally Persian.
+    explicit = str(settings.get(f"{field}_{lang}") or "").strip()
+    if lang != "fa" and explicit:
+        return explicit
+    if lang != "fa" and custom and isinstance(settings.get(field), dict):
+        return custom
+    return _default_guide_platform_text(platform, lang)
 
 
 def _ticket_status_title(status: str, lang: str = "fa") -> str:
@@ -1118,7 +1164,12 @@ async def _send_support_panel(
     text_settings: Optional[Dict[str, Any]] = None,
 ) -> None:
     settings = text_settings if isinstance(text_settings, dict) else _get_text_settings()
-    panel_text = str(settings.get("ticket_panel_text") or "").strip() or "📩 برای ارتباط با پشتیبانی، پیام خود را ارسال کنید."
+    panel_text = _cfg_text(
+        user_id,
+        "ticket_panel_text",
+        "cfg_ticket_panel",
+        settings,
+    )
     if message is not None:
         try:
             await message.edit_text(panel_text, reply_markup=support_panel_keyboard(lang=_user_lang(user_id)))
@@ -1145,16 +1196,17 @@ async def _notify_admin_new_ticket(ticket: Dict[str, Any]) -> None:
     question = str(ticket.get("question") or "").strip() or "-"
     receipt_photo_id = str(ticket.get("receipt_photo_id") or "").strip()
     display_name = full_name or (f"@{username}" if username else telegram_id)
+    lang = _admin_lang()
     text = (
-        f"📩 تیکت جدید #{code}\n"
-        f"📋 موضوع: {title}\n"
-        f"👤 مشتری: {display_name}\n\n"
-        f"{question}"
+        i18n.t("ub_ticket_new", lang, code=code) + "\n"
+        + i18n.t("ub_ticket_subject", lang, subject=title) + "\n"
+        + i18n.t("ub_ticket_customer", lang, name=display_name) + "\n\n"
+        + question
     )
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📩 مشاهده تیکت", callback_data=f"userbot:ticket:detail:{code}:pending:1")],
-            [InlineKeyboardButton("📬تیکت‌های در انتظار", callback_data="userbot:tickets:list:pending:1")],
+            [InlineKeyboardButton(i18n.t("btn_view_ticket2", lang), callback_data=f"userbot:ticket:detail:{code}:pending:1")],
+            [InlineKeyboardButton(i18n.t("btn_pending_tickets", lang), callback_data="userbot:tickets:list:pending:1")],
         ]
     )
     try:
@@ -1174,14 +1226,15 @@ async def _notify_admin_ticket_reply(ticket: Dict[str, Any]) -> None:
     username = str(ticket.get("username") or ticket.get("db_username") or "").strip().lstrip("@")
     telegram_id = str(ticket.get("telegram_id") or ticket.get("db_telegram_id") or "-")
     display_name = full_name or (f"@{username}" if username else telegram_id)
+    lang = _admin_lang()
     text = (
-        "📨 پاسخ جدید کاربر در تیکت\n\n"
-        f"🆔 شناسه تیکت: {code}\n"
-        f"👤 کاربر: {display_name}\n"
-        "برای مشاهده جزئیات وارد تیکت شوید."
+        i18n.t("ub_ticket_reply_new", lang) + "\n\n"
+        + i18n.t("ub_ticket_id", lang, code=code) + "\n"
+        + i18n.t("ub_ticket_customer", lang, name=display_name) + "\n"
+        + i18n.t("ub_ticket_open_hint", lang)
     )
     kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("📩 مشاهده تیکت", callback_data=f"userbot:ticket:detail:{code}:open:1")]]
+        [[InlineKeyboardButton(i18n.t("btn_view_ticket2", lang), callback_data=f"userbot:ticket:detail:{code}:open:1")]]
     )
     try:
         admin_bot = Bot(token=ADMIN_BOT_TOKEN)
@@ -1220,14 +1273,18 @@ def _cfg_text(user_id: int, settings_key: str, i18n_key: str, text_settings: Opt
     ترجمه‌ی پیش‌فرض (اگر ادمین متن سفارشی گذاشته باشد، کاربر غیرفارسی پیش‌فرض
     ترجمه‌شده را می‌بیند)."""
     lang = _user_lang(user_id)
-    try:
-        stored = str((text_settings or {}).get(settings_key) or "").strip()
-    except Exception:
-        stored = ""
-    if lang == "fa":
-        return stored or i18n.t(i18n_key, "fa")
-    # برای کاربران غیرفارسی همیشه نسخه ترجمه‌شده ارسال می‌شود؛ متن‌های
-    # سفارشی ادمین فارسی‌اند و برای مخاطب فارسی نوشته شده‌اند.
+    settings = text_settings if isinstance(text_settings, dict) else {}
+    value = settings.get(settings_key)
+    if isinstance(value, dict):
+        selected = str(value.get(lang) or "").strip()
+        if selected and selected.lower() not in {"0", "none", "null"}:
+            return selected
+    localized = str(settings.get(f"{settings_key}_{lang}") or "").strip()
+    if localized and localized.lower() not in {"0", "none", "null"}:
+        return localized
+    legacy = str(value or "").strip() if isinstance(value, str) else ""
+    if lang == "fa" and legacy.lower() not in {"0", "none", "null"}:
+        return legacy or i18n.t(i18n_key, lang)
     return i18n.t(i18n_key, lang)
 
 
@@ -3318,15 +3375,15 @@ async def _send_long_message(
             disable_web_page_preview=True,
         )
 
-def _build_payment_report_caption(tx_code: str, amount: int, payer_last4: str = "") -> str:
+def _build_payment_report_caption(tx_code: str, amount: int, payer_last4: str = "", lang: str = "fa") -> str:
     last4 = _normalize_card_last4(payer_last4)
-    last4_line = f"\n💳۴ رقم آخر کارت مبدا: {last4}" if last4 else ""
+    last4_line = ("\n" + i18n.t("ub_payment_source_last4", lang, last4=last4)) if last4 else ""
     return (
-        "💸گزارش تایید پرداخت🕊\n\n"
-        "🔖شیوه پرداخت:کارت به کارت\n"
-        f"🔑شناسه تراکنش:{tx_code}\n"
-        f"💰مبلغ پرداخت:{int(amount):,} تومان"
-        f"{last4_line}"
+        i18n.t("ub_payment_report_title", lang) + "\n\n"
+        + i18n.t("ub_payment_method_card", lang) + "\n"
+        + i18n.t("ub_payment_transaction", lang, code=tx_code) + "\n"
+        + i18n.t("ub_payment_amount", lang, amount=f"{int(amount):,}")
+        + last4_line
     )
 
 def _build_subscription_created_caption(
@@ -3340,28 +3397,29 @@ def _build_subscription_created_caption(
     is_renew: bool = False,
     payment_method: str = "",
     wallet_balance_after: Optional[int] = None,
+    lang: str = "fa",
 ) -> str:
     if is_trial:
-        title = "📄 گزارش ایجاد اشتراک تستی"
+        title = i18n.t("ub_subscription_trial", lang)
     elif is_renew:
-        title = "📄 گزارش تمدید اشتراک"
+        title = i18n.t("ub_subscription_renewed", lang)
     else:
-        title = "📄 گزارش ایجاد اشتراک"
+        title = i18n.t("ub_subscription_created", lang)
     lines = [
         title,
         "",
-        f"👤اشتراک: {service_name}",
-        f"🛰سرور: {server_title}",
-        f"📊حجم: {float(gb):.1f} گیگابایت",
-        f"⏳زمان: {int(days)} روز",
+        i18n.t("ub_subscription_name", lang, name=service_name),
+        i18n.t("ub_subscription_server", lang, server=server_title),
+        i18n.t("ub_subscription_volume", lang, gb=f"{float(gb):.1f}"),
+        i18n.t("ub_subscription_duration", lang, days=int(days)),
     ]
     if amount is not None:
-        lines.append(f"💰مبلغ پرداختی: {int(amount):,} تومان")
+        lines.append(i18n.t("ub_subscription_amount", lang, amount=f"{int(amount):,}"))
     if payment_method == "wallet":
-        lines.append("💳پرداخت از کیف پول کاربر — مبلغ کسر شد")
+        lines.append(i18n.t("ub_subscription_wallet_payment", lang))
         if wallet_balance_after is not None:
-            lines.append(f"💼مانده کیف پول کاربر: {int(wallet_balance_after):,} تومان")
-    lines.append(f"🔑شناسه اشتراک:{service_code}")
+            lines.append(i18n.t("ub_subscription_wallet_balance", lang, balance=f"{int(wallet_balance_after):,}"))
+    lines.append(i18n.t("ub_subscription_id", lang, code=service_code))
     return "\n".join(lines)
 
 
@@ -3390,18 +3448,19 @@ async def _send_event_channel_subscription_report(
     if not target or not ADMIN_BOT_TOKEN:
         return
 
-    amount_text = f"{int(amount):,} تومان" if amount is not None else "رایگان"
+    lang = _admin_lang()
+    amount_text = f"{int(amount):,} {i18n.t('ub_toman', lang)}" if amount is not None else i18n.t("ub_free", lang)
     text = (
-        "📣 گزارش رویداد اشتراک\n"
-        f"🔖 نوع عملیات: {action_title}\n"
-        f"👤 کاربر: {display_name}\n"
-        f"🆔 شناسه تلگرام: {telegram_id}\n"
-        f"🏷 نام اشتراک: {service_name}\n"
-        f"🛰 سرور: {server_title}\n"
-        f"📊حجم: {float(gb):.1f} گیگابایت\n"
-        f"⏳زمان: {int(days)} روز\n"
-        f"💰مبلغ: {amount_text}\n"
-        f"🔑شناسه اشتراک:{service_code}"
+        i18n.t("ub_event_report_title", lang) + "\n"
+        + i18n.t("ub_event_type", lang, action=action_title) + "\n"
+        + i18n.t("ub_event_user", lang, name=display_name) + "\n"
+        + i18n.t("ub_event_telegram_id", lang, telegram_id=telegram_id) + "\n"
+        + i18n.t("ub_event_subscription", lang, name=service_name) + "\n"
+        + i18n.t("ub_event_server", lang, server=server_title) + "\n"
+        + i18n.t("ub_subscription_volume", lang, gb=f"{float(gb):.1f}") + "\n"
+        + i18n.t("ub_subscription_duration", lang, days=int(days)) + "\n"
+        + i18n.t("ub_event_amount", lang, amount=amount_text) + "\n"
+        + i18n.t("ub_subscription_id", lang, code=service_code)
     )
     try:
         bot = Bot(token=ADMIN_BOT_TOKEN)
@@ -3436,24 +3495,26 @@ async def _send_admin_sms_auto_approval_report(payment: dict, *, flow: str = "")
         receipt_local_path = str(meta.get("local_path") or "").strip()
         has_receipt = bool(receipt_admin_fid or receipt_local_path)
         flow_label = {
-            "wallet_topup": "شارژ کیف پول",
-            "buy_payment": "خرید اشتراک",
-            "direct_buy_payment": "خرید مستقیم",
-            "direct_buy": "خرید مستقیم",
-            "renew": "تمدید",
+            "wallet_topup": "ub_flow_wallet_topup",
+            "buy_payment": "ub_flow_subscription_purchase",
+            "direct_buy_payment": "ub_flow_direct_purchase",
+            "direct_buy": "ub_flow_direct_purchase",
+            "renew": "ub_flow_renewal",
         }.get(str(flow or "").strip().lower(), str(flow or "").strip() or "پرداخت")
+        lang = _admin_lang()
+        if flow_label.startswith("ub_flow_"):
+            flow_label = i18n.t(flow_label, lang)
 
         text = (
-            "✅ پرداخت با SMS بانک تایید شد\n"
-            f"🔖 نوع: {flow_label}\n"
-            f"👤 کاربر: {user_label}\n"
-            f"💰 مبلغ: {amount:,} تومان\n"
-            f"🧾 کد تراکنش: {tx_code or '-'}\n"
-            f"🆔 شناسه پرداخت: {payment_id or '-'}\n"
-            f"📨 سرشماره SMS: {sms_sender or '-'}\n"
-            f"🏦 مبلغ خام SMS: {sms_amount_raw or '-'} {sms_currency or ''}\n"
-            f"🔖 پیگیری SMS: {sms_reference or '-'}\n"
-            f"🖼 رسید کاربر: {'پیوست شد' if has_receipt else 'در دسترس نیست'}"
+            i18n.t("ub_sms_approved", lang) + "\n"
+            + i18n.t("ub_payment_type", lang, flow=flow_label) + "\n"
+            + i18n.t("ub_payment_user", lang, name=user_label) + "\n"
+            + i18n.t("ub_payment_amount", lang, amount=f"{amount:,}") + "\n"
+            + i18n.t("ub_payment_id", lang, payment_id=payment_id or "-") + "\n"
+            + i18n.t("ub_sms_sender", lang, sender=sms_sender or "-") + "\n"
+            + i18n.t("ub_sms_raw_amount", lang, amount=sms_amount_raw or "-", currency=sms_currency or "") + "\n"
+            + i18n.t("ub_sms_reference", lang, reference=sms_reference or "-") + "\n"
+            + i18n.t("ub_receipt_status", lang, status=i18n.t("ub_receipt_attached" if has_receipt else "ub_receipt_unavailable", lang))
         )
         kb = None
         if uid > 0:
@@ -3875,14 +3936,15 @@ async def _send_admin_pending_card_payment_report(
             tx_code or str(payment.get("tx_code") or ""),
             int(amount or payment.get("amount") or 0),
             payer_last4,
+            lang=_admin_lang(),
         )
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("رد ❌", callback_data=f"userbot:pay:act:reject:{payment_id}"),
-                InlineKeyboardButton("تایید ✅", callback_data=f"userbot:pay:act:approve:{payment_id}"),
+                InlineKeyboardButton(i18n.t("ub_payment_reject", _admin_lang()), callback_data=f"userbot:pay:act:reject:{payment_id}"),
+                InlineKeyboardButton(i18n.t("ub_payment_approve", _admin_lang()), callback_data=f"userbot:pay:act:approve:{payment_id}"),
             ],
-            [InlineKeyboardButton("📩 ارسال پیام", callback_data=f"userbot:pay:msg:{payment_id}")],
-            [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")],
+            [InlineKeyboardButton(i18n.t("ub_send_message", _admin_lang()), callback_data=f"userbot:pay:msg:{payment_id}")],
+            [InlineKeyboardButton(i18n.t("ub_user_button", _admin_lang(), name=user_btn_title), callback_data=f"userbot:user:{internal_user_id}")],
         ])
 
         admin_bot = Bot(token=ADMIN_BOT_TOKEN)
@@ -3952,12 +4014,7 @@ async def _send_admin_pending_card_payment_report(
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
-                    "⚠️ گزارش پرداخت به AdminBot ارسال نشد.\n"
-                    f"🆔 شناسه پرداخت: {payment_id}\n"
-                    f"💰 مبلغ: {int(amount or 0):,} تومان\n"
-                    f"🔑 کد تراکنش: {tx_code or '-'}\n"
-                    f"خطا: {error_text}\n\n"
-                    "لطفاً ADMIN_BOT_TOKEN و ADMIN_ID را بررسی کن."
+                    i18n.t("ub_payment_report_failed", _admin_lang(), payment_id=payment_id, amount=f"{int(amount or 0):,}", tx_code=tx_code or "-", error=error_text)
                 ),
             )
         except Exception:
@@ -4409,12 +4466,7 @@ async def _warn_admin_direct_delivery_exhausted(payment_id: int, row: dict, atte
         await admin_bot.send_message(
             chat_id=ADMIN_ID,
             text=(
-                "⚠️ تحویل خرید مستقیم پس از چند تلاش موفق نشد.\n"
-                f"🆔 پرداخت: {payment_id}\n"
-                f"👤 کاربر: {user_title}\n"
-                f"🔑 کد تراکنش: {row.get('tx_code') or '-'}\n"
-                f"📦 تعداد تلاش: {attempts}\n\n"
-                "لطفاً به صورت دستی بررسی/تحویل دهید یا پنل/نود را بررسی کنید."
+                i18n.t("ub_direct_delivery_failed", _admin_lang(), payment_id=payment_id, user=user_title, tx_code=row.get("tx_code") or "-", attempts=attempts)
             ),
         )
     except Exception as e:
@@ -4438,7 +4490,7 @@ async def _warn_admin_pending_node_sync(
             [
                 [
                     InlineKeyboardButton(
-                        "🔄 همگام‌سازی و ساخت کاربران جاافتاده روی نودها",
+                        i18n.t("ub_sync_missing_nodes", _admin_lang()),
                         callback_data=f"server:{server_id}:sync_nodes_missing",
                     )
                 ]
@@ -4447,10 +4499,7 @@ async def _warn_admin_pending_node_sync(
         await admin_bot.send_message(
             chat_id=ADMIN_ID,
             text=(
-                f"⚠️ {service_label} روی بعضی نودها تحویل نشد.\n\n"
-                f"سرورهای در دسترس نبودند:\n{fail_lines}\n\n"
-                "سرویس روی بقیه نودها تحویل داده شد. بعد از بازگشت آن سرورها، "
-                "روی دکمه زیر بزنید تا ربات بررسی کند و کاربران جاافتاده را بسازد."
+                i18n.t("ub_node_sync_warning", _admin_lang(), service=service_label, servers=fail_lines)
             ),
             reply_markup=kb,
         )
@@ -4468,6 +4517,7 @@ def _resolve_plan_display_mode(server_block: Optional[Dict[str, Any]]) -> str:
 
 
 async def show_fixed_categories(query, sid, server_block):
+    user_id = int(query.from_user.id or 0)
     txp = _get_tx_plans_settings()
     text_settings = _get_text_settings()
     plans_all = server_block.get("plans", []) or []
@@ -4496,7 +4546,7 @@ async def show_fixed_categories(query, sid, server_block):
         return
     await _safe_edit_message_text(
         query,
-        "📂 **لطفاً دسته بندی مورد نظر را انتخاب کنید:**", 
+        i18n.t("select_category", _user_lang(user_id)),
         parse_mode="Markdown", 
         reply_markup=category_keyboard(categories, sid, lang=_user_lang(query.from_user.id))
     )
@@ -5171,7 +5221,7 @@ async def _process_wallet_purchase(
             admin_bot = Bot(token=ADMIN_BOT_TOKEN)
             user_btn_title = (tg_user.full_name or tg_user.username or str(user_id)).strip()
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")]
+                [InlineKeyboardButton(i18n.t("ub_user_button", _admin_lang(), name=user_btn_title), callback_data=f"userbot:user:{internal_user_id}")]
             ])
             wallet_balance_after: Optional[int] = None
             if wallet_charged:
@@ -5188,6 +5238,7 @@ async def _process_wallet_purchase(
                     days=days,
                     amount=amount,
                     service_code=service_code,
+                    lang=_admin_lang(),
                     is_renew=is_renew_flow,
                     payment_method="wallet" if wallet_charged else "card",
                     wallet_balance_after=wallet_balance_after,
@@ -5199,7 +5250,7 @@ async def _process_wallet_purchase(
 
     await _send_event_channel_subscription_report(
         context,
-        action_title="تمدید اشتراک" if is_renew_flow else "خرید اشتراک",
+        action_title=i18n.t("ub_flow_renewal", _admin_lang()) if is_renew_flow else i18n.t("ub_flow_subscription_purchase", _admin_lang()),
         telegram_id=int(user_id),
         display_name=(tg_user.full_name or tg_user.username or str(user_id)).strip(),
         service_name=service_name,
@@ -5578,7 +5629,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 i18n.t("gift_balance_added", _user_lang(user_id), amount=f"{int(amount):,}", balance=f"{balance:,}")
             )
         else:
-            await msg_obj.reply_text(f"⚠️ {result_text}")
+            await msg_obj.reply_text(_voucher_error_text(result_text, _user_lang(user_id)))
 
 # --- 6. هندلر منوی اصلی (دکمه‌های پایین صفحه) ---
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5924,12 +5975,10 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif "سوالات متداول" in text:
         _lg = _user_lang(user_id)
-        faq_text = str(text_settings.get("faq_text") or "").strip()
-        if (not faq_text) or ("به‌زودی تکمیل می‌شود" in faq_text) or ("به زودی تکمیل می شود" in faq_text):
-            faq_text = i18n.t("faq_default_full", _lg)
+        faq_text = _cfg_text(user_id, "faq_text", "cfg_faq_default", text_settings)
         await update.message.reply_text(
             faq_text,
-            reply_markup=_main_menu_keyboard(lang=_lg),
+            reply_markup=_main_menu_keyboard(user_id=user_id, lang=_lg),
         )
 
     elif "دعوت دوستان" in text:
@@ -5999,7 +6048,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=_cfg_text(user_id, "force_join_text", "force_join_guide_default", settings),
+                    text=_cfg_text(user_id, "guide_text", "force_join_guide_default", settings),
                     reply_markup=force_join_keyboard(_force_join_url(settings), lang=_user_lang(update.effective_user.id)),
                 )
         return
@@ -6014,7 +6063,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             await context.bot.send_message(
                 chat_id=user_id,
-                text=_cfg_text(user_id, "force_join_text", "force_join_guide_default", settings_fj),
+                text=_cfg_text(user_id, "guide_text", "force_join_guide_default", settings_fj),
                 reply_markup=force_join_keyboard(_force_join_url(settings_fj), lang=_user_lang(update.effective_user.id)),
             )
             return
@@ -6492,6 +6541,7 @@ _cb_branches.bind_main_namespace({
     "_default_faq_text": _default_faq_text,
     "_default_guide_intro_text": _default_guide_intro_text,
     "_default_zarinpal_text": _default_zarinpal_text,
+    "_voucher_error_text": _voucher_error_text,
     "_deliver_direct_buy_after_sms_notice": _deliver_direct_buy_after_sms_notice,
     "_expected_server_price": _expected_server_price,
     "_extract_uuid_from_user_input": _extract_uuid_from_user_input,

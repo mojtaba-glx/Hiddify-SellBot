@@ -44,7 +44,7 @@ def agent_lang(context) -> str:
         return "fa"
 
 
-def language_keyboard():
+def language_keyboard( lang: str = "fa"):
     rows = []
     langs = i18n.supported_langs()
     for i in range(0, len(langs), 2):
@@ -52,37 +52,41 @@ def language_keyboard():
     return _ikb(rows)
 
 
-def back_keyboard(callback_data: str = f"agbot:menu") -> InlineKeyboardMarkup:
-    return _ikb([[IButton(BTN_BACK, callback_data=callback_data)]])
+def back_keyboard(callback_data: str = f"agbot:menu", lang: str = "fa") -> InlineKeyboardMarkup:
+    return _ikb([[IButton(i18n.t("back", lang), callback_data=callback_data)]])
 
 
-def cancel_keyboard():
+def cancel_keyboard( lang: str = "fa"):
+    _lg = lang
     return ReplyKeyboardMarkup(
-        [[KButton("\u274c \u0644\u063a\u0648", style="danger")]],
+        [[KButton(i18n.t('❌ لغو', _lg), style="danger")]],
         resize_keyboard=True, one_time_keyboard=True,
     )
 
 
-def rename_cancel_keyboard():
+def rename_cancel_keyboard( lang: str = "fa"):
     """کیبورد پایین برای حالت تغییر نام — دکمه بازگشت در کیبورد اصلی"""
+    _lg = lang
     return ReplyKeyboardMarkup(
-        [[KButton(BTN_BACK)], [KButton("\u274c \u0644\u063a\u0648")]],
+        [[KButton(i18n.t("back", _lg))], [KButton(i18n.t('❌ لغو', _lg))]],
         resize_keyboard=True, one_time_keyboard=True,
     )
 
 
-def send_msg_keyboard():
+def send_msg_keyboard( lang: str = "fa"):
+    _lg = lang
     return ReplyKeyboardMarkup(
-        [[KButton("\u25c0\ufe0f \u0628\u0627\u0632\u06af\u0634\u062a", style="danger")]],
+        [[KButton(i18n.t('◀️ بازگشت', _lg), style="danger")]],
         resize_keyboard=True,
     )
 
 
-def broadcast_skip_cancel_keyboard():
+def broadcast_skip_cancel_keyboard( lang: str = "fa"):
+    _lg = lang
     return ReplyKeyboardMarkup(
         [
-            [KButton("⏩رد کردن")],
-            [KButton("\u274c \u0644\u063a\u0648")],
+            [KButton(i18n.t('⏩رد کردن', _lg))],
+            [KButton(i18n.t('❌ لغو', _lg))],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -127,22 +131,23 @@ def service_detail_keyboard(service_id: int, is_active: bool, lang: str = "fa"):
 def subs_configs_keyboard(service_id: int, *, show_direct_config: bool = True,
                           show_sub_link: bool = True, show_auto_sub_link: bool = False,
                           show_sub_link_b64: bool = False, show_multi_server: bool = False,
-                          show_multi_server_b64: bool = False) -> InlineKeyboardMarkup:
+                          show_multi_server_b64: bool = False, lang: str = "fa") -> InlineKeyboardMarkup:
     """زیرمنوی «دریافت کانفیگ»: فقط دکمه‌های لینکی که ادمین فعال کرده (مثل ربات مشتری)."""
+    _lg = lang
     rows = []
     if show_direct_config:
-        rows.append([IButton("⚔️ کانفیگ مستقیم", callback_data=f"agbot:subs:cfgmenu:{service_id}:direct")])
+        rows.append([IButton(i18n.t('⚔️ کانفیگ مستقیم', _lg), callback_data=f"agbot:subs:cfgmenu:{service_id}:direct")])
     if show_sub_link:
-        rows.append([IButton("🔗 لینک اشتراک", callback_data=f"agbot:subs:cfgmenu:{service_id}:sub_link")])
+        rows.append([IButton(i18n.t('🔗 لینک اشتراک', _lg), callback_data=f"agbot:subs:cfgmenu:{service_id}:sub_link")])
     if show_auto_sub_link:
-        rows.append([IButton("🤖 اشتراک خودکار", callback_data=f"agbot:subs:cfgmenu:{service_id}:auto_sub")])
+        rows.append([IButton(i18n.t('🤖 اشتراک خودکار', _lg), callback_data=f"agbot:subs:cfgmenu:{service_id}:auto_sub")])
     if show_sub_link_b64:
-        rows.append([IButton("🔐 لینک اشتراک b64", callback_data=f"agbot:subs:cfgmenu:{service_id}:sub_b64")])
+        rows.append([IButton(i18n.t('🔐 لینک اشتراک b64', _lg), callback_data=f"agbot:subs:cfgmenu:{service_id}:sub_b64")])
     if show_multi_server:
-        rows.append([IButton("🌐 لینک اشتراک هوشمند", callback_data=f"agbot:subs:cfgmenu:{service_id}:multi")])
+        rows.append([IButton(i18n.t('🌐 لینک اشتراک هوشمند', _lg), callback_data=f"agbot:subs:cfgmenu:{service_id}:multi")])
     if show_multi_server_b64:
-        rows.append([IButton("🌐 لینک اشتراک هوشمند b64", callback_data=f"agbot:subs:cfgmenu:{service_id}:multi_b64")])
-    rows.append([IButton(BTN_BACK, callback_data=f"agbot:subs:detail:{service_id}")])
+        rows.append([IButton(i18n.t('🌐 لینک اشتراک هوشمند b64', _lg), callback_data=f"agbot:subs:cfgmenu:{service_id}:multi_b64")])
+    rows.append([IButton(i18n.t("back", _lg), callback_data=f"agbot:subs:detail:{service_id}")])
     return _ikb(rows)
 
 
@@ -213,20 +218,22 @@ def ticket_detail_keyboard(ticket_id: int, status: str, lang: str = "fa"):
     return _ikb(rows)
 
 
-def ticket_reply_skip_keyboard():
+def ticket_reply_skip_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton("\u25b6\ufe0f \u0631\u062f \u06a9\u0631\u062f\u0646", callback_data="agbot:ticket:replyshot:skip")],
-        [IButton("\u274c \u0644\u063a\u0648", callback_data="agbot:ticket:replyshot:cancel")],
+        [IButton(i18n.t('▶️ رد کردن', _lg), callback_data="agbot:ticket:replyshot:skip")],
+        [IButton(i18n.t('❌ لغو', _lg), callback_data="agbot:ticket:replyshot:cancel")],
     ])
 
 
-def ticket_reply_confirm_keyboard():
+def ticket_reply_confirm_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
         [
-            IButton("\u2705 \u0627\u0631\u0633\u0627\u0644", callback_data="agbot:ticket:replyconfirm:send"),
-            IButton("\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634", callback_data="agbot:ticket:replyconfirm:edit"),
+            IButton(i18n.t('✅ ارسال', _lg), callback_data="agbot:ticket:replyconfirm:send"),
+            IButton(i18n.t('✏️ ویرایش', _lg), callback_data="agbot:ticket:replyconfirm:edit"),
         ],
-        [IButton("\u274c \u0644\u063a\u0648", callback_data="agbot:ticket:replyconfirm:cancel")],
+        [IButton(i18n.t('❌ لغو', _lg), callback_data="agbot:ticket:replyconfirm:cancel")],
     ])
 
 
@@ -246,53 +253,58 @@ def settings_menu_keyboard(lang: str = "fa"):
     ])
 
 
-def broadcast_menu_keyboard():
+def broadcast_menu_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton("تمام کاربران", callback_data="agbot:broadcast:segment:all")],
-        [IButton("تمام کاربران منقضی شده", callback_data="agbot:broadcast:segment:expired_all")],
-        [IButton("کاربران بدون سفارش", callback_data="agbot:broadcast:segment:no_order")],
-        [IButton("کاربران منقضی شده بیش از یک هفته", callback_data="agbot:broadcast:segment:expired_1w")],
-        [IButton("کاربران منقضی شده بیش از دو هفته", callback_data="agbot:broadcast:segment:expired_2w")],
-        [IButton("کاربران منقضی شده بیش از چهار هفته", callback_data="agbot:broadcast:segment:expired_4w")],
-        [IButton("کاربران منقضی شده بیش از هشت هفته", callback_data="agbot:broadcast:segment:expired_8w")],
-        [IButton(BTN_BACK, callback_data="agbot:set:back")],
+        [IButton(i18n.t('تمام کاربران', _lg), callback_data="agbot:broadcast:segment:all")],
+        [IButton(i18n.t('تمام کاربران منقضی شده', _lg), callback_data="agbot:broadcast:segment:expired_all")],
+        [IButton(i18n.t('کاربران بدون سفارش', _lg), callback_data="agbot:broadcast:segment:no_order")],
+        [IButton(i18n.t('کاربران منقضی شده بیش از یک هفته', _lg), callback_data="agbot:broadcast:segment:expired_1w")],
+        [IButton(i18n.t('کاربران منقضی شده بیش از دو هفته', _lg), callback_data="agbot:broadcast:segment:expired_2w")],
+        [IButton(i18n.t('کاربران منقضی شده بیش از چهار هفته', _lg), callback_data="agbot:broadcast:segment:expired_4w")],
+        [IButton(i18n.t('کاربران منقضی شده بیش از هشت هفته', _lg), callback_data="agbot:broadcast:segment:expired_8w")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:back")],
     ])
 
 
-def users_profile_keyboard(customer_id: int, telegram_id: int, back_callback: str = "agbot:set:users"):
+def users_profile_keyboard(customer_id: int, telegram_id: int, back_callback: str = "agbot:set:users", lang: str = "fa"):
     """کیبورد پروفایل کاربر برای نماینده"""
+    _lg = lang
     rows = [
-        [IButton("📋 لیست سرویس‌ها", callback_data=f"agbot:set:users:services:{customer_id}")],
-        [IButton("📗 لیست سفارشات", callback_data=f"agbot:set:users:orders:{customer_id}")],
-        [IButton("💵 لیست تراکنش‌ها", callback_data=f"agbot:set:users:tx:{customer_id}")],
-        [IButton("🚫 مسدود/آزادسازی کاربر", callback_data=f"agbot:set:users:ban:{customer_id}")],
-        [IButton("📑 لیست تیکت‌ها", callback_data=f"agbot:set:users:tickets:{customer_id}")],
-        [IButton("📨 ارسال پیام", callback_data=f"agbot:set:users:message:{telegram_id}")],
-        [IButton(BTN_BACK, callback_data=back_callback)],
+        [IButton(i18n.t('📋 لیست سرویس‌ها', _lg), callback_data=f"agbot:set:users:services:{customer_id}")],
+        [IButton(i18n.t('📗 لیست سفارشات', _lg), callback_data=f"agbot:set:users:orders:{customer_id}")],
+        [IButton(i18n.t('💵 لیست تراکنش‌ها', _lg), callback_data=f"agbot:set:users:tx:{customer_id}")],
+        [IButton(i18n.t('🚫 مسدود/آزادسازی کاربر', _lg), callback_data=f"agbot:set:users:ban:{customer_id}")],
+        [IButton(i18n.t('📑 لیست تیکت‌ها', _lg), callback_data=f"agbot:set:users:tickets:{customer_id}")],
+        [IButton(i18n.t('📨 ارسال پیام', _lg), callback_data=f"agbot:set:users:message:{telegram_id}")],
+        [IButton(i18n.t("back", _lg), callback_data=back_callback)],
     ]
     return _ikb(rows)
 
 
-def settings_sub_menu_keyboard(prefix: str, list_label: Optional[str] = None):
+def settings_sub_menu_keyboard(prefix: str, list_label: Optional[str] = None, lang: str = "fa"):
+    _lg = lang
     if list_label is None:
-        list_label = "\U0001f4cb \u0644\u06cc\u0633\u062a"
+        list_label = i18n.t('📋 لیست', _lg)
     return _ikb([
         [IButton(list_label, callback_data=f"agbot:{prefix}:list")],
-        [IButton("\U0001f50d \u062c\u0633\u062a\u062c\u0648", callback_data=f"agbot:{prefix}:search")],
-        [IButton(BTN_BACK, callback_data="agbot:set:back")],
+        [IButton(i18n.t('🔍 جستجو', _lg), callback_data=f"agbot:{prefix}:search")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:back")],
     ])
 
 
-def orders_menu_keyboard():
+def orders_menu_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton("\U0001f4d7\u0644\u06cc\u0633\u062a \u0633\u0641\u0627\u0631\u0634\u0627\u062a", callback_data="agbot:set:orders:list")],
-        [IButton("\U0001f50d\u062c\u0633\u062a\u062c\u0648\u06cc \u0633\u0641\u0627\u0631\u0634\u0627\u062a", callback_data="agbot:set:orders:search")],
-        [IButton(BTN_BACK, callback_data="agbot:set:back")],
+        [IButton(i18n.t('📗لیست سفارشات', _lg), callback_data="agbot:set:orders:list")],
+        [IButton(i18n.t('🔍جستجوی سفارشات', _lg), callback_data="agbot:set:orders:search")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:back")],
     ])
 
 
-def orders_list_keyboard(orders: List[Dict[str, Any]], page: int, total_pages: int, back_callback: str = "agbot:set:orders"):
+def orders_list_keyboard(orders: List[Dict[str, Any]], page: int, total_pages: int, back_callback: str = "agbot:set:orders", lang: str = "fa"):
     """کیبورد لیست سفارشات — گرید ۳ ستونه شناسه سفارش + صفحه‌بندی."""
+    _lg = lang
     rows = []
     current_row = []
     for o in orders:
@@ -313,12 +325,13 @@ def orders_list_keyboard(orders: List[Dict[str, Any]], page: int, total_pages: i
     if nav_row:
         rows.append(nav_row)
 
-    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
+    rows.append([IButton(i18n.t('🔙بازگشت', _lg), callback_data=back_callback)])
     return _ikb(rows)
 
 
-def order_search_results_keyboard(orders: List[Dict[str, Any]], back_callback: str = "agbot:set:orders"):
+def order_search_results_keyboard(orders: List[Dict[str, Any]], back_callback: str = "agbot:set:orders", lang: str = "fa"):
     """کیبورد نتایج جستجوی سفارش — دکمه‌های شناسه سفارش + بازگشت."""
+    _lg = lang
     rows = []
     current_row = []
     for o in orders:
@@ -328,60 +341,66 @@ def order_search_results_keyboard(orders: List[Dict[str, Any]], back_callback: s
             current_row = []
     if current_row:
         rows.append(current_row)
-    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
+    rows.append([IButton(i18n.t('🔙بازگشت', _lg), callback_data=back_callback)])
     return _ikb(rows)
 
 
-def tx_menu_keyboard():
+def tx_menu_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton("\u2705\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647", callback_data="agbot:set:tx:approved")],
-        [IButton("\u274c\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u0631\u062f \u0634\u062f\u0647", callback_data="agbot:set:tx:rejected")],
-        [IButton("\u23f3\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631", callback_data="agbot:set:tx:pending")],
-        [IButton("\U0001f4b3\u0644\u06cc\u0633\u062a \u062a\u0631\u0627\u06a9\u0646\u0634\u0627\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a", callback_data="agbot:set:tx:card")],
-        [IButton("\U0001f50d\u062c\u0633\u062a\u062c\u0648\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634", callback_data="agbot:set:tx:search")],
-        [IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data="agbot:set:back")],
+        [IButton(i18n.t('✅لیست تراکنشات تایید شده', _lg), callback_data="agbot:set:tx:approved")],
+        [IButton(i18n.t('❌لیست تراکنشات رد شده', _lg), callback_data="agbot:set:tx:rejected")],
+        [IButton(i18n.t('⏳لیست تراکنشات در انتظار', _lg), callback_data="agbot:set:tx:pending")],
+        [IButton(i18n.t('💳لیست تراکنشات کارت به کارت', _lg), callback_data="agbot:set:tx:card")],
+        [IButton(i18n.t('🔍جستجوی تراکنش', _lg), callback_data="agbot:set:tx:search")],
+        [IButton(i18n.t('🔙بازگشت', _lg), callback_data="agbot:set:back")],
     ])
 
 
-def config_menu_keyboard():
+def config_menu_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton("🛒 تنظیمات خرید و تمدید", callback_data="agbot:set:cfg:shop")],
-        [IButton("💳 تنظیمات پرداخت", callback_data="agbot:set:cfg:payment")],
-        [IButton("🔒 تنظیمات عضویت اجباری", callback_data="agbot:set:cfg:forcejoin")],
-        [IButton(BTN_BACK, callback_data="agbot:set:back")],
+        [IButton(i18n.t('🛒 تنظیمات خرید و تمدید', _lg), callback_data="agbot:set:cfg:shop")],
+        [IButton(i18n.t('💳 تنظیمات پرداخت', _lg), callback_data="agbot:set:cfg:payment")],
+        [IButton(i18n.t('🔒 تنظیمات عضویت اجباری', _lg), callback_data="agbot:set:cfg:forcejoin")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:back")],
     ])
 
 
-def shop_settings_keyboard(buy_enabled: bool, renew_enabled: bool):
-    buy = "\u2705 \u0627\u0645\u06a9\u0627\u0646 \u062e\u0631\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if buy_enabled else "\u274c \u0627\u0645\u06a9\u0627\u0646 \u062e\u0631\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9"
-    renew = "\u2705 \u0627\u0645\u06a9\u0627\u0646 \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if renew_enabled else "\u274c \u0627\u0645\u06a9\u0627\u0646 \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9"
+def shop_settings_keyboard(buy_enabled: bool, renew_enabled: bool, lang: str = "fa"):
+    _lg = lang
+    buy = i18n.t('✅ امکان خرید اشتراک', _lg) if buy_enabled else i18n.t('❌ امکان خرید اشتراک', _lg)
+    renew = i18n.t('✅ امکان تمدید اشتراک', _lg) if renew_enabled else i18n.t('❌ امکان تمدید اشتراک', _lg)
     return _ikb([
         [IButton(buy, callback_data="agbot:shop:buy")],
         [IButton(renew, callback_data="agbot:shop:renew")],
-        [IButton(BTN_BACK, callback_data="agbot:set:cfg:back")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:cfg:back")],
     ])
 
 
-def payment_settings_keyboard():
+def payment_settings_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton("\U0001f4b3 \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a", callback_data="agbot:pay:menu")],
-        [IButton(BTN_BACK, callback_data="agbot:set:cfg:back")],
+        [IButton(i18n.t('💳 تنظیمات کارت به کارت', _lg), callback_data="agbot:pay:menu")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:cfg:back")],
     ])
 
 
-def card_settings_keyboard(card_enabled: bool, last4: bool, rand_tx: bool, sms_auto: bool):
+def card_settings_keyboard(card_enabled: bool, last4: bool, rand_tx: bool, sms_auto: bool, lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton("\u2705 \u067e\u0631\u062f\u0627\u062e\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a" if card_enabled else "\u274c \u067e\u0631\u062f\u0627\u062e\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a", callback_data="agbot:pay:card")],
-        [IButton("\u2705 \u0627\u0644\u0632\u0627\u0645 4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a" if last4 else "\u274c \u0627\u0644\u0632\u0627\u0645 4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a", callback_data="agbot:pay:last4")],
-        [IButton("\u2705 \u0645\u0634\u062e\u0635\u0647 \u062a\u0635\u0627\u062f\u0641\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634" if rand_tx else "\u274c \u0645\u0634\u062e\u0635\u0647 \u062a\u0635\u0627\u062f\u0641\u06cc \u062a\u0631\u0627\u06a9\u0646\u0634", callback_data="agbot:pay:randtx")],
-        [IButton("🤖 تایید خودکار SMS بانک", callback_data="agbot:pay:smsauto")],
-        [IButton("💳 لیست کارت‌ها", callback_data="agbot:pay:cards")],
-        [IButton("\u270f\ufe0f \u062a\u0646\u0638\u06cc\u0645 \u0645\u062a\u0646 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a", callback_data="agbot:pay:cardtext")],
-        [IButton(BTN_BACK, callback_data="agbot:set:cfg:back")],
+        [IButton(i18n.t('✅ پرداخت کارت به کارت', _lg) if card_enabled else i18n.t('❌ پرداخت کارت به کارت', _lg), callback_data="agbot:pay:card")],
+        [IButton(i18n.t('✅ الزام 4 رقم آخر کارت', _lg) if last4 else i18n.t('❌ الزام 4 رقم آخر کارت', _lg), callback_data="agbot:pay:last4")],
+        [IButton(i18n.t('✅ مشخصه تصادفی تراکنش', _lg) if rand_tx else i18n.t('❌ مشخصه تصادفی تراکنش', _lg), callback_data="agbot:pay:randtx")],
+        [IButton(i18n.t('🤖 تایید خودکار SMS بانک', _lg), callback_data="agbot:pay:smsauto")],
+        [IButton(i18n.t('💳 لیست کارت‌ها', _lg), callback_data="agbot:pay:cards")],
+        [IButton(i18n.t('✏️ تنظیم متن کارت به کارت', _lg), callback_data="agbot:pay:cardtext")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:cfg:back")],
     ])
 
 
-def payment_cards_list_keyboard(cards):
+def payment_cards_list_keyboard(cards, lang: str = "fa"):
+    _lg = lang
     rows = []
     for c in cards:
         number = str(c.get("card_number") or "").strip()
@@ -390,36 +409,39 @@ def payment_cards_list_keyboard(cards):
         bank = str(c.get("bank_name") or "").strip()
         label = f"{bank} - {number}" if bank else number
         rows.append([IButton(label, callback_data=f"agbot:pay:cardedit:{c['id']}")])
-    rows.append([IButton("➕ افزودن کارت", callback_data="agbot:pay:cardadd")])
-    rows.append([IButton(BTN_BACK, callback_data="agbot:pay:menu")])
+    rows.append([IButton(i18n.t('➕ افزودن کارت', _lg), callback_data="agbot:pay:cardadd")])
+    rows.append([IButton(i18n.t("back", _lg), callback_data="agbot:pay:menu")])
     return _ikb(rows)
 
 
-def sms_webhook_settings_keyboard(enabled: bool):
+def sms_webhook_settings_keyboard(enabled: bool, lang: str = "fa"):
+    _lg = lang
     enabled_icon = "✅" if enabled else "❌"
     return _ikb([
-        [IButton(f"تایید خودکار SMS | {enabled_icon}", callback_data="agbot:pay:smsauto:toggle")],
-        [IButton("🔑 ساخت / تعویض Secret", callback_data="agbot:pay:smsauto:regen")],
-        [IButton("👁 نمایش Secret برای اپ", callback_data="agbot:pay:smsauto:show")],
-        [IButton("📱 راهنمای اتصال اپ", callback_data="agbot:pay:smsauto:help")],
-        [IButton(BTN_BACK, callback_data="agbot:pay:menu")],
+        [IButton(f"{i18n.t('تایید خودکار SMS | ', _lg)}{enabled_icon}", callback_data="agbot:pay:smsauto:toggle")],
+        [IButton(i18n.t('🔑 ساخت / تعویض Secret', _lg), callback_data="agbot:pay:smsauto:regen")],
+        [IButton(i18n.t('👁 نمایش Secret برای اپ', _lg), callback_data="agbot:pay:smsauto:show")],
+        [IButton(i18n.t('📱 راهنمای اتصال اپ', _lg), callback_data="agbot:pay:smsauto:help")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:pay:menu")],
     ])
 
 
-def pagination_keyboard(base_callback: str, page: int, total_pages: int, back_callback: str):
+def pagination_keyboard(base_callback: str, page: int, total_pages: int, back_callback: str, lang: str = "fa"):
+    _lg = lang
     rows = []
     nav = []
     if page > 1:
-        nav.append(IButton("\u2b05\ufe0f \u0642\u0628\u0644\u06cc", callback_data=f"{base_callback}:{page - 1}"))
+        nav.append(IButton(i18n.t('⬅️ قبلی', _lg), callback_data=f"{base_callback}:{page - 1}"))
     if page < total_pages:
-        nav.append(IButton("\u0628\u0639\u062f\u06cc \u27a1\ufe0f", callback_data=f"{base_callback}:{page + 1}"))
+        nav.append(IButton(i18n.t('بعدی ➡️', _lg), callback_data=f"{base_callback}:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([IButton(BTN_BACK, callback_data=back_callback)])
+    rows.append([IButton(i18n.t("back", _lg), callback_data=back_callback)])
     return _ikb(rows)
 
 
-def tx_list_keyboard(payments: List[Dict[str, Any]], filter_type: str, page: int, total_pages: int, back_callback: str = "agbot:set:tx"):
+def tx_list_keyboard(payments: List[Dict[str, Any]], filter_type: str, page: int, total_pages: int, back_callback: str = "agbot:set:tx", lang: str = "fa"):
+    _lg = lang
     rows = []
     current_row = []
     for p in payments:
@@ -439,12 +461,13 @@ def tx_list_keyboard(payments: List[Dict[str, Any]], filter_type: str, page: int
     if nav_row:
         rows.append(nav_row)
 
-    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
+    rows.append([IButton(i18n.t('🔙بازگشت', _lg), callback_data=back_callback)])
     return _ikb(rows)
 
 
-def tx_search_results_keyboard(payments: List[Dict[str, Any]], back_callback: str = "agbot:set:tx"):
+def tx_search_results_keyboard(payments: List[Dict[str, Any]], back_callback: str = "agbot:set:tx", lang: str = "fa"):
     """کیبورد نتایج جستجوی تراکنش — دکمه‌های شناسه تراکنش + بازگشت."""
+    _lg = lang
     rows = []
     current_row = []
     for p in payments:
@@ -454,155 +477,163 @@ def tx_search_results_keyboard(payments: List[Dict[str, Any]], back_callback: st
             current_row = []
     if current_row:
         rows.append(current_row)
-    rows.append([IButton("\U0001f519\u0628\u0627\u0632\u06af\u0634\u062a", callback_data=back_callback)])
+    rows.append([IButton(i18n.t('🔙بازگشت', _lg), callback_data=back_callback)])
     return _ikb(rows)
 
 
 # Fixed plan keyboards
-def plans_cats_keyboard(cats):
+def plans_cats_keyboard(cats, lang: str = "fa"):
+    _lg = lang
     rows = []
     for c in cats:
         count = int(c.get('plan_count', 0) or 0)
-        rows.append([IButton(f"\U0001f6d2 {c['title']}  \u2022  {count} \u067e\u0644\u0646", callback_data=f"agbot:plans:fixed:cat:{c['id']}")])
-    rows.append([IButton('\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u062f\u0633\u062a\u0647 \u062c\u062f\u06cc\u062f', callback_data='agbot:plans:fixed:cat_add')])
-    rows.append([IButton(BTN_BACK, callback_data='agbot:plans:back')])
+        rows.append([IButton(f"\U0001f6d2 {c['title']}  \u2022  {count}{i18n.t(' پلن', _lg)}", callback_data=f"agbot:plans:fixed:cat:{c['id']}")])
+    rows.append([IButton(i18n.t('➕ افزودن دسته جدید', _lg), callback_data='agbot:plans:fixed:cat_add')])
+    rows.append([IButton(i18n.t("back", _lg), callback_data='agbot:plans:back')])
     return _ikb(rows)
 
 
-def plans_cat_detail_keyboard(cat_id: int):
+def plans_cat_detail_keyboard(cat_id: int, lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton('\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u067e\u0644\u0646 \u062c\u062f\u06cc\u062f', callback_data=f'agbot:plans:fixed:plan_add:{cat_id}')],
-        [IButton('\U0001f4cb \u0645\u0634\u0627\u0647\u062f\u0647 \u0648 \u0645\u062f\u06cc\u0631\u06cc\u062a \u067e\u0644\u0646\u200c\u0647\u0627', callback_data=f'agbot:plans:fixed:plans:{cat_id}')],
-        [IButton('\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634 \u0639\u0646\u0648\u0627\u0646 \u062f\u0633\u062a\u0647', callback_data=f'agbot:plans:fixed:cat_edit:{cat_id}')],
-        [IButton('\U0001f5d1 \u062d\u0630\u0641 \u062f\u0633\u062a\u0647', callback_data=f'agbot:plans:fixed:cat_del_ask:{cat_id}')],
-        [IButton(BTN_BACK, callback_data='agbot:plans:fixed')],
+        [IButton(i18n.t('➕ افزودن پلن جدید', _lg), callback_data=f'agbot:plans:fixed:plan_add:{cat_id}')],
+        [IButton(i18n.t('📋 مشاهده و مدیریت پلن‌ها', _lg), callback_data=f'agbot:plans:fixed:plans:{cat_id}')],
+        [IButton(i18n.t('✏️ ویرایش عنوان دسته', _lg), callback_data=f'agbot:plans:fixed:cat_edit:{cat_id}')],
+        [IButton(i18n.t('🗑 حذف دسته', _lg), callback_data=f'agbot:plans:fixed:cat_del_ask:{cat_id}')],
+        [IButton(i18n.t("back", _lg), callback_data='agbot:plans:fixed')],
     ])
 
 
-def plans_cat_del_confirm_keyboard(cat_id: int):
+def plans_cat_del_confirm_keyboard(cat_id: int, lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton('\u26a0\ufe0f \u062a\u0627\u06cc\u06cc\u062f \u062d\u0630\u0641 \u062f\u0633\u062a\u0647', callback_data=f'agbot:plans:fixed:cat_del:{cat_id}')],
-        [IButton('\u274c \u0627\u0646\u0635\u0631\u0627\u0641', callback_data=f'agbot:plans:fixed:cat:{cat_id}')],
+        [IButton(i18n.t('⚠️ تایید حذف دسته', _lg), callback_data=f'agbot:plans:fixed:cat_del:{cat_id}')],
+        [IButton(i18n.t('❌ انصراف', _lg), callback_data=f'agbot:plans:fixed:cat:{cat_id}')],
     ])
 
 
-def plans_cat_del_keyboard(cats):
+def plans_cat_del_keyboard(cats, lang: str = "fa"):
     rows = []
     for c in cats:
         rows.append([IButton(f"\U0001f5d1 {c['title']}", callback_data=f"agbot:plans:fixed:cat_del:{c['id']}")])
-    rows.append([IButton(BTN_BACK, callback_data='agbot:plans:fixed')])
+    rows.append([IButton(i18n.t("back", lang), callback_data='agbot:plans:fixed')])
     return _ikb(rows)
 
 
-def plans_plans_keyboard(plans, cat_id):
+def plans_plans_keyboard(plans, cat_id, lang: str = "fa"):
+    _lg = lang
     rows = []
     for p in plans:
         try:
             gb_val = float(p.get('gb') or 0)
         except (TypeError, ValueError):
             gb_val = 0.0
-        vol_txt = '\u0646\u0627\u0645\u062d\u062f\u0648\u062f' if gb_val == 0 else f'{gb_val:g} \u06af\u06cc\u06af'
+        vol_txt = i18n.t('نامحدود', _lg) if gb_val == 0 else f'{gb_val:g}{i18n.t(' گیگ', _lg)}'
         days_val = int(p.get('days') or 0)
-        days_txt = '\u0646\u0627\u0645\u062d\u062f\u0648\u062f' if days_val == 0 else f'{days_val} \u0631\u0648\u0632'
-        label = f"\U0001f4e6 {p['title']} | {vol_txt} | {days_txt} | {int(p['price']):,} \u062a"
+        days_txt = i18n.t('نامحدود', _lg) if days_val == 0 else f'{days_val}{i18n.t(' روز', _lg)}'
+        label = f"\U0001f4e6 {p['title']} | {vol_txt} | {days_txt} | {int(p['price']):,}{i18n.t(' ت', _lg)}"
         rows.append([IButton(label, callback_data=f"agbot:plans:fixed:plan:{p['id']}")])
-    rows.append([IButton('\u2795 \u0627\u0641\u0632\u0648\u062f\u0646 \u067e\u0644\u0646', callback_data=f"agbot:plans:fixed:plan_add:{cat_id}")])
-    rows.append([IButton('\U0001f5d1 \u062d\u0630\u0641 \u067e\u0644\u0646', callback_data=f"agbot:plans:fixed:plan_del_menu:{cat_id}")])
-    rows.append([IButton(BTN_BACK, callback_data=f"agbot:plans:fixed:cat:{cat_id}")])
+    rows.append([IButton(i18n.t('➕ افزودن پلن', _lg), callback_data=f"agbot:plans:fixed:plan_add:{cat_id}")])
+    rows.append([IButton(i18n.t('🗑 حذف پلن', _lg), callback_data=f"agbot:plans:fixed:plan_del_menu:{cat_id}")])
+    rows.append([IButton(i18n.t("back", _lg), callback_data=f"agbot:plans:fixed:cat:{cat_id}")])
     return _ikb(rows)
 
 
-def plans_plan_del_keyboard(plans, cid):
+def plans_plan_del_keyboard(plans, cid, lang: str = "fa"):
     rows = []
     for p in plans:
         rows.append([IButton(f"\U0001f5d1 {p['title']}", callback_data=f"agbot:plans:fixed:plan_del:{p['id']}")])
-    rows.append([IButton(BTN_BACK, callback_data=f"agbot:plans:fixed:plans:{cid}")])
+    rows.append([IButton(i18n.t("back", lang), callback_data=f"agbot:plans:fixed:plans:{cid}")])
     return _ikb(rows)
 
 
 # Dynamic plan settings keyboard
-def dyn_settings_keyboard():
+def dyn_settings_keyboard( lang: str = "fa"):
+    _lg = lang
     return _ikb([
-        [IButton('\U0001f4b0 \u0642\u06cc\u0645\u062a \u0647\u0631 \u06af\u06cc\u06af', callback_data='agbot:plans:dyn_edit:price_per_gb')],
-        [IButton('\U0001f4b0 \u0642\u06cc\u0645\u062a \u0647\u0631 \u0645\u0627\u0647', callback_data='agbot:plans:dyn_edit:price_per_month')],
-        [IButton('\U0001f4ca \u0645\u062d\u062f\u0648\u062f\u0647 \u062d\u062c\u0645', callback_data='agbot:plans:dyn_edit:volume_range')],
-        [IButton('\u23f0 \u0645\u062d\u062f\u0648\u062f\u0647 \u0632\u0645\u0627\u0646', callback_data='agbot:plans:dyn_edit:time_range')],
-        [IButton('\U0001f39f \u0645\u062f\u06cc\u0631\u06cc\u062a \u062d\u0631\u0641\u0647\u200c\u0627\u06cc \u062a\u062e\u0641\u06cc\u0641\u200c\u0647\u0627', callback_data='agbot:plans:discount')],
-        [IButton(BTN_BACK, callback_data='agbot:plans:back')],
+        [IButton(i18n.t('💰 قیمت هر گیگ', _lg), callback_data='agbot:plans:dyn_edit:price_per_gb')],
+        [IButton(i18n.t('💰 قیمت هر ماه', _lg), callback_data='agbot:plans:dyn_edit:price_per_month')],
+        [IButton(i18n.t('📊 محدوده حجم', _lg), callback_data='agbot:plans:dyn_edit:volume_range')],
+        [IButton(i18n.t('⏰ محدوده زمان', _lg), callback_data='agbot:plans:dyn_edit:time_range')],
+        [IButton(i18n.t('🎟 مدیریت حرفه‌ای تخفیف‌ها', _lg), callback_data='agbot:plans:discount')],
+        [IButton(i18n.t("back", _lg), callback_data='agbot:plans:back')],
     ])
 
 
-def discount_settings_keyboard(simple_enabled=False, tiered_enabled=False):
+def discount_settings_keyboard(simple_enabled=False, tiered_enabled=False, lang: str = "fa"):
+    _lg = lang
     simple_style = "danger" if simple_enabled else "success"
     tiered_style = "danger" if tiered_enabled else "success"
     return _ikb([
-        [IButton('\U0001f48e \u062d\u062c\u0645\u06cc \u0633\u0627\u062f\u0647', callback_data='agbot:plans:discount:toggle:simple', style=simple_style)],
-        [IButton('\U0001f3a9 \u067e\u0644\u06a9\u0627\u0646\u06cc', callback_data='agbot:plans:discount:toggle:tiers', style=tiered_style)],
-        [IButton('\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634 \u062a\u062e\u0641\u06cc\u0641 \u062d\u062c\u0645\u06cc \u0633\u0627\u062f\u0647', callback_data='agbot:plans:discount:edit:simple')],
-        [IButton('\u270f\ufe0f \u0648\u06cc\u0631\u0627\u06cc\u0634 \u062a\u062e\u0641\u06cc\u0641 \u067e\u0644\u06a9\u0627\u0646\u06cc', callback_data='agbot:plans:discount:edit:tiers')],
-        [IButton('\u23f1\ufe0f \u062a\u0627\u06cc\u0645\u0631 \u062a\u062e\u0641\u06cc\u0641 \u062d\u062c\u0645\u06cc \u0633\u0627\u062f\u0647', callback_data='agbot:plans:discount:edit:timer')],
-        [IButton(BTN_BACK, callback_data='agbot:plans:dynset')],
+        [IButton(i18n.t('💎 حجمی ساده', _lg), callback_data='agbot:plans:discount:toggle:simple', style=simple_style)],
+        [IButton(i18n.t('🎩 پلکانی', _lg), callback_data='agbot:plans:discount:toggle:tiers', style=tiered_style)],
+        [IButton(i18n.t('✏️ ویرایش تخفیف حجمی ساده', _lg), callback_data='agbot:plans:discount:edit:simple')],
+        [IButton(i18n.t('✏️ ویرایش تخفیف پلکانی', _lg), callback_data='agbot:plans:discount:edit:tiers')],
+        [IButton(i18n.t('⏱️ تایمر تخفیف حجمی ساده', _lg), callback_data='agbot:plans:discount:edit:timer')],
+        [IButton(i18n.t("back", _lg), callback_data='agbot:plans:dynset')],
     ])
 
 
-def agent_dynamic_wizard_keyboard(server_id: int, gb: int, months: int, price: int, off_percent: int = 0, wholesale: int = 0):
+def agent_dynamic_wizard_keyboard(server_id: int, gb: int, months: int, price: int, off_percent: int = 0, wholesale: int = 0, lang: str = "fa"):
+    _lg = lang
     price_str = f"{price:,}"
     wholesale_str = f"{wholesale:,}"
     rows = [
-        [IButton("\U0001f4ca \u062d\u062c\u0645", callback_data="noop")],
+        [IButton(i18n.t('📊 حجم', _lg), callback_data="noop")],
         [
             IButton("\u2796 10", callback_data=f"agbot:subs:wiz:gb_dec10:{server_id}"),
             IButton("\u2796", callback_data=f"agbot:subs:wiz:gb_dec:{server_id}"),
             IButton("\u2795", callback_data=f"agbot:subs:wiz:gb_inc:{server_id}"),
             IButton("\u2795 10", callback_data=f"agbot:subs:wiz:gb_inc10:{server_id}"),
         ],
-        [IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop")],
-        [IButton("\u23f3 \u0632\u0645\u0627\u0646", callback_data="noop")],
+        [IButton(f"{gb}{i18n.t(' گیگابایت', _lg)}", callback_data="noop")],
+        [IButton(i18n.t('⏳ زمان', _lg), callback_data="noop")],
         [
             IButton("\u2796", callback_data=f"agbot:subs:wiz:month_dec:{server_id}"),
-            IButton(f"{months} \u0645\u0627\u0647\u0647", callback_data="noop"),
+            IButton(f"{months}{i18n.t(' ماهه', _lg)}", callback_data="noop"),
             IButton("\u2795", callback_data=f"agbot:subs:wiz:month_inc:{server_id}"),
         ],
         [
-            IButton(f"\U0001f4b0 \u0642\u06cc\u0645\u062a \u0639\u0645\u062f\u0647: {wholesale_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
+            IButton(f"{i18n.t('💰 قیمت عمده: ', _lg)}{wholesale_str}{i18n.t(' تومان', _lg)}", callback_data="noop"),
         ],
         [
-            IButton(f"\U0001f4b8 \u0642\u06cc\u0645\u062a \u0641\u0631\u0648\u0634: {price_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
-            IButton(f"\U0001f3f7 \u062a\u062e\u0641\u06cc\u0641: {off_percent}%", callback_data="noop"),
+            IButton(f"{i18n.t('💸 قیمت فروش: ', _lg)}{price_str}{i18n.t(' تومان', _lg)}", callback_data="noop"),
+            IButton(f"{i18n.t('🏷 تخفیف: ', _lg)}{off_percent}%", callback_data="noop"),
         ],
-        [IButton("\U0001f4b3 \u062a\u0627\u06cc\u06cc\u062f \u0648 \u0633\u0627\u062e\u062a\u0646", callback_data=f"agbot:subs:wiz:confirm:{server_id}")],
-        [IButton(BTN_BACK, callback_data="agbot:subs:picksrv_back")],
+        [IButton(i18n.t('💳 تایید و ساختن', _lg), callback_data=f"agbot:subs:wiz:confirm:{server_id}")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:subs:picksrv_back")],
     ]
     return _ikb(rows)
 
 
-def agent_renew_wizard_keyboard(service_id: int, gb: int, months: int, price: int, off_percent: int = 0, wholesale: int = 0):
+def agent_renew_wizard_keyboard(service_id: int, gb: int, months: int, price: int, off_percent: int = 0, wholesale: int = 0, lang: str = "fa"):
     """ویزارد تمدید اشتراک — دقیقاً مثل پنل ساخت اشتراک ولی برای تمدید."""
+    _lg = lang
     price_str = f"{price:,}"
     wholesale_str = f"{wholesale:,}"
     rows = [
-        [IButton("\U0001f4ca \u062d\u062c\u0645 \u062a\u0645\u062f\u06cc\u062f", callback_data="noop")],
+        [IButton(i18n.t('📊 حجم تمدید', _lg), callback_data="noop")],
         [
             IButton("\u2796 10", callback_data=f"agbot:subs:rewiz:gb_dec10:{service_id}"),
             IButton("\u2796", callback_data=f"agbot:subs:rewiz:gb_dec:{service_id}"),
             IButton("\u2795", callback_data=f"agbot:subs:rewiz:gb_inc:{service_id}"),
             IButton("\u2795 10", callback_data=f"agbot:subs:rewiz:gb_inc10:{service_id}"),
         ],
-        [IButton(f"{gb} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a", callback_data="noop")],
-        [IButton("\u23f3 \u0645\u062f\u062a \u062a\u0645\u062f\u06cc\u062f", callback_data="noop")],
+        [IButton(f"{gb}{i18n.t(' گیگابایت', _lg)}", callback_data="noop")],
+        [IButton(i18n.t('⏳ مدت تمدید', _lg), callback_data="noop")],
         [
             IButton("\u2796", callback_data=f"agbot:subs:rewiz:month_dec:{service_id}"),
-            IButton(f"{months} \u0645\u0627\u0647", callback_data="noop"),
+            IButton(f"{months}{i18n.t(' ماه', _lg)}", callback_data="noop"),
             IButton("\u2795", callback_data=f"agbot:subs:rewiz:month_inc:{service_id}"),
         ],
         [
-            IButton(f"\U0001f4b0 \u06a9\u0633\u0631 \u0627\u0632 \u06a9\u06cc\u0641 \u067e\u0648\u0644: {wholesale_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
+            IButton(f"{i18n.t('💰 کسر از کیف پول: ', _lg)}{wholesale_str}{i18n.t(' تومان', _lg)}", callback_data="noop"),
         ],
         [
-            IButton(f"\U0001f4b8 \u0642\u06cc\u0645\u062a \u0641\u0631\u0648\u0634: {price_str} \u062a\u0648\u0645\u0627\u0646", callback_data="noop"),
-            IButton(f"\U0001f3f7 \u062a\u062e\u0641\u06cc\u0641: {off_percent}%", callback_data="noop"),
+            IButton(f"{i18n.t('💸 قیمت فروش: ', _lg)}{price_str}{i18n.t(' تومان', _lg)}", callback_data="noop"),
+            IButton(f"{i18n.t('🏷 تخفیف: ', _lg)}{off_percent}%", callback_data="noop"),
         ],
-        [IButton("\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0648 \u062a\u0645\u062f\u06cc\u062f", callback_data=f"agbot:subs:rewiz:confirm:{service_id}")],
-        [IButton(BTN_BACK, callback_data=f"agbot:subs:detail:{service_id}")],
+        [IButton(i18n.t('✅ تایید و تمدید', _lg), callback_data=f"agbot:subs:rewiz:confirm:{service_id}")],
+        [IButton(i18n.t("back", _lg), callback_data=f"agbot:subs:detail:{service_id}")],
     ]
     return _ikb(rows)

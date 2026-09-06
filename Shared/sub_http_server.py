@@ -161,6 +161,18 @@ def _normalize_sms_currency(raw: str) -> str:
     return "unknown"
 
 
+def _normalize_sms_card_last4(raw: object) -> tuple[str, bool]:
+    """Return (four_ascii_digits, invalid_supplied_value)."""
+    text = str(raw or "").strip()
+    if not text:
+        return "", False
+    translated = text.translate(
+        str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    )
+    digits = "".join(ch for ch in translated if ch in "0123456789")
+    return (digits, False) if len(digits) == 4 else ("", True)
+
+
 def _sms_amount_candidates_toman(amount_raw: int, currency_raw: str) -> list[int]:
     amount = int(amount_raw or 0)
     if amount <= 0:
@@ -194,6 +206,101 @@ def _sms_webhook_secret() -> str:
 
 def _sms_webhook_max_pending_age_minutes() -> int:
     return max(5, _to_int(_dotenv_get(SMS_WEBHOOK_MAX_PENDING_AGE_ENV, "360"), 360))
+
+
+def _sms_setting_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if raw in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(default)
+
+
+def _requested_sms_agent_id(query_string: str) -> Optional[int]:
+    """Return a validated tenant id, or None for the legacy/global endpoint."""
+    params = parse_qs(str(query_string or ""), keep_blank_values=True)
+    if "agent_id" not in params:
+        return None
+    values = params.get("agent_id") or []
+    if len(values) != 1:
+        raise ValueError("agent_id must appear exactly once")
+    raw = str(values[0] or "").strip()
+    if not re.fullmatch(r"[1-9]\d*", raw):
+        raise ValueError("agent_id must be a positive integer")
+    return int(raw)
+
+
+def _authorize_sms_webhook(
+    query_string: str,
+    provided_secret: str,
+) -> tuple[bool, str, int, int, str]:
+    """Authenticate global/main or agent-scoped SMS requests."""
+    if not _env_bool(SMS_WEBHOOK_ENABLED_ENV, False):
+        return False, "", 0, 403, "sms_webhook_disabled"
+
+    try:
+        requested_agent_id = _requested_sms_agent_id(query_string)
+    except ValueError:
+        return False, "", 0, 400, "invalid_agent_id"
+
+    supplied = str(provided_secret or "").strip()
+    if requested_agent_id is None:
+        expected = _sms_webhook_secret()
+        if not expected:
+            return False, "", 0, 503, "sms_webhook_secret_not_configured"
+        if not hmac.compare_digest(supplied, expected):
+            return False, "", 0, 401, "invalid_secret"
+        return True, "main", 0, 200, ""
+
+    try:
+        from AgentBot.database import get_setting as _get_agent_bot_setting
+
+        enabled = _sms_setting_bool(
+            _get_agent_bot_setting(requested_agent_id, "sms_auto_confirm", False),
+            False,
+        )
+        expected = str(
+            _get_agent_bot_setting(requested_agent_id, "sms_webhook_secret", "") or ""
+        ).strip()
+    except Exception as exc:
+        logger.warning(
+            "Failed reading agent SMS credentials (agent_id=%s): %s",
+            requested_agent_id,
+            exc,
+        )
+        return False, "", 0, 503, "sms_agent_settings_unavailable"
+
+    if not enabled:
+        return False, "", 0, 403, "sms_auto_confirm_disabled"
+    if not expected:
+        return False, "", 0, 503, "sms_agent_secret_not_configured"
+    if not hmac.compare_digest(supplied, expected):
+        return False, "", 0, 401, "invalid_secret"
+
+    try:
+        active_bot = agent_db.get_active_customer_bot(requested_agent_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed checking active customer bot (agent_id=%s): %s",
+            requested_agent_id,
+            exc,
+        )
+        return False, "", 0, 503, "sms_agent_status_unavailable"
+    if not active_bot:
+        return False, "", 0, 403, "sms_agent_inactive"
+
+    return True, "agency", requested_agent_id, 200, ""
+
+
+def _scoped_sms_event_id(raw_event_id: str, agent_id: int = 0) -> str:
+    raw = str(raw_event_id or "").strip()
+    aid = int(agent_id or 0)
+    return f"agency:{aid}:{raw}" if aid > 0 else raw
 
 
 def _parse_receipt_meta(raw: str) -> dict[str, str]:
@@ -328,6 +435,80 @@ def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str
             )
         except Exception as fallback_error:
             logger.warning("Failed sending fallback SMS payment admin report payment_id=%s: %s", payment_id, fallback_error)
+
+
+def _send_agent_wallet_sms_payment_report(
+    payment: dict,
+    wallet: dict,
+    amount_toman: int,
+    sender: str,
+    reference: str,
+) -> None:
+    """Notify both admin and agent after an online SMS wallet approval."""
+    admin_token = str(_dotenv_get("ADMIN_BOT_TOKEN", "") or "").strip()
+    agent_token = str(_dotenv_get("AGENT_BOT_TOKEN", "") or "").strip()
+    admin_id = _to_int(_dotenv_get("ADMIN_ID", "0"), 0)
+    agent_id = int((payment or {}).get("agent_id") or 0)
+    agent = agent_db.get_agent_by_id(agent_id) or {}
+    agent_tg_id = int(agent.get("telegram_id") or 0)
+    payment_id = int((payment or {}).get("id") or 0)
+    agent_name = str(
+        agent.get("full_name")
+        or agent.get("username")
+        or (payment or {}).get("customer_name")
+        or agent_tg_id
+        or agent_id
+    )
+    try:
+        meta = json.loads(str((payment or {}).get("receipt_image") or "{}"))
+        if not isinstance(meta, dict):
+            meta = {}
+    except Exception:
+        meta = {}
+    balance = int((wallet or {}).get("balance") or 0)
+    text = (
+        "✅ شارژ کیف پول نماینده با SMS تایید شد.\n"
+        f"👤 نماینده: {agent_name}\n"
+        f"💰 مبلغ: {int(amount_toman or 0):,} تومان\n"
+        f"💼 موجودی جدید: {balance:,} تومان\n"
+        f"🆔 شناسه پرداخت: {payment_id}\n"
+        f"📨 سرشماره: {sender or '-'}\n"
+        f"🔖 پیگیری SMS: {reference or '-'}"
+    )
+    if admin_token and admin_id > 0:
+        _clear_pending_admin_payment_keyboard(admin_token, admin_id, meta)
+        try:
+            _telegram_form_request(
+                admin_token,
+                "sendMessage",
+                {"chat_id": str(admin_id), "text": text},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed sending agent wallet SMS report payment_id=%s: %s",
+                payment_id,
+                exc,
+            )
+    if agent_token and agent_tg_id > 0:
+        try:
+            _telegram_form_request(
+                agent_token,
+                "sendMessage",
+                {
+                    "chat_id": str(agent_tg_id),
+                    "text": (
+                        "✅ پرداخت شما با پیامک بانک تایید شد.\n\n"
+                        f"مبلغ {int(amount_toman or 0):,} تومان به کیف پول اضافه شد.\n"
+                        f"موجودی جدید: {balance:,} تومان"
+                    ),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed notifying agent wallet SMS approval payment_id=%s: %s",
+                payment_id,
+                exc,
+            )
 
 
 def _clear_pending_admin_payment_keyboard(token: str, default_admin_id: int, receipt_meta: dict[str, str]) -> None:
@@ -874,18 +1055,14 @@ class _SubHandler(BaseHTTPRequestHandler):
             self._write_json(500, {"ok": False, "error": "internal_error"})
 
     def _handle_sms_webhook(self) -> None:
-        if not _env_bool(SMS_WEBHOOK_ENABLED_ENV, False):
-            self._write_json(403, {"ok": False, "error": "sms_webhook_disabled"})
-            return
-
-        expected_secret = _sms_webhook_secret()
-        if not expected_secret:
-            self._write_json(503, {"ok": False, "error": "sms_webhook_secret_not_configured"})
-            return
-
         provided_secret = str(self.headers.get("X-SellBot-Sms-Secret") or "").strip()
-        if not hmac.compare_digest(provided_secret, expected_secret):
-            self._write_json(401, {"ok": False, "error": "invalid_secret"})
+        parsed_request = urlparse(self.path)
+        authorized, sms_scope, agency_agent_id, auth_status, auth_error = _authorize_sms_webhook(
+            parsed_request.query,
+            provided_secret,
+        )
+        if not authorized:
+            self._write_json(auth_status, {"ok": False, "error": auth_error})
             return
 
         try:
@@ -905,19 +1082,25 @@ class _SubHandler(BaseHTTPRequestHandler):
             self._write_json(400, {"ok": False, "error": "invalid_payload"})
             return
 
-        event_id = str(payload.get("event_id") or self.headers.get("X-SellBot-Event-Id") or "").strip()
+        raw_event_id = str(payload.get("event_id") or self.headers.get("X-SellBot-Event-Id") or "").strip()
+        event_id = _scoped_sms_event_id(raw_event_id, agency_agent_id)
         amount_raw = _to_int(payload.get("amount"), 0)
         currency_raw = _normalize_sms_currency(str(payload.get("currency") or ""))
         reference = str(payload.get("reference") or "").strip()
         sender = str(payload.get("sender") or "").strip()
-        card_last4 = re.sub(r"\D", "", str(payload.get("card_last4") or ""))[-4:]
+        card_last4, invalid_card_last4 = _normalize_sms_card_last4(
+            payload.get("card_last4")
+        )
         body = str(payload.get("body") or "")
         received_at_ms = _to_int(payload.get("received_at"), 0)
         device_time_ms = _to_int(payload.get("device_time"), 0)
         is_test = bool(payload.get("test"))
 
-        if not event_id:
+        if not raw_event_id:
             self._write_json(400, {"ok": False, "error": "event_id_required"})
+            return
+        if invalid_card_last4:
+            self._write_json(422, {"ok": False, "error": "invalid_card_last4"})
             return
 
         if is_test:
@@ -979,17 +1162,42 @@ class _SubHandler(BaseHTTPRequestHandler):
         )
         if not inserted:
             status = str((existing or {}).get("status") or "").strip().lower()
-            if status in {"received", "no_pending_match", "ambiguous"}:
+            retryable_statuses = {"received", "no_pending_match", "ambiguous"}
+            if agency_agent_id:
+                retryable_statuses.update(
+                    {
+                        "agency_queued",
+                        "approve_retry",
+                        "agency_waiting_wallet",
+                        "approve_failed",
+                    }
+                )
+            if status in retryable_statuses:
+                retry_card_last4, invalid_retry_last4 = _normalize_sms_card_last4(
+                    (existing or {}).get("card_last4") or card_last4
+                )
+                if invalid_retry_last4:
+                    userbot_db.update_sms_webhook_event(
+                        event_id,
+                        status="invalid_card_last4",
+                        message="stored SMS card_last4 is malformed",
+                    )
+                    self._write_json(
+                        422,
+                        {"ok": False, "duplicate": True, "error": "invalid_card_last4"},
+                    )
+                    return
                 retry_status, retry_payload = self._try_approve_sms_event(
                     event_id=event_id,
                     amount_raw=_to_int((existing or {}).get("amount_raw"), amount_raw),
                     currency_raw=str((existing or {}).get("currency_raw") or currency_raw),
                     reference=str((existing or {}).get("reference") or reference),
                     sender=str((existing or {}).get("sender") or sender),
-                    card_last4=re.sub(r"\D", "", str((existing or {}).get("card_last4") or card_last4))[-4:],
+                    card_last4=retry_card_last4,
                     body=str((existing or {}).get("body") or body),
                     received_at_ms=_to_int((existing or {}).get("received_at"), received_at_ms),
                     device_time_ms=_to_int((existing or {}).get("device_time"), device_time_ms),
+                    agency_agent_id=agency_agent_id,
                 )
                 retry_payload["duplicate"] = True
                 retry_payload["retry"] = True
@@ -1003,6 +1211,8 @@ class _SubHandler(BaseHTTPRequestHandler):
                     "duplicate": True,
                     "status": (existing or {}).get("status"),
                     "matched_payment_id": (existing or {}).get("matched_payment_id"),
+                    "matched": status in {"approved", "approved_duplicate", "agent_wallet_approved"},
+                    "scope": "agent_wallet" if status == "agent_wallet_approved" else "main",
                 },
             )
             return
@@ -1017,9 +1227,196 @@ class _SubHandler(BaseHTTPRequestHandler):
             body=body,
             received_at_ms=received_at_ms,
             device_time_ms=device_time_ms,
+            agency_agent_id=agency_agent_id,
         )
         self._write_json(status_code, response)
         return
+
+    def _try_queue_agency_sms_event(
+        self,
+        *,
+        event_id: str,
+        agent_id: int,
+        amount_raw: int,
+        currency_raw: str,
+        reference: str,
+        sender: str,
+        card_last4: str,
+        received_at_ms: int = 0,
+        device_time_ms: int = 0,
+    ) -> tuple[int, dict]:
+        """Match and queue an SMS inside exactly one authenticated tenant."""
+        from AgentBot.database import get_setting as _get_agent_setting
+        from CustomerBot.database import (
+            enqueue_sms_auto_approval,
+            find_pending_card_payments_by_amount as _find_pending,
+            get_payment_status,
+            get_sms_auto_queue_by_event,
+        )
+
+        aid = int(agent_id or 0)
+        candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
+        if aid <= 0 or not candidates:
+            userbot_db.update_sms_webhook_event(
+                event_id, status="invalid_amount", message="amount not found or invalid", amount_toman=0
+            )
+            return 422, {"ok": False, "matched": False, "error": "invalid_amount"}
+
+        raw_event_id = event_id
+        prefix = f"agency:{aid}:"
+        if event_id.startswith(prefix):
+            raw_event_id = event_id[len(prefix):]
+        queued_row = get_sms_auto_queue_by_event(
+            event_id,
+            agent_id=aid,
+            legacy_event_id=raw_event_id,
+        )
+        if queued_row:
+            payment_id = int(queued_row.get("pay_id") or 0)
+            payment_status = get_payment_status(aid, payment_id).strip().lower()
+            queue_state = str(queued_row.get("state") or "pending").strip().lower()
+            if payment_status == "approved":
+                userbot_db.update_sms_webhook_event(
+                    event_id,
+                    status="approved_duplicate",
+                    matched_payment_id=payment_id,
+                    message="agency payment approved for this SMS",
+                    amount_toman=int(queued_row.get("amount_toman") or candidates[0]),
+                )
+                return 200, {
+                    "ok": True,
+                    "matched": True,
+                    "duplicate": True,
+                    "status": "approved_duplicate",
+                    "payment_id": payment_id,
+                    "agent_id": aid,
+                }
+            if not int(queued_row.get("processed") or 0) and queue_state in {
+                "pending", "retry", "waiting_wallet", "processing"
+            }:
+                return 202, {
+                    "ok": True,
+                    "matched": False,
+                    "queued": True,
+                    "duplicate": True,
+                    "status": "agency_queued",
+                    "queue_state": queue_state,
+                    "payment_id": payment_id,
+                    "agent_id": aid,
+                }
+            return 409, {
+                "ok": False,
+                "matched": False,
+                "queued": False,
+                "status": "manual_review",
+                "payment_id": payment_id,
+                "agent_id": aid,
+            }
+
+        require_last4 = _sms_setting_bool(
+            _get_agent_setting(aid, "require_last4", False), False
+        )
+        sms_time_ms = int(received_at_ms or device_time_ms or 0)
+        matches: list[dict] = []
+        matched_amount = 0
+        for amount_toman in candidates:
+            matches = _find_pending(
+                int(amount_toman),
+                agent_id=aid,
+                card_last4=card_last4,
+                require_last4=require_last4,
+                max_age_minutes=_sms_webhook_max_pending_age_minutes(),
+                sms_time_ms=sms_time_ms,
+            )
+            if matches:
+                matched_amount = int(amount_toman)
+                break
+        if not matches:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="no_pending_match",
+                message=f"no agent-scoped pending payment for candidates={candidates}",
+                amount_toman=int(candidates[0]),
+            )
+            return 202, {
+                "ok": True,
+                "matched": False,
+                "queued": False,
+                "status": "no_pending_match",
+                "agent_id": aid,
+                "amount_candidates_toman": candidates,
+            }
+        if len(matches) > 1:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="ambiguous",
+                message=f"multiple scoped payments matched amount={matched_amount}",
+                amount_toman=matched_amount,
+            )
+            return 409, {
+                "ok": False,
+                "matched": False,
+                "queued": False,
+                "error": "ambiguous_pending_payments",
+                "scope": "agency",
+                "agent_id": aid,
+                "count": len(matches),
+            }
+
+        payment_id = int(matches[0].get("id") or 0)
+        queued = enqueue_sms_auto_approval(
+            aid,
+            payment_id,
+            event_id,
+            matched_amount,
+            card_last4=card_last4,
+        )
+        if not queued:
+            raced = get_sms_auto_queue_by_event(event_id, agent_id=aid)
+            if raced and not int(raced.get("processed") or 0):
+                return 202, {
+                    "ok": True,
+                    "matched": False,
+                    "queued": True,
+                    "duplicate": True,
+                    "status": "agency_queued",
+                    "payment_id": int(raced.get("pay_id") or 0),
+                    "agent_id": aid,
+                }
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="approve_failed",
+                message="scoped match found but atomic enqueue failed",
+                amount_toman=matched_amount,
+            )
+            return 409, {
+                "ok": False,
+                "matched": False,
+                "queued": False,
+                "status": "agency_queue_failed",
+                "payment_id": payment_id,
+                "agent_id": aid,
+            }
+
+        userbot_db.update_sms_webhook_event(
+            event_id,
+            status="agency_queued",
+            matched_payment_id=payment_id,
+            message=f"agency payment queued for auto approval (agent_id={aid})",
+            amount_toman=matched_amount,
+        )
+        # matched=False is intentional: the Android client must not show
+        # APPROVED until AgentBot has completed wallet + fulfillment.
+        return 202, {
+            "ok": True,
+            "matched": False,
+            "queued": True,
+            "status": "agency_queued",
+            "payment_id": payment_id,
+            "agent_id": aid,
+            "amount_toman": matched_amount,
+        }
+
 
     def _try_approve_sms_event(
         self,
@@ -1033,7 +1430,20 @@ class _SubHandler(BaseHTTPRequestHandler):
         body: str = "",
         received_at_ms: int = 0,
         device_time_ms: int = 0,
+        agency_agent_id: int = 0,
     ) -> tuple[int, dict]:
+        if int(agency_agent_id or 0) > 0:
+            return self._try_queue_agency_sms_event(
+                event_id=event_id,
+                agent_id=int(agency_agent_id),
+                amount_raw=amount_raw,
+                currency_raw=currency_raw,
+                reference=reference,
+                sender=sender,
+                card_last4=card_last4,
+                received_at_ms=received_at_ms,
+                device_time_ms=device_time_ms,
+            )
         candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
         if not candidates:
             userbot_db.update_sms_webhook_event(
@@ -1162,115 +1572,100 @@ class _SubHandler(BaseHTTPRequestHandler):
                 matched_amount = int(amount_toman)
                 break
 
-        if not matches:
-            # اگر این SMS قبلاً برای پرداخت نمایندگی صف شده و آن پرداخت حالا تایید شده است
-            # (خودکار یا دستی)، به اپ approved_duplicate برگردان تا رکوردش به «تایید شده» برود
-            try:
-                from CustomerBot.database import get_sms_auto_queue_by_event as _qrow
-                from CustomerBot.database import get_payment_status_any_agent as _pstat
-                qrow = _qrow(event_id)
-                if qrow:
-                    agency_pay_status = _pstat(int(qrow.get("pay_id") or 0))
-                    if agency_pay_status == "approved":
-                        approved_pay_id = int(qrow.get("pay_id") or 0)
-                        userbot_db.update_sms_webhook_event(
-                            event_id,
-                            status="approved_duplicate",
-                            matched_payment_id=approved_pay_id,
-                            message="agency payment approved for this SMS",
-                            amount_toman=int(qrow.get("amount_toman") or candidates[0] or 0),
-                        )
-                        return 200, {
-                            "ok": True,
-                            "matched": True,
-                            "duplicate": True,
-                            "status": "approved_duplicate",
-                            "message": "bank_sms_already_approved",
-                            "matched_payment_id": approved_pay_id,
-                        }
-            except Exception as exc:
-                logger.warning("agency sms duplicate check failed: %s", exc)
+        agent_wallet_matches: list[dict] = []
+        agent_wallet_amount = 0
+        try:
+            from AgentBot import database as agentbot_db
 
-            # تطبیق با پرداخت‌های مشتریانِ نمایندگی‌ها (دیتابیس CustomerBot) —
-            # پرداخت صف می‌شود تا پروسه AgentBot سرویس را بسازد و تحویل دهد
-            agency_matches: list = []
-            agency_matched_amount = 0
-            try:
-                from CustomerBot.database import find_pending_card_payments_by_amount as _find_agency_pending
-                for amount_toman in candidates:
-                    agency_matches = _find_agency_pending(
-                        int(amount_toman),
-                        max_age_minutes=_sms_webhook_max_pending_age_minutes(),
-                        sms_time_ms=sms_time_ms,
-                    )
-                    if agency_matches:
-                        agency_matched_amount = int(amount_toman)
-                        break
-            except Exception as exc:
-                logger.warning("agency sms match failed: %s", exc)
-
-            if agency_matches:
-                if len(agency_matches) > 1:
-                    userbot_db.update_sms_webhook_event(
-                        event_id,
-                        status="ambiguous",
-                        message=f"multiple agency pending card payments matched amount={agency_matched_amount}",
-                        amount_toman=agency_matched_amount,
-                    )
-                    return 409, {
-                        "ok": False,
-                        "matched": False,
-                        "error": "ambiguous_pending_payments",
-                        "scope": "agency",
-                        "amount_toman": agency_matched_amount,
-                        "count": len(agency_matches),
-                    }
-                agency_pay = agency_matches[0]
-                agency_id = int(agency_pay.get("agent_id") or 0)
-                agency_pay_id = int(agency_pay.get("id") or 0)
-                try:
-                    from CustomerBot.database import enqueue_sms_auto_approval as _enqueue_agency
-                    # اگر event قبلاً صف شده باشد (استعلام دوباره اپ) هم مشکلی نیست
-                    _enqueue_agency(
-                        agency_id,
-                        agency_pay_id,
-                        event_id,
-                        agency_matched_amount,
-                        card_last4=card_last4,
-                    )
-                    queued = True
-                except Exception as exc:
-                    queued = False
-                    logger.warning("agency sms enqueue failed: %s", exc)
-                userbot_db.update_sms_webhook_event(
-                    event_id,
-                    status="agency_queued" if queued else "approve_failed",
-                    matched_payment_id=agency_pay_id if queued else 0,
-                    message=(
-                        f"agency payment queued for auto approval (agent_id={agency_id})"
-                        if queued
-                        else "agency match found but enqueue failed"
-                    ),
-                    amount_toman=agency_matched_amount,
+            for amount_toman in candidates:
+                agent_wallet_matches = agentbot_db.find_pending_wallet_charge_payments_by_amount(
+                    int(amount_toman),
+                    card_last4=card_last4,
+                    max_age_minutes=_sms_webhook_max_pending_age_minutes(),
+                    sms_time_ms=sms_time_ms,
                 )
-                if queued:
-                    return 200, {
-                        "ok": True,
-                        "matched": True,
-                        "status": "agency_queued",
-                        "payment_id": agency_pay_id,
-                        "agent_id": agency_id,
-                        "amount_toman": agency_matched_amount,
-                        "message": "agency payment queued for automatic approval",
-                    }
-                return 500, {
-                    "ok": False,
-                    "matched": True,
-                    "status": "agency_queue_failed",
-                    "payment_id": agency_pay_id,
-                    "agent_id": agency_id,
-                }
+                if agent_wallet_matches:
+                    agent_wallet_amount = int(amount_toman)
+                    break
+        except Exception as exc:
+            logger.warning("agent wallet SMS match failed: %s", exc)
+            agent_wallet_matches = []
 
+        if agent_wallet_matches and matches:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="ambiguous",
+                message="SMS matches both a user payment and an agent wallet charge",
+                amount_toman=agent_wallet_amount or matched_amount,
+            )
+            return 409, {
+                "ok": False,
+                "matched": False,
+                "error": "ambiguous_cross_scope_payments",
+                "count": len(agent_wallet_matches) + len(matches),
+            }
+
+        if len(agent_wallet_matches) > 1:
+            userbot_db.update_sms_webhook_event(
+                event_id,
+                status="ambiguous",
+                message=f"multiple pending agent wallet charges matched amount={agent_wallet_amount}",
+                amount_toman=agent_wallet_amount,
+            )
+            return 409, {
+                "ok": False,
+                "matched": False,
+                "error": "ambiguous_agent_wallet_payments",
+                "amount_toman": agent_wallet_amount,
+                "count": len(agent_wallet_matches),
+            }
+
+        if len(agent_wallet_matches) == 1:
+            payment = agent_wallet_matches[0]
+            payment_id = int(payment.get("id") or 0)
+            event = userbot_db.get_sms_webhook_event(event_id) or {
+                "event_id": event_id,
+                "amount_raw": amount_raw,
+                "currency_raw": currency_raw,
+                "sender": sender,
+                "reference": reference,
+                "card_last4": card_last4,
+            }
+            event = dict(event)
+            event["amount_toman"] = agent_wallet_amount
+            result = agentbot_db.approve_wallet_charge_payment_from_sms_event(
+                payment_id,
+                event,
+                expected_event_status="received",
+            )
+            if result.get("ok"):
+                approved_payment = result.get("payment") or payment
+                wallet = result.get("wallet") or {}
+                _send_agent_wallet_sms_payment_report(
+                    approved_payment,
+                    wallet,
+                    agent_wallet_amount,
+                    sender,
+                    reference,
+                )
+                return 200, {
+                    "ok": True,
+                    "matched": True,
+                    "status": "agent_wallet_approved",
+                    "scope": "agent_wallet",
+                    "payment_id": payment_id,
+                    "agent_id": int(payment.get("agent_id") or 0),
+                    "amount_toman": agent_wallet_amount,
+                }
+            return 500, {
+                "ok": False,
+                "matched": False,
+                "status": "agent_wallet_approve_failed",
+                "payment_id": payment_id,
+                "error": str(result.get("reason") or "wallet_approval_failed")[:200],
+            }
+
+        if not matches:
             userbot_db.update_sms_webhook_event(
                 event_id,
                 status="no_pending_match",

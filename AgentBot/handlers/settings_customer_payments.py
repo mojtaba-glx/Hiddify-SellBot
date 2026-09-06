@@ -2,6 +2,7 @@ import json
 import logging
 import asyncio
 import re
+import uuid
 
 from Shared import i18n as _i18n
 
@@ -21,14 +22,21 @@ from AgentBot.keyboards import (
 )
 from AgentBot.utils.helpers import _fmt_toman
 from AgentBot.database import (
+    claim_customer_payment_processing,
+    finish_customer_payment_processing,
     get_customer_pending_card_payments,
-    update_customer_payment_status,
-    get_customer_user,
     get_customer_payment_by_id_enriched,
+    get_customer_user,
+    get_stale_customer_processing_payments,
+    mark_customer_payment_manual_review,
+    release_customer_payment_processing,
+    set_customer_payment_processing_stage,
+    update_customer_payment_status,
 )
 from CustomerBot.database import update_order_status
 from Shared import agent_db
 from Shared.agent_db import get_active_customer_bot
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -52,32 +60,29 @@ def _calc_wholesale_price(agent_id: int, pay: dict, order: dict | None = None) -
 
 def _find_service_by_order(agent_id: int, order_id: int) -> dict:
     """اگر قبلاً برای این سفارش سرویس ساخته شده، آن را برمی‌گرداند."""
-    try:
-        from Shared.agent_db import search_services_by_name
-        panel_name = f"vpn-{int(order_id):07d}"
-        rows, _total = search_services_by_name(agent_id, panel_name, page=1, page_size=5)
-        for r in rows or []:
-            if str(r.get("name") or "") == panel_name:
-                return r
-    except Exception:
-        pass
-    return {}
+    return agent_db.find_service_by_order_reference(agent_id, order_id) or {}
 
 
-def _change_status_options_keyboard(pay_id: int, current_status: str):
+def _change_status_options_keyboard(pay_id: int, current_status: str, lang: str = "fa"):
+    _lg = lang
     status = (current_status or "").strip().lower()
     rows = []
     if status != "approved":
-        rows.append([IButton("\u2705 \u062a\u0627\u06cc\u06cc\u062f \u0634\u062f\u0647", callback_data=f"agbot:custpay:set:{pay_id}:approved")])
+        rows.append([IButton(i18n.t('✅ تایید شده', _lg), callback_data=f"agbot:custpay:set:{pay_id}:approved")])
     if status != "rejected":
-        rows.append([IButton("\u274c \u0631\u062f \u0634\u062f\u0647", callback_data=f"agbot:custpay:set:{pay_id}:rejected")])
+        rows.append([IButton(i18n.t('❌ رد شده', _lg), callback_data=f"agbot:custpay:set:{pay_id}:rejected")])
     if status != "pending":
-        rows.append([IButton("\u23f3 \u062f\u0631 \u062d\u0627\u0644 \u0627\u0646\u062a\u0638\u0627\u0631", callback_data=f"agbot:custpay:set:{pay_id}:pending")])
-    rows.append([IButton(BTN_BACK, callback_data=f"agbot:custpay:chg:back:{pay_id}")])
+        rows.append([IButton(i18n.t('⏳ در حال انتظار', _lg), callback_data=f"agbot:custpay:set:{pay_id}:pending")])
+    rows.append([IButton(i18n.t("back", _lg), callback_data=f"agbot:custpay:chg:back:{pay_id}")])
     return _ikb(rows)
 
 
 async def _show_change_options(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     try:
         await query.answer()
@@ -85,14 +90,17 @@ async def _show_change_options(update: Update, context: ContextTypes.DEFAULT_TYP
         pass
     pay = get_customer_payment_by_id_enriched(agent_id, pay_id)
     if not pay:
-        await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+        await query.answer(i18n.t('❌ تراکنش یافت نشد.', _lg), show_alert=True)
         return
     current_status = str(pay.get("status") or "pending").strip().lower()
     if current_status == "approved":
-        await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
+        await query.answer(i18n.t('🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.', _lg), show_alert=True)
+        return
+    if current_status == "processing":
+        await query.answer(i18n.t('⏳ این تراکنش در حال پردازش است؛ تا پایان عملیات قابل تغییر نیست.', _lg), show_alert=True)
         return
     from AgentBot.handlers.settings_transactions import _build_payment_detail_text
-    text = _build_payment_detail_text(pay) + "\n\nوضعیت جدید تراکنش را انتخاب کنید:"
+    text = _build_payment_detail_text(pay) + i18n.t('\n\nوضعیت جدید تراکنش را انتخاب کنید:', _lg)
     kb = _change_status_options_keyboard(pay_id, current_status)
     try:
         if query.message and getattr(query.message, "photo", None):
@@ -104,6 +112,11 @@ async def _show_change_options(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _redetail_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     try:
         await query.answer()
@@ -111,41 +124,51 @@ async def _redetail_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         pass
     pay = get_customer_payment_by_id_enriched(agent_id, pay_id)
     if not pay:
-        await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+        await query.answer(i18n.t('❌ تراکنش یافت نشد.', _lg), show_alert=True)
         return
     from AgentBot.handlers.settings_transactions import _send_payment_detail
     await _send_payment_detail(context, agent_id, query.message.chat_id, pay, source_message=query.message)
 
 
 async def _apply_change_status(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, new_status: str) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     new_status = (new_status or "").strip().lower()
     if new_status not in {"pending", "approved", "rejected"}:
-        await query.answer("❌ وضعیت مقصد نامعتبر است.", show_alert=True)
+        await query.answer(i18n.t('❌ وضعیت مقصد نامعتبر است.', _lg), show_alert=True)
         return
     pay = get_customer_payment_by_id_enriched(agent_id, pay_id)
     if not pay:
-        await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+        await query.answer(i18n.t('❌ تراکنش یافت نشد.', _lg), show_alert=True)
         return
     old_status = str(pay.get("status") or "").strip().lower()
     if old_status == "approved":
-        await query.answer("🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.", show_alert=True)
+        await query.answer(i18n.t('🔒 تراکنش‌های تاییدشده قابل تغییر وضعیت نیستند.', _lg), show_alert=True)
+        return
+    if old_status == "processing":
+        await query.answer(i18n.t('⏳ این تراکنش در حال پردازش است؛ تا پایان عملیات قابل تغییر نیست.', _lg), show_alert=True)
         return
     if old_status == new_status:
-        await query.answer("وضعیت تراکنش تغییری نکرد.", show_alert=True)
+        await query.answer(i18n.t('وضعیت تراکنش تغییری نکرد.', _lg), show_alert=True)
         return
 
     if new_status == "approved":
         order = pay.get("_order") or {}
         order_id = int(pay.get("_order_id") or order.get("order_id") or 0)
         if order_id and _find_service_by_order(agent_id, order_id):
-            await query.answer("⚠️ برای این سفارش سرویسی از قبل وجود دارد؛ امکان تایید مجدد نیست.", show_alert=True)
+            await query.answer(i18n.t('⚠️ برای این سفارش سرویسی از قبل وجود دارد؛ امکان تایید مجدد نیست.', _lg), show_alert=True)
             return
         await _approve_payment(update, context, agent_id, pay_id, pay=pay)
         return
 
-    if not update_customer_payment_status(agent_id, pay_id, new_status):
-        await query.answer("❌ تغییر وضعیت انجام نشد.", show_alert=True)
+    if not update_customer_payment_status(
+        agent_id, pay_id, new_status, expected_status=old_status
+    ):
+        await query.answer(i18n.t('❌ تغییر وضعیت انجام نشد.', _lg), show_alert=True)
         return
 
     order = pay.get("_order") or {}
@@ -160,20 +183,18 @@ async def _apply_change_status(update: Update, context: ContextTypes.DEFAULT_TYP
     amount = int(pay.get("amount") or 0)
     if new_status == "rejected":
         notify_text = (
-            f"\u274c \u067e\u0631\u062f\u0627\u062e\u062a \u0634\u0645\u0627 \u0628\u0647 \u0645\u0628\u0644\u063a {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646 \u0631\u062f \u0634\u062f.\n"
-            f"\u0644\u0637\u0641\u0627 \u0628\u0631\u0627\u06cc \u0627\u0637\u0644\u0627\u0639\u0627\u062a \u0628\u06cc\u0634\u062a\u0631 \u0628\u0627 \u067e\u0634\u062a\u06cc\u0628\u0627\u0646\u06cc \u062a\u0645\u0627\u0633 \u0628\u06af\u06cc\u0631\u06cc\u062f."
+            f"{i18n.t('❌ پرداخت شما به مبلغ ', _lg)}{_fmt_toman(amount)}{i18n.t(' تومان رد شد.\nلطفا برای اطلاعات بیشتر با پشتیبانی تماس بگیرید.', _lg)}"
         )
         await _notify_customer(context, agent_id, user_tg_id, notify_text)
         await _delete_pending_customer_message(context, agent_id, pay)
     else:
         notify_text = (
-            f"\u23f3 \u0648\u0636\u0639\u06cc\u062a \u067e\u0631\u062f\u0627\u062e\u062a \u0634\u0645\u0627 \u0628\u0647 \u0645\u0628\u0644\u063a {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646 \u0628\u0647 \u062d\u0627\u0644\u062a \u00ab\u062f\u0631 \u062d\u0627\u0644 \u0627\u0646\u062a\u0638\u0627\u0631\u00bb \u062a\u063a\u06cc\u06cc\u0631 \u06a9\u0631\u062f.\n"
-            f"پس از بررسی، نتیجه به اطلاع شما می‌رسد."
+            f"{i18n.t('⏳ وضعیت پرداخت شما به مبلغ ', _lg)}{_fmt_toman(amount)}{i18n.t(' تومان به حالت «در حال انتظار» تغییر کرد.\nپس از بررسی، نتیجه به اطلاع شما می‌رسد.', _lg)}"
         )
         await _notify_customer(context, agent_id, user_tg_id, notify_text)
 
     try:
-        await query.answer("✅ وضعیت تراکنش تغییر کرد.", show_alert=True)
+        await query.answer(i18n.t('✅ وضعیت تراکنش تغییر کرد.', _lg), show_alert=True)
     except Exception:
         pass
     try:
@@ -187,6 +208,11 @@ async def _apply_change_status(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return False
@@ -247,7 +273,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 pay_id = int(parts[3]) if parts[3].isdigit() else 0
                 await _apply_change_status(update, context, agent_id, pay_id, parts[4])
                 return
-            await query.answer("❌ داده نامعتبر.", show_alert=True)
+            await query.answer(i18n.t('❌ داده نامعتبر.', _lg), show_alert=True)
             return
 
         if sub == "back":
@@ -259,14 +285,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def _show_payments_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     text = (
-            "💳 <b>مدیریت پرداخت‌های مشتریان</b>\n\n"
-        "در این بخش می‌توانید رسیدهای خرید مشتریان را بررسی، تایید یا رد کنید."
+            i18n.t('💳 <b>مدیریت پرداخت‌های مشتریان</b>\n\nدر این بخش می‌توانید رسیدهای خرید مشتریان را بررسی، تایید یا رد کنید.', _lg)
     )
     kb = _ikb([
-        [IButton("\U0001f4cb \u0644\u06cc\u0633\u062a \u067e\u0631\u062f\u0627\u062e\u062a\u200c\u0647\u0627\u06cc \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631", callback_data="agbot:custpay:list:1")],
-        [IButton(BTN_BACK, callback_data="agbot:set:back")],
+        [IButton(i18n.t('📋 لیست پرداخت‌های در انتظار', _lg), callback_data="agbot:custpay:list:1")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:set:back")],
     ])
     try:
         await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
@@ -275,6 +305,11 @@ async def _show_payments_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def _list_pending_payments(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, page: int = 1) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     payments = get_customer_pending_card_payments(agent_id)
     total = len(payments)
@@ -284,20 +319,20 @@ async def _list_pending_payments(update: Update, context: ContextTypes.DEFAULT_T
     end = start + PAGE_SIZE
     page_pays = payments[start:end]
 
-    text = f"\U0001f4cb <b>\u067e\u0631\u062f\u0627\u062e\u062a\u200c\u0647\u0627\u06cc \u062f\u0631 \u0627\u0646\u062a\u0638\u0627\u0631</b> (\u062a\u0639\u062f\u0627\u062f: {total})\n\n"
+    text = f"{i18n.t('📋 <b>پرداخت‌های در انتظار</b> (تعداد: ', _lg)}{total})\n\n"
     if not page_pays:
-        text += "\u0647\u06cc\u0686 \u067e\u0631\u062f\u0627\u062e\u062a \u0645\u0646\u062a\u0638\u0631\u06cc \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f."
+        text += i18n.t('هیچ پرداخت منتظری وجود ندارد.', _lg)
     else:
         for p in page_pays:
             _order_row = p.get("_order") or {}
-            ptype = "\u267b\ufe0f \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if int(_order_row.get("renew_service_id") or 0) else "\U0001f4e6 \u062e\u0631\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9"
-            name = p.get("full_name") or p.get("username") or f"\u06a9\u0627\u0631\u0628\u0631 #{p.get('user_id', '?')}"
+            ptype = i18n.t('♻️ تمدید اشتراک', _lg) if int(_order_row.get("renew_service_id") or 0) else i18n.t('📦 خرید اشتراک', _lg)
+            name = p.get("full_name") or p.get("username") or f"{i18n.t('کاربر #', _lg)}{p.get('user_id', '?')}"
             amount = p.get("amount", 0)
             tx_code = p.get("tx_code", "")
             created = (p.get("created_at") or "")[:16]
-            text += f"{ptype} | <b>{name}</b> | {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646 | {created}\n"
-            text += f"\u06a9\u062f: {tx_code} | "
-            text += f"[\U0001f4fa \u0645\u0634\u0627\u0647\u062f\u0647 \u062c\u0632\u0626\u06cc\u0627\u062a](agbot:custpay:detail:{p['id']})\n\n"
+            text += f"{ptype} | <b>{name}</b> | {_fmt_toman(amount)}{i18n.t(' تومان | ', _lg)}{created}\n"
+            text += f"{i18n.t('کد: ', _lg)}{tx_code} | "
+            text += f"{i18n.t('[📺 مشاهده جزئیات](agbot:custpay:detail:', _lg)}{p['id']})\n\n"
 
     kb_rows = []
     if page_pays:
@@ -313,7 +348,7 @@ async def _list_pending_payments(update: Update, context: ContextTypes.DEFAULT_T
         nav.append(IButton("\u27a1\ufe0f", callback_data=f"agbot:custpay:list:{page+1}"))
     if nav:
         kb_rows.append(nav)
-    kb_rows.append([IButton(BTN_BACK, callback_data="agbot:custpay:menu")])
+    kb_rows.append([IButton(i18n.t("back", _lg), callback_data="agbot:custpay:menu")])
 
     try:
         await query.edit_message_text(text, reply_markup=_ikb(kb_rows), parse_mode="HTML")
@@ -322,44 +357,39 @@ async def _list_pending_payments(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     payments = get_customer_pending_card_payments(agent_id)
     pay = next((p for p in payments if p["id"] == pay_id), None)
     if not pay:
         try:
-            await query.edit_message_text("\u274c \u067e\u0631\u062f\u0627\u062e\u062a \u06cc\u0627\u0641\u062a \u0646\u0634\u062f.", reply_markup=back_keyboard("agbot:custpay:list:1"))
+            await query.edit_message_text(i18n.t('❌ پرداخت یافت نشد.', _lg), reply_markup=back_keyboard("agbot:custpay:list:1"))
         except Exception:
             pass
         return
 
-    name = pay.get("full_name") or pay.get("username") or f"\u06a9\u0627\u0631\u0628\u0631 #{pay.get('user_id', '?')}"
+    name = pay.get("full_name") or pay.get("username") or f"{i18n.t('کاربر #', _lg)}{pay.get('user_id', '?')}"
     amount = pay.get("amount", 0)
     tx_code = pay.get("tx_code", "")
     created = pay.get("created_at", "") or ""
     order = pay.get("_order")
-    ptype = "\u267b\ufe0f \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if (order and int(order.get("renew_service_id") or 0)) else "\U0001f4e6 خرید اشتراک"
+    ptype = i18n.t('♻️ تمدید اشتراک', _lg) if (order and int(order.get("renew_service_id") or 0)) else i18n.t('📦 خرید اشتراک', _lg)
 
     text = (
-        f"<b>جزئیات درخواست مشتری</b>\n\n"
-        f"\U0001f464 \u0645\u0634\u062a\u0631\u06cc: {name}\n"
-        f"{ptype}\n"
-        f"\U0001f4b0 \u0645\u0628\u0644\u063a: {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646\n"
-        f"\U0001f522 \u06a9\u062f \u067e\u06cc\u06af\u06cc\u0631\u06cc: {tx_code}\n"
-        f"\U0001f4c5 \u062a\u0627\u0631\u06cc\u062e: {created}\n"
+        f"{i18n.t('<b>جزئیات درخواست مشتری</b>\n\n👤 مشتری: ', _lg)}{name}\n{ptype}{i18n.t('\n💰 مبلغ: ', _lg)}{_fmt_toman(amount)}{i18n.t(' تومان\n🔢 کد پیگیری: ', _lg)}{tx_code}{i18n.t('\n📅 تاریخ: ', _lg)}{created}\n"
     )
     if order:
         wholesale = _calc_wholesale_price(agent_id, pay, order)
         text += (
-            f"\n<code>\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501</code>\n"
-            f"\U0001f4e6 \u067e\u0644\u0646: {order.get('plan_title', '?')}\n"
-            f"\U0001f4ca \u062d\u062c\u0645: {order.get('volume_gb', 0)} \u06af\u06cc\u06af\n"
-            f"\u23f0 \u0631\u0648\u0632: {order.get('days', 0)}\n"
-            f"\U0001f4cd \u0645\u06a9\u0627\u0646: {order.get('server_location', '?')}\n"
+            f"{i18n.t('\n<code>━━━━━━━━━━━━━</code>\n📦 پلن: ', _lg)}{order.get('plan_title', '?')}{i18n.t('\n📊 حجم: ', _lg)}{order.get('volume_gb', 0)}{i18n.t(' گیگ\n⏰ روز: ', _lg)}{order.get('days', 0)}{i18n.t('\n📍 مکان: ', _lg)}{order.get('server_location', '?')}\n"
         )
 
         text += (
-            f"\U0001f3f7 \u0647\u0632\u06cc\u0646\u0647 \u0639\u0645\u062f\u0647: {_fmt_toman(wholesale)} \u062a\u0648\u0645\u0627\u0646\n"
-            f"\U0001f4bc \u0645\u0648\u062c\u0648\u062f\u06cc \u0646\u0645\u0627\u06cc\u0646\u062f\u0647: {_fmt_toman(agent_db.get_wallet_balance(agent_id))} \u062a\u0648\u0645\u0627\u0646\n"
+            f"{i18n.t('🏷 هزینه عمده: ', _lg)}{_fmt_toman(wholesale)}{i18n.t(' تومان\n💼 موجودی نماینده: ', _lg)}{_fmt_toman(agent_db.get_wallet_balance(agent_id))}{i18n.t(' تومان\n', _lg)}"
         )
 
     raw_receipt = pay.get("receipt_image", "")
@@ -370,17 +400,17 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
         receipt_fid = str(raw_receipt).strip()
     card_last4 = str(meta.get("card_last4") or "").strip()
     if card_last4:
-        text += f"\n\U0001f4b3 \u06f4 \u0631\u0642\u0645 \u0622\u062e\u0631 \u06a9\u0627\u0631\u062a: <code>{card_last4}</code>\n"
+        text += f"{i18n.t('\n💳 ۴ رقم آخر کارت: <code>', _lg)}{card_last4}</code>\n"
     if not receipt_fid:
-        text += "\n\n\u28fe \u0647\u06cc\u0686 \u0631\u0633\u06cc\u062f\u06cc \u0628\u0631\u0627\u06cc \u0627\u06cc\u0646 \u067e\u0631\u062f\u0627\u062e\u062a \u0648\u062c\u0648\u062f \u0646\u062f\u0627\u0631\u062f."
+        text += i18n.t('\n\n⣾ هیچ رسیدی برای این پرداخت وجود ندارد.', _lg)
 
     kb_rows = [
         [
-            IButton("❌ رد پرداخت", callback_data=f"agbot:custpay:reject:{pay_id}"),
-            IButton("✅ تایید پرداخت", callback_data=f"agbot:custpay:approve:{pay_id}"),
+            IButton(i18n.t('❌ رد پرداخت', _lg), callback_data=f"agbot:custpay:reject:{pay_id}"),
+            IButton(i18n.t('✅ تایید پرداخت', _lg), callback_data=f"agbot:custpay:approve:{pay_id}"),
         ],
         [IButton(f"👤 {name}", callback_data=f"agbot:custpay:profile:{pay.get('user_id', 0)}")],
-        [IButton(BTN_BACK, callback_data="agbot:custpay:list:1")],
+        [IButton(i18n.t("back", _lg), callback_data="agbot:custpay:list:1")],
     ]
 
     try:
@@ -404,106 +434,502 @@ async def _show_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.warning("Failed to edit message as fallback for payment %s: %s", pay_id, edit_err)
 
 
-async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:
-    query = update.callback_query
-    if pay is None:
-        payments = get_customer_pending_card_payments(agent_id)
-        pay = next((p for p in payments if p["id"] == pay_id), None)
+def _fulfillment_result(
+    outcome: str,
+    note: str,
+    *,
+    pay: Optional[dict] = None,
+    service: Optional[dict] = None,
+    is_renew: bool = False,
+) -> dict:
+    return {
+        "outcome": str(outcome or "manual_review"),
+        "note": str(note or "")[:1000],
+        "pay": pay or {},
+        "service": service or {},
+        "is_renew": bool(is_renew),
+    }
+
+
+def _mark_fulfillment_order_approved(agent_id: int, order_id: int) -> tuple[bool, str]:
+    """Persist the order side of a completed fulfillment without hiding errors."""
+    oid = int(order_id or 0)
+    if oid <= 0:
+        return True, ""
+    try:
+        if update_order_status(int(agent_id or 0), oid, "approved"):
+            return True, ""
+        return False, f"customer_order_{oid}_not_found"
+    except Exception as exc:
+        return False, f"order_status_update_failed:{type(exc).__name__}:{exc}"[:1000]
+
+
+async def _fulfill_customer_payment(
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    pay_id: int,
+    *,
+    source: str,
+    expected_status: Optional[str] = None,
+    allow_resume: bool = False,
+) -> dict:
+    """Financial core shared by manual approval, SMS and crash recovery.
+
+    The payment claim lives in customer_bot.db while the wallet reservation and
+    fulfillment ledger live together in agency.db.  Every operation after that
+    boundary is replay-safe: the debit has a unique reference, create has a
+    stable UUID/source payment, and renew persists absolute target values.
+    """
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
+    aid = int(agent_id or 0)
+    pid = int(pay_id or 0)
+    pay = get_customer_payment_by_id_enriched(aid, pid)
     if not pay:
-        await query.answer("❌ پرداخت در لیست در انتظار پیدا نشد.", show_alert=True)
+        return _fulfillment_result("manual_review", "payment_not_found")
+
+    current_status = str(pay.get("status") or "").strip().lower()
+    if current_status == "approved":
+        fulfillment = agent_db.get_payment_fulfillment(aid, pid)
+        service = None
+        if fulfillment and int(fulfillment.get("service_id") or 0):
+            service = agent_db.get_service_by_id(int(fulfillment["service_id"]))
+        if not service:
+            service = agent_db.find_service_by_source_payment(aid, pid)
+        fulfillment_state = str((fulfillment or {}).get("state") or "").strip().lower()
+        if fulfillment and fulfillment_state != "completed":
+            service_is_live = bool(service) and not str(
+                (service or {}).get("deleted_at") or ""
+            ).strip()
+            if fulfillment_state == "local_recorded" and service_is_live:
+                # Valid crash window: payment committed immediately before the
+                # final ledger state update.
+                agent_db.update_payment_fulfillment(
+                    aid,
+                    pid,
+                    state="completed",
+                    service_id=int((service or {}).get("id") or 0),
+                    last_error="",
+                )
+            else:
+                # An approved payment cannot prove that provisioning completed.
+                # Preserve the inconsistency for an operator instead of turning
+                # incomplete panel/wallet work into a false completed ledger.
+                agent_db.update_payment_fulfillment(
+                    aid,
+                    pid,
+                    state="manual_review",
+                    last_error=f"approved payment with fulfillment state {fulfillment_state or 'unknown'}",
+                )
+        approved_order = dict(pay.get("_order") or {})
+        approved_order_id = int(
+            approved_order.get("order_id") or pay.get("_order_id") or 0
+        )
+        order_ok, order_note = _mark_fulfillment_order_approved(aid, approved_order_id)
+        if not order_ok:
+            logger.warning(
+                "Could not reconcile approved customer order agent=%s pay=%s: %s",
+                aid,
+                pid,
+                order_note,
+            )
+        return _fulfillment_result(
+            "obsolete", "payment_already_approved", pay=pay, service=service
+        )
+
+    order = dict(pay.get("_order") or {})
+    order_id_hint = int(pay.get("_order_id") or 0)
+    if pay.get("_pay_type") != "buy" or not order:
+        note = (
+            f"customer order {order_id_hint} is missing or unreadable"
+            if order_id_hint > 0
+            else "customer payment has no traceable order"
+        )
+        if current_status == "processing":
+            mark_customer_payment_manual_review(
+                aid, pid, processing_token=str(pay.get("processing_token") or ""),
+                note=note,
+            )
+        return _fulfillment_result(
+            "manual_review",
+            "order_not_found" if order_id_hint > 0 else "payment_without_order",
+            pay=pay,
+        )
+
+    if not int(order.get("server_id") or 0):
+        order["server_id"] = int(pay.get("_server_id") or 0)
+    order_id = int(order.get("order_id") or pay.get("_order_id") or 0)
+    renew_service_id = int(order.get("renew_service_id") or 0)
+    is_renew = renew_service_id > 0
+    kind = "renew" if is_renew else "create"
+    wholesale_price = _calc_wholesale_price(aid, pay, order)
+    if wholesale_price <= 0:
+        return _fulfillment_result(
+            "manual_review", "wholesale_price_not_configured", pay=pay, is_renew=is_renew
+        )
+
+    # A legacy service/order with no durable source is ambiguous.  Failing
+    # closed is safer than either charging again or granting a free duplicate.
+    fulfillment = agent_db.get_payment_fulfillment(aid, pid)
+    if str((fulfillment or {}).get("state") or "").strip().lower() == "manual_review":
+        if current_status == "processing":
+            mark_customer_payment_manual_review(
+                aid,
+                pid,
+                processing_token=str(pay.get("processing_token") or ""),
+                note=str(
+                    (fulfillment or {}).get("last_error")
+                    or "fulfillment requires manual review"
+                ),
+            )
+        return _fulfillment_result(
+            "manual_review",
+            str((fulfillment or {}).get("last_error") or "fulfillment_requires_manual_review"),
+            pay=pay,
+            is_renew=is_renew,
+        )
+    source_service = agent_db.find_service_by_source_payment(aid, pid) if not is_renew else None
+    if not fulfillment:
+        if is_renew and str(order.get("status") or "").strip().lower() == "approved":
+            return _fulfillment_result(
+                "manual_review", "legacy_renewal_already_marked_approved", pay=pay, is_renew=True
+            )
+        if not is_renew and not source_service and order_id:
+            try:
+                legacy_service = _find_service_by_order(aid, order_id)
+            except Exception as exc:
+                return _fulfillment_result(
+                    "retry", f"service_idempotency_check_failed:{exc}", pay=pay
+                )
+            if legacy_service:
+                return _fulfillment_result(
+                    "manual_review", "legacy_service_exists_without_payment_source",
+                    pay=pay, service=legacy_service,
+                )
+
+    stable_uuid = ""
+    if not is_renew:
+        stable_uuid = str((fulfillment or {}).get("panel_uuid") or "").strip()
+        if not stable_uuid:
+            stable_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"hiddify-sellbot:{aid}:{pid}"))
+    try:
+        fulfillment = agent_db.prepare_payment_fulfillment(
+            aid,
+            pid,
+            order_id=order_id,
+            kind=kind,
+            wholesale_price=wholesale_price,
+            panel_uuid=stable_uuid,
+        )
+    except Exception as exc:
+        logger.exception("payment fulfillment preparation failed agent=%s pay=%s", aid, pid)
+        return _fulfillment_result(
+            "manual_review", f"fulfillment_conflict:{exc}", pay=pay, is_renew=is_renew
+        )
+
+    token = ""
+    if current_status == "processing":
+        token = str(pay.get("processing_token") or "").strip()
+        if source != "recovery":
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                started = datetime.strptime(
+                    str(pay.get("processing_started_at") or ""), "%Y-%m-%d %H:%M:%S"
+                )
+                if started > datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10):
+                    return _fulfillment_result(
+                        "retry", "payment_is_already_being_processed", pay=pay,
+                        service=source_service, is_renew=is_renew,
+                    )
+            except (TypeError, ValueError):
+                pass
+        if (
+            not allow_resume
+            or not token
+            or str(pay.get("processing_stage") or "").strip().lower() == "manual_review"
+        ):
+            return _fulfillment_result(
+                "manual_review", "payment_processing_requires_review", pay=pay,
+                service=source_service, is_renew=is_renew,
+            )
+    else:
+        wanted = str(expected_status or "pending").strip().lower()
+        if wanted not in {"pending", "rejected"} or current_status != wanted:
+            return _fulfillment_result(
+                "obsolete", f"payment_status_{current_status}", pay=pay, is_renew=is_renew
+            )
+        token = claim_customer_payment_processing(
+            aid, pid, expected_status=wanted, source=source
+        )
+        if not token:
+            fresh = get_customer_payment_by_id_enriched(aid, pid) or pay
+            fresh_status = str(fresh.get("status") or "").strip().lower()
+            outcome = "obsolete" if fresh_status == "approved" else "retry"
+            return _fulfillment_result(
+                outcome, f"payment_claim_failed:{fresh_status}", pay=fresh, is_renew=is_renew
+            )
+        pay = get_customer_payment_by_id_enriched(aid, pid) or pay
+
+    # Crash after local persistence: finish the financial state without calling
+    # the panel or debiting a second time.
+    fulfillment = agent_db.get_payment_fulfillment(aid, pid) or fulfillment
+    if not is_renew:
+        source_service = agent_db.find_service_by_source_payment(aid, pid)
+    service_id = int((fulfillment or {}).get("service_id") or 0)
+    completed_service = agent_db.get_service_by_id(service_id) if service_id else source_service
+    if completed_service and str(completed_service.get("deleted_at") or "").strip():
+        mark_customer_payment_manual_review(
+            aid, pid, processing_token=token, note="source service was deleted"
+        )
+        return _fulfillment_result(
+            "manual_review", "source_service_deleted", pay=pay,
+            service=completed_service, is_renew=is_renew,
+        )
+    fulfillment_state = str(fulfillment.get("state") or "").strip().lower()
+    if not completed_service and fulfillment_state in {"local_recorded", "completed"}:
+        mark_customer_payment_manual_review(
+            aid, pid, processing_token=token,
+            note=f"fulfillment references missing service {service_id}",
+        )
+        return _fulfillment_result(
+            "manual_review", "recorded_service_missing", pay=pay, is_renew=is_renew,
+        )
+    if completed_service and fulfillment_state in {"local_recorded", "completed"}:
+        try:
+            agent_db.reserve_wallet_for_payment_once(
+                aid,
+                pid,
+                int(fulfillment.get("wholesale_price") or wholesale_price),
+                description="",
+                service_id=int(completed_service["id"]),
+            )
+        except Exception as exc:
+            mark_customer_payment_manual_review(
+                aid, pid, processing_token=token,
+                note=f"could not reconcile wallet transaction service: {exc}",
+            )
+            return _fulfillment_result(
+                "manual_review", f"wallet_service_reconcile_failed:{exc}", pay=pay,
+                service=completed_service, is_renew=is_renew,
+            )
+        order_ok, order_note = _mark_fulfillment_order_approved(aid, order_id)
+        if not order_ok:
+            set_customer_payment_processing_stage(
+                aid, pid, token, "order_status_retry", order_note
+            )
+            return _fulfillment_result(
+                "retry", order_note, pay=pay, service=completed_service,
+                is_renew=is_renew,
+            )
+        finalized_here = finish_customer_payment_processing(
+            aid, pid, token, "recovered local fulfillment"
+        )
+        if not finalized_here:
+            fresh = get_customer_payment_by_id_enriched(aid, pid) or pay
+            if str(fresh.get("status") or "").lower() != "approved":
+                mark_customer_payment_manual_review(
+                    aid, pid, processing_token=token, note="could not finalize recovered payment"
+                )
+                return _fulfillment_result(
+                    "manual_review", "payment_finalize_failed", pay=fresh,
+                    service=completed_service, is_renew=is_renew,
+                )
+        agent_db.update_payment_fulfillment(
+            aid, pid, state="completed", service_id=int(completed_service["id"]), last_error=""
+        )
+        if not finalized_here:
+            return _fulfillment_result(
+                "obsolete", "payment_finalized_by_concurrent_worker", pay=fresh,
+                service=completed_service, is_renew=is_renew,
+            )
+        return _fulfillment_result(
+            "success", "recovered_completed_fulfillment",
+            pay=get_customer_payment_by_id_enriched(aid, pid) or pay,
+            service=completed_service, is_renew=is_renew,
+        )
+
+    set_customer_payment_processing_stage(aid, pid, token, "reserving_wallet")
+    try:
+        wallet_ok, wallet, _debited_now = agent_db.reserve_wallet_for_payment_once(
+            aid,
+            pid,
+            wholesale_price,
+            description=(
+                f"{i18n.t('کسر عمده سفارش مشتری #', _lg)}{order_id or pay.get('tx_code')}"
+                + (i18n.t(' (تایید خودکار SMS)', _lg) if source == "sms" else "")
+            ),
+        )
+    except Exception as exc:
+        mark_customer_payment_manual_review(
+            aid, pid, processing_token=token, note=f"wallet ledger conflict: {exc}"
+        )
+        return _fulfillment_result(
+            "manual_review", f"wallet_ledger_conflict:{exc}", pay=pay, is_renew=is_renew
+        )
+    if not wallet_ok:
+        balance = int((wallet or {}).get("balance") or 0)
+        agent_db.update_payment_fulfillment(
+            aid, pid, state="waiting_wallet", last_error="insufficient_wallet"
+        )
+        release_customer_payment_processing(
+            aid, pid, token, note=f"insufficient wallet ({balance} < {wholesale_price})"
+        )
+        return _fulfillment_result(
+            "waiting_wallet", f"insufficient_wallet:{balance}:{wholesale_price}",
+            pay=pay, is_renew=is_renew,
+        )
+
+    set_customer_payment_processing_stage(aid, pid, token, "applying_panel")
+    agent_db.update_payment_fulfillment(
+        aid, pid, increment_attempt=True, last_error=""
+    )
+    try:
+        if is_renew:
+            service = await _renew_subscription_from_order(
+                context, aid, int(pay.get("user_id") or 0), order,
+                tx_code=str(pay.get("tx_code") or ""), payment_id=pid,
+            )
+        else:
+            service = await _create_subscription_from_order(
+                context, aid, int(pay.get("user_id") or 0), order,
+                wholesale_price, tx_code=str(pay.get("tx_code") or ""), payment_id=pid,
+            )
+        if not service or not int(service.get("id") or 0):
+            raise RuntimeError("local_service_not_recorded")
+    except Exception as exc:
+        note = f"{type(exc).__name__}:{exc}"[:1000]
+        agent_db.update_payment_fulfillment(aid, pid, last_error=note)
+        release_customer_payment_processing(aid, pid, token, note=note)
+        logger.exception("payment fulfillment failed agent=%s pay=%s", aid, pid)
+        return _fulfillment_result("retry", note, pay=pay, is_renew=is_renew)
+
+    service_id = int(service["id"])
+    agent_db.update_payment_fulfillment(
+        aid, pid, state="local_recorded", service_id=service_id, last_error=""
+    )
+    # Re-run the idempotent reservation only to attach the service id to the
+    # existing transaction; no second debit can occur.
+    agent_db.reserve_wallet_for_payment_once(
+        aid, pid, wholesale_price, description="", service_id=service_id
+    )
+    set_customer_payment_processing_stage(aid, pid, token, "finalizing")
+    order_ok, order_note = _mark_fulfillment_order_approved(aid, order_id)
+    if not order_ok:
+        set_customer_payment_processing_stage(
+            aid, pid, token, "order_status_retry", order_note
+        )
+        return _fulfillment_result(
+            "retry", order_note, pay=pay, service=service, is_renew=is_renew,
+        )
+    finalized_here = finish_customer_payment_processing(
+        aid, pid, token, "fulfillment completed"
+    )
+    if not finalized_here:
+        fresh = get_customer_payment_by_id_enriched(aid, pid) or pay
+        if str(fresh.get("status") or "").strip().lower() != "approved":
+            mark_customer_payment_manual_review(
+                aid, pid, processing_token=token,
+                note=f"service {service_id} exists but payment finalization failed",
+            )
+            return _fulfillment_result(
+                "manual_review", "service_exists_payment_finalize_failed",
+                pay=fresh, service=service, is_renew=is_renew,
+            )
+    agent_db.update_payment_fulfillment(
+        aid, pid, state="completed", service_id=service_id, last_error=""
+    )
+    if not finalized_here:
+        return _fulfillment_result(
+            "obsolete", "payment_finalized_by_concurrent_worker", pay=fresh,
+            service=service, is_renew=is_renew,
+        )
+    return _fulfillment_result(
+        "success", "approved", pay=get_customer_payment_by_id_enriched(aid, pid) or pay,
+        service=service, is_renew=is_renew,
+    )
+
+
+async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
+    query = update.callback_query
+    requested_status = str((pay or {}).get("status") or "pending").strip().lower()
+    if requested_status not in {"pending", "rejected"}:
+        requested_status = "pending"
+    result = await _fulfill_customer_payment(
+        context,
+        agent_id,
+        pay_id,
+        source="manual",
+        expected_status=requested_status,
+        allow_resume=False,
+    )
+    outcome = str(result.get("outcome") or "manual_review")
+    note = str(result.get("note") or "")
+    pay = result.get("pay") or get_customer_payment_by_id_enriched(agent_id, pay_id)
+    if not pay:
+        await query.answer(i18n.t('❌ پرداخت در لیست در انتظار پیدا نشد.', _lg), show_alert=True)
+        return
+    if outcome == "obsolete":
+        await query.answer(i18n.t('⚠️ این پرداخت قبلاً تعیین‌تکلیف شده است.', _lg), show_alert=True)
+        return
+    if outcome == "waiting_wallet":
+        await query.answer(
+            i18n.t('موجودی کیف پول کافی نیست. پرداخت در انتظار مانده و هیچ کسر تکراری انجام نمی‌شود.', _lg),
+            show_alert=True,
+        )
+        return
+    if outcome == "retry":
+        await query.answer(
+            f"{i18n.t('عملیات کامل نشد و برای تلاش امن بعدی نگه داشته شد؛ کسر وجه تکرار نخواهد شد. جزئیات: ', _lg)}{note[:120]}",
+            show_alert=True,
+        )
+        return
+    if outcome != "success":
+        await query.answer(
+            f"{i18n.t('⚠️ وضعیت مالی مبهم است و برای جلوگیری از کسر یا ساخت تکراری قفل شد. لاگ و دفترکل را بررسی کنید. جزئیات: ', _lg)}{note[:120]}",
+            show_alert=True,
+        )
         return
 
-    user_tg_id = pay.get("user_id", 0)
-
-    if pay.get("_pay_type") == "buy" and pay.get("_order"):
-        # Create subscription for approved buy payment / renew approved renew order
-        order = dict(pay["_order"])
-        if not int(order.get("server_id") or 0):
-            order["server_id"] = int(pay.get("_server_id") or 0)
-        renew_service_id = int(order.get("renew_service_id") or 0)
-        if renew_service_id and str(order.get("status") or "").strip().lower() == "approved":
-            await query.answer("⚠️ برای این سفارش قبلاً تمدید انجام شده است.", show_alert=True)
-            return
-        wholesale_price = _calc_wholesale_price(agent_id, pay, order)
-        if wholesale_price <= 0:
-            await query.answer("قیمت عمده برای این سفارش تنظیم نشده است. از ادمین بخواهید تعرفه عمده را ثبت کند.", show_alert=True)
-            return
-        wallet_balance = agent_db.get_wallet_balance(agent_id)
-        if wallet_balance < wholesale_price:
-            await query.answer(
-                f"موجودی کیف پول کافی نیست. موجودی: {_fmt_toman(wallet_balance)} تومان | مورد نیاز: {_fmt_toman(wholesale_price)} تومان",
-                show_alert=True,
+    user_tg_id = int(pay.get("user_id") or 0)
+    svc = result.get("service") or {}
+    is_renew = bool(result.get("is_renew"))
+    try:
+        await _post_fulfillment_customer_delivery(context, agent_id, pay, svc, is_renew)
+    except Exception as notify_err:
+        logger.warning("Post-approval customer delivery failed for payment %s: %s", pay_id, notify_err)
+    try:
+        await _delete_pending_customer_message(context, agent_id, pay)
+    except Exception as delete_err:
+        logger.warning("Failed deleting pending customer message for payment %s: %s", pay_id, delete_err)
+    if svc:
+        try:
+            from Shared.subscription_reports import send_subscription_report
+            await send_subscription_report(
+                context.bot,
+                query.message.chat_id,
+                agent_id,
+                user_tg_id,
+                svc,
+                "renew" if is_renew else "create",
+                int(pay.get("amount") or 0),
             )
-            return
-        if not update_customer_payment_status(agent_id, pay_id, "processing"):
-            await query.answer("خطا در قفل کردن پرداخت.", show_alert=True)
-            return
-        deducted, _ = agent_db.deduct_wallet(
-            agent_id,
-            wholesale_price,
-            description=f"کسر عمده سفارش مشتری #{order.get('order_id') or pay.get('tx_code')}",
-        )
-        if not deducted:
-            update_customer_payment_status(agent_id, pay_id, "pending")
-            await query.answer("موجودی کیف پول کافی نیست. لطفاً کیف پول خود را شارژ کنید.", show_alert=True)
-            return
-        if renew_service_id:
-            try:
-                svc = await _renew_subscription_from_order(context, agent_id, user_tg_id, order, tx_code=str(pay.get("tx_code") or ""))
-            except Exception as e:
-                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای تمدید سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
-                if int(order.get("order_id") or 0):
-                    update_order_status(agent_id, int(order.get("order_id")), "pending")
-                logger.error(f"Failed to renew subscription for payment {pay_id}: {e}")
-                await query.answer(f"خطا در تمدید سرویس؛ مبلغ از کیف پول نماینده برگشت خورد: {e}", show_alert=True)
-                return
-        else:
-            try:
-                svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
-            except Exception as e:
-                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
-                if int(order.get("order_id") or 0):
-                    update_order_status(agent_id, int(order.get("order_id")), "pending")
-                logger.error(f"Failed to create subscription for payment {pay_id}: {e}")
-                await query.answer(f"خطا در ساخت سرویس؛ مبلغ از کیف پول نماینده برگشت خورد: {e}", show_alert=True)
-                return
-        if not update_customer_payment_status(agent_id, pay_id, "approved"):
-            logger.error("Payment %s approved service %s but status update failed", pay_id, (svc or {}).get("id"))
-            await query.answer("سرویس ساخته شد اما ثبت وضعیت پرداخت خطا داد. لاگ را بررسی کنید.", show_alert=True)
-            return
-        if int(order.get("order_id") or 0):
-            update_order_status(agent_id, int(order.get("order_id") or 0), "approved")
-        if svc:
-            try:
-                from Shared.subscription_reports import send_subscription_report
-                await send_subscription_report(
-                    context.bot,
-                    query.message.chat_id,
-                    agent_id,
-                    user_tg_id,
-                    svc,
-                    "renew" if renew_service_id else "create",
-                    int(pay.get("amount") or order.get("price") or 0),
-                )
-            except Exception as report_err:
-                logger.warning("Failed to send subscription report for payment %s: %s", pay_id, report_err)
-    else:
-        # No order info - just mark approved
-        ok = update_customer_payment_status(agent_id, pay_id, "approved")
-        if not ok:
-            await query.answer("خطا در به‌روزرسانی.", show_alert=True)
-            return
+        except Exception as report_err:
+            logger.warning("Failed to send subscription report for payment %s: %s", pay_id, report_err)
 
     amount = int(pay.get("amount") or 0)
     tx_code = str(pay.get("tx_code") or "-")
     customer_name = pay.get("full_name") or pay.get("username") or f"Customer {user_tg_id}"
     done_text = (
-        "🕊️💸 گزارش تایید پرداخت 💸🕊️\n\n"
-        "📌 شیوه پرداخت: کارت به کارت\n"
-        f"🔑 شناسه تراکنش: {tx_code}\n"
-        f"💰 مبلغ پرداخت: {amount:,} تومان"
+        f"{i18n.t('🕊️💸 گزارش تایید پرداخت 💸🕊️\n\n📌 شیوه پرداخت: کارت به کارت\n🔑 شناسه تراکنش: ', _lg)}{tx_code}{i18n.t('\n💰 مبلغ پرداخت: ', _lg)}{amount:f','}{i18n.t(' تومان', _lg)}"
     )
     card_last4 = str(pay.get("_card_last4") or "").strip()
     if not card_last4:
@@ -513,13 +939,16 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
         except Exception:
             card_last4 = ""
     if card_last4:
-        done_text += f"\n💳 ۴ رقم آخر کارت: <code>{card_last4}</code>"
-    done_text += "\n\n✅ پرداخت تایید شد؛ " + ("اشتراک مشتری تمدید شد." if renew_service_id else "اشتراک مشتری ساخته شد.")
+        done_text += f"{i18n.t('\n💳 ۴ رقم آخر کارت: <code>', _lg)}{card_last4}</code>"
+    if svc:
+        done_text += i18n.t('\n\n✅ پرداخت تایید شد؛ ', _lg) + (i18n.t('اشتراک مشتری تمدید شد.', _lg) if is_renew else i18n.t('اشتراک مشتری ساخته شد.', _lg))
+    else:
+        done_text += i18n.t('\n\n✅ پرداخت تایید شد.', _lg)
     done_kb = _ikb([
         [IButton(f"👤 {customer_name}", callback_data=f"agbot:custpay:profile:{user_tg_id}")],
     ])
     try:
-        await query.answer("✅ پرداخت با موفقیت تایید شد.", show_alert=True)
+        await query.answer(i18n.t('✅ پرداخت با موفقیت تایید شد.', _lg), show_alert=True)
     except Exception:
         pass
     try:
@@ -543,129 +972,133 @@ async def process_sms_webhook_queue(context: ContextTypes.DEFAULT_TYPE, limit: i
     کیف پول عمده و تحویل اشتراک باید در همین پروسه (با رویداد لوپ و توکن ربات
     مشتریِ هر نماینده) انجام شود — دقیقاً مثل تایید دستی ادمین.
     """
-    from CustomerBot.database import fetch_pending_sms_auto_queue, mark_sms_auto_queue_processed
+    from CustomerBot.database import (
+        claim_sms_auto_queue,
+        complete_sms_auto_queue,
+        dead_letter_sms_auto_queue,
+        retry_sms_auto_queue,
+    )
 
     processed = 0
+    # First resume operations interrupted by a process restart. This also
+    # freezes legacy/ambiguous processing rows instead of assuming success.
     try:
-        rows = fetch_pending_sms_auto_queue(limit=limit)
+        await recover_stale_customer_payment_fulfillments(context, limit=max(5, int(limit or 5)))
+    except Exception as exc:
+        logger.exception("stale customer payment recovery failed: %s", exc)
+    try:
+        rows = claim_sms_auto_queue(limit=limit, lease_seconds=900)
     except Exception as e:
-        logger.warning("sms webhook queue fetch failed: %s", e)
+        logger.warning("sms webhook queue claim failed: %s", e)
         return 0
     for row in rows or []:
         qid = int(row.get("id") or 0)
         agent_id = int(row.get("agent_id") or 0)
         pay_id = int(row.get("pay_id") or 0)
+        lease_token = str(row.get("lease_token") or "")
+        attempt = int(row.get("attempt_count") or 1)
         try:
-            ok, note = await _auto_approve_from_sms_webhook(context, agent_id, pay_id, row)
+            result = await _auto_approve_from_sms_webhook(context, agent_id, pay_id, row)
+            outcome = str(result.get("outcome") or "manual_review")
+            note = str(result.get("note") or outcome)
         except Exception as e:
-            ok, note = False, f"{type(e).__name__}: {e}"
+            outcome, note = "retry", f"{type(e).__name__}: {e}"
             logger.exception("sms auto approve failed (agent=%s pay=%s)", agent_id, pay_id)
+        stored = False
         try:
-            mark_sms_auto_queue_processed(qid, note=note)
+            if outcome in {"success", "obsolete"}:
+                stored = complete_sms_auto_queue(
+                    qid,
+                    lease_token,
+                    note=note,
+                    state="succeeded" if outcome == "success" else "obsolete",
+                )
+            elif outcome == "waiting_wallet":
+                stored = retry_sms_auto_queue(
+                    qid, lease_token, note, 300, state="waiting_wallet"
+                )
+            elif outcome == "retry" and attempt < 8:
+                backoff = (15, 30, 60, 120, 300, 900, 1800, 3600)
+                stored = retry_sms_auto_queue(
+                    qid, lease_token, note, backoff[min(attempt - 1, len(backoff) - 1)]
+                )
+            else:
+                stored = dead_letter_sms_auto_queue(qid, lease_token, note)
+                outcome = "manual_review"
+                try:
+                    agent_db.update_payment_fulfillment(
+                        agent_id, pay_id, state="manual_review", last_error=note
+                    )
+                except Exception:
+                    pass
         except Exception as e:
-            logger.warning("sms queue mark processed failed (id=%s): %s", qid, e)
+            logger.warning("sms queue outcome write failed (id=%s): %s", qid, e)
+        if not stored:
+            logger.warning("sms queue lease was lost before outcome write (id=%s)", qid)
+            processed += 1
+            continue
+        try:
+            from Shared import userbot_db
+            event_status = {
+                "success": "approved",
+                "obsolete": "approved_duplicate",
+                "waiting_wallet": "agency_waiting_wallet",
+                "retry": "approve_retry",
+                "manual_review": "manual_review",
+            }.get(outcome, "manual_review")
+            userbot_db.update_sms_webhook_event(
+                str(row.get("event_id") or ""),
+                status=event_status,
+                matched_payment_id=pay_id,
+                message=note[:500],
+                amount_toman=int(row.get("amount_toman") or 0),
+            )
+        except Exception as exc:
+            logger.warning("sms queue event status update failed (id=%s): %s", qid, exc)
         processed += 1
     return processed
 
 
-async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, queue_row: dict = None) -> tuple[bool, str]:
-    """تایید خودکار پرداخت مشتری از طریق SMS — بدون تعامل با پیام‌های ادمین."""
-    queue_row = queue_row or {}
-    payments = get_customer_pending_card_payments(agent_id)
-    pay = next((p for p in payments if int(p.get("id") or 0) == pay_id), None)
-    if not pay:
-        return True, "payment is not pending anymore (probably approved manually)"
-
-    user_tg_id = int(pay.get("user_id") or 0)
-    svc = None
-    is_renew = False
-
-    if pay.get("_pay_type") == "buy" and pay.get("_order"):
-        order = dict(pay["_order"])
-        if not int(order.get("server_id") or 0):
-            order["server_id"] = int(pay.get("_server_id") or 0)
-        renew_service_id = int(order.get("renew_service_id") or 0)
-        is_renew = bool(renew_service_id)
-        if renew_service_id and str(order.get("status") or "").strip().lower() == "approved":
-            return True, "order already renewed"
-
-        wholesale_price = _calc_wholesale_price(agent_id, pay, order)
-        if wholesale_price <= 0:
-            return False, "wholesale price not set; left pending for agent"
-        wallet_balance = agent_db.get_wallet_balance(agent_id)
-        if wallet_balance < wholesale_price:
-            return False, f"insufficient agent wallet ({int(wallet_balance)} < {wholesale_price}); left pending"
-
-        if not update_customer_payment_status(agent_id, pay_id, "processing"):
-            return False, "failed to lock payment"
-        deducted, _ = agent_db.deduct_wallet(
-            agent_id,
-            wholesale_price,
-            description=f"کسر عمده سفارش مشتری #{order.get('order_id') or pay.get('tx_code')} (تایید خودکار SMS)",
-        )
-        if not deducted:
-            update_customer_payment_status(agent_id, pay_id, "pending")
-            return False, "wallet deduction failed; left pending"
-
-        # پیام تایید خودکار باید اول از همه در چت مشتری بیاید (بالای پیام‌های تحویل اشتراک)
-        try:
-            await _notify_customer(
-                context,
-                agent_id,
-                user_tg_id,
-                "✅ پرداخت کارت‌به‌کارت شما با پیامک بانکی به‌صورت خودکار تایید شد.",
-            )
-        except Exception as e:
-            logger.warning("sms auto approve customer notify failed (agent=%s pay=%s): %s", agent_id, pay_id, e)
-
-        if renew_service_id:
-            try:
-                svc = await _renew_subscription_from_order(context, agent_id, user_tg_id, order, tx_code=str(pay.get("tx_code") or ""))
-            except Exception as e:
-                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای تمدید سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
-                logger.error("sms auto renew failed for payment %s: %s", pay_id, e)
-                try:
-                    await _notify_customer(
-                        context,
-                        agent_id,
-                        user_tg_id,
-                        "⚠️ پرداخت شما تایید شد اما در تمدید سرویس خطایی رخ داد؛ به‌زودی توسط ادمین بررسی و فعال می‌شود.",
-                    )
-                except Exception:
-                    pass
-                return False, f"renew failed: {e}"
-        else:
-            try:
-                svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
-            except Exception as e:
-                agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
-                logger.error("sms auto service creation failed for payment %s: %s", pay_id, e)
-                try:
-                    await _notify_customer(
-                        context,
-                        agent_id,
-                        user_tg_id,
-                        "⚠️ پرداخت شما تایید شد اما در ساخت سرویس خطایی رخ داد؛ به‌زودی توسط ادمین بررسی و فعال می‌شود.",
-                    )
-                except Exception:
-                    pass
-                return False, f"service creation failed: {e}"
-
-        if not update_customer_payment_status(agent_id, pay_id, "approved"):
-            return False, "service created but payment status update failed"
-        if int(order.get("order_id") or 0):
-            update_order_status(agent_id, int(order.get("order_id") or 0), "approved")
-    else:
-        if not update_customer_payment_status(agent_id, pay_id, "approved"):
-            return False, "status update failed (no-order payment)"
-
-    # پیام‌های «در انتظار تایید» (چت مشتری و چت نماینده) پاک می‌شوند
+async def _auto_approve_from_sms_webhook(
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    pay_id: int,
+    queue_row: dict = None,
+) -> dict:
+    """Run the same replay-safe financial core used by manual approval."""
     try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
+    queue_row = queue_row or {}
+    result = await _fulfill_customer_payment(
+        context,
+        agent_id,
+        pay_id,
+        source="sms",
+        expected_status="pending",
+        allow_resume=True,
+    )
+    if result.get("outcome") != "success":
+        return result
+    pay = result.get("pay") or {}
+    svc = result.get("service") or {}
+    is_renew = bool(result.get("is_renew"))
+    user_tg_id = int(pay.get("user_id") or 0)
+    # Telegram is deliberately post-commit. Notification failure can never
+    # refund/reopen a fulfilled payment.
+    try:
+        await _notify_customer(
+            context,
+            agent_id,
+            user_tg_id,
+            i18n.t('✅ پرداخت کارت‌به‌کارت شما با پیامک بانکی به‌صورت خودکار تایید شد.', _lg),
+        )
+        await _post_fulfillment_customer_delivery(context, agent_id, pay, svc, is_renew)
         await _delete_pending_customer_message(context, agent_id, pay)
     except Exception as e:
-        logger.warning("sms auto: delete customer pending message failed (pay=%s): %s", pay_id, e)
+        logger.warning("sms auto post-approval delivery failed (pay=%s): %s", pay_id, e)
     try:
         await _delete_agent_pending_message(context, agent_id, pay)
     except Exception as e:
@@ -678,7 +1111,54 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
         logger.warning("sms auto approval report failed (agent=%s pay=%s): %s", agent_id, pay_id, e)
 
     logger.info("sms webhook auto-approved agency payment (agent=%s pay=%s)", agent_id, pay_id)
-    return True, "approved"
+    return result
+
+
+async def recover_stale_customer_payment_fulfillments(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    age_minutes: int = 10,
+    limit: int = 10,
+) -> int:
+    """Resume new durable claims and freeze untraceable legacy claims."""
+    recovered = 0
+    rows = get_stale_customer_processing_payments(age_minutes=age_minutes, limit=limit)
+    for pay in rows:
+        aid = int(pay.get("agent_id") or 0)
+        pid = int(pay.get("id") or 0)
+        token = str(pay.get("processing_token") or "").strip()
+        fulfillment = agent_db.get_payment_fulfillment(aid, pid)
+        if not token or not fulfillment:
+            mark_customer_payment_manual_review(
+                aid,
+                pid,
+                processing_token=token,
+                note="legacy processing row has no durable token/ledger",
+            )
+            logger.error(
+                "stale payment frozen for manual review (agent=%s pay=%s)", aid, pid
+            )
+            continue
+        result = await _fulfill_customer_payment(
+            context,
+            aid,
+            pid,
+            source="recovery",
+            allow_resume=True,
+        )
+        if result.get("outcome") == "success":
+            recovered += 1
+            try:
+                await _post_fulfillment_customer_delivery(
+                    context,
+                    aid,
+                    result.get("pay") or pay,
+                    result.get("service") or {},
+                    bool(result.get("is_renew")),
+                )
+            except Exception as exc:
+                logger.warning("recovered payment delivery failed pay=%s: %s", pid, exc)
+    return recovered
 
 
 async def _delete_agent_pending_message(context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay: dict) -> None:
@@ -707,6 +1187,11 @@ async def _send_sms_auto_approval_report(
     queue_row: dict,
 ) -> None:
     """گزارش تایید خودکار SMS برای چت نماینده (عکس رسید بالا، متن زیر آن)."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     from Shared.agent_db import get_agent_by_id
 
     agent = get_agent_by_id(agent_id)
@@ -745,18 +1230,9 @@ async def _send_sms_auto_approval_report(
     except Exception:
         file_id = ""
 
-    caption = (
-        "✅ <b>پرداخت با SMS بانک تایید شد</b>\n\n"
-        f"🔖 نوع: {'♻️ تمدید اشتراک' if is_renew else '🛍 خرید مستقیم'}\n"
-        f"👤 کاربر: {customer_display}\n"
-        f"💰 مبلغ: <b>{amount:,}</b> تومان\n"
-        f"🧾 کد تراکنش: <code>{tx_code}</code>\n"
-        f"🆔 شناسه پرداخت: {pay_id}\n"
-        f"📨 سرشماره SMS: <code>{sender}</code>\n"
-        f"🏦 مبلغ خام SMS: {amount_raw} {currency_raw}\n"
-        f"🔖 پیگیری SMS: {reference}\n"
-        f"🖼 رسید کاربر: {'پیوست شد' if file_id else 'در دسترس نیست'}"
-    )
+        caption = (
+            f"{i18n.t('✅ <b>پرداخت با SMS بانک تایید شد</b>\n\n🔖 نوع: ', _lg)}{i18n.t('paytype_renew', _lg) if is_renew else i18n.t('paytype_direct', _lg)}{i18n.t('\n👤 کاربر: ', _lg)}{customer_display}{i18n.t('\n💰 مبلغ: <b>', _lg)}{amount:f','}{i18n.t('</b> تومان\n🧾 کد تراکنش: <code>', _lg)}{tx_code}{i18n.t('</code>\n🆔 شناسه پرداخت: ', _lg)}{pay_id}{i18n.t('\n📨 سرشماره SMS: <code>', _lg)}{sender}{i18n.t('</code>\n🏦 مبلغ خام SMS: ', _lg)}{amount_raw} {currency_raw}{i18n.t('\n🔖 پیگیری SMS: ', _lg)}{reference}{i18n.t('\n🖼 رسید کاربر: ', _lg)}{i18n.t('attached_yes', _lg) if file_id else i18n.t('attached_no', _lg)}"
+        )
 
     try:
         profile_kb = _ikb([[IButton(f"👤 {customer_display}", callback_data=f"agbot:custpay:profile:{user_tg_id}")]])
@@ -808,16 +1284,23 @@ async def _send_sms_auto_approval_report(
 
 
 async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, pay_id: int, pay: dict = None) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if pay is None:
         payments = get_customer_pending_card_payments(agent_id)
         pay = next((p for p in payments if p["id"] == pay_id), None)
     if not pay:
-        await query.answer("❌ پرداخت در لیست در انتظار پیدا نشد.", show_alert=True)
+        await query.answer(i18n.t('❌ پرداخت در لیست در انتظار پیدا نشد.', _lg), show_alert=True)
         return
 
-    if not update_customer_payment_status(agent_id, pay_id, "rejected"):
-        await query.answer("❌ رد پرداخت انجام نشد.", show_alert=True)
+    if not update_customer_payment_status(
+        agent_id, pay_id, "rejected", expected_status="pending"
+    ):
+        await query.answer(i18n.t('❌ رد پرداخت انجام نشد.', _lg), show_alert=True)
         return
     order = pay.get("_order") or {}
     if int(order.get("order_id") or pay.get("_order_id") or 0):
@@ -826,21 +1309,20 @@ async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
     user_tg_id = pay.get("user_id", 0)
     amount = pay.get("amount", 0)
     notify_text = (
-        f"\u274c \u067e\u0631\u062f\u0627\u062e\u062a \u0634\u0645\u0627 \u0628\u0647 \u0645\u0628\u0644\u063a {_fmt_toman(amount)} \u062a\u0648\u0645\u0627\u0646 \u0631\u062f \u0634\u062f.\n"
-        f"\u0644\u0637\u0641\u0627 \u0628\u0631\u0627\u06cc \u0627\u0637\u0644\u0627\u0639\u0627\u062a \u0628\u06cc\u0634\u062a\u0631 \u0628\u0627 \u067e\u0634\u062a\u06cc\u0628\u0627\u0646\u06cc \u062a\u0645\u0627\u0633 \u0628\u06af\u06cc\u0631\u06cc\u062f."
+        f"{i18n.t('❌ پرداخت شما به مبلغ ', _lg)}{_fmt_toman(amount)}{i18n.t(' تومان رد شد.\nلطفا برای اطلاعات بیشتر با پشتیبانی تماس بگیرید.', _lg)}"
     )
 
     await _notify_customer(context, agent_id, user_tg_id, notify_text)
     await _delete_pending_customer_message(context, agent_id, pay)
 
-    done_text = "❌ پرداخت رد شد."
+    done_text = i18n.t('❌ پرداخت رد شد.', _lg)
     customer_name = pay.get("full_name") or pay.get("username") or f"Customer {user_tg_id}"
     done_kb = _ikb([
-        [IButton("✏️ تغییر وضعیت", callback_data=f"agbot:custpay:chg:{pay_id}")],
+        [IButton(i18n.t('✏️ تغییر وضعیت', _lg), callback_data=f"agbot:custpay:chg:{pay_id}")],
         [IButton(f"👤 {customer_name}", callback_data=f"agbot:custpay:profile:{user_tg_id}")],
     ])
     try:
-        await query.answer("❌ پرداخت رد شد.", show_alert=True)
+        await query.answer(i18n.t('❌ پرداخت رد شد.', _lg), show_alert=True)
     except Exception:
         pass
     try:
@@ -858,6 +1340,11 @@ async def _reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, ag
 
 
 async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     try:
         await query.answer()
@@ -866,7 +1353,7 @@ async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_T
     customer = agent_db.get_customer_by_telegram_id(agent_id, user_tg_id)
     if not customer:
         try:
-            await query.answer("❌ اطلاعات مشتری یافت نشد.", show_alert=True)
+            await query.answer(i18n.t('❌ اطلاعات مشتری یافت نشد.', _lg), show_alert=True)
         except Exception:
             pass
         return
@@ -880,14 +1367,39 @@ async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning("custpay profile send failed user=%s: %s", user_tg_id, edit_err)
 
 
-async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, wholesale_price: int = 0, tx_code: str = "") -> dict:
-    import time
-    import uuid
-
+async def _create_subscription_from_order(
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    user_tg_id: int,
+    order: dict,
+    wholesale_price: int = 0,
+    tx_code: str = "",
+    payment_id: int = 0,
+) -> dict:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     from AgentBot.services.subscription_service import _get_cluster_servers
     from Shared.agent_db import upsert_customer, create_service, add_service_node, get_customer_by_telegram_id, make_service_note
     from AgentBot.database import upsert_customer_user, get_customer_user
     from Shared.database import get_server_by_id
+
+    if int(payment_id or 0) > 0:
+        existing_service = agent_db.find_service_by_source_payment(agent_id, payment_id)
+        if existing_service:
+            if str(existing_service.get("deleted_at") or "").strip():
+                raise RuntimeError("source_service_deleted")
+            existing_fulfillment = agent_db.get_payment_fulfillment(agent_id, payment_id)
+            if str((existing_fulfillment or {}).get("state") or "").strip().lower() in {
+                "local_recorded",
+                "completed",
+            }:
+                return existing_service
+            # A crash may happen after the service INSERT but before all cluster
+            # node mappings are saved. Continue with the stable UUID and rebuild
+            # every idempotent mapping before declaring local persistence done.
 
     # Get or create customer (محلی customer_users) — اگر ردیف مشتری موجود نشد، می‌سازیم
     cust = get_customer_user(agent_id, user_tg_id)
@@ -920,13 +1432,23 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         logger.error(f"Server {server_id} not found for agent {agent_id}")
         raise RuntimeError("server_not_found")
 
-    # Create user on Hiddify panel (main + all child nodes, shared UUID)
-    new_uuid = str(uuid.uuid4())
+    # UUID is persisted before the network call, so a retry can discover a
+    # panel user created immediately before a timeout/crash.
+    fulfillment = agent_db.get_payment_fulfillment(agent_id, payment_id) if payment_id else None
+    new_uuid = str((fulfillment or {}).get("panel_uuid") or "").strip()
+    if not new_uuid:
+        new_uuid = (
+            str(uuid.uuid5(uuid.NAMESPACE_URL, f"hiddify-sellbot:{agent_id}:{payment_id}"))
+            if payment_id
+            else str(uuid.uuid4())
+        )
+        if payment_id:
+            agent_db.update_payment_fulfillment(agent_id, payment_id, panel_uuid=new_uuid)
     order_id_num = int(order.get("order_id") or 0)
     if order_id_num:
         panel_name = f"vpn-{order_id_num:07d}"
     else:
-        panel_name = f"vpn-{user_tg_id}-{int(time.time())}"
+        panel_name = f"vpn-{user_tg_id}-{new_uuid[:8]}"
     note = make_service_note(agent_id)
     payload = {
         "name": panel_name,
@@ -941,28 +1463,45 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
     if not targets:
         targets = [server]
 
-    from Shared.multi_panel import create_user as mp_create_user
+    from Shared.multi_panel import create_user as mp_create_user, get_user_by_uuid as mp_get_user
     shared_uuid = new_uuid
     payload["uuid"] = shared_uuid
     created_nodes: list[dict] = []
     panel_user = None
+    node_errors: list[str] = []
     for idx, tgt in enumerate(targets):
+        created = None
         try:
-            created = await mp_create_user(tgt, payload)
-        except Exception as e:
-            if idx == 0:
-                raise
-            logger.warning("Cluster node create_user failed server=%s: %s", tgt.get("id"), e)
-            continue
+            created = await mp_get_user(tgt, shared_uuid)
+        except Exception as lookup_exc:
+            lookup_text = str(lookup_exc).lower()
+            explicitly_missing = any(
+                marker in lookup_text
+                for marker in ("http 404", "not found", i18n.t('یافت نشد', _lg), "does not exist")
+            )
+            if not explicitly_missing:
+                raise RuntimeError(
+                    f"panel_lookup_failed server={tgt.get('id')}: {lookup_exc}"
+                ) from lookup_exc
+        if not created:
+            try:
+                created = await mp_create_user(tgt, payload)
+            except Exception as create_exc:
+                try:
+                    created = await mp_get_user(tgt, shared_uuid)
+                except Exception:
+                    created = None
+                if not created:
+                    node_errors.append(f"server={tgt.get('id')}:{create_exc}")
+                    continue
         created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
         if not created_uuid:
-            if idx == 0:
-                raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
+            node_errors.append(f"server={tgt.get('id')}:missing_uuid")
             continue
         created_nodes.append(
             {
                 "server_id": int(tgt.get("id") or 0),
-                "server_title": tgt.get("title") or f"سرور #{tgt.get('id')}",
+                "server_title": tgt.get("title") or f"{i18n.t('سرور #', _lg)}{tgt.get('id')}",
                 "panel_user_uuid": created_uuid,
                 "panel_user_id": str(created.get("id") or "").strip(),
                 "is_primary": idx == 0,
@@ -970,10 +1509,14 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         )
         if idx == 0:
             panel_user = created
-    if panel_user is None:
-        raise RuntimeError("no primary node created")
+    if panel_user is None or node_errors:
+        raise RuntimeError("panel_nodes_incomplete: " + "; ".join(node_errors or ["primary_missing"]))
     panel_uuid = str(panel_user.get("uuid") or shared_uuid).strip()
     panel_user_id = str(panel_user.get("id") or "").strip()
+    if payment_id:
+        agent_db.update_payment_fulfillment(
+            agent_id, payment_id, state="panel_applied", panel_uuid=panel_uuid, last_error=""
+        )
 
     # Create service record
     svc = create_service(
@@ -988,7 +1531,11 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         wholesale_price=wholesale_price,
         sale_price=price,
         note=note,
+        source_payment_id=int(payment_id or 0),
+        source_order_id=order_id_num,
     )
+    if not svc:
+        raise RuntimeError("local_service_not_recorded")
     if svc:
         for item in created_nodes:
             add_service_node(
@@ -999,36 +1546,25 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
                 panel_user_id=str(item.get("panel_user_id") or "").strip(),
             )
 
-    # Notify customer
-    _cust_lang = "fa"
-    try:
-        from CustomerBot.database import get_user as _cget
-        _cu = _cget(agent_id, user_tg_id) or {}
-        _cust_lang = str(_cu.get("language") or "fa").strip().lower() or "fa"
-    except Exception:
-        _cust_lang = "fa"
-    notify = (
-        _t(_cust_lang, "created_notify_title") + "\n"
-        + _t(_cust_lang, "created_notify_hint") + "\n\n"
-    )
-    if tx_code:
-        notify += "\U0001f381 " + _t(_cust_lang, "tx_id_label") + f"{tx_code}"
-    await _notify_customer(context, agent_id, user_tg_id, notify)
-    pay_stub = {"id": order.get("payment_id") or 0, "user_id": user_tg_id, "receipt_image": order.get("receipt_image", "")}
-    await _delete_pending_customer_message(context, agent_id, pay_stub)
-
-    # Deliver subscription info + status keyboard to customer
-    if svc:
-        await _send_subscription_delivery(context, agent_id, user_tg_id, svc["id"])
-    return svc or {}
+    if payment_id:
+        agent_db.update_payment_fulfillment(
+            agent_id, payment_id, state="local_recorded", service_id=int(svc["id"]), last_error=""
+        )
+    return svc
 
 
-async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, order: dict, tx_code: str = "") -> dict:
-    """تمدید سرویس موجود مشتری پس از تایید پرداخت سفارش تمدید (♻️).
+async def _renew_subscription_from_order(
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    user_tg_id: int,
+    order: dict,
+    tx_code: str = "",
+    payment_id: int = 0,
+) -> dict:
+    """Apply a renewal using one persisted absolute target.
 
-    الگوی حجم/زمان (add/reset) از تنظیمات ربات ادمین خوانده می‌شود؛
-    اول سرور اصلی روی پنل آپدیت می‌شود (خطا → exception تا پول برگشت بخورد)،
-    سپس نودها best-effort و در انتها دیتابیس محلی.
+    Replaying this function patches the same values; it never adds the package
+    a second time after a timeout or process crash.
     """
     from datetime import datetime, timedelta, timezone
 
@@ -1048,101 +1584,151 @@ async def _renew_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, age
     if extra_days <= 0 and extra_gb <= 0:
         raise RuntimeError("empty_renew_package")
 
-    vol_mode, time_mode = "add", "add"
-    try:
-        from Shared.userbot_db import get_renew_modes
-        vol_mode, time_mode = get_renew_modes()
-    except Exception:
-        pass
-    vol_mode = str(vol_mode or "add").strip().lower()
-    time_mode = str(time_mode or "add").strip().lower()
-
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    old_days_left = int(float(svc.get("days_left") or 0) or 0)
-    # ── زمان (مطابق renew_service_with_policy) ──
-    if time_mode == "add":
-        new_days_left = old_days_left + extra_days
-        end_date = str(svc.get("end_date") or "").strip()
-        if end_date:
-            try:
-                current_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
+    fulfillment = agent_db.get_payment_fulfillment(agent_id, payment_id) if payment_id else None
+    target = dict((fulfillment or {}).get("target") or {})
+    if target:
+        if int(target.get("service_id") or 0) != service_id:
+            raise RuntimeError("renew_target_service_conflict")
+    else:
+        vol_mode, time_mode = "add", "add"
+        try:
+            from Shared.userbot_db import get_renew_modes
+            vol_mode, time_mode = get_renew_modes()
+        except Exception:
+            pass
+        vol_mode = str(vol_mode or "add").strip().lower()
+        time_mode = str(time_mode or "add").strip().lower()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        old_days_left = int(float(svc.get("days_left") or 0) or 0)
+        if time_mode == "add":
+            new_days_left = old_days_left + extra_days
+            end_date = str(svc.get("end_date") or "").strip()
+            if end_date:
+                try:
+                    current_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    current_end = now
+            else:
                 current_end = now
+            new_end = current_end + timedelta(days=extra_days)
         else:
-            current_end = now
-        new_end = current_end + timedelta(days=extra_days)
-    else:
-        new_days_left = extra_days
-        new_end = now + timedelta(days=extra_days)
-    new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
+            new_days_left = extra_days
+            new_end = now + timedelta(days=extra_days)
+        new_usage_limit = (
+            float(svc.get("usage_limit") or 0) + extra_gb
+            if vol_mode == "add"
+            else float(extra_gb)
+        )
+        target = {
+            "service_id": service_id,
+            "volume_mode": vol_mode,
+            "time_mode": time_mode,
+            "days_left": int(new_days_left),
+            "usage_limit": float(new_usage_limit),
+            "usage_current": 0.0 if vol_mode == "reset" else float(svc.get("usage_current") or 0),
+            "start_date": (
+                now.strftime("%Y-%m-%d %H:%M:%S")
+                if vol_mode == "reset"
+                else str(svc.get("start_date") or "")
+            ),
+            "end_date": new_end.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if payment_id:
+            agent_db.update_payment_fulfillment(agent_id, payment_id, target=target)
 
-    # ── حجم (مطابق renew_service_with_policy) ──
-    if vol_mode == "add":
-        new_usage_limit = float(svc.get("usage_limit") or 0) + extra_gb
-    else:
-        new_usage_limit = float(extra_gb)
+    vol_mode = str(target.get("volume_mode") or "add")
+    time_mode = str(target.get("time_mode") or "add")
+    new_days_left = int(target.get("days_left") or 0)
+    new_usage_limit = float(target.get("usage_limit") or 0)
+    new_end_str = str(target.get("end_date") or "")
 
     # ── پنل‌ها ── (payload مطابق مسیر تمدید نماینده در AgentBot.services.subscription_service)
     targets = get_service_panel_targets(svc)
-    if targets:
-        primary_sid = int(svc.get("server_id") or 0)
-        primary_target = next(
-            (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
-            targets[0],
+    if not targets:
+        raise RuntimeError("panel_targets_not_found")
+    patch_data = {
+        "usage_limit_GB": new_usage_limit,
+        "package_days": int(new_days_left),
+    }
+    if vol_mode == "reset":
+        patch_data["current_usage_GB"] = 0
+    if time_mode == "reset":
+        patch_data["start_date"] = str(target.get("start_date") or "")[:10]
+    panel_errors: list[str] = []
+    for srv, panel_uuid, _un in targets:
+        try:
+            await multi_panel.patch_user(srv, panel_uuid, patch_data)
+        except Exception as e:
+            panel_errors.append(f"patch server={srv.get('id')}:{e}")
+    if panel_errors:
+        raise RuntimeError("panel_patch_failed: " + "; ".join(panel_errors))
+    if payment_id:
+        agent_db.update_payment_fulfillment(
+            agent_id, payment_id, state="panel_applied", target=target, last_error=""
         )
-        patch_data = {
-            "usage_limit_GB": new_usage_limit,
-            "package_days": int(new_days_left),
-        }
-        if vol_mode == "reset":
-            patch_data["current_usage_GB"] = 0
-        if time_mode == "reset":
-            patch_data["start_date"] = now.strftime("%Y-%m-%d")
+
+    enable_errors: list[str] = []
+    for srv, panel_uuid, _un in targets:
         try:
-            await multi_panel.patch_user(
-                primary_target[0], primary_target[1],
-                patch_data,
-            )
+            await multi_panel.enable_user(srv, panel_uuid)
         except Exception as e:
-            raise RuntimeError(f"panel_patch_failed: {str(e)[:100]}")
-        for srv, uuid, _un in targets:
-            if int(srv.get("id") or 0) == int(primary_target[0].get("id") or 0):
-                continue
-            try:
-                await multi_panel.patch_user(srv, uuid, patch_data)
-            except Exception as e:
-                logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
+            enable_errors.append(f"enable server={srv.get('id')}:{e}")
+    if enable_errors:
+        raise RuntimeError("panel_enable_failed: " + "; ".join(enable_errors))
 
-    # ── دیتابیس محلی ──
-    agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, vol_mode, time_mode)
+    local_updates = {
+        "days_left": new_days_left,
+        "usage_limit": new_usage_limit,
+        "usage_current": float(target.get("usage_current") or 0),
+        "start_date": str(target.get("start_date") or ""),
+        "end_date": new_end_str,
+        "is_active": 1,
+    }
+    if not agent_db.update_service(service_id, local_updates):
+        raise RuntimeError("local_renew_update_failed")
+    updated_svc = agent_db.get_service_by_id(service_id) or dict(svc)
+    if payment_id:
+        agent_db.update_payment_fulfillment(
+            agent_id, payment_id, state="local_recorded", service_id=service_id,
+            target=target, last_error="",
+        )
+    return updated_svc
 
-    # ── فعال‌سازی مجدد (اگر به‌خاطر اتمام حجم/زمان غیرفعال شده بود) ──
-    for srv, uuid, _un in targets:
-        try:
-            await multi_panel.enable_user(srv, uuid)
-        except Exception as e:
-            logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
-    agent_db.set_service_active(service_id, True)
 
-    _cust_lang = "fa"
+async def _post_fulfillment_customer_delivery(
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    pay: dict,
+    svc: dict,
+    is_renew: bool,
+) -> None:
+    """Best-effort customer messages, strictly after financial commit."""
+    if not svc or not int(svc.get("id") or 0):
+        return
+    user_tg_id = int(pay.get("user_id") or 0)
+    if not user_tg_id:
+        return
+    lang = "fa"
     try:
         from CustomerBot.database import get_user as _cget
-        _cu = _cget(agent_id, user_tg_id) or {}
-        _cust_lang = str(_cu.get("language") or "fa").strip().lower() or "fa"
+        customer = _cget(agent_id, user_tg_id) or {}
+        lang = str(customer.get("language") or "fa").strip().lower() or "fa"
     except Exception:
-        _cust_lang = "fa"
-    notify = (
-        "♻️ " + _t(_cust_lang, "renew_notify_title") + "\n\n"
-        f"📊 {_t(_cust_lang, 'volume_label')}: {new_usage_limit:g} {_t(_cust_lang, 'gb_unit')}\n"
-        f"⏳ {_t(_cust_lang, 'expire_label')}: {new_end_str[:10]}\n\n"
-        + _t(_cust_lang, "renew_notify_hint")
-    )
+        pass
+    tx_code = str(pay.get("tx_code") or "").strip()
+    if is_renew:
+        notify = (
+            "♻️ " + _t(lang, "renew_notify_title") + "\n\n"
+            f"📊 {_t(lang, 'volume_label')}: {float(svc.get('usage_limit') or 0):g} {_t(lang, 'gb_unit')}\n"
+            f"⏳ {_t(lang, 'expire_label')}: {str(svc.get('end_date') or '')[:10]}\n\n"
+            + _t(lang, "renew_notify_hint")
+        )
+    else:
+        notify = _t(lang, "created_notify_title") + "\n" + _t(lang, "created_notify_hint")
     if tx_code:
-        notify += "\n\n🎁 " + _t(_cust_lang, "tx_id_label") + f"{tx_code}"
+        notify += "\n\n🎁 " + _t(lang, "tx_id_label") + tx_code
     await _notify_customer(context, agent_id, user_tg_id, notify)
-    updated_svc = agent_db.get_service_by_id(service_id) or dict(svc)
-    await _send_subscription_delivery(context, agent_id, user_tg_id, service_id)
-    return updated_svc
+    await _send_subscription_delivery(context, agent_id, user_tg_id, int(svc["id"]))
 
 
 async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_id: int, user_tg_id: int, service_id: int) -> None:
@@ -1289,13 +1875,14 @@ async def _send_subscription_delivery(context: ContextTypes.DEFAULT_TYPE, agent_
 
         if not sent_kind or sent_kind == "show_status":
             br = get_buy_renew_settings(agent_id)
-            svc_text = build_subscription_status_text(svc, subs_settings, br)
+            svc_text = build_subscription_status_text(svc, subs_settings, br, lang=_cust_lang)
             show_detach = bool(svc.get("comment") == "connected")
             kb = subscription_status_keyboard(
                 service_id,
                 show_direct_config=subs_settings.get("show_direct_config", True),
                 show_sub_link=subs_settings.get("show_sub_link", True),
                 show_detach=show_detach,
+                lang=_cust_lang,
             )
             await customer_bot.send_message(
                 chat_id=user_tg_id,
@@ -1374,7 +1961,7 @@ async def _delete_pending_customer_message(context: ContextTypes.DEFAULT_TYPE, a
         logger.warning("Unexpected error while deleting pending customer message for payment %s: %s", pay.get("id"), e)
 
 
-def _get_customer_menu_keyboard():
+def _get_customer_menu_keyboard( lang: str = "fa"):
     """Safely import and return customer bot main menu keyboard."""
     try:
         from CustomerBot.keyboards import main_menu_keyboard

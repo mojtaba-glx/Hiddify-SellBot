@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
 from AgentBot.handlers.main_menu import handle_start, handle_main_menu_callback, handle_agent_text, handle_language_command
 from AgentBot.database import init_db as init_agent_db
 from Shared import i18n as _i18n
+from Shared import i18n
 
 load_dotenv()
 AGENT_BOT_TOKEN = os.getenv("AGENT_BOT_TOKEN")
@@ -37,9 +38,17 @@ async def _sms_webhook_queue_worker(application) -> None:
     ساخت سرویس و تحویل باید در همین پروسه انجام شود (توکن ربات مشتری اینجاست).
     """
     from AgentBot.handlers.settings_customer_payments import process_sms_webhook_queue
+    from AgentBot.database import recover_processing_agent_wallet_sms_payments
 
     while True:
         try:
+            recovered = await asyncio.to_thread(
+                recover_processing_agent_wallet_sms_payments, 20
+            )
+            if recovered:
+                logger.info(
+                    "Recovered %s interrupted agent wallet SMS approvals", recovered
+                )
             await process_sms_webhook_queue(application, limit=5)
         except Exception as e:
             logger.warning("sms webhook queue worker error: %s", e)

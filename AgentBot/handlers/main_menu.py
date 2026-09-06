@@ -13,16 +13,17 @@ from AgentBot.handlers import (
     settings_shop, settings_payment, settings_customer_payments, settings_broadcast,
     settings_forcejoin,
 )
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent = await authenticate(update, context)
+    _lg = i18n.get_agent_lang(int((agent or {}).get("id") or 0)) if agent else "fa"
     if not agent:
         await update.message.reply_text(
-            "\u26a0\ufe0f \u0634\u0645\u0627 \u0628\u0647 \u0639\u0646\u0648\u0627\u0646 \u0646\u0645\u0627\u06cc\u0646\u062f\u0647 \u062b\u0628\u062a \u0646\u0634\u062f\u0647\u200c\u0627\u06cc\u062f.\n"
-            "\u0628\u0627 \u0627\u062f\u0645\u06cc\u0646 \u062f\u0631 \u0627\u0631\u062a\u0628\u0627\u0637 \u0628\u0627\u0634\u06cc\u062f."
+            i18n.t('⚠️ شما به عنوان نماینده ثبت نشده‌اید.\nبا ادمین در ارتباط باشید.', _lg)
         )
         return
 
@@ -38,18 +39,17 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         pass
 
     clear_state(context)
-    name = agent.get("full_name") or agent.get("username") or f"\u0646\u0645\u0627\u06cc\u0646\u062f\u0647 #"
+    name = agent.get("full_name") or agent.get("username") or f"{i18n.t('agent_fallback', _lg)}"
     from Shared import i18n as _i18n
     from Shared import agent_db as _adb
     _lg = _i18n.get_agent_lang(int(agent.get("id") or 0))
     await update.message.reply_text(
-        f"\u062e\u0648\u0634 \u0622\u0645\u062f\u06cc\u062f {name} \u0639\u0632\u06cc\u0632 \U0001f44b\n"
-        "\u0627\u0632 \u0645\u0646\u0648\u06cc \u0632\u06cc\u0631 \u06af\u0632\u06cc\u0646\u0647 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f.",
+        f"{i18n.t('خوش آمدید ', _lg)}{name}{i18n.t(' عزیز 👋\nاز منوی زیر گزینه مورد نظر را انتخاب کنید.', _lg)}",
         reply_markup=main_menu_keyboard(lang=_lg),
     )
     await update.message.reply_text(
         _i18n.t("lang_choose", _lg),
-        reply_markup=language_keyboard(),
+        reply_markup=language_keyboard( lang=_lg),
     )
 
 
@@ -64,16 +64,21 @@ async def handle_language_command(update: Update, context: ContextTypes.DEFAULT_
     except Exception:
         agent = None
     if not agent:
-        await update.message.reply_text("⚠️ لطفاً ابتدا با /start وارد شوید.")
+        await update.message.reply_text(i18n.t('not_authenticated', "fa"))
         return
     _lg = _i18n.get_agent_lang(int(agent.get("id") or 0))
     await update.message.reply_text(
         _i18n.t("lang_choose", _lg),
-        reply_markup=language_keyboard(),
+        reply_markup=language_keyboard( lang=_lg),
     )
 
 
 async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -125,13 +130,12 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
     if action == "menu" or action == "":
         clear_state(context)
         text = (
-            "\U0001f4ca <b>\u067e\u0627\u0646\u0644 \u0646\u0645\u0627\u06cc\u0646\u062f\u06af\u06cc</b>\n"
-            "\u0627\u0632 \u0645\u0646\u0648\u06cc \u0632\u06cc\u0631 \u06af\u0632\u06cc\u0646\u0647 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f."
+            i18n.t('📊 <b>پانل نمایندگی</b>\nاز منوی زیر گزینه مورد نظر را انتخاب کنید.', _lg)
         )
         try:
-            await query.edit_message_text(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
+            await query.edit_message_text(text, reply_markup=main_menu_keyboard(lang=_lg), parse_mode="HTML")
         except Exception:
-            await query.message.reply_text(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
+            await query.message.reply_text(text, reply_markup=main_menu_keyboard(lang=_lg), parse_mode="HTML")
         return
 
     routing = {
@@ -158,7 +162,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
             clear_state(context)
             from AgentBot.keyboards import settings_menu_keyboard
             await query.edit_message_text(
-                "⚙️ <b>مدیریت ربات</b>",
+                i18n.t('⚙️ <b>مدیریت ربات</b>', _lg),
                 reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
             )
             return
@@ -187,8 +191,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
                 from AgentBot.keyboards import config_menu_keyboard
                 try:
                     await query.edit_message_text(
-                        "\u2699\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a</b>\n"
-                        "\u06af\u0632\u06cc\u0646\u0647 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f:",
+                        i18n.t('⚙️ <b>تنظیمات</b>\nگزینه مورد نظر را انتخاب کنید:', _lg),
                         reply_markup=config_menu_keyboard(), parse_mode="HTML",
                     )
                 except Exception:
@@ -197,6 +200,11 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
 
 
 async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     if not update.message:
         return
     agent_id = get_agent_id(context)
@@ -245,10 +253,10 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             current_state = state
             clear_state(context)
             if current_state in payment_states:
-                await update.message.reply_text("عملیات لغو شد.")
+                await update.message.reply_text(i18n.t('عملیات لغو شد.', _lg))
                 await settings_payment.show_menu(update, context)
                 return
-            await update.message.reply_text("عملیات لغو شد.", reply_markup=main_menu_keyboard())
+            await update.message.reply_text(i18n.t('عملیات لغو شد.', _lg), reply_markup=main_menu_keyboard())
             return
         clear_state(context)
         target = menu_map.get(text)
@@ -257,7 +265,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
         from AgentBot.keyboards import settings_menu_keyboard
         await update.message.reply_text(
-            "⚙️ <b>مدیریت ربات</b>",
+            i18n.t('⚙️ <b>مدیریت ربات</b>', _lg),
             reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
         )
         return
@@ -316,7 +324,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         clear_state(context)
         from AgentBot.keyboards import settings_menu_keyboard
         await update.message.reply_text(
-            "\u2699\ufe0f <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u0631\u0628\u0627\u062a</b>",
+            i18n.t('⚙️ <b>مدیریت ربات</b>', _lg),
             reply_markup=settings_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
         )
         return
@@ -324,7 +332,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if text in ("\u274c \u0644\u063a\u0648", "/cancel"):
         clear_state(context)
         await update.message.reply_text(
-            "\u0644\u063a\u0648 \u0634\u062f.", reply_markup=main_menu_keyboard()
+            i18n.t('لغو شد.', _lg), reply_markup=main_menu_keyboard()
         )
         return
 

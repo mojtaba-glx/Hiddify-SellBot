@@ -1,10 +1,7 @@
 import logging
 import os
 import secrets
-import fcntl
 from pathlib import Path
-
-from dotenv import load_dotenv
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -29,6 +26,7 @@ from AgentBot.database import (
     get_setting, set_setting,
     get_cards, get_card, add_card, update_card, delete_card,
 )
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -49,42 +47,11 @@ def _read_env_values() -> dict[str, str]:
     return data
 
 
-def _write_env_values(updates: dict[str, str]) -> None:
-    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(ENV_FILE, "a+") as lock_f:
-        fcntl.flock(lock_f, fcntl.LOCK_EX)
-        lock_f.seek(0)
-        existing_raw = lock_f.read().splitlines()
-        lines = []
-        seen: set[str] = set()
-        for raw_line in existing_raw:
-            stripped = raw_line.lstrip()
-            if not stripped or stripped.startswith("#") or "=" not in raw_line:
-                lines.append(raw_line)
-                continue
-            key, _value = raw_line.split("=", 1)
-            clean_key = key.strip()
-            if clean_key in updates:
-                lines.append(f"{clean_key}={updates[clean_key]}")
-                seen.add(clean_key)
-            else:
-                lines.append(raw_line)
-        for key, value in updates.items():
-            if key not in seen:
-                lines.append(f"{key}={value}")
-        lock_f.seek(0)
-        lock_f.truncate()
-        lock_f.write("\n".join(lines).rstrip() + "\n")
-        fcntl.flock(lock_f, fcntl.LOCK_UN)
-    for key, value in updates.items():
-        os.environ[key] = value
-    load_dotenv(dotenv_path=ENV_FILE, override=True)
-
-
 def _mask_secret(secret: str) -> str:
+    _lg = "fa"
     text = str(secret or "").strip()
     if not text:
-        return "تنظیم نشده"
+        return i18n.t('تنظیم نشده', _lg)
     if len(text) <= 12:
         return text[:3] + "..." + text[-3:]
     return text[:8] + "..." + text[-6:]
@@ -95,22 +62,21 @@ async def _show_card_details(query, card: dict) -> None:
 
 
 async def _render_card_details(query, card: dict, is_new: bool = False) -> None:
+    _lg = "fa"
     card_id = int(card.get("id") or 0)
     rows = [
-        [IButton("✏️ ویرایش شماره کارت", callback_data=f"agbot:pay:cardeditnum:{card_id}")],
-        [IButton("🧑 ویرایش نام صاحب کارت", callback_data=f"agbot:pay:cardeditowner:{card_id}")],
-        [IButton("➖ حذف کارت", callback_data=f"agbot:pay:carddel:{card_id}")],
-        [IButton("🔙 بازگشت", callback_data="agbot:pay:cards")],
+        [IButton(i18n.t('✏️ ویرایش شماره کارت', _lg), callback_data=f"agbot:pay:cardeditnum:{card_id}")],
+        [IButton(i18n.t('🧑 ویرایش نام صاحب کارت', _lg), callback_data=f"agbot:pay:cardeditowner:{card_id}")],
+        [IButton(i18n.t('➖ حذف کارت', _lg), callback_data=f"agbot:pay:carddel:{card_id}")],
+        [IButton(i18n.t('🔙 بازگشت', _lg), callback_data="agbot:pay:cards")],
     ]
-    title = "✅ کارت با موفقیت افزوده شد.\n\n" if is_new else "💳 <b>مدیریت کارت</b>\n\n"
+    title = i18n.t('✅ کارت با موفقیت افزوده شد.\n\n', _lg) if is_new else i18n.t('💳 <b>مدیریت کارت</b>\n\n', _lg)
     text = (
-        f"{title}"
-        f"❖ شماره کارت: <code>{_escape(str(card.get('card_number') or ''))}</code>\n"
-        f"❖ نام صاحب کارت: {_escape(str(card.get('owner_name') or ''))}"
+        f"{title}{i18n.t('❖ شماره کارت: <code>', _lg)}{_escape(str(card.get('card_number') or ''))}{i18n.t('</code>\n❖ نام صاحب کارت: ', _lg)}{_escape(str(card.get('owner_name') or ''))}"
     )
     bank_name = str(card.get("bank_name") or "").strip()
     if bank_name:
-        text += f"\n❖ نام بانک: {_escape(bank_name)}"
+        text += f"{i18n.t('\n❖ نام بانک: ', _lg)}{_escape(bank_name)}"
     if hasattr(query, "edit_message_text"):
         await query.edit_message_text(text, reply_markup=_ikb(rows), parse_mode="HTML")
     else:
@@ -130,59 +96,130 @@ def _sync_random_tx_to_customer(agent_id: int) -> bool:
 
 
 async def _send_payment_menu(message, agent_id: int) -> None:
+    try:
+        _lg = i18n.get_agent_lang(int(agent_id or 0))
+    except Exception:
+        _lg = "fa"
     card_enabled = bool(get_setting(agent_id, "card_payment_enabled", True))
     last4 = bool(get_setting(agent_id, "require_last4", False))
     rand_tx = bool(get_setting(agent_id, "random_tx_code", True))
     sms_auto = bool(get_setting(agent_id, "sms_auto_confirm", False))
     _sync_random_tx_to_customer(agent_id)
     await message.reply_text(
-        "💳 <b>تنظیمات کارت به کارت</b>",
+        i18n.t('💳 <b>تنظیمات کارت به کارت</b>', _lg),
         reply_markup=card_settings_keyboard(card_enabled, last4, rand_tx, sms_auto),
         parse_mode="HTML",
     )
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if not agent_id or not update.message:
         return
-    await update.message.reply_text("✅ عملیات لغو شد.", reply_markup=main_menu_keyboard())
+    await update.message.reply_text(i18n.t('✅ عملیات لغو شد.', _lg), reply_markup=main_menu_keyboard())
     await _send_payment_menu(update.message, agent_id)
 
 
-def _sms_webhook_status() -> dict[str, str | bool]:
+def _setting_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if raw in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(default)
+
+
+def _ensure_agent_sms_secret(agent_id: int) -> str:
+    """Return this agent's webhook secret, creating it once when necessary."""
+    aid = int(agent_id or 0)
+    if aid <= 0:
+        return ""
+    secret = str(get_setting(aid, "sms_webhook_secret", "") or "").strip()
+    if secret:
+        return secret
+    secret = secrets.token_hex(32)
+    set_setting(aid, "sms_webhook_secret", secret)
+    return secret
+
+
+def _set_agent_sms_auto_enabled(agent_id: int, enabled: bool) -> str:
+    """Change one tenant's switch without changing the global master switch."""
+    aid = int(agent_id or 0)
+    if aid <= 0:
+        return ""
+    secret = _ensure_agent_sms_secret(aid) if enabled else str(
+        get_setting(aid, "sms_webhook_secret", "") or ""
+    ).strip()
+    set_setting(aid, "sms_auto_confirm", bool(enabled))
+    return secret
+
+
+def _sms_webhook_status(agent_id: int) -> dict[str, str | bool]:
+    aid = int(agent_id or 0)
     env = _read_env_values()
-    enabled_raw = str(env.get("SMS_WEBHOOK_ENABLED", os.getenv("SMS_WEBHOOK_ENABLED", "false")) or "false").strip().lower()
-    secret = str(env.get("SMS_WEBHOOK_SECRET", os.getenv("SMS_WEBHOOK_SECRET", "")) or "").strip()
-    age = str(env.get("SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES", os.getenv("SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES", "360")) or "360").strip() or "360"
+    master_raw = str(
+        env.get("SMS_WEBHOOK_ENABLED", os.getenv("SMS_WEBHOOK_ENABLED", "false")) or "false"
+    ).strip().strip("\"'").lower()
+    enabled = _setting_bool(get_setting(aid, "sms_auto_confirm", False), False) if aid > 0 else False
+    secret = str(get_setting(aid, "sms_webhook_secret", "") or "").strip() if aid > 0 else ""
+    # Migrate an already-enabled tenant away from the legacy global credential.
+    # The agent must paste the newly shown scoped URL and secret into the app once.
+    if enabled and not secret:
+        secret = _ensure_agent_sms_secret(aid)
+    age = str(
+        env.get(
+            "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES",
+            os.getenv("SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES", "360"),
+        )
+        or "360"
+    ).strip() or "360"
     host = str(env.get("SUB_SERVER_PUBLIC_HOST", os.getenv("SUB_SERVER_PUBLIC_HOST", "")) or "").strip()
-    scheme = str(env.get("SUB_SERVER_PUBLIC_SCHEME", os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https")) or "https").strip() or "https"
-    port = str(env.get("SUB_SERVER_PUBLIC_PORT", os.getenv("SUB_SERVER_PUBLIC_PORT", "443")) or "443").strip() or "443"
+    scheme = str(
+        env.get("SUB_SERVER_PUBLIC_SCHEME", os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https"))
+        or "https"
+    ).strip() or "https"
+    port = str(
+        env.get("SUB_SERVER_PUBLIC_PORT", os.getenv("SUB_SERVER_PUBLIC_PORT", "443")) or "443"
+    ).strip() or "443"
     if host:
         default_port = (scheme == "https" and port == "443") or (scheme == "http" and port == "80")
         base_url = f"{scheme}://{host}" if default_port else f"{scheme}://{host}:{port}"
     else:
         base_url = ""
-    endpoint = f"{base_url}/payment/sms-webhook" if base_url else "https://YOUR_SUB_DOMAIN/payment/sms-webhook"
+    endpoint_base = (
+        f"{base_url}/payment/sms-webhook"
+        if base_url
+        else "https://YOUR_SUB_DOMAIN/payment/sms-webhook"
+    )
+    endpoint = f"{endpoint_base}?agent_id={aid}" if aid > 0 else endpoint_base
     return {
-        "enabled": enabled_raw in {"1", "true", "yes", "on"},
+        "enabled": enabled,
+        "master_enabled": master_raw in {"1", "true", "yes", "on"},
         "secret": secret,
         "age": age,
         "endpoint": endpoint,
     }
 
 
-async def _show_sms_settings(query) -> None:
-    status = _sms_webhook_status()
-    enabled = "✅ روشن" if status.get("enabled") else "❌ خاموش"
+async def _show_sms_settings(query, agent_id: int) -> None:
+    try:
+        _lg = i18n.get_agent_lang(int(agent_id or 0))
+    except Exception:
+        _lg = "fa"
+    status = _sms_webhook_status(agent_id)
+    enabled = i18n.t('✅ روشن', _lg) if status.get("enabled") else i18n.t('❌ خاموش', _lg)
+    master_enabled = i18n.t('✅ فعال', _lg) if status.get("master_enabled") else i18n.t('❌ غیرفعال', _lg)
     text = (
-        "🤖 تایید خودکار SMS بانک\n\n"
-        f"وضعیت: {enabled}\n"
-        f"Secret Key: {_mask_secret(str(status.get('secret') or ''))}\n"
-        f"مهلت تطبیق پرداخت: {status.get('age')} دقیقه\n\n"
-        "آدرس Webhook برای اپ اندروید:\n"
-        f"<code>{_escape(str(status.get('endpoint') or ''))}</code>\n\n"
-        "Secret و وضعیت روشن/خاموش از همین منو مدیریت می‌شود."
+        f"{i18n.t('🤖 تایید خودکار SMS بانک\n\nوضعیت سرویس مرکزی: ', _lg)}{master_enabled}{i18n.t('\nوضعیت این نماینده: ', _lg)}{enabled}\nSecret Key: {_mask_secret(str(status.get('secret') or ''))}{i18n.t('\nمهلت تطبیق پرداخت: ', _lg)}{status.get('age')}{i18n.t(' دقیقه\n\nآدرس Webhook برای اپ اندروید:\n<code>', _lg)}{_escape(str(status.get('endpoint') or ''))}{i18n.t('</code>\n\nSecret این بخش فقط برای همین نماینده است.\nاگر سرویس مرکزی غیرفعال است، مدیر اصلی باید آن را فعال کند.', _lg)}"
     )
     await query.edit_message_text(
         text,
@@ -193,6 +230,11 @@ async def _show_sms_settings(query) -> None:
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -211,7 +253,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sms_auto = bool(get_setting(agent_id, "sms_auto_confirm", False))
         _sync_random_tx_to_customer(agent_id)
         await query.edit_message_text(
-            "💳 <b>تنظیمات کارت به کارت</b>",
+            i18n.t('💳 <b>تنظیمات کارت به کارت</b>', _lg),
             reply_markup=card_settings_keyboard(card_enabled, last4, rand_tx, sms_auto),
             parse_mode="HTML",
         )
@@ -224,7 +266,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sms_auto = bool(get_setting(agent_id, "sms_auto_confirm", False))
         _sync_random_tx_to_customer(agent_id)
         await query.edit_message_text(
-            "\U0001f4b3 <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a</b>",
+            i18n.t('💳 <b>تنظیمات کارت به کارت</b>', _lg),
             reply_markup=card_settings_keyboard(card_enabled, last4, rand_tx, sms_auto),
             parse_mode="HTML",
         )
@@ -233,7 +275,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if (p2 == "back" and p1 == "pay") or (p2 == "payment" and p3 == "back"):
         from AgentBot.keyboards import config_menu_keyboard
         await query.edit_message_text(
-            "\u2699\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a</b>\n\u06af\u0632\u06cc\u0646\u0647 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f:",
+            i18n.t('⚙️ <b>تنظیمات</b>\nگزینه مورد نظر را انتخاب کنید:', _lg),
             reply_markup=config_menu_keyboard(), parse_mode="HTML",
         )
         return
@@ -242,14 +284,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 == "card":
             current = bool(get_setting(agent_id, "card_payment_enabled", True))
             set_setting(agent_id, "card_payment_enabled", not current)
-            label = '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644' if current else '\u0641\u0639\u0627\u0644'
-            await query.answer(f"\u067e\u0631\u062f\u0627\u062e\u062a \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a {label} \u0634\u062f.")
+            label = i18n.t('غیرفعال', _lg) if current else i18n.t('فعال', _lg)
+            await query.answer(f"{i18n.t('پرداخت کارت به کارت ', _lg)}{label}{i18n.t(' شد.', _lg)}")
             await _refresh_card_settings(update, agent_id)
             return
         if p2 == "last4":
             current = bool(get_setting(agent_id, "require_last4", False))
             set_setting(agent_id, "require_last4", not current)
-            label = '\u063a\u06cc\u0631\u0641\u0639\u0627\u0644' if current else '\u0641\u0639\u0627\u0644'
+            label = i18n.t('غیرفعال', _lg) if current else i18n.t('فعال', _lg)
             # هم‌گام کردن با ربات مشتری تا از کاربر 4 رقم آخر کارت خواسته شود
             try:
                 from CustomerBot.database import get_payment_settings, set_payment_settings
@@ -259,7 +301,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 set_payment_settings(agent_id, cb_ps)
             except Exception as e:
                 logger.warning("Failed to sync require_last4 to customer bot: %s", e)
-            await query.answer(f"\u0627\u0644\u0632\u0627\u0645 4 \u0631\u0642\u0645 \u0622\u062e\u0631 {label} \u0634\u062f.")
+            await query.answer(f"{i18n.t('الزام 4 رقم آخر ', _lg)}{label}{i18n.t(' شد.', _lg)}")
             await _refresh_card_settings(update, agent_id)
             return
         if p2 == "randtx":
@@ -267,78 +309,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             new_value = not current
             set_setting(agent_id, "random_tx_code", new_value)
             _sync_random_tx_to_customer(agent_id)
-            await query.answer(f"کد تراکنش تصادفی {'فعال' if new_value else 'غیرفعال'} شد.")
+            await query.answer(f"{i18n.t('کد تراکنش تصادفی ', _lg)}{i18n.t('فعال' if new_value else 'غیرفعال', _lg)}{i18n.t(' شد.', _lg)}")
             await _refresh_card_settings(update, agent_id)
             return
         if p2 == "smsauto":
             if p3 == "":
-                await _show_sms_settings(query)
+                await _show_sms_settings(query, agent_id)
                 return
             if p3 == "toggle":
-                status = _sms_webhook_status()
+                status = _sms_webhook_status(agent_id)
                 new_enabled = not bool(status.get("enabled"))
-                updates = {"SMS_WEBHOOK_ENABLED": "true" if new_enabled else "false"}
-                if new_enabled and not str(status.get("secret") or "").strip():
-                    updates["SMS_WEBHOOK_SECRET"] = secrets.token_hex(32)
-                if new_enabled:
-                    updates["SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES"] = "360"
-                _write_env_values(updates)
-                set_setting(agent_id, "sms_auto_confirm", new_enabled)
-                await query.answer("ذخیره شد.", show_alert=True)
-                await _show_sms_settings(query)
+                _set_agent_sms_auto_enabled(agent_id, new_enabled)
+                await query.answer(i18n.t('ذخیره شد.', _lg), show_alert=True)
+                await _show_sms_settings(query, agent_id)
                 return
         if p2 == "smsauto" and p3 == "regen":
             new_secret = secrets.token_hex(32)
-            _write_env_values(
-                {
-                    "SMS_WEBHOOK_ENABLED": "true",
-                    "SMS_WEBHOOK_SECRET": new_secret,
-                    "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES": "360",
-                }
-            )
+            set_setting(agent_id, "sms_webhook_secret", new_secret)
             set_setting(agent_id, "sms_auto_confirm", True)
-            await query.answer("Secret جدید ساخته شد.")
-            await _show_sms_settings(query)
+            await query.answer(i18n.t('Secret جدید ساخته شد.', _lg))
+            await _show_sms_settings(query, agent_id)
             await query.message.reply_text(
-                "🔐 Secret Key جدید اپ\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n"
-                f"<code>{_escape(new_secret)}</code>",
+                f"{i18n.t('🔐 Secret Key جدید اپ\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n<code>', _lg)}{_escape(new_secret)}</code>",
                 parse_mode="HTML",
             )
             return
         if p2 == "smsauto" and p3 == "show":
-            status = _sms_webhook_status()
+            status = _sms_webhook_status(agent_id)
             secret = str(status.get("secret") or "").strip()
             if not secret:
-                await query.answer("Secret هنوز ساخته نشده است. اول «ساخت Secret» را بزنید.", show_alert=True)
+                await query.answer(i18n.t('Secret هنوز ساخته نشده است. اول «ساخت Secret» را بزنید.', _lg), show_alert=True)
                 return
             await query.message.reply_text(
-                "🔐 Secret Key اپ\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n"
-                f"<code>{_escape(secret)}</code>\n\n"
-                "Webhook URL:\n"
-                f"<code>{_escape(str(status.get('endpoint') or ''))}</code>",
+                f"{i18n.t('🔐 Secret Key اپ\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n<code>', _lg)}{_escape(secret)}</code>\n\nWebhook URL:\n<code>{_escape(str(status.get('endpoint') or ''))}</code>",
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
             return
         if p2 == "smsauto" and p3 == "help":
-            status = _sms_webhook_status()
+            status = _sms_webhook_status(agent_id)
             await query.message.reply_text(
-                "📱 راهنمای اتصال اپ SMS Verifier\n\n"
-                "داخل اپ این مقدارها را وارد کنید:\n\n"
-                "Webhook URL:\n"
-                f"<code>{_escape(str(status.get('endpoint') or ''))}</code>\n\n"
-                "Secret Key:\nاز دکمه «👁 نمایش Secret برای اپ» کپی کنید.\n\n"
-                "سرشماره بانک:\nمثلاً <code>20004861</code>\n\n"
-                "اگر بانک چهار رقم کارت را داخل SMS می‌فرستد، الزام ۴ رقم آخر را روشن کنید.",
+                f"{i18n.t('📱 راهنمای اتصال اپ SMS Verifier\n\nداخل اپ این مقدارها را وارد کنید:\n\nWebhook URL:\n<code>', _lg)}{_escape(str(status.get('endpoint') or ''))}{i18n.t('</code>\n\nSecret Key:\nاز دکمه «👁 نمایش Secret برای اپ» کپی کنید.\n\nسرشماره بانک:\nمثلاً <code>20004861</code>\n\nاگر بانک چهار رقم کارت را داخل SMS می‌فرستد، الزام ۴ رقم آخر را روشن کنید.', _lg)}",
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
             return
         if p2 == "cards":
             cards = get_cards(agent_id)
-            text = "\U0001f4cb <b>\u0644\u06cc\u0633\u062a \u06a9\u0627\u0631\u062a\u200c\u0647\u0627</b>\n"
+            text = i18n.t('📋 <b>لیست کارت‌ها</b>\n', _lg)
             if not cards:
-                text += "\n\u0647\u06cc\u0686 \u06a9\u0627\u0631\u062a\u06cc \u062b\u0628\u062a \u0646\u0634\u062f\u0647."
+                text += i18n.t('\nهیچ کارتی ثبت نشده.', _lg)
             try:
                 await query.edit_message_text(text, reply_markup=payment_cards_list_keyboard(cards), parse_mode="HTML")
             except Exception:
@@ -349,8 +369,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data.pop(UD_NEW_CARD, None)
             try:
                 await query.message.reply_text(
-                    "⬇️ لطفا اطلاعات زیر را برای افزودن کارت وارد کنید\n"
-                    "💳 لطفا شماره کارت را وارد کنید:",
+                    i18n.t('⬇️ لطفا اطلاعات زیر را برای افزودن کارت وارد کنید\n💳 لطفا شماره کارت را وارد کنید:', _lg),
                     reply_markup=cancel_keyboard(), parse_mode="HTML",
                 )
             except Exception:
@@ -360,7 +379,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             card_id = int(p3) if p3.isdigit() else 0
             card = get_card(card_id, agent_id)
             if not card:
-                await query.answer("\u06a9\u0627\u0631\u062a \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.", show_alert=True)
+                await query.answer(i18n.t('کارت پیدا نشد.', _lg), show_alert=True)
                 return
             context.user_data[UD_SELECTED_CARD] = card_id
             try:
@@ -371,12 +390,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 in ("cardeditnum", "cardeditowner"):
             card_id = int(p3) if p3.isdigit() else 0
             context.user_data[UD_SELECTED_CARD] = card_id
-            field = "\u0634\u0645\u0627\u0631\u0647 \u06a9\u0627\u0631\u062a" if p2 == "cardeditnum" else "\u0635\u0627\u062d\u0628 \u06a9\u0627\u0631\u062a"
+            field = i18n.t('شماره کارت', _lg) if p2 == "cardeditnum" else i18n.t('صاحب کارت', _lg)
             context.user_data["edit_card_field"] = "card_number" if p2 == "cardeditnum" else "owner_name"
             context.user_data[UD_STATE] = STATE_EDIT_CARD
             try:
                 await query.message.reply_text(
-                    f"\u270f\ufe0f \u0645\u0642\u062f\u0627\u0631 \u062c\u062f\u06cc\u062f \u0628\u0631\u0627\u06cc {field} \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+                    f"{i18n.t('✏️ مقدار جدید برای ', _lg)}{field}{i18n.t(' را وارد کنید:', _lg)}",
                     reply_markup=cancel_keyboard(), parse_mode="HTML",
                 )
             except Exception:
@@ -385,13 +404,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 == "carddel":
             card_id = int(p3) if p3.isdigit() else 0
             ok = delete_card(card_id, agent_id)
-            await query.answer("\u062d\u0630\u0641 \u0634\u062f \u2705" if ok else "\u062e\u0637\u0627!", show_alert=not ok)
+            await query.answer(i18n.t('حذف شد ✅', _lg) if ok else i18n.t('خطا!', _lg), show_alert=not ok)
             if ok:
                 cards = get_cards(agent_id)
                 try:
-                    text = "💳 <b>لیست کارت‌ها</b>\n"
+                    text = i18n.t('💳 <b>لیست کارت‌ها</b>\n', _lg)
                     if not cards:
-                        text += "\nهیچ کارتی ثبت نشده."
+                        text += i18n.t('\nهیچ کارتی ثبت نشده.', _lg)
                     await query.edit_message_text(text, reply_markup=payment_cards_list_keyboard(cards), parse_mode="HTML")
                 except Exception:
                     pass
@@ -399,13 +418,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if p2 == "cardtext":
             current = get_setting(agent_id, "card_to_card_text", "")
             context.user_data[UD_STATE] = STATE_SET_CARD_TEXT
-            _empty_label = '(\u062e\u0627\u0644\u06cc)'
+            _empty_label = i18n.t('(خالی)', _lg)
             try:
                 await query.message.reply_text(
-                    "\u270f\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645 \u0645\u062a\u0646 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a</b>\n\n"
-                    f"\u0645\u062a\u0646 \u0641\u0639\u0644\u06cc:\n<code>{_escape(current) or _empty_label}</code>\n\n"
-                    "\u0645\u062a\u0646 \u062c\u062f\u06cc\u062f \u0631\u0627 \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f (\u06cc\u0627 \u0628\u0631\u0627\u06cc \u062e\u0627\u0644\u06cc \u06a9\u0631\u062f\u0646 \u2014 \u0628\u0641\u0631\u0633\u062a\u06cc\u062f):",
-                    reply_markup=cancel_keyounter(), parse_mode="HTML",
+                    f"{i18n.t('✏️ <b>تنظیم متن کارت به کارت</b>\n\nمتن فعلی:\n<code>', _lg)}{_escape(current) or _empty_label}{i18n.t('</code>\n\nمتن جدید را ارسال کنید (یا برای خالی کردن — بفرستید):', _lg)}",
+                    reply_markup=cancel_keyboard(), parse_mode="HTML",
                 )
             except Exception:
                 pass
@@ -427,6 +444,11 @@ async def _refresh_card_settings(update: Update, agent_id: int) -> None:
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if not agent_id:
         return False
@@ -437,14 +459,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         number = "".join(ch for ch in text if ch.isdigit())
         if len(number) != 16:
             await update.message.reply_text(
-                "❌ لطفا شماره کارت معتبر 16 رقمی وارد کنید.",
+                i18n.t('❌ لطفا شماره کارت معتبر 16 رقمی وارد کنید.', _lg),
                 reply_markup=cancel_keyboard(),
             )
             return True
         context.user_data[UD_NEW_CARD] = {"card_number": number}
         context.user_data[UD_STATE] = STATE_ADD_CARD_OWNER
         await update.message.reply_text(
-            "➡️ لطفا نام صاحب کارت را وارد کنید:",
+            i18n.t('➡️ لطفا نام صاحب کارت را وارد کنید:', _lg),
             reply_markup=cancel_keyboard(),
         )
         return True
@@ -453,7 +475,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         owner = text.strip()
         if not owner:
             await update.message.reply_text(
-                "❌ لطفا نام صاحب کارت را وارد کنید.",
+                i18n.t('❌ لطفا نام صاحب کارت را وارد کنید.', _lg),
                 reply_markup=cancel_keyboard(),
             )
             return True
@@ -462,7 +484,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         context.user_data[UD_NEW_CARD] = draft
         context.user_data[UD_STATE] = STATE_ADD_CARD_BANK
         await update.message.reply_text(
-            "🏦 لطفا نام بانک را وارد کنید:\nبرای رد شدن این مرحله عدد 0 را ارسال کنید.",
+            i18n.t('🏦 لطفا نام بانک را وارد کنید:\nبرای رد شدن این مرحله عدد 0 را ارسال کنید.', _lg),
             reply_markup=cancel_keyboard(),
         )
         return True
@@ -474,7 +496,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not number or not owner:
             context.user_data.pop(UD_NEW_CARD, None)
             context.user_data.pop(UD_STATE, None)
-            await update.message.reply_text("❌ اطلاعات کارت ناقص است. دوباره تلاش کنید.")
+            await update.message.reply_text(i18n.t('❌ اطلاعات کارت ناقص است. دوباره تلاش کنید.', _lg))
             return True
         bank = "" if text.strip() == "0" else text.strip()
         card = add_card(agent_id, number, owner, bank)
@@ -498,10 +520,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if ok:
             card = get_card(card_id, agent_id)
             if card:
-                await update.message.reply_text("✅ بروزرسانی شد.", reply_markup=main_menu_keyboard())
+                await update.message.reply_text(i18n.t('✅ بروزرسانی شد.', _lg), reply_markup=main_menu_keyboard(lang=_lg))
                 await _show_card_details(type('Q', (), {'message': update.message})(), card)
                 return True
-        await update.message.reply_text("خطا!", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(i18n.t('خطا!', _lg), reply_markup=main_menu_keyboard(lang=_lg))
         return True
 
     if state == STATE_SET_CARD_TEXT:
@@ -512,8 +534,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         agent_db.sync_customer_bot_text_setting(agent_id, "card_to_card_text", text)
         context.user_data.pop(UD_STATE, None)
         await update.message.reply_text(
-            "\u2705 \u0645\u062a\u0646 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a \u0630\u062e\u06cc\u0631\u0647 \u0634\u062f.",
-            reply_markup=main_menu_keyboard(),
+            i18n.t('✅ متن کارت به کارت ذخیره شد.', _lg),
+            reply_markup=main_menu_keyboard(lang=_lg),
         )
         return True
 

@@ -8,6 +8,7 @@ import json
 import math
 import re
 import random
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,10 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 DB_FILE_NAME = "agency.db"
 DB_PATH = Path(__file__).with_name(DB_FILE_NAME)
 
-_CUSTOMER_BOT_DB_PATH = Path(__file__).resolve().parent.parent / "CustomerBot" / "customer_bot.db"
+_CUSTOMER_BOT_DB_PATH = Path(__file__).resolve().parent.parent / "customer_bot.db"
 
 _db_initialized = False
 _init_db_path = ""
+_init_db_lock = threading.RLock()
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -35,14 +37,38 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(cur: sqlite3.Cursor, table: str, column: str, definition: str) -> None:
+    """Add a column to an existing SQLite table without masking other errors."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        raise ValueError(f"invalid table name: {table!r}")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", column):
+        raise ValueError(f"invalid column name: {column!r}")
+    columns = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        try:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        except sqlite3.OperationalError:
+            # Another process may have completed the same additive migration
+            # between our schema check and ALTER acquiring SQLite's lock.
+            columns = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                raise
+
+
 def init_db() -> None:
     global _db_initialized, _init_db_path
     current_path = str(DB_PATH)
-    # اگر مسیر دیتابیس تغییر کرده (مثلاً در تست‌ها)، دوباره جداول را می‌سازیم.
-    if _db_initialized and current_path == _init_db_path:
-        return
-    _db_initialized = True
-    _init_db_path = current_path
+    with _init_db_lock:
+        # اگر مسیر دیتابیس تغییر کرده (مثلاً در تست‌ها)، دوباره جداول را می‌سازیم.
+        if _db_initialized and current_path == _init_db_path:
+            return
+        _initialize_db()
+        # Do not let concurrent callers observe a partially migrated schema.
+        _db_initialized = True
+        _init_db_path = current_path
+
+
+def _initialize_db() -> None:
     """ساخت تمام جداول دیتابیس نمایندگی."""
     conn = _get_conn()
     cur = conn.cursor()
@@ -113,6 +139,8 @@ def init_db() -> None:
             created_at TEXT DEFAULT '',
             updated_at TEXT DEFAULT '',
             deleted_at TEXT DEFAULT '',
+            source_payment_id INTEGER DEFAULT 0,
+            source_order_id INTEGER DEFAULT 0,
             FOREIGN KEY (agent_id) REFERENCES agent_users(id),
             FOREIGN KEY (customer_id) REFERENCES agent_customers(id)
         )
@@ -219,12 +247,38 @@ def init_db() -> None:
             tx_type TEXT DEFAULT '',
             description TEXT DEFAULT '',
             service_id INTEGER DEFAULT 0,
+            reference_key TEXT DEFAULT '',
             created_at TEXT DEFAULT '',
             FOREIGN KEY (agent_id) REFERENCES agent_users(id)
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_tx_agent ON agent_transactions(agent_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_tx_type ON agent_transactions(tx_type)")
+
+    # دفترکل پایدار اجرای پرداخت مشتری. این رکورد در همان دیتابیسی قرار دارد که
+    # کیف پول و سرویس نماینده در آن هستند تا رزرو وجه به صورت اتمیک ثبت شود.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_payment_fulfillments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id INTEGER NOT NULL,
+            payment_id INTEGER NOT NULL,
+            order_id INTEGER DEFAULT 0,
+            kind TEXT NOT NULL DEFAULT 'create',
+            state TEXT NOT NULL DEFAULT 'prepared',
+            wholesale_price INTEGER DEFAULT 0,
+            wallet_state TEXT NOT NULL DEFAULT 'none',
+            panel_uuid TEXT DEFAULT '',
+            service_id INTEGER DEFAULT 0,
+            target_json TEXT NOT NULL DEFAULT '{}',
+            attempt_count INTEGER DEFAULT 0,
+            last_error TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT '',
+            completed_at TEXT DEFAULT '',
+            UNIQUE(agent_id, payment_id),
+            FOREIGN KEY (agent_id) REFERENCES agent_users(id)
+        )
+    """)
 
     # 10. تنظیمات نماینده (key-value)
     cur.execute("""
@@ -261,29 +315,33 @@ def _migrate_db():
     conn = _get_conn()
     cur = conn.cursor()
 
-    # is_trial ستون برای agent_services
-    try:
-        cur.execute("SELECT is_trial FROM agent_services LIMIT 1")
-    except sqlite3.OperationalError:
-        cur.execute("ALTER TABLE agent_services ADD COLUMN is_trial INTEGER DEFAULT 0")
+    # ستون‌های نسخه‌های قدیمی (افزودن امن در شروع هم‌زمان چند پردازه)
+    _ensure_column(cur, "agent_services", "is_trial", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "agent_services", "deleted_at", "TEXT DEFAULT ''")
+    _ensure_column(
+        cur,
+        "agent_service_reminder_state",
+        "expired_sent",
+        "INTEGER DEFAULT 0",
+    )
 
-    # deleted_at ستون برای agent_services (soft-delete)
-    try:
-        cur.execute("SELECT deleted_at FROM agent_services LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            cur.execute("ALTER TABLE agent_services ADD COLUMN deleted_at TEXT DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass
+    # ستون‌های idempotency برای دیتابیس‌های ساخته‌شده با نسخه‌های قدیمی.
+    _ensure_column(cur, "agent_transactions", "reference_key", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_services", "source_payment_id", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "agent_services", "source_order_id", "INTEGER DEFAULT 0")
 
-    # expired_sent ستون برای agent_service_reminder_state (پیام انقضا)
-    try:
-        cur.execute("SELECT expired_sent FROM agent_service_reminder_state LIMIT 1")
-    except sqlite3.OperationalError:
-        try:
-            cur.execute("ALTER TABLE agent_service_reminder_state ADD COLUMN expired_sent INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tx_reference_key "
+        "ON agent_transactions(reference_key) WHERE reference_key IS NOT NULL AND reference_key != ''"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_service_source_payment "
+        "ON agent_services(agent_id, source_payment_id) WHERE source_payment_id > 0"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_fulfillment_state "
+        "ON agent_payment_fulfillments(state, updated_at)"
+    )
 
     conn.commit()
     conn.close()
@@ -464,6 +522,7 @@ def delete_agent(agent_id: int) -> bool:
     cur.execute("DELETE FROM agent_wallets WHERE agent_id = ?", (agent_id,))
     cur.execute("DELETE FROM agent_discount_codes WHERE agent_id = ?", (agent_id,))
     cur.execute("DELETE FROM agent_customer_bots WHERE agent_id = ?", (agent_id,))
+    cur.execute("DELETE FROM agent_payment_fulfillments WHERE agent_id = ?", (agent_id,))
     cur.execute("DELETE FROM agent_transactions WHERE agent_id = ?", (agent_id,))
     cur.execute("DELETE FROM agent_settings WHERE agent_id = ?", (agent_id,))
     cur.execute("DELETE FROM agent_plans WHERE agent_id = ?", (agent_id,))
@@ -485,6 +544,418 @@ def delete_agent(agent_id: int) -> bool:
 
 # ===============================
 #   کیف پول (agent_wallets)
+# ===============================
+#   دفترکل پایدار پرداخت مشتری
+# ===============================
+
+
+def _canonical_target_json(target: Optional[Dict[str, Any]]) -> str:
+    if target is None:
+        return "{}"
+    if not isinstance(target, dict):
+        raise TypeError("fulfillment target must be a dict")
+    return json.dumps(target, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _fulfillment_row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    item = dict(row)
+    try:
+        parsed = json.loads(str(item.get("target_json") or "{}"))
+        item["target"] = parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        item["target"] = {}
+    return item
+
+
+def customer_payment_wallet_reference_key(agent_id: int, payment_id: int) -> str:
+    """Stable unique key used for the one allowed wallet debit per payment."""
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    if aid <= 0 or pid <= 0:
+        raise ValueError("agent_id and payment_id must be positive")
+    return f"custpay:{aid}:{pid}:debit"
+
+
+def get_payment_fulfillment(agent_id: int, payment_id: int) -> Optional[Dict[str, Any]]:
+    """Return the durable fulfillment record for one customer payment."""
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    if aid <= 0 or pid <= 0:
+        return None
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_payment_fulfillments "
+            "WHERE agent_id = ? AND payment_id = ? LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        return _fulfillment_row(row)
+    finally:
+        conn.close()
+
+
+def prepare_payment_fulfillment(
+    agent_id: int,
+    payment_id: int,
+    *,
+    order_id: int = 0,
+    kind: str = "create",
+    wholesale_price: int = 0,
+    panel_uuid: str = "",
+    target: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Create a fulfillment once and preserve its immutable retry inputs.
+
+    Concurrent/repeated calls return the same row. A conflicting retry raises
+    ValueError instead of silently changing price, operation kind, UUID or an
+    already-persisted absolute renewal target.
+    """
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    oid = int(order_id or 0)
+    price = int(wholesale_price or 0)
+    op_kind = str(kind or "").strip().lower()
+    stable_uuid = str(panel_uuid or "").strip()
+    if aid <= 0 or pid <= 0:
+        raise ValueError("agent_id and payment_id must be positive")
+    if oid < 0 or price < 0:
+        raise ValueError("order_id and wholesale_price cannot be negative")
+    if not op_kind or len(op_kind) > 32:
+        raise ValueError("kind must be a non-empty value up to 32 characters")
+    requested_target = _canonical_target_json(target)
+    now = _now()
+
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM agent_payment_fulfillments "
+            "WHERE agent_id = ? AND payment_id = ? LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                """
+                INSERT INTO agent_payment_fulfillments (
+                    agent_id, payment_id, order_id, kind, state,
+                    wholesale_price, wallet_state, panel_uuid, target_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'prepared', ?, 'none', ?, ?, ?, ?)
+                """,
+                (aid, pid, oid, op_kind, price, stable_uuid, requested_target, now, now),
+            )
+        else:
+            current = dict(row)
+            current_order = int(current.get("order_id") or 0)
+            current_price = int(current.get("wholesale_price") or 0)
+            current_kind = str(current.get("kind") or "").strip().lower()
+            current_uuid = str(current.get("panel_uuid") or "").strip()
+            try:
+                current_target = _canonical_target_json(
+                    json.loads(str(current.get("target_json") or "{}"))
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raise RuntimeError("stored fulfillment target_json is invalid")
+
+            conflicts = []
+            if current_order > 0 and oid > 0 and current_order != oid:
+                conflicts.append("order_id")
+            if current_price > 0 and price > 0 and current_price != price:
+                conflicts.append("wholesale_price")
+            if current_kind and current_kind != op_kind:
+                conflicts.append("kind")
+            if current_uuid and stable_uuid and current_uuid != stable_uuid:
+                conflicts.append("panel_uuid")
+            if target is not None and current_target != "{}" and current_target != requested_target:
+                conflicts.append("target")
+            if conflicts:
+                raise ValueError(
+                    "conflicting fulfillment retry fields: " + ", ".join(conflicts)
+                )
+
+            conn.execute(
+                """
+                UPDATE agent_payment_fulfillments
+                SET order_id = CASE WHEN order_id <= 0 THEN ? ELSE order_id END,
+                    wholesale_price = CASE WHEN wholesale_price <= 0 THEN ? ELSE wholesale_price END,
+                    panel_uuid = CASE WHEN COALESCE(panel_uuid, '') = '' THEN ? ELSE panel_uuid END,
+                    target_json = CASE
+                        WHEN COALESCE(target_json, '') IN ('', '{}') THEN ?
+                        ELSE target_json
+                    END,
+                    updated_at = ?
+                WHERE agent_id = ? AND payment_id = ?
+                """,
+                (oid, price, stable_uuid, requested_target, now, aid, pid),
+            )
+        conn.commit()
+        saved = conn.execute(
+            "SELECT * FROM agent_payment_fulfillments "
+            "WHERE agent_id = ? AND payment_id = ? LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        result = _fulfillment_row(saved)
+        if result is None:
+            raise RuntimeError("fulfillment was not persisted")
+        return result
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def update_payment_fulfillment(
+    agent_id: int,
+    payment_id: int,
+    *,
+    state: Optional[str] = None,
+    wallet_state: Optional[str] = None,
+    panel_uuid: Optional[str] = None,
+    service_id: Optional[int] = None,
+    target: Optional[Dict[str, Any]] = None,
+    last_error: Optional[str] = None,
+    increment_attempt: bool = False,
+    expected_state: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Atomically update fulfillment progress, optionally as compare-and-swap."""
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    if aid <= 0 or pid <= 0:
+        return None
+
+    assignments: List[str] = []
+    values: List[Any] = []
+    normalized_state = None
+    if state is not None:
+        normalized_state = str(state or "").strip().lower()
+        if not normalized_state:
+            raise ValueError("state cannot be empty")
+        assignments.append("state = ?")
+        values.append(normalized_state)
+    if wallet_state is not None:
+        normalized_wallet_state = str(wallet_state or "").strip().lower()
+        if not normalized_wallet_state:
+            raise ValueError("wallet_state cannot be empty")
+        assignments.append("wallet_state = ?")
+        values.append(normalized_wallet_state)
+    if panel_uuid is not None:
+        assignments.append("panel_uuid = ?")
+        values.append(str(panel_uuid or "").strip())
+    if service_id is not None:
+        sid = int(service_id or 0)
+        if sid < 0:
+            raise ValueError("service_id cannot be negative")
+        assignments.append("service_id = ?")
+        values.append(sid)
+    if target is not None:
+        assignments.append("target_json = ?")
+        values.append(_canonical_target_json(target))
+    if last_error is not None:
+        assignments.append("last_error = ?")
+        values.append(str(last_error or "")[:2000])
+    if increment_attempt:
+        assignments.append("attempt_count = attempt_count + 1")
+
+    now = _now()
+    if normalized_state == "completed":
+        assignments.append("completed_at = CASE WHEN completed_at = '' THEN ? ELSE completed_at END")
+        values.append(now)
+    assignments.append("updated_at = ?")
+    values.append(now)
+
+    where = "agent_id = ? AND payment_id = ?"
+    values.extend((aid, pid))
+    if expected_state is not None:
+        expected = str(expected_state or "").strip().lower()
+        if not expected:
+            raise ValueError("expected_state cannot be empty")
+        where += " AND lower(trim(COALESCE(state, ''))) = ?"
+        values.append(expected)
+
+    init_db()
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            f"UPDATE agent_payment_fulfillments SET {', '.join(assignments)} WHERE {where}",
+            values,
+        )
+        if cur.rowcount <= 0:
+            conn.rollback()
+            return None
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM agent_payment_fulfillments "
+            "WHERE agent_id = ? AND payment_id = ? LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        return _fulfillment_row(row)
+    finally:
+        conn.close()
+
+
+def reserve_wallet_for_payment_once(
+    agent_id: int,
+    payment_id: int,
+    amount: int,
+    *,
+    description: str = "",
+    service_id: int = 0,
+) -> Tuple[bool, Dict[str, Any], bool]:
+    """Atomically debit an agent wallet at most once for a customer payment.
+
+    Returns (ok, wallet, debited_now). On a replay after a successful debit,
+    ok remains true while debited_now is false.
+    """
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    debit = int(amount or 0)
+    sid = int(service_id or 0)
+    if aid <= 0 or pid <= 0:
+        raise ValueError("agent_id and payment_id must be positive")
+    if debit <= 0:
+        raise ValueError("amount must be positive")
+    if sid < 0:
+        raise ValueError("service_id cannot be negative")
+
+    reference_key = customer_payment_wallet_reference_key(aid, pid)
+    now = _now()
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        fulfillment = conn.execute(
+            "SELECT * FROM agent_payment_fulfillments "
+            "WHERE agent_id = ? AND payment_id = ? LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        if fulfillment is None:
+            raise ValueError("prepare_payment_fulfillment must be called before wallet reservation")
+        stored_price = int(fulfillment["wholesale_price"] or 0)
+        if stored_price > 0 and stored_price != debit:
+            raise ValueError("wallet amount conflicts with the prepared wholesale_price")
+
+        existing_tx = conn.execute(
+            "SELECT * FROM agent_transactions WHERE reference_key = ? LIMIT 1",
+            (reference_key,),
+        ).fetchone()
+        if existing_tx is not None:
+            if (
+                int(existing_tx["agent_id"] or 0) != aid
+                or int(existing_tx["amount"] or 0) != debit
+                or str(existing_tx["tx_type"] or "").strip().lower() != "purchase"
+            ):
+                raise RuntimeError("wallet reference_key points to a conflicting transaction")
+            existing_sid = int(existing_tx["service_id"] or 0)
+            if sid > 0 and existing_sid not in (0, sid):
+                raise ValueError("service_id conflicts with the existing wallet transaction")
+            if sid > 0 and existing_sid == 0:
+                conn.execute(
+                    "UPDATE agent_transactions SET service_id = ? WHERE id = ?",
+                    (sid, int(existing_tx["id"])),
+                )
+            conn.execute(
+                "INSERT OR IGNORE INTO agent_wallets (agent_id, balance, updated_at) "
+                "VALUES (?, 0, ?)",
+                (aid, now),
+            )
+            conn.execute(
+                """
+                UPDATE agent_payment_fulfillments
+                SET wholesale_price = CASE WHEN wholesale_price <= 0 THEN ? ELSE wholesale_price END,
+                    wallet_state = 'reserved',
+                    state = CASE
+                        WHEN state IN ('prepared', 'waiting_wallet') THEN 'wallet_reserved'
+                        ELSE state
+                    END,
+                    last_error = '',
+                    updated_at = ?
+                WHERE agent_id = ? AND payment_id = ?
+                """,
+                (debit, now, aid, pid),
+            )
+            wallet_row = conn.execute(
+                "SELECT * FROM agent_wallets WHERE agent_id = ?", (aid,)
+            ).fetchone()
+            conn.commit()
+            return True, dict(wallet_row), False
+
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_wallets (agent_id, balance, updated_at) "
+            "VALUES (?, 0, ?)",
+            (aid, now),
+        )
+        cur = conn.execute(
+            "UPDATE agent_wallets SET balance = balance - ?, updated_at = ? "
+            "WHERE agent_id = ? AND balance >= ?",
+            (debit, now, aid, debit),
+        )
+        if cur.rowcount <= 0:
+            conn.execute(
+                """
+                UPDATE agent_payment_fulfillments
+                SET wallet_state = 'insufficient',
+                    last_error = 'insufficient_wallet',
+                    updated_at = ?
+                WHERE agent_id = ? AND payment_id = ?
+                """,
+                (now, aid, pid),
+            )
+            wallet_row = conn.execute(
+                "SELECT * FROM agent_wallets WHERE agent_id = ?", (aid,)
+            ).fetchone()
+            conn.commit()
+            return False, dict(wallet_row), False
+
+        conn.execute(
+            """
+            INSERT INTO agent_transactions (
+                agent_id, amount, tx_type, description, service_id,
+                reference_key, created_at
+            ) VALUES (?, ?, 'purchase', ?, ?, ?, ?)
+            """,
+            (
+                aid,
+                debit,
+                description or f"کسر عمده پرداخت مشتری #{pid}",
+                sid,
+                reference_key,
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE agent_payment_fulfillments
+            SET wholesale_price = CASE WHEN wholesale_price <= 0 THEN ? ELSE wholesale_price END,
+                wallet_state = 'reserved',
+                state = CASE
+                    WHEN state IN ('prepared', 'waiting_wallet') THEN 'wallet_reserved'
+                    ELSE state
+                END,
+                last_error = '',
+                updated_at = ?
+            WHERE agent_id = ? AND payment_id = ?
+            """,
+            (debit, now, aid, pid),
+        )
+        wallet_row = conn.execute(
+            "SELECT * FROM agent_wallets WHERE agent_id = ?", (aid,)
+        ).fetchone()
+        conn.commit()
+        return True, dict(wallet_row), True
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 # ===============================
 
 def get_wallet(agent_id: int) -> Dict[str, Any]:
@@ -543,6 +1014,100 @@ def charge_wallet(agent_id: int, amount: int, description: str = "") -> Dict[str
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else get_wallet(agent_id)
+
+
+def charge_wallet_for_agent_payment_once(
+    agent_id: int,
+    payment_id: int,
+    amount: int,
+    description: str = "",
+) -> Tuple[bool, Dict[str, Any], bool]:
+    """Credit one agent wallet payment exactly once.
+
+    The source payment lives in ``AgentBot/agent_bot.db`` while the wallet and
+    transaction ledger live here.  A stable unique reference makes retries
+    safe across process crashes and concurrent manual/SMS approvals.
+    """
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    credit = int(amount or 0)
+    if aid <= 0 or pid <= 0 or credit <= 0:
+        return False, {"agent_id": aid, "balance": 0}, False
+    reference_key = f"agent_wallet_topup:{aid}:{pid}"
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM agent_transactions WHERE reference_key=? LIMIT 1",
+            (reference_key,),
+        ).fetchone()
+        if existing:
+            row = dict(existing)
+            if (
+                int(row.get("agent_id") or 0) != aid
+                or int(row.get("amount") or 0) != credit
+                or str(row.get("tx_type") or "").strip().lower() != "charge"
+            ):
+                raise RuntimeError("agent wallet topup reference conflicts with ledger")
+            wallet_row = conn.execute(
+                "SELECT * FROM agent_wallets WHERE agent_id=?", (aid,)
+            ).fetchone()
+            if not wallet_row:
+                raise RuntimeError("agent wallet topup ledger exists without wallet")
+            conn.commit()
+            return True, dict(wallet_row), False
+
+        now = _now()
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_wallets(agent_id,balance,updated_at) VALUES (?,0,?)",
+            (aid, now),
+        )
+        conn.execute(
+            "UPDATE agent_wallets SET balance=balance+?,updated_at=? WHERE agent_id=?",
+            (credit, now, aid),
+        )
+        conn.execute(
+            "INSERT INTO agent_transactions"
+            "(agent_id,amount,tx_type,description,service_id,reference_key,created_at) "
+            "VALUES (?,?,'charge',?,0,?,?)",
+            (
+                aid,
+                credit,
+                description or f"شارژ کیف پول نماینده - پرداخت #{pid}",
+                reference_key,
+                now,
+            ),
+        )
+        wallet_row = conn.execute(
+            "SELECT * FROM agent_wallets WHERE agent_id=?", (aid,)
+        ).fetchone()
+        conn.commit()
+        return True, dict(wallet_row), True
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_agent_wallet_payment_credit(agent_id: int, payment_id: int) -> Optional[Dict[str, Any]]:
+    """Return the idempotent credit ledger row for an agent wallet payment."""
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    if aid <= 0 or pid <= 0:
+        return None
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_transactions WHERE reference_key=? LIMIT 1",
+            (f"agent_wallet_topup:{aid}:{pid}",),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def deduct_wallet(agent_id: int, amount: int, description: str = "", service_id: int = 0) -> Tuple[bool, Dict[str, Any]]:
@@ -1054,6 +1619,50 @@ def get_service_by_code(service_code: str, agent_id: Optional[int] = None) -> Op
         conn.close()
 
 
+def find_service_by_source_payment(agent_id: int, payment_id: int) -> Optional[Dict[str, Any]]:
+    """Return the single local service created for a customer payment.
+
+    Deleted rows are intentionally included: silently recreating a service
+    after a later deletion would violate payment idempotency.
+    """
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    if aid <= 0 or pid <= 0:
+        return None
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_services WHERE agent_id=? AND source_payment_id=? "
+            "ORDER BY id DESC LIMIT 1",
+            (aid, pid),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def find_service_by_order_reference(agent_id: int, order_id: int) -> Optional[Dict[str, Any]]:
+    """Find new or legacy service evidence for an order, including deleted rows."""
+    aid = int(agent_id or 0)
+    oid = int(order_id or 0)
+    if aid <= 0 or oid <= 0:
+        return None
+    panel_name = f"vpn-{oid:07d}"
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_services WHERE agent_id=? "
+            "AND (source_order_id=? OR name=?) "
+            "ORDER BY CASE WHEN source_order_id=? THEN 0 ELSE 1 END, id DESC LIMIT 1",
+            (aid, oid, panel_name, oid),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def create_service(
     agent_id: int,
     customer_id: int,
@@ -1068,11 +1677,22 @@ def create_service(
     is_trial: int = 0,
     comment: str = "",
     note: str = "",
+    *,
+    source_payment_id: int = 0,
+    source_order_id: int = 0,
 ) -> Dict[str, Any]:
     """
     ساخت سرویس جدید برای مشتری.
     """
     init_db()
+    source_pid = int(source_payment_id or 0)
+    source_oid = int(source_order_id or 0)
+    if source_pid < 0 or source_oid < 0:
+        raise ValueError("source payment/order ids cannot be negative")
+    if source_pid > 0:
+        existing = find_service_by_source_payment(agent_id, source_pid)
+        if existing:
+            return existing
     conn = _get_conn()
     cur = conn.cursor()
     now = _now()
@@ -1084,17 +1704,28 @@ def create_service(
         except Exception:
             pass
 
-    cur.execute(
-        """
-        INSERT INTO agent_services (
-            agent_id, customer_id, server_id, server_title, name, panel_user_uuid,
-            usage_limit, days_left, start_date, end_date, is_active,
-            wholesale_price, sale_price, is_trial, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-        """,
-        (agent_id, customer_id, server_id, server_title, name, panel_user_uuid,
-         usage_limit, days, now, end_date, wholesale_price, sale_price, is_trial, now, now),
-    )
+    try:
+        cur.execute(
+            """
+            INSERT INTO agent_services (
+                agent_id, customer_id, server_id, server_title, name, panel_user_uuid,
+                usage_limit, days_left, start_date, end_date, is_active,
+                wholesale_price, sale_price, is_trial, created_at, updated_at,
+                source_payment_id, source_order_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (agent_id, customer_id, server_id, server_title, name, panel_user_uuid,
+             usage_limit, days, now, end_date, wholesale_price, sale_price, is_trial,
+             now, now, source_pid, source_oid),
+        )
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        if source_pid > 0:
+            existing = find_service_by_source_payment(agent_id, source_pid)
+            if existing:
+                return existing
+        raise
     svc_id = cur.lastrowid
 
     # شناسه ۷ رقمی سرویس در comment (code:XXXXXXX) برای جستجو در ادمین/نمایندگی
@@ -1494,10 +2125,15 @@ def update_service(service_id: int, updates: Dict[str, Any]) -> bool:
     set_parts.append("updated_at = ?")
     values.append(_now())
     values.append(service_id)
-    cur.execute(f"UPDATE agent_services SET {', '.join(set_parts)} WHERE id = ?", values)
+    cur.execute(
+        f"UPDATE agent_services SET {', '.join(set_parts)} "
+        "WHERE id = ? AND (deleted_at IS NULL OR deleted_at = '')",
+        values,
+    )
+    updated = cur.rowcount > 0
     conn.commit()
     conn.close()
-    return True
+    return updated
 
 
 def renew_service(service_id: int, extra_days: int, extra_gb: float = 0) -> bool:

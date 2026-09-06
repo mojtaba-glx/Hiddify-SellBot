@@ -93,6 +93,8 @@ ensure_dirs() {
   # دسترسی سخت‌گیرانه روی داده‌های حساس (توکن‌ها، دیتابیس، بکاپ‌ها)
   chmod 600 "$ENV_FILE" 2>/dev/null || true
   chmod 600 "$ROOT_DIR"/Shared/*.db "$ROOT_DIR"/Shared/*.db-wal "$ROOT_DIR"/Shared/*.db-shm 2>/dev/null || true
+  chmod 600 "$ROOT_DIR"/customer_bot.db "$ROOT_DIR"/customer_bot.db-wal "$ROOT_DIR"/customer_bot.db-shm 2>/dev/null || true
+  chmod 600 "$ROOT_DIR"/AgentBot/*.db "$ROOT_DIR"/AgentBot/*.db-wal "$ROOT_DIR"/AgentBot/*.db-shm 2>/dev/null || true
   chmod 700 "$ROOT_DIR/backups" 2>/dev/null || true
   chmod 600 "$ROOT_DIR"/backups/* 2>/dev/null || true
 }
@@ -323,27 +325,95 @@ setup_venv_and_requirements() {
   _green "OK: dependencies installed."
 }
 
+_sqlite_snapshot_copy() {
+  local src="$1"
+  local dst="$2"
+  local python_bin=""
+  if [ -x "$VENV_DIR/bin/python" ]; then
+    python_bin="$VENV_DIR/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    python_bin="$(command -v python3)"
+  else
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$dst")"
+  "$python_bin" - "$src" "$dst" <<'PY'
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).resolve()
+destination = Path(sys.argv[2]).resolve()
+sidecars = [
+    destination,
+    destination.with_name(destination.name + "-wal"),
+    destination.with_name(destination.name + "-shm"),
+]
+for candidate in sidecars:
+    candidate.unlink(missing_ok=True)
+try:
+    source_uri = f"{source.as_uri()}?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=30) as source_conn:
+        source_conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        with sqlite3.connect(destination, timeout=30) as destination_conn:
+            source_conn.backup(destination_conn)
+            destination_conn.commit()
+            result = destination_conn.execute("PRAGMA quick_check").fetchone()
+            if not result or str(result[0]).strip().lower() != "ok":
+                raise sqlite3.DatabaseError(f"snapshot integrity check failed: {source}")
+    os.chmod(destination, 0o600)
+except BaseException:
+    for candidate in sidecars:
+        candidate.unlink(missing_ok=True)
+    raise
+PY
+}
+
 create_snapshot_backup() {
   local prefix="$1"
   ensure_dirs
-  local ts backup_file
+  local ts backup_file snapshot_dir rel snapshot_failed
   ts="$(date '+%d-%m-%Y_%H-%M-%S')"
   backup_file="$BACKUP_DIR/${prefix}_${ts}.tar.gz"
+  snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/hsb-backup.XXXXXX")"
+  snapshot_failed=0
 
-  tar -czf "$backup_file" \
-    --ignore-failed-read \
-    .env \
+  for rel in .env Shared/servers.json Shared/plans.json; do
+    if [ -f "$ROOT_DIR/$rel" ]; then
+      mkdir -p "$snapshot_dir/$(dirname "$rel")"
+      cp -a "$ROOT_DIR/$rel" "$snapshot_dir/$rel"
+    fi
+  done
+
+  if [ -d "$ROOT_DIR/Receiptions" ]; then
+    cp -a "$ROOT_DIR/Receiptions" "$snapshot_dir/Receiptions"
+  fi
+
+  for rel in \
     Shared/hiddify_sellbot.db \
-    Shared/servers.json \
-    Shared/plans.json \
     Shared/agency.db \
-    CustomerBot/customer_bot.db \
-    AgentBot/agent_bot.db \
-    Receiptions \
-    2>/dev/null || true
+    customer_bot.db \
+    AgentBot/agent_bot.db; do
+    if [ -f "$ROOT_DIR/$rel" ]; then
+      if ! _sqlite_snapshot_copy "$ROOT_DIR/$rel" "$snapshot_dir/$rel"; then
+        _yellow "WARN: SQLite snapshot failed: $rel"
+        snapshot_failed=1
+      fi
+    fi
+  done
+
+  tar -czf "$backup_file" -C "$snapshot_dir" . 2>/dev/null || true
+  rm -rf "$snapshot_dir"
+
+  chmod 600 "$backup_file" 2>/dev/null || true
 
   if [ -f "$backup_file" ]; then
     _green "OK: backup created: $backup_file"
+    if [ "$snapshot_failed" -eq 1 ]; then
+      _yellow "WARN: one or more live SQLite databases were excluded after snapshot failure."
+    fi
   else
     _yellow "WARN: backup was not created."
   fi
@@ -361,7 +431,7 @@ RUNTIME_GIT_PRESERVE_PATHS=(
   "Shared/servers.json"
   "Shared/plans.json"
   "Shared/agency.db"
-  "CustomerBot/customer_bot.db"
+  "customer_bot.db"
   "AgentBot/agent_bot.db"
 )
 
@@ -373,8 +443,16 @@ create_runtime_git_preserve_snapshot() {
   for rel in "${RUNTIME_GIT_PRESERVE_PATHS[@]}"; do
     if [ -f "$ROOT_DIR/$rel" ]; then
       mkdir -p "$snapshot_dir/$(dirname "$rel")"
-      cp -a "$ROOT_DIR/$rel" "$snapshot_dir/$rel"
-      copied=1
+      if [[ "$rel" == *.db ]]; then
+        if _sqlite_snapshot_copy "$ROOT_DIR/$rel" "$snapshot_dir/$rel"; then
+          copied=1
+        else
+          _yellow "WARN: failed to preserve live SQLite database: $rel" >&2
+        fi
+      else
+        cp -a "$ROOT_DIR/$rel" "$snapshot_dir/$rel"
+        copied=1
+      fi
     fi
   done
   if [ "$copied" -eq 1 ]; then
@@ -394,9 +472,22 @@ restore_runtime_git_preserve_snapshot() {
   local restored=0
   for rel in "${RUNTIME_GIT_PRESERVE_PATHS[@]}"; do
     if [ -f "$snapshot_dir/$rel" ]; then
+      # Ignored runtime databases survive git sync.  Never replace one while a
+      # bot may still have live WAL connections; restore only if it disappeared.
+      if [[ "$rel" == *.db ]] && [ -f "$ROOT_DIR/$rel" ]; then
+        continue
+      fi
       mkdir -p "$(dirname "$ROOT_DIR/$rel")"
-      cp -a "$snapshot_dir/$rel" "$ROOT_DIR/$rel"
-      restored=1
+      if [[ "$rel" == *.db ]]; then
+        if _sqlite_snapshot_copy "$snapshot_dir/$rel" "$ROOT_DIR/$rel"; then
+          restored=1
+        else
+          _yellow "WARN: failed to restore preserved SQLite database: $rel" >&2
+        fi
+      else
+        cp -a "$snapshot_dir/$rel" "$ROOT_DIR/$rel"
+        restored=1
+      fi
     fi
   done
 
@@ -412,7 +503,7 @@ is_runtime_local_path() {
     .env|.env.bak*|.env.*.bak|logs|logs/*|backups|backups/*|Receiptions|Receiptions/*)
       return 0
       ;;
-    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db|Shared/*.db-*|Shared/agency.db|CustomerBot/customer_bot.db|AgentBot/agent_bot.db)
+    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db|Shared/*.db-*|Shared/agency.db|customer_bot.db|customer_bot.db-*|CustomerBot/customer_bot.db|CustomerBot/customer_bot.db-*|AgentBot/agent_bot.db|AgentBot/agent_bot.db-*)
       return 0
       ;;
     *.pid|*.log|*.bak|*.tmp|Backup_Bot_*|Backup_All_*|Pre*.tar.gz|Pre*.zip)

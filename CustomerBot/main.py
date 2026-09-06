@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from Shared.agent_db import get_all_active_customer_bots
-from CustomerBot.database import init_db as init_customer_db, get_force_join_settings, get_user
+from CustomerBot.database import init_db as init_customer_db, get_force_join_settings, get_user, get_localized_forcejoin_guide
 from Shared import agent_reminder
 from Shared import i18n
 from CustomerBot.handlers.start import start_command
@@ -55,20 +55,23 @@ async def force_join_middleware(update: Update, context) -> None:
     if update.callback_query and (update.callback_query.data or "").startswith("forcejoin:"):
         return
 
+    _lang = i18n.get_customer_lang(agent_id, update.effective_user.id) if update.effective_user else "fa"
+
     # اگر کاربر مسدود شده باشد، از همه فعالیتها جلوگیری کن.
     user = update.effective_user
     if user and _is_user_banned(agent_id, user.id):
+        banned = i18n.t("banned_msg", i18n.get_customer_lang(agent_id, user.id))
         if update.callback_query:
             try:
                 await update.callback_query.answer(
-                    "🚫 حساب شما توسط مدیر مسدود شده است.",
+                    banned,
                     show_alert=True,
                 )
             except Exception:
                 pass
         elif update.message and update.message.text:
             try:
-                await update.message.reply_text("🚫 حساب شما توسط مدیر مسدود شده است.")
+                await update.message.reply_text(banned)
             except Exception:
                 pass
         raise ApplicationHandlerStop
@@ -80,10 +83,11 @@ async def force_join_middleware(update: Update, context) -> None:
     if not user:
         return
 
+    _lang = i18n.get_customer_lang(agent_id, user.id)
     ch = str(fjs["channel_username"])
     chat_target = ch if ch.lstrip("-").isdigit() else f"@{ch}"
     link = fjs.get("channel_link") or (f"https://t.me/{ch}" if not ch.lstrip("-").isdigit() else "")
-    guide = fjs.get("guide_text", "🔒 لطفاً ابتدا در کانال پشتیبانی عضو شوید.\nپس از عضویت روی «✅ بررسی عضویت» بزنید.")
+    guide = get_localized_forcejoin_guide(agent_id, _lang)
 
     allowed_statuses = {"member", "administrator", "creator", "owner"}
     try:
@@ -92,9 +96,9 @@ async def force_join_middleware(update: Update, context) -> None:
         if status not in allowed_statuses:
             if update.callback_query:
                 await update.callback_query.answer()
-                await update.callback_query.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+                await update.callback_query.message.reply_text(guide, reply_markup=force_join_keyboard(link, lang=_lang))
             elif update.message:
-                await update.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+                await update.message.reply_text(guide, reply_markup=force_join_keyboard(link, lang=_lang))
             raise ApplicationHandlerStop
     except ApplicationHandlerStop:
         raise
@@ -108,9 +112,9 @@ async def force_join_middleware(update: Update, context) -> None:
         )
         if update.callback_query:
             await update.callback_query.answer()
-            await update.callback_query.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+            await update.callback_query.message.reply_text(guide, reply_markup=force_join_keyboard(link, lang=_lang))
         elif update.message:
-            await update.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+            await update.message.reply_text(guide, reply_markup=force_join_keyboard(link, lang=_lang))
         raise ApplicationHandlerStop
 
 

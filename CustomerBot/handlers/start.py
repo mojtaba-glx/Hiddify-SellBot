@@ -6,6 +6,8 @@ from CustomerBot.database import (
     upsert_user,
     get_user,
     get_text_settings,
+    get_localized_text,
+    get_localized_forcejoin_guide,
     get_marketing_settings,
     get_tx_plans_settings,
     get_force_join_settings,
@@ -23,7 +25,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     agent_id = context.bot_data.get("agent_id", 0)
     if not agent_id:
-        await update.message.reply_text("❌ ربات به درستی پیکربندی نشده است.")
+        await update.message.reply_text(i18n.t("not_configured", "fa"))
         return
 
     if is_rate_limited(f"start_{user.id}"):
@@ -32,31 +34,28 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(agent_id, user.id, user.username or "", user.full_name or "")
     upsert_customer(agent_id, user.id, user.username or "", user.full_name or "")
 
+    lang = i18n.get_customer_lang(agent_id, user.id)
+
     fjs = get_force_join_settings(agent_id)
     if fjs.get("enabled") and fjs.get("channel_username"):
         ch = str(fjs["channel_username"])
         chat_target = ch if ch.lstrip("-").isdigit() else f"@{ch}"
         link = fjs.get("channel_link") or (f"https://t.me/{ch}" if not ch.lstrip("-").isdigit() else "")
-        guide = fjs.get("guide_text", "🔒 لطفاً ابتدا عضو شوید.")
+        guide = get_localized_forcejoin_guide(agent_id, lang)
         try:
             member = await context.bot.get_chat_member(chat_target, user.id)
             if member.status in ("left", "kicked"):
-                await update.message.reply_text(guide, reply_markup=force_join_keyboard(link))
+                await update.message.reply_text(guide, reply_markup=force_join_keyboard(link, lang=lang))
                 return
         except Exception:
             # خطا در چک عضویت — اجازه ورود بده (ربات ادمین نیست یا کانال نامعتبر)
             pass
 
-    text_settings = get_text_settings(agent_id)
-    lang = i18n.get_customer_lang(agent_id, user.id)
-    if str(text_settings.get("welcome_message", "") or "").strip():
-        welcome = text_settings.get("welcome_message", "").format(
-            full_name=user.full_name or "",
-            username=f"@{user.username}" if user.username else "",
-            id=user.id,
-        )
-    else:
-        welcome = i18n.t("welcome", lang, full_name=user.full_name or "")
+    welcome = get_localized_text(agent_id, "welcome_message", lang).format(
+        full_name=user.full_name or "",
+        username=f"@{user.username}" if user.username else "",
+        id=user.id,
+    )
 
     await update.message.reply_text(
         welcome,
@@ -73,10 +72,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await handle_ticket_shot_start(update, context, start_payload)
             elif kind == "voucher":
                 from CustomerBot.database import get_zarin_voucher, redeem_zarin_voucher
-                ok, amount = redeem_zarin_voucher(agent_id, data, user.id)
+                ok, amount = redeem_zarin_voucher(agent_id, data, user.id, lang=lang)
                 if ok:
                     await update.message.reply_text(
-                        f"🎉 موجودی کیف پول شما افزایش یافت.\nمبلغ: {int(amount):,} تومان"
+                        i18n.t("voucher_ok", lang, a=f"{int(amount):,}")
                     )
                 else:
                     await update.message.reply_text(f"⚠️ {amount}")

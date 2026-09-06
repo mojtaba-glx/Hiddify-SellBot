@@ -157,7 +157,7 @@ def _display_name(user: Dict[str, Any]) -> str:
         return f"@{username}"
     if full_name:
         return full_name
-    return str(user.get("telegram_id") or user.get("id") or "کاربر")
+    return str(user.get("telegram_id") or user.get("id") or _adm_t("ub_user"))
 
 
 def _normalize_public_base_url(raw: str) -> str:
@@ -277,7 +277,7 @@ def _write_env_values(updates: Dict[str, Any]) -> None:
 def _mask_secret(secret: str) -> str:
     text = str(secret or "").strip()
     if not text:
-        return "تنظیم نشده"
+        return _adm_t("ub_not_configured")
     if len(text) <= 12:
         return text[:3] + "..." + text[-3:]
     return text[:8] + "..." + text[-6:]
@@ -309,7 +309,7 @@ def _sms_webhook_status() -> Dict[str, Any]:
 
 def _format_gb(value: Any) -> str:
     if value is None:
-        return "نامشخص"
+        return _adm_t("ub_unknown")
     try:
         v = float(value)
     except (TypeError, ValueError):
@@ -372,10 +372,10 @@ def _parse_receipt_meta(raw: str) -> Dict[str, str]:
 def _payment_status_title(status: str) -> str:
     s = (status or "").strip().lower()
     if s == "approved":
-        return "✅ تایید شده"
+        return _adm_t("ub_status_approved")
     if s == "rejected":
-        return "❌ رد شده"
-    return "⏳ در انتظار"
+        return _adm_t("ub_status_rejected")
+    return _adm_t("ub_status_pending")
 
 
 def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
@@ -390,18 +390,12 @@ def _build_payment_detail_text(pay: Dict[str, Any]) -> str:
     status_title = _payment_status_title(str(pay.get("status") or "pending"))
     receipt_meta = _parse_receipt_meta(str(pay.get("receipt_image") or ""))
     payer_last4 = str(receipt_meta.get("payer_last4") or "").strip()
-    payer_line = f"\n◈ ۴ رقم آخر کارت مبدا: {payer_last4}" if payer_last4 else ""
+    payer_line = _adm_t("ub_payment_payer_last4", value=payer_last4) if payer_last4 else ""
     return (
-        f"◈ شناسه تراکنش: {tx_code}\n"
-        f"👤 کاربر: {full_name}\n"
-        f"◈ نام کاربری: {username}\n"
-        f"◈ شناسه کاربر: {tg_id}\n"
-        f"◈ تاریخ تراکنش: {created_at}\n"
-        f"◈ مبلغ تراکنش: {amount} تومان\n"
-        "❖ • -------------------------- • ❖\n"
-        f"◈ وضعیت: {status_title}\n"
-        f"◈ روش تراکنش: {method}"
-        f"{payer_line}"
+        _adm_t("ub_payment_detail", tx_code=tx_code, full_name=full_name,
+               username=username, tg_id=tg_id, created_at=created_at,
+               amount=amount, status=status_title, method=method)
+        + payer_line
     )
 
 
@@ -413,14 +407,12 @@ def _build_payment_approved_report_text(pay: Dict[str, Any]) -> str:
     pay_flow = str(receipt_meta.get("pay_flow") or "").strip().lower()
     is_direct_buy = pay_flow == "direct_buy"
     if method == "card" and is_direct_buy:
-        method_title = "کارت به کارت (خرید مستقیم)"
+        method_title = _adm_t("ub_method_direct_card")
     else:
-        method_title = "کارت به کارت" if method == "card" else method
+        method_title = _adm_t("ub_method_card") if method == "card" else method
     text = (
-        "💸گزارش تایید پرداخت🕊\n\n"
-        f"🔖شیوه پرداخت:{method_title}\n"
-        f"🔑شناسه تراکنش:{tx_code}\n"
-        f"💰مبلغ پرداخت:{amount} تومان"
+        _adm_t("ub_payment_approved_report", method=method_title,
+               tx_code=tx_code, amount=amount)
     )
     # گزارش شارژ کیف پول: موجودی جدید کاربر بعد از تایید نمایش داده می‌شود
     if pay_flow == "wallet_topup":
@@ -436,8 +428,7 @@ def _build_payment_approved_report_text(pay: Dict[str, Any]) -> str:
         except Exception:
             balance = 0
         text += (
-            "\n\n✅ کیف پول کاربر شارژ شد."
-            f"\n💼 مانده کیف پول کاربر: {_format_toman(balance)} تومان"
+            _adm_t("ub_wallet_topped_up", balance=_format_toman(balance))
         )
     return text
 
@@ -445,10 +436,10 @@ def _build_payment_approved_report_text(pay: Dict[str, Any]) -> str:
 def _ticket_status_title(status: str) -> str:
     s = str(status or "").strip().lower()
     if s == "open":
-        return "✅ باز"
+        return _adm_t("ub_ticket_open")
     if s == "closed":
-        return "📪 بسته"
-    return "❌ در انتظار"
+        return _adm_t("ub_ticket_closed")
+    return _adm_t("ub_ticket_pending")
 
 
 def _ticket_user_label(ticket: Dict[str, Any]) -> str:
@@ -459,7 +450,7 @@ def _ticket_user_label(ticket: Dict[str, Any]) -> str:
         return full_name
     if username:
         return username
-    return tg_id or "کاربر"
+    return tg_id or _adm_t("ub_user")
 
 
 def _build_tickets_stats_text(stats: Dict[str, Any]) -> str:
@@ -471,42 +462,27 @@ def _build_tickets_stats_text(stats: Dict[str, Any]) -> str:
     feedback_pos = int(stats.get("feedback_positive") or 0)
     feedback_neg = int(stats.get("feedback_negative") or 0)
     return (
-        "📮 مدیریت تیکت‌ها\n"
-        "❖⬩--------------------------------⬩❖\n"
-        f"◈ تعداد تیکت‌ها: {total}\n"
-        f"◈ تعداد تیکت‌های باز: {opened}\n"
-        f"◈ تعداد تیکت‌های بسته: {closed}\n"
-        f"◈ تعداد تیکت‌های در انتظار: {pending}\n"
-        f"◈ تعداد نظرسنجی‌ها: {feedback_total}\n"
-        f"◈ تعداد نظرسنجی‌های مثبت: {feedback_pos}\n"
-        f"◈ تعداد نظرسنجی‌های منفی: {feedback_neg}\n"
-        "❖⬩--------------------------------⬩❖"
+        f"{_adm_t('ub_lit_95446193b2f4')}{total}{_adm_t('ub_lit_e9cbd2d2737c')}{opened}{_adm_t('ub_lit_464fef4b6241')}{closed}{_adm_t('ub_lit_d19d7a6fbd42')}{pending}{_adm_t('ub_lit_27351dc51444')}{feedback_total}{_adm_t('ub_lit_7b9ca13b8c44')}{feedback_pos}{_adm_t('ub_lit_fb8cdcb93919')}{feedback_neg}\n❖⬩--------------------------------⬩❖"
     )
 
 
 def _broadcast_segment_label(segment: str) -> str:
     seg = str(segment or "").strip().lower()
     mapping = {
-        "all": "تمام کاربران",
-        "expired_all": "تمام کاربران منقضی شده",
-        "no_order": "کاربران بدون سفارش",
-        "expired_1w": "کاربران منقضی شده بیش از یک هفته",
-        "expired_2w": "کاربران منقضی شده بیش از دو هفته",
-        "expired_4w": "کاربران منقضی شده بیش از چهار هفته",
-        "expired_8w": "کاربران منقضی شده بیش از هشت هفته",
+        "all": _adm_t('ub_lit_4e2322181a3c'),
+        "expired_all": _adm_t('ub_lit_f0d81758cac5'),
+        "no_order": _adm_t('ub_lit_c7d991fd8b86'),
+        "expired_1w": _adm_t('ub_lit_a2e8cf10692c'),
+        "expired_2w": _adm_t('ub_lit_e9f9a574e26e'),
+        "expired_4w": _adm_t('ub_lit_817af6577e85'),
+        "expired_8w": _adm_t('ub_lit_f33f3f99dccc'),
     }
-    return mapping.get(seg, "تمام کاربران")
+    return mapping.get(seg, _adm_t('ub_lit_4e2322181a3c'))
 
 
 def _build_broadcast_stats_text(stats: Dict[str, Any]) -> str:
     return (
-        f"◈ تعداد کاربران تلگرام: {int(stats.get('total_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی: {int(stats.get('expired_users') or 0)}\n"
-        f"◈ تعداد کاربران بدون سفارش: {int(stats.get('no_order_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از یک هفته: {int(stats.get('expired_1w_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از دو هفته: {int(stats.get('expired_2w_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از چهار هفته: {int(stats.get('expired_4w_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از هشت هفته: {int(stats.get('expired_8w_users') or 0)}"
+        f"{_adm_t('ub_lit_b3d620fb2274')}{int(stats.get('total_users') or 0)}{_adm_t('ub_lit_1c7fb94307f9')}{int(stats.get('expired_users') or 0)}{_adm_t('ub_lit_83024d8eef9c')}{int(stats.get('no_order_users') or 0)}{_adm_t('ub_lit_baf77f76340e')}{int(stats.get('expired_1w_users') or 0)}{_adm_t('ub_lit_502540af517b')}{int(stats.get('expired_2w_users') or 0)}{_adm_t('ub_lit_f0268f20ccc5')}{int(stats.get('expired_4w_users') or 0)}{_adm_t('ub_lit_2b607a6b23bd')}{int(stats.get('expired_8w_users') or 0)}"
     )
 
 
@@ -529,12 +505,9 @@ def _is_ticket_reply_skip_text(text: str) -> bool:
 
 def _build_ticket_reply_preview_text(reply_text: str, has_photo: bool) -> str:
     body = str(reply_text or "").strip() or "-"
-    shot_line = "📎 اسکرین‌شات: ارسال شده ✅" if has_photo else "📎 اسکرین‌شات: ارسال نشد"
+    shot_line = _adm_t('ub_lit_2601a58a4d58') if has_photo else _adm_t('ub_lit_42a1d894cd7d')
     return (
-        "📩 تایید اطلاعات پاسخ تیکت\n\n"
-        f"📝 پاسخ:\n{body}\n\n"
-        f"{shot_line}\n\n"
-        "❗️در صورت تایید اطلاعات، برای ارسال تیکت گزینه «✅ارسال» را انتخاب نمایید."
+        f"{_adm_t('ub_lit_bc641fde7a5f')}{body}\n\n{shot_line}{_adm_t('ub_lit_a044227ca392')}"
     )
 
 
@@ -546,39 +519,39 @@ def _build_ticket_detail_text(
     code = str(ticket.get("ticket_code") or "-")
     status = _ticket_status_title(str(ticket.get("status") or "pending"))
     created = str(ticket.get("created_at") or "-")
-    admin_name = str(ticket.get("admin_name") or "").strip() or "تنظیم نشده"
+    admin_name = str(ticket.get("admin_name") or "").strip() or _adm_t('ub_lit_b5f50a9abc69')
     user_label = _ticket_user_label(ticket)
     username = str(ticket.get("username") or ticket.get("db_username") or "").strip().lstrip("@")
     tg_id = str(ticket.get("telegram_id") or ticket.get("db_telegram_id") or "-")
 
     lines = [
-        f"🧾 شناسه تیکت: {html_escape(code)}",
-        f"📅 تاریخ ایجاد: {html_escape(created)}",
-        f"◈ وضعیت تیکت: {html_escape(status)}",
-        f"👤 کاربر: {html_escape(user_label)}",
-        f"🔹 نام کاربری: {html_escape(username or '-')}",
-        f"🔢 شناسه کاربر: {html_escape(tg_id)}",
-        f"👨‍💻 ادمین: {html_escape(admin_name)}",
+        f"{_adm_t('ub_lit_02f28a6324ce')}{html_escape(code)}",
+        f"{_adm_t('ub_lit_0bfca2015957')}{html_escape(created)}",
+        f"{_adm_t('ub_lit_821388487a16')}{html_escape(status)}",
+        f"{_adm_t('ub_lit_9a3903dac8b0')}{html_escape(user_label)}",
+        f"{_adm_t('ub_lit_0b59261c72b1')}{html_escape(username or '-')}",
+        f"{_adm_t('ub_lit_6135467417d5')}{html_escape(tg_id)}",
+        f"{_adm_t('ub_lit_29e351d99dc9')}{html_escape(admin_name)}",
         "❖⬩--------------------------------⬩❖",
     ]
 
     for idx, m in enumerate(messages, start=1):
         sender_type = str(m.get("sender_type") or "").strip().lower()
-        sender_name = str(m.get("sender_name") or "").strip() or ("کاربر" if sender_type == "user" else "ادمین")
+        sender_name = str(m.get("sender_name") or "").strip() or (_adm_t('ub_lit_883da9f030ce') if sender_type == "user" else _adm_t('ub_lit_65497ce4192c'))
         created_at = str(m.get("created_at") or "-")
         text = str(m.get("message_text") or "").strip()
         photo = str(m.get("photo_file_id") or "").strip()
-        lines.append(f"📅 تاریخ ایجاد: {html_escape(created_at)} | #{idx}")
-        lines.append(f"◈ {'سوال' if sender_type == 'user' else 'پاسخ'}:")
+        lines.append(f"{_adm_t('ub_lit_0bfca2015957')}{html_escape(created_at)} | #{idx}")
+        lines.append(f"◈ {_adm_t('ub_lit_139606472968') if sender_type == 'user' else _adm_t('ub_lit_c121b28dc81d')}:")
         lines.append(html_escape(sender_name))
         if text:
             lines.append(html_escape(text))
         if photo:
             shot_link = str((screenshot_links or {}).get(idx) or "").strip()
             if shot_link:
-                lines.append(f"🖼 <a href=\"{html_escape(shot_link, quote=True)}\">اسکرین‌شات #{idx}</a>")
+                lines.append(f"🖼 <a href=\"{html_escape(shot_link, quote=True)}{_adm_t('ub_lit_d791a48e6b47')}{idx}</a>")
             else:
-                lines.append(f"🖼 اسکرین‌شات #{idx}")
+                lines.append(f"{_adm_t('ub_lit_86922f1334f7')}{idx}")
         lines.append("❖⬩------------------------------⬩❖")
     return "\n".join(lines)
 
@@ -652,16 +625,10 @@ def _make_qr_image(data: str, *, filename: str = "gift-deeplink-qr.png") -> Byte
 
 
 def _build_gift_campaign_copy(code: str, deep_link: str, amount_toman: int, *, title: str = "") -> str:
-    campaign_title = str(title or "هدیه ویژه فروشگاه").strip()
-    link_line = str(deep_link or "").strip() or f"کد هدیه: {code}"
+    campaign_title = str(title or _adm_t('ub_lit_af51f0048ada')).strip()
+    link_line = str(deep_link or "").strip() or f"{_adm_t('ub_lit_5f9b2588a592')}{code}"
     return (
-        f"🎁 {campaign_title}\n\n"
-        "یک هدیه شارژ کیف پول برای شما فعال شده است.\n"
-        "برای دریافت هدیه، روی لینک زیر بزنید یا کد هدیه را در بخش کیف پول وارد کنید.\n\n"
-        f"🏷 کد هدیه: {code}\n"
-        f"💰 مبلغ هدیه: {_format_toman(amount_toman)} تومان\n"
-        f"🔗 لینک دریافت: {link_line}\n\n"
-        "⏳ ظرفیت محدود است؛ بعد از تکمیل ظرفیت یا پایان زمان کمپین، کد غیرفعال می‌شود."
+        f"🎁 {campaign_title}{_adm_t('ub_lit_574a9428f931')}{code}{_adm_t('ub_lit_d540a419275e')}{_format_toman(amount_toman)}{_adm_t('ub_lit_ee2315460a4b')}{link_line}{_adm_t('ub_lit_e5b13ceec4c3')}"
     )
 
 
@@ -730,7 +697,7 @@ async def handle_ticket_screenshot_start(
 
     ticket = userbot_db.get_ticket_by_code(code)
     if not ticket:
-        await message.reply_text("❌ تیکت موردنظر پیدا نشد.")
+        await message.reply_text(_adm_t("ub_ticket_not_found"))
         return True
 
     messages = userbot_db.get_ticket_messages(code)
@@ -749,16 +716,14 @@ async def handle_ticket_screenshot_start(
         break
 
     if not photo_ref:
-        await message.reply_text("❌ اسکرین‌شات موردنظر یافت نشد.")
+        await message.reply_text(_adm_t("ub_screenshot_not_found"))
         return True
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 بازگشت به تیکت", callback_data=f"userbot:ticket:detail:{code}:pending:1")]
+        [InlineKeyboardButton(_adm_t("ub_back_to_ticket"), callback_data=f"userbot:ticket:detail:{code}:pending:1")]
     ])
     caption = (
-        f"🖼 اسکرین‌شات تیکت #{code}\n"
-        f"◈ عکس #{int(photo_ref['idx'])}\n"
-        f"📅 زمان: {photo_ref['created_at']}"
+        f"{_adm_t('ub_lit_096c2487df9b')}{code}{_adm_t('ub_lit_2740fc3ccb0e')}{int(photo_ref['idx'])}{_adm_t('ub_lit_7bf0af3d7455')}{photo_ref['created_at']}"
     )
     sent = await _send_ticket_photo_with_fallback(
         context=context,
@@ -768,7 +733,7 @@ async def handle_ticket_screenshot_start(
         reply_markup=kb,
     )
     if not sent:
-        await message.reply_text("❌ ارسال عکس ممکن نشد.")
+        await message.reply_text(_adm_t("ub_photo_send_failed"))
     return True
 
 
@@ -860,13 +825,7 @@ async def _send_payment_event_channel_report_if_enabled(pay: Dict[str, Any]) -> 
         amount = _format_toman(pay.get("amount") or 0)
         tx_code = str(pay.get("tx_code") or pay.get("id") or "-")
         text = (
-            "📣 گزارش رویداد پرداخت\n"
-            f"👤 کاربر: {full_name}\n"
-            f"◈ نام کاربری: {username}\n"
-            f"◈ شناسه کاربر: {tg_id}\n"
-            f"🔑 شناسه تراکنش: {tx_code}\n"
-            f"💰 مبلغ: {amount} تومان\n"
-            "✅ وضعیت: تایید شده"
+            f"{_adm_t('ub_lit_af08ec76e495')}{full_name}{_adm_t('ub_lit_7b764c0838e5')}{username}{_adm_t('ub_lit_08c2e487ac8a')}{tg_id}{_adm_t('ub_lit_56260a9789c9')}{tx_code}{_adm_t('ub_lit_0835446733bd')}{amount}{_adm_t('ub_lit_5d262a4780cd')}"
         )
         await user_bot.send_message(chat_id=chat_target, text=text)
     except Exception as e:
@@ -875,15 +834,15 @@ async def _send_payment_event_channel_report_if_enabled(pay: Dict[str, Any]) -> 
 
 def _build_payment_action_keyboard(payment_id: int, user_btn_title: str, uid: int, status: str = "") -> InlineKeyboardMarkup:
     rows = []
-    rows.append([InlineKeyboardButton("✏️ تغییر وضعیت تراکنش", callback_data=f"userbot:pay:chg:{payment_id}")])
+    rows.append([InlineKeyboardButton(_adm_t("ub_change_payment_status"), callback_data=f"userbot:pay:chg:{payment_id}")])
     rows.append([InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{uid}")])
     return InlineKeyboardMarkup(rows)
 
 
 def _build_payment_change_confirm_keyboard(payment_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ بله", callback_data=f"userbot:pay:chg:yes:{payment_id}")],
-        [InlineKeyboardButton("❌ خیر", callback_data=f"userbot:pay:chg:no:{payment_id}")],
+        [InlineKeyboardButton(_adm_t("ag_yes"), callback_data=f"userbot:pay:chg:yes:{payment_id}")],
+        [InlineKeyboardButton(_adm_t("ag_no"), callback_data=f"userbot:pay:chg:no:{payment_id}")],
     ])
 
 
@@ -891,12 +850,12 @@ def _build_payment_change_options_keyboard(payment_id: int, current_status: str)
     status = (current_status or "").strip().lower()
     rows = []
     if status != "approved":
-        rows.append([InlineKeyboardButton("✅ تایید شده", callback_data=f"userbot:pay:set:{payment_id}:approved")])
+        rows.append([InlineKeyboardButton(_adm_t("ub_status_approved"), callback_data=f"userbot:pay:set:{payment_id}:approved")])
     if status != "rejected":
-        rows.append([InlineKeyboardButton("❌ رد شده", callback_data=f"userbot:pay:set:{payment_id}:rejected")])
+        rows.append([InlineKeyboardButton(_adm_t("ub_status_rejected"), callback_data=f"userbot:pay:set:{payment_id}:rejected")])
     if status != "pending":
-        rows.append([InlineKeyboardButton("⏳ در انتظار", callback_data=f"userbot:pay:set:{payment_id}:pending")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:pay:detail:{payment_id}")])
+        rows.append([InlineKeyboardButton(_adm_t("ub_status_pending"), callback_data=f"userbot:pay:set:{payment_id}:pending")])
+    rows.append([InlineKeyboardButton(_adm_t("back"), callback_data=f"userbot:pay:detail:{payment_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -952,7 +911,7 @@ async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List
         if not snapshot:
             # اشتراک تمدیدی بدون اسنپ‌شات قابل حذف نیست؛ طبق قانون فقط وضعیت بازگشت می‌خورد.
             userbot_db._patch_payment_receipt_meta(pid, {"direct_done": "reverted"})
-            return True, "⚠️ اشتراک تمدیدی بود؛ اطلاعات قبل از تمدید ثبت نشده و اشتراک حذف نشد.", failed
+            return True, _adm_t('ub_lit_f752e9fc6dde'), failed
         service = userbot_db.get_service_by_id(renew_service_id)
         if not service:
             userbot_db._patch_payment_receipt_meta(pid, {"direct_done": "reverted", "renew_snapshot": None})
@@ -971,7 +930,7 @@ async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List
         }
         changed, failed = await delivery_ops.patch_service_on_panels(service, payload)
         if changed == 0:
-            return False, "بازگشت تمدید روی هیچ سروری انجام نشد.", failed
+            return False, _adm_t('ub_lit_784b7736e218'), failed
         userbot_db.update_service_runtime(
             renew_service_id,
             usage_current=usage_current,
@@ -979,7 +938,7 @@ async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List
             days_left=days_left,
         )
         userbot_db._patch_payment_receipt_meta(pid, {"direct_done": "reverted"})
-        return True, "🔁 تمدید به حالت قبل بازگشت.", failed
+        return True, _adm_t('ub_lit_317cea6e4027'), failed
 
     service = userbot_db.get_service_by_id(delivered_service_id) if delivered_service_id > 0 else None
     if not service:
@@ -988,12 +947,12 @@ async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List
             {"direct_done": "reverted", "delivered_service_id": None},
         )
         if delivered_service_id <= 0:
-            return True, "⚠️ رکورد سرویس متصل به این تراکنش ثبت نشده بود؛ فقط وضعیت تراکنش تغییر کرد.", failed
+            return True, _adm_t('ub_lit_0f8a02885560'), failed
         return True, "", failed
 
     deleted, failed = await delivery_ops.delete_service_from_panels(service)
     if deleted == 0:
-        return False, "حذف اشتراک روی هیچ سروری انجام نشد.", failed
+        return False, _adm_t('ub_lit_565b57318db3'), failed
 
     userbot_db.delete_service(delivered_service_id)
     try:
@@ -1007,7 +966,7 @@ async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List
         pid,
         {"direct_done": "reverted", "delivered_service_id": None},
     )
-    return True, "🗑 اشتراک تحویل‌شده حذف شد.", failed
+    return True, _adm_t('ub_lit_e2459030a92c'), failed
 
 
 async def _notify_user_about_redelivery(pay: Dict[str, Any]) -> None:
@@ -1059,25 +1018,25 @@ def _relative_last_online(last_online_raw: Optional[str]) -> str:
                 continue
     
     if not dt:
-        return "📶آخرین اتصال: نامشخص"
+        return _adm_t('ub_lit_437519ce5bf9')
     
     delta = datetime.now(timezone.utc).replace(tzinfo=None) - dt
     days = delta.days
     seconds = delta.seconds
     if days <= 0:
         if seconds < 60:
-            rel = "چند ثانیه پیش"
+            rel = _adm_t('ub_lit_7890a7f0eb06')
         elif seconds < 3600:
-            rel = f"{seconds // 60} دقیقه پیش"
+            rel = f"{seconds // 60}{_adm_t('ub_lit_44d84b24c863')}"
         else:
-            rel = f"{seconds // 3600} ساعت پیش"
+            rel = f"{seconds // 3600}{_adm_t('ub_lit_43a26f3e010b')}"
     elif days < 30:
-        rel = f"{days} روز پیش"
+        rel = f"{days}{_adm_t('ub_lit_116b6a8f8f3e')}"
     elif days < 365:
-        rel = f"{days // 30} ماه پیش"
+        rel = f"{days // 30}{_adm_t('ub_lit_b6b254bf4dab')}"
     else:
-        rel = f"{days // 365} سال پیش"
-    return f"📶آخرین اتصال: {rel}"
+        rel = f"{days // 365}{_adm_t('ub_lit_931b38d2d941')}"
+    return f"{_adm_t('ub_lit_b69c033117ef')}{rel}"
 
 
 def _parse_last_online_dt(last_online_raw: Optional[str]) -> Optional[datetime]:
@@ -1095,10 +1054,10 @@ def _parse_last_online_dt(last_online_raw: Optional[str]) -> Optional[datetime]:
 def _service_last_online_line(last_online_raw: Optional[str]) -> str:
     dt = _parse_last_online_dt(last_online_raw)
     if not dt:
-        return "📶آخرین اتصال: نامشخص"
+        return _adm_t('ub_lit_437519ce5bf9')
     # اگر اخیراً آنلاین بوده، خروجی ساده و شبیه UI مدنظر نشان بده.
     if (datetime.now(timezone.utc).replace(tzinfo=None) - dt).total_seconds() <= 4 * 3600:
-        return "📶آخرین اتصال: آنلاین"
+        return _adm_t('ub_lit_0a2bf5861b7a')
     return _relative_last_online(last_online_raw)
 
 
@@ -1118,7 +1077,7 @@ def _display_safe_note(note_text: str) -> str:
 
 
 def _subscription_tracking_prompt_text() -> str:
-    return " 🀄️لطفا شناسه اشتراک را وارد کنید:"
+    return _adm_t('ub_lit_b7b0bdd9bfa3')
 
 
 def _location_flag_from_title(title: str) -> str:
@@ -1137,7 +1096,7 @@ def _location_flag_from_title(title: str) -> str:
 
 
 def _format_server_location_title(raw_title: str) -> str:
-    title = str(raw_title or "").strip() or "نامشخص"
+    title = str(raw_title or "").strip() or _adm_t('ub_lit_264f61d0e11d')
     flag = _location_flag_from_title(title)
     has_location_word = "لوکیشن" in title
     has_flag = flag != "🏳️" and flag in title
@@ -1146,11 +1105,11 @@ def _format_server_location_title(raw_title: str) -> str:
             return title
         return f"{title} {flag}"
     if flag == "🏳️":
-        return f"لوکیشن {title}"
-    return f"لوکیشن {flag} {title}"
+        return f"{_adm_t('ub_lit_648eb893aa7a')}{title}"
+    return f"{_adm_t('ub_lit_648eb893aa7a')}{flag} {title}"
 
 
-def _resolve_live_server_title(service: Dict[str, Any], default: str = "سرور") -> str:
+def _resolve_live_server_title(service: Dict[str, Any], default: str = "") -> str:
     stored_title = str(service.get("server_title") or "").strip()
     try:
         sid = int(service.get("server_id") or 0)
@@ -1168,12 +1127,12 @@ def _resolve_live_server_title(service: Dict[str, Any], default: str = "سرور
                 return live_title
         if stored_title:
             return stored_title
-        return f"سرور #{sid}"
+        return f"{_adm_t('ub_lit_bb3a2e4773a8')}{sid}"
 
-    return stored_title or default
+    return stored_title or default or _adm_t('ub_lit_bb3a2e4773a8')
 
 
-def _resolve_all_server_titles(service: Dict[str, Any], default: str = "سرور") -> str:
+def _resolve_all_server_titles(service: Dict[str, Any], default: str = "") -> str:
     titles = []
     seen_ids = set()
     try:
@@ -1192,7 +1151,7 @@ def _resolve_all_server_titles(service: Dict[str, Any], default: str = "سرور
                 titles.append(t)
         else:
             stored = str(service.get("server_title") or "").strip()
-            titles.append(stored or f"سرور #{sid}")
+            titles.append(stored or f"{_adm_t('ub_lit_bb3a2e4773a8')}{sid}")
     try:
         service_id = int(service.get("id") or 0)
     except (TypeError, ValueError):
@@ -1219,12 +1178,12 @@ def _resolve_all_server_titles(service: Dict[str, Any], default: str = "سرور
                 if t:
                     titles.append(t)
             else:
-                titles.append(f"سرور #{nid}")
+                titles.append(f"{_adm_t('ub_lit_bb3a2e4773a8')}{nid}")
     if len(titles) == 1:
         return titles[0]
     if len(titles) > 1:
         return " + ".join(titles)
-    return default
+    return default or _adm_t('ub_lit_bb3a2e4773a8')
 
 
 def _parse_service_comment_meta(raw_comment: str) -> Dict[str, str]:
@@ -1246,7 +1205,7 @@ def _parse_service_comment_meta(raw_comment: str) -> Dict[str, str]:
 def build_subscription_tracking_keyboard(service: Dict[str, Any]) -> InlineKeyboardMarkup:
     service_id = int(service.get("id") or 0)
     user_id = int(service.get("user_id") or 0)
-    service_name = str(service.get("name") or "سرویس").strip() or "سرویس"
+    service_name = str(service.get("name") or _adm_t('ub_lit_06097bf287e6')).strip() or _adm_t('ub_lit_06097bf287e6')
     user_btn_title = service_name
     if user_id > 0:
         user_row = userbot_db.get_user_by_id(user_id) or {}
@@ -1270,9 +1229,9 @@ def build_subscription_tracking_keyboard(service: Dict[str, Any]) -> InlineKeybo
         del_cb = f"userbot:svc:{service_id}:delete"
 
     rows = [
-        [InlineKeyboardButton("📄کانفیگ ها", callback_data=cfg_cb)],
-        [InlineKeyboardButton("✏️ویرایش کاربر", callback_data=edit_cb)],
-        [InlineKeyboardButton("🗑حذف کاربر", callback_data=del_cb)],
+        [InlineKeyboardButton(_adm_t("ub_configs"), callback_data=cfg_cb)],
+        [InlineKeyboardButton(_adm_t("ub_edit_user"), callback_data=edit_cb)],
+        [InlineKeyboardButton(_adm_t("ub_delete_user"), callback_data=del_cb)],
         [
             InlineKeyboardButton(
                 user_btn_title,
@@ -1630,7 +1589,7 @@ async def _resolve_service_note_text(service: Dict[str, Any]) -> str:
 
 def build_subscription_tracking_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> str:
     user_name = str(service.get("name") or "").strip() or str(user.get("full_name") or "").strip() or _display_name(user)
-    server_title = _format_server_location_title(_resolve_all_server_titles(service, default="سرور"))
+    server_title = _format_server_location_title(_resolve_all_server_titles(service, default=_adm_t('ub_lit_9edd05da3834')))
 
     usage_current = _to_float(service.get("usage_current"))
     usage_limit = _to_float(service.get("usage_limit"))
@@ -1638,40 +1597,40 @@ def build_subscription_tracking_detail_text(user: Dict[str, Any], service: Dict[
     meta = _parse_service_comment_meta(str(service.get("comment") or ""))
 
     if usage_current is None and usage_limit is None:
-        usage_line = "📊میزان استفاده: نامشخص"
+        usage_line = _adm_t('ub_lit_24895ba533ce')
     elif usage_limit is None or usage_limit <= 0:
-        usage_line = f"📊میزان استفاده: {(usage_current or 0.0):.1f} از نامحدود گیگ"
+        usage_line = f"{_adm_t('ub_lit_2e6cd37f40c3')}{usage_current or 0.0:f'.1f'}{_adm_t('ub_lit_cbda8b44061e')}"
     else:
-        usage_line = f"📊میزان استفاده: {(usage_current or 0.0):.1f} از {usage_limit:.1f} گیگ (مجموع سرورها)"
+        usage_line = f"{_adm_t('ub_lit_2e6cd37f40c3')}{usage_current or 0.0:f'.1f'}{_adm_t('ub_lit_7138b458fc80')}{usage_limit:f'.1f'}{_adm_t('ub_lit_0f54de48930e')}"
 
     if days_left is None:
-        expire_line = "⏳زمان باقی مانده: نامشخص"
+        expire_line = _adm_t('ub_lit_880029da193b')
     elif days_left < 0:
-        expire_line = f"⏳زمان باقی مانده: منقضی شده ({abs(int(days_left))} روز پیش)"
+        expire_line = f"{_adm_t('ub_lit_680c6ea64d27')}{abs(int(days_left))}{_adm_t('ub_lit_39606a0be064')}"
     else:
-        expire_line = f"⏳زمان باقی مانده: {int(days_left)} روز"
+        expire_line = f"{_adm_t('ub_lit_1e68e1a1af1c')}{int(days_left)}{_adm_t('ub_lit_6f274ee56123')}"
 
-    price_line = "💰قیمت اشتراک: نامشخص"
+    price_line = _adm_t('ub_lit_19bc14069649')
     price_raw = str(meta.get("price") or "").strip()
     if price_raw.isdigit():
-        price_line = f"💰قیمت اشتراک: {int(price_raw):,} تومان"
+        price_line = f"{_adm_t('ub_lit_5fc63892f0e4')}{int(price_raw):f','}{_adm_t('ub_lit_f6ac3483a71a')}"
 
     lines = [
-        f"👤 کاربر:  {user_name}",
+        f"{_adm_t('ub_lit_a4c85669f841')}{user_name}",
         "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",
-        f"📡سرور: {server_title}",
+        f"{_adm_t('ub_lit_d968434b916d')}{server_title}",
         usage_line,
         expire_line,
         price_line,
-        f"📝یادداشت: {_service_public_note_text(service)}",
+        f"{_adm_t('ub_lit_c489019f5c6c')}{_service_public_note_text(service)}",
     ]
     return "\n".join(lines)
 
 
 def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> str:
     """متن جزئیات سرویس (برای منوی لیست سرویس‌ها)."""
-    service_name = (service.get("name") or "سرویس").strip()
-    server_title = _format_server_location_title(_resolve_all_server_titles(service, default="سرور"))
+    service_name = (service.get("name") or _adm_t('ub_lit_06097bf287e6')).strip()
+    server_title = _format_server_location_title(_resolve_all_server_titles(service, default=_adm_t('ub_lit_9edd05da3834')))
 
     usage_current = _to_float(service.get("usage_current"))
     usage_limit = _to_float(service.get("usage_limit"))
@@ -1683,30 +1642,30 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
     comment = _display_safe_note(comment)
 
     if usage_current is None:
-        usage_line = "📊مصرف: نامشخص"
+        usage_line = _adm_t('ub_lit_f5a22d55ca6c')
     elif usage_limit is None:
-        usage_line = f"📊مصرف: {usage_current:.2f} گیگابایت (نامحدود)"
+        usage_line = f"{_adm_t('ub_lit_4a4dd5e2a0f6')}{usage_current:f'.2f'}{_adm_t('ub_lit_ab4b45a9ca94')}"
     else:
-        usage_line = f"📊مصرف: {usage_current:.2f} از {usage_limit:.1f} گیگابایت (مجموع سرورها)"
+        usage_line = f"{_adm_t('ub_lit_4a4dd5e2a0f6')}{usage_current:f'.2f'}{_adm_t('ub_lit_7138b458fc80')}{usage_limit:f'.1f'}{_adm_t('ub_lit_7e0dcee1a10c')}"
 
     is_display_expired = _is_display_expired_service(service)
     if is_display_expired:
-        expire_line = "📆انقضا: منقضی/غیرفعال در پنل"
+        expire_line = _adm_t('ub_lit_cad862180b19')
     elif days_left is None:
-        expire_line = "📆انقضا: نامشخص"
+        expire_line = _adm_t('ub_lit_b5ec9e10c799')
     elif days_left < 0:
-        expire_line = f"📆انقضا: منقضی شده ({abs(int(days_left))} روز پیش)"
+        expire_line = f"{_adm_t('ub_lit_3c55aa353829')}{abs(int(days_left))}{_adm_t('ub_lit_39606a0be064')}"
     else:
-        expire_line = f"📆انقضا: {int(days_left)} روز دیگر"
+        expire_line = f"{_adm_t('ub_lit_def726e210a2')}{int(days_left)}{_adm_t('ub_lit_ca231220876d')}"
 
     if is_display_expired:
-        last_online_line = "📶آخرین اتصال: غیرفعال/منقضی"
+        last_online_line = _adm_t('ub_lit_3c3c3dbbf5b6')
     else:
         last_online_line = _service_last_online_line(last_online_raw)
 
-    header_line = f"👤 کاربر:  {service_name}"
+    header_line = f"{_adm_t('ub_lit_a4c85669f841')}{service_name}"
     sep_line = "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"
-    server_line = f"⬖ سرور:  {server_title}"
+    server_line = f"{_adm_t('ub_lit_332833b95ef3')}{server_title}"
 
     # بخش نودها: نمایش وضعیت یخ‌زده / حذف‌شده به‌تفکیک هر نود
     node_lines: List[str] = []
@@ -1733,17 +1692,17 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
             elif _stored_title:
                 _title = _stored_title
             else:
-                _title = f"سرور #{_sid}" if _sid is not None else "ناشناخته"
+                _title = f"{_adm_t('ub_lit_bb3a2e4773a8')}{_sid}" if _sid is not None else _adm_t('ub_lit_1789f5ad69dc')
             _is_deleted = bool(_nd.get("deleted"))
             _is_frozen = bool(_nd.get("frozen"))
             if _is_deleted:
                 deleted_count += 1
-                _status = "🗑 حذف‌شده"
+                _status = _adm_t('ub_lit_7b7fadfb0acc')
             elif _is_frozen:
                 frozen_count += 1
-                _status = "🧊 یخ‌زده"
+                _status = _adm_t('ub_lit_0290035a8413')
             else:
-                _status = "✅ فعال"
+                _status = _adm_t('ub_lit_f1bc469f39f7')
             _nu = _to_float(_nd.get("usage_current"))
             _nu_s = f"{_nu:.2f}GB" if _nu is not None else "—"
             node_lines.append(f"  • {_title}: {_status} ({_nu_s})")
@@ -1755,15 +1714,14 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
         usage_line,
         expire_line,
         last_online_line,
-        f"📝یادداشت: {comment if str(comment).strip() else '—'}",
+        f"{_adm_t('ub_lit_c489019f5c6c')}{comment if str(comment).strip() else '—'}",
     ]
     if node_lines:
-        lines.append("❄️ نودها:")
+        lines.append(_adm_t('ub_lit_26e87b968446'))
         lines.extend(node_lines)
     if frozen_count or deleted_count:
         lines.append(
-            f"⚠️ {frozen_count} نود یخ‌زده، {deleted_count} نود حذف‌شده "
-            f"(حجم مصرف‌شده تا زمان تمدید فریز شد)"
+            f"⚠️ {frozen_count}{_adm_t('ub_lit_c883563059ef')}{deleted_count}{_adm_t('ub_lit_361e63d4664f')}"
         )
     return "\n".join(lines)
 
@@ -1771,7 +1729,7 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
 def userbot_cancel_keyboard() -> ReplyKeyboardMarkup:
     """کیبورد لغو برای ویزاردها"""
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("❌لغو")]],
+        [[KeyboardButton(_adm_t("btn_cancel_inline"))]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -1818,30 +1776,30 @@ def build_userbot_main_menu() -> InlineKeyboardMarkup:
 def build_payments_menu_keyboard() -> InlineKeyboardMarkup:
     """منوی مدیریت تراکنشات (طبق عکس)"""
     rows = [
-        [InlineKeyboardButton("✅لیست تراکنشات تایید شده", callback_data="userbot:payments:list:approved")],
-        [InlineKeyboardButton("🚫لیست تراکنشات رد شده", callback_data="userbot:payments:list:rejected")],
-        [InlineKeyboardButton("⏳لیست تراکنشات در انتظار", callback_data="userbot:payments:list:pending")],
-        [InlineKeyboardButton("💳لیست تراکنشات کارت به کارت", callback_data="userbot:payments:list:card")],
-        [InlineKeyboardButton("🔍جستجوی تراکنش", callback_data="userbot:payments:search")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+        [InlineKeyboardButton(_adm_t("ub_payments_approved"), callback_data="userbot:payments:list:approved")],
+        [InlineKeyboardButton(_adm_t("ub_payments_rejected"), callback_data="userbot:payments:list:rejected")],
+        [InlineKeyboardButton(_adm_t("ub_payments_pending"), callback_data="userbot:payments:list:pending")],
+        [InlineKeyboardButton(_adm_t("ub_payments_card"), callback_data="userbot:payments:list:card")],
+        [InlineKeyboardButton(_adm_t("ub_search_payment"), callback_data="userbot:payments:search")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_users_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("👥لیست کاربران ربات", callback_data="userbot:users:1")],
-        [InlineKeyboardButton("🔍جستجوی کاربران", callback_data="userbot:users_search_menu")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+        [InlineKeyboardButton(_adm_t("ub_user_list"), callback_data="userbot:users:1")],
+        [InlineKeyboardButton(_adm_t("ub_search_users"), callback_data="userbot:users_search_menu")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_users_search_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("👤جستجو با نام", callback_data="userbot:search:name")],
-        [InlineKeyboardButton("✝️جستجو با Telegram ID", callback_data="userbot:search:id")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:users_menu")],
+        [InlineKeyboardButton(_adm_t("ub_search_by_name"), callback_data="userbot:search:name")],
+        [InlineKeyboardButton(_adm_t("ub_search_by_id"), callback_data="userbot:search:id")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:users_menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -1850,52 +1808,52 @@ def build_users_search_menu_keyboard() -> InlineKeyboardMarkup:
 def build_user_profile_keyboard(user_id: int, back_callback: str = "userbot:users_menu") -> InlineKeyboardMarkup:
     """کیبورد پروفایل"""
     rows = [
-        [InlineKeyboardButton("📋 لیست سرویس‌ها", callback_data=f"userbot:user:{user_id}:services")],
-        [InlineKeyboardButton("📗 لیست سفارشات", callback_data=f"userbot:user:{user_id}:orders")],
-        [InlineKeyboardButton("💵 لیست تراکنشات", callback_data=f"userbot:user:{user_id}:payments")],
-        [InlineKeyboardButton("💳 ویرایش کیف پول", callback_data=f"userbot:user:{user_id}:wallet")],
-        [InlineKeyboardButton("🔄 بازنشانی اشتراک تستی", callback_data=f"userbot:user:{user_id}:reset_trial")],
-        [InlineKeyboardButton("🚫 مسدود/آزاد سازی کاربر", callback_data=f"userbot:user:{user_id}:ban")],
-        [InlineKeyboardButton("📨 ارسال پیام", callback_data=f"userbot:user:{user_id}:message"),
-         InlineKeyboardButton("📑 لیست تیکت‌ها", callback_data=f"userbot:user:{user_id}:tickets")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data=back_callback)],
+        [InlineKeyboardButton(_adm_t("ub_profile_services"), callback_data=f"userbot:user:{user_id}:services")],
+        [InlineKeyboardButton(_adm_t("ub_profile_orders"), callback_data=f"userbot:user:{user_id}:orders")],
+        [InlineKeyboardButton(_adm_t("ub_profile_payments"), callback_data=f"userbot:user:{user_id}:payments")],
+        [InlineKeyboardButton(_adm_t("ub_profile_wallet"), callback_data=f"userbot:user:{user_id}:wallet")],
+        [InlineKeyboardButton(_adm_t("ub_profile_reset_trial"), callback_data=f"userbot:user:{user_id}:reset_trial")],
+        [InlineKeyboardButton(_adm_t("ub_profile_ban"), callback_data=f"userbot:user:{user_id}:ban")],
+        [InlineKeyboardButton(_adm_t("ub_profile_message"), callback_data=f"userbot:user:{user_id}:message"),
+         InlineKeyboardButton(_adm_t("ub_profile_tickets"), callback_data=f"userbot:user:{user_id}:tickets")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data=back_callback)],
     ]
     return InlineKeyboardMarkup(rows)
 
 def build_service_detail_keyboard(user_id: int, service_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("📄کانفیگ ها", callback_data=f"userbot:svc:{service_id}:configs")],
-        [InlineKeyboardButton("✏️ویرایش کاربر", callback_data=f"userbot:svc:{service_id}:edit")],
-        [InlineKeyboardButton("∞تمدید اشتراک", callback_data=f"userbot:svc:{service_id}:extend")],
-        [InlineKeyboardButton("🗑حذف کاربر", callback_data=f"userbot:svc:{service_id}:delete")],
-        [InlineKeyboardButton("📋بازگشت به سرویس‌ها", callback_data=f"userbot:user:{user_id}:services")],
-        [InlineKeyboardButton("👤بازگشت به پروفایل", callback_data=f"userbot:user:{user_id}")],
+        [InlineKeyboardButton(_adm_t("ub_service_configs"), callback_data=f"userbot:svc:{service_id}:configs")],
+        [InlineKeyboardButton(_adm_t("ub_service_edit"), callback_data=f"userbot:svc:{service_id}:edit")],
+        [InlineKeyboardButton(_adm_t("ub_service_extend"), callback_data=f"userbot:svc:{service_id}:extend")],
+        [InlineKeyboardButton(_adm_t("ub_service_delete"), callback_data=f"userbot:svc:{service_id}:delete")],
+        [InlineKeyboardButton(_adm_t("ub_service_back"), callback_data=f"userbot:user:{user_id}:services")],
+        [InlineKeyboardButton(_adm_t("ub_profile_back"), callback_data=f"userbot:user:{user_id}")],
     ]
     return InlineKeyboardMarkup(rows)
 
 def build_orders_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📗لیست سفارشات", callback_data="userbot:orders:list:1")],
-        [InlineKeyboardButton("🔍جستجوی سفارشات", callback_data="userbot:orders:search")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+         [InlineKeyboardButton(_adm_t("ub_orders_list"), callback_data="userbot:orders:list:1")],
+         [InlineKeyboardButton(_adm_t("ub_search_orders"), callback_data="userbot:orders:search")],
+         [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:menu")],
     ])
 
 
 def build_gifts_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("📊 داشبورد هدایا", callback_data="userbot:gifts:dashboard")],
-        [InlineKeyboardButton("🏷 کوپن‌ها و کدهای هدیه", callback_data="userbot:gifts:coupons")],
+        [InlineKeyboardButton(_adm_t("ub_gifts_dashboard"), callback_data="userbot:gifts:dashboard")],
+        [InlineKeyboardButton(_adm_t("ub_gifts_coupons"), callback_data="userbot:gifts:coupons")],
         [
-            InlineKeyboardButton("🎯 قالب‌های آماده کمپین", callback_data="userbot:gifts:presets"),
-            InlineKeyboardButton("🧩 ساخت گروهی کد هدیه", callback_data="userbot:gifts:bulk"),
+            InlineKeyboardButton(_adm_t("ub_gifts_presets"), callback_data="userbot:gifts:presets"),
+            InlineKeyboardButton(_adm_t("ub_gifts_bulk"), callback_data="userbot:gifts:bulk"),
         ],
-        [InlineKeyboardButton("📜 گزارش مصرف هدایا", callback_data="userbot:gifts:redemptions")],
+        [InlineKeyboardButton(_adm_t("ub_gifts_redemptions"), callback_data="userbot:gifts:redemptions")],
         [
-            InlineKeyboardButton("📣 متن آماده کمپین", callback_data="userbot:gifts:campaign"),
-            InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security"),
+            InlineKeyboardButton(_adm_t("ub_gifts_campaign"), callback_data="userbot:gifts:campaign"),
+            InlineKeyboardButton(_adm_t("ub_gifts_security"), callback_data="userbot:gifts:security"),
         ],
-        [InlineKeyboardButton("📘 راهنمای هدایا", callback_data="userbot:gifts:help")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+        [InlineKeyboardButton(_adm_t("ub_gifts_help"), callback_data="userbot:gifts:help")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -1905,34 +1863,34 @@ def build_gift_presets_keyboard() -> InlineKeyboardMarkup:
     for key, preset in GIFT_CAMPAIGN_PRESETS.items():
         rows.append([
             InlineKeyboardButton(
-                f"{preset['title']} | {_format_toman(preset['amount'])} تومان",
+                f"{preset['title']} | {_format_toman(preset['amount'])}{_adm_t('ub_lit_f6ac3483a71a')}",
                 callback_data=f"userbot:gifts:preset:{key}",
             )
         ])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")])
+    rows.append([InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:gifts_menu")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_tickets_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("📨تیکت‌های در انتظار", callback_data="userbot:tickets:list:pending:1")],
-        [InlineKeyboardButton("📬تیکت‌های باز", callback_data="userbot:tickets:list:open:1")],
-        [InlineKeyboardButton("📩تیکت‌های بسته", callback_data="userbot:tickets:list:closed:1")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+        [InlineKeyboardButton(_adm_t("ub_tickets_pending"), callback_data="userbot:tickets:list:pending:1")],
+        [InlineKeyboardButton(_adm_t("ub_tickets_open"), callback_data="userbot:tickets:list:open:1")],
+        [InlineKeyboardButton(_adm_t("ub_tickets_closed"), callback_data="userbot:tickets:list:closed:1")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_broadcast_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("تمام کاربران", callback_data="userbot:broadcast:segment:all")],
-        [InlineKeyboardButton("تمام کاربران منقضی شده", callback_data="userbot:broadcast:segment:expired_all")],
-        [InlineKeyboardButton("کاربران بدون سفارش", callback_data="userbot:broadcast:segment:no_order")],
-        [InlineKeyboardButton("کاربران منقضی شده بیش از یک هفته", callback_data="userbot:broadcast:segment:expired_1w")],
-        [InlineKeyboardButton("کاربران منقضی شده بیش از دو هفته", callback_data="userbot:broadcast:segment:expired_2w")],
-        [InlineKeyboardButton("کاربران منقضی شده بیش از چهار هفته", callback_data="userbot:broadcast:segment:expired_4w")],
-        [InlineKeyboardButton("کاربران منقضی شده بیش از هشت هفته", callback_data="userbot:broadcast:segment:expired_8w")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+        [InlineKeyboardButton(_adm_t("ub_segment_all"), callback_data="userbot:broadcast:segment:all")],
+        [InlineKeyboardButton(_adm_t("ub_segment_expired_all"), callback_data="userbot:broadcast:segment:expired_all")],
+        [InlineKeyboardButton(_adm_t("ub_segment_no_order"), callback_data="userbot:broadcast:segment:no_order")],
+        [InlineKeyboardButton(_adm_t("ub_segment_expired_1w"), callback_data="userbot:broadcast:segment:expired_1w")],
+        [InlineKeyboardButton(_adm_t("ub_segment_expired_2w"), callback_data="userbot:broadcast:segment:expired_2w")],
+        [InlineKeyboardButton(_adm_t("ub_segment_expired_4w"), callback_data="userbot:broadcast:segment:expired_4w")],
+        [InlineKeyboardButton(_adm_t("ub_segment_expired_8w"), callback_data="userbot:broadcast:segment:expired_8w")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -1940,8 +1898,8 @@ def build_broadcast_menu_keyboard() -> InlineKeyboardMarkup:
 def broadcast_skip_cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("⏩رد کردن")],
-            [KeyboardButton("❌لغو")],
+            [KeyboardButton(_adm_t("ub_skip"))],
+            [KeyboardButton(_adm_t("btn_cancel_inline"))],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -1987,9 +1945,9 @@ def build_tickets_list_keyboard(
             nav.append(InlineKeyboardButton("▶️", callback_data=f"userbot:tickets:list:{status}:{page+1}"))
     rows.append(nav)
     if from_user_id > 0:
-        rows.append([InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{from_user_id}")])
+        rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data=f"userbot:user:{from_user_id}")])
     else:
-        rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:tickets_menu")])
+        rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:tickets_menu")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -2013,10 +1971,10 @@ def build_ticket_detail_keyboard(
 
     current_status = str(ticket.get("status") or "pending").strip().lower()
     if current_status == "closed":
-        status_title = "📬 باز کردن تیکت"
+        status_title = _adm_t('ub_lit_3e481593296d')
         new_status = "open"
     else:
-        status_title = "📪 بستن تیکت"
+        status_title = _adm_t('ub_lit_1a7b2fd035f2')
         new_status = "closed"
     if from_user_id > 0:
         status_callback = f"{status_callback_base}:{new_status}:{from_user_id}:{page}"
@@ -2026,25 +1984,25 @@ def build_ticket_detail_keyboard(
     rows = []
     if user_id > 0:
         rows.append([InlineKeyboardButton(user_btn, callback_data=f"userbot:user:{user_id}")])
-    rows.append([InlineKeyboardButton("📩پاسخ", callback_data=reply_callback)])
+    rows.append([InlineKeyboardButton(_adm_t("btn_reply2"), callback_data=reply_callback)])
     rows.append([InlineKeyboardButton(status_title, callback_data=status_callback)])
     return InlineKeyboardMarkup(rows)
 
 
 def build_ticket_reply_screenshot_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏩رد کردن", callback_data="userbot:ticketreply:skip")],
-        [InlineKeyboardButton("❌لغو", callback_data="userbot:ticketreply:cancel")],
+        [InlineKeyboardButton(_adm_t("ub_skip"), callback_data="userbot:ticketreply:skip")],
+        [InlineKeyboardButton(_adm_t("btn_cancel_inline"), callback_data="userbot:ticketreply:cancel")],
     ])
 
 
 def build_ticket_reply_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ارسال", callback_data="userbot:ticketreply:send"),
-            InlineKeyboardButton("✏️ویرایش", callback_data="userbot:ticketreply:edit"),
+            InlineKeyboardButton(_adm_t("btn_send"), callback_data="userbot:ticketreply:send"),
+            InlineKeyboardButton(_adm_t("btn_edit"), callback_data="userbot:ticketreply:edit"),
         ],
-        [InlineKeyboardButton("❌لغو", callback_data="userbot:ticketreply:cancel")],
+        [InlineKeyboardButton(_adm_t("btn_cancel_inline"), callback_data="userbot:ticketreply:cancel")],
     ])
 
 
@@ -2056,14 +2014,14 @@ def _zarin_coupon_status(item: Dict[str, Any]) -> Tuple[str, str]:
     if exp_raw:
         try:
             if datetime.strptime(exp_raw, "%Y-%m-%d %H:%M:%S") <= now:
-                return "⏰", "منقضی"
+                return "⏰", _adm_t('ub_lit_8c8d3e14ff33')
         except Exception:
             pass
     if used >= max_uses:
-        return "🔒", "تکمیل"
+        return "🔒", _adm_t('ub_lit_8470f065c5cc')
     if int(item.get("is_active") or 0) != 1:
-        return "⚫", "خاموش"
-    return "🟢", "فعال"
+        return "⚫", _adm_t('ub_lit_551b1db85bf7')
+    return "🟢", _adm_t('ub_lit_25c499f43398')
 
 
 def build_zarin_coupons_list_keyboard(coupons: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
@@ -2076,33 +2034,33 @@ def build_zarin_coupons_list_keyboard(coupons: List[Dict[str, Any]]) -> InlineKe
         amount = _format_toman(item.get("amount_toman"))
         used = int(item.get("used_count") or 0)
         max_uses = int(item.get("max_uses") or 1)
-        title = f"{icon} {code} | {amount} تومان | {used}/{max_uses} | {status}"
+        title = f"{icon} {code} | {amount}{_adm_t('ub_lit_7fa2e0e6b8aa')}{used}/{max_uses} | {status}"
         rows.append([InlineKeyboardButton(title, callback_data=f"userbot:gifts:coupon:{code}")])
-    rows.append([InlineKeyboardButton("افزودن کوپن جدید➕", callback_data="userbot:gifts:coupons:add")])
-    rows.append([InlineKeyboardButton("🧩 ساخت گروهی کد هدیه", callback_data="userbot:gifts:bulk")])
-    rows.append([InlineKeyboardButton("حذف کوپن➖", callback_data="userbot:gifts:coupons:delete")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")])
+    rows.append([InlineKeyboardButton(_adm_t("ub_add_coupon"), callback_data="userbot:gifts:coupons:add")])
+    rows.append([InlineKeyboardButton(_adm_t("ub_bulk_gifts"), callback_data="userbot:gifts:bulk")])
+    rows.append([InlineKeyboardButton(_adm_t("ub_delete_coupon"), callback_data="userbot:gifts:coupons:delete")])
+    rows.append([InlineKeyboardButton(_adm_t("back"), callback_data="userbot:gifts_menu")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_zarin_coupon_detail_keyboard(code: str, item: Optional[Dict[str, Any]] = None) -> InlineKeyboardMarkup:
     c = str(code or "").strip()
     active = int((item or {}).get("is_active") or 0) == 1
-    toggle_title = "⏸ خاموش کردن کوپن" if active else "▶️ روشن کردن کوپن"
+    toggle_title = _adm_t('ub_lit_cd15491463d9') if active else _adm_t('ub_lit_d309e9df4422')
     rows = [
-        [InlineKeyboardButton("💳تنظیم لینک پرداخت زرین پال", callback_data=f"userbot:gifts:coupon:set_link:{c}")],
+        [InlineKeyboardButton(_adm_t("ub_set_zarinpal_link"), callback_data=f"userbot:gifts:coupon:set_link:{c}")],
         [
-            InlineKeyboardButton("🚀 دیپ‌لینک", callback_data=f"userbot:gifts:coupon:deeplink:{c}"),
-            InlineKeyboardButton("📱 QR دیپ‌لینک", callback_data=f"userbot:gifts:coupon:qr:{c}"),
+            InlineKeyboardButton(_adm_t("ub_deeplink"), callback_data=f"userbot:gifts:coupon:deeplink:{c}"),
+            InlineKeyboardButton(_adm_t("ub_qr_deeplink"), callback_data=f"userbot:gifts:coupon:qr:{c}"),
         ],
-        [InlineKeyboardButton("📣 متن تبلیغ همین کوپن", callback_data=f"userbot:gifts:coupon:campaign:{c}")],
+        [InlineKeyboardButton(_adm_t("ub_coupon_campaign"), callback_data=f"userbot:gifts:coupon:campaign:{c}")],
         [InlineKeyboardButton(toggle_title, callback_data=f"userbot:gifts:coupon:toggle:{c}")],
-        [InlineKeyboardButton("✏️ویرایش کد", callback_data=f"userbot:gifts:coupon:set_code:{c}")],
-        [InlineKeyboardButton("👤ویرایش محدودیت کاربر", callback_data=f"userbot:gifts:coupon:set_limit:{c}")],
-        [InlineKeyboardButton("🕒ویرایش مدت زمان انقضا", callback_data=f"userbot:gifts:coupon:set_exp:{c}")],
-        [InlineKeyboardButton("🎁ویرایش هدیه کوپن", callback_data=f"userbot:gifts:coupon:set_amount:{c}")],
-        [InlineKeyboardButton("📜 گزارش مصرف این کوپن", callback_data=f"userbot:gifts:redemptions:{c}")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts:coupons")],
+        [InlineKeyboardButton(_adm_t("ub_edit_coupon_code"), callback_data=f"userbot:gifts:coupon:set_code:{c}")],
+        [InlineKeyboardButton(_adm_t("ub_edit_coupon_limit"), callback_data=f"userbot:gifts:coupon:set_limit:{c}")],
+        [InlineKeyboardButton(_adm_t("ub_edit_coupon_expiry"), callback_data=f"userbot:gifts:coupon:set_exp:{c}")],
+        [InlineKeyboardButton(_adm_t("ub_edit_coupon_gift"), callback_data=f"userbot:gifts:coupon:set_amount:{c}")],
+        [InlineKeyboardButton(_adm_t("ub_coupon_redemptions"), callback_data=f"userbot:gifts:redemptions:{c}")],
+        [InlineKeyboardButton(_adm_t("back"), callback_data="userbot:gifts:coupons")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2386,12 +2344,12 @@ def build_backup_restore_settings_menu_keyboard(settings: Dict[str, Any]) -> Inl
 
 def build_payment_method_menu_keyboard(method: str, enabled: bool) -> InlineKeyboardMarkup:
     title_map = {
-        "card": "کارت به کارت",
-        "zarinpal": "زرین پال",
-        "perfect": "پرفکت مانی",
-        "crypto": "پرداخت ارز دیجیتال",
+        "card": _adm_t('ub_lit_5e50de690dd4'),
+        "zarinpal": _adm_t('ub_lit_746b989c930f'),
+        "perfect": _adm_t('ub_lit_1da0ed43fb30'),
+        "crypto": _adm_t('ub_lit_206483172632'),
     }
-    title = title_map.get(method, "روش پرداخت")
+    title = title_map.get(method, _adm_t('ub_lit_6fe520977035'))
     icon = "✅" if enabled else "❌"
     if method == "card":
         tx_settings = _get_tx_plans_settings()
@@ -2399,26 +2357,26 @@ def build_payment_method_menu_keyboard(method: str, enabled: bool) -> InlineKeyb
         pay_settings = _get_payment_settings()
         last4_icon = "✅" if bool(pay_settings.get("require_last4_for_card_receipt", False)) else "❌"
         rows = [
-            [InlineKeyboardButton(f"پرداخت کارت به کارت | {icon}", callback_data="userbot:settings:payment:toggle:card")],
-            [InlineKeyboardButton(f"🔐 الزام ۴ رقم آخر کارت | {last4_icon}", callback_data="userbot:settings:payment:card:require_last4")],
-            [InlineKeyboardButton(f"🔢مشخصه تصادفی تراکنش | {random_icon}", callback_data="userbot:settings:payment:card:random_tx_spec")],
-            [InlineKeyboardButton("🤖 تایید خودکار SMS بانک", callback_data="userbot:settings:payment:card:sms")],
-            [InlineKeyboardButton("💳لیست کارت‌ها", callback_data="userbot:settings:payment:card:list")],
-            [InlineKeyboardButton("📝تنظیم متن کارت به کارت", callback_data="userbot:settings:payment:card:text")],
-            [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment")],
+            [InlineKeyboardButton(f"{_adm_t('ub_card_payment')} | {icon}", callback_data="userbot:settings:payment:toggle:card")],
+            [InlineKeyboardButton(f"{_adm_t('ub_card_last4')} | {last4_icon}", callback_data="userbot:settings:payment:card:require_last4")],
+            [InlineKeyboardButton(f"{_adm_t('ub_card_random_tx')} | {random_icon}", callback_data="userbot:settings:payment:card:random_tx_spec")],
+            [InlineKeyboardButton(_adm_t("ub_card_sms"), callback_data="userbot:settings:payment:card:sms")],
+            [InlineKeyboardButton(_adm_t("ub_card_list"), callback_data="userbot:settings:payment:card:list")],
+            [InlineKeyboardButton(_adm_t("ub_card_text"), callback_data="userbot:settings:payment:card:text")],
+            [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:payment")],
         ]
         return InlineKeyboardMarkup(rows)
 
     if method == "zarinpal":
         rows = [
-            [InlineKeyboardButton(f"{icon} | درگاه زرین پال", callback_data="userbot:settings:payment:toggle:zarinpal")],
-            [InlineKeyboardButton("📝تنظیم متن زرین پال", callback_data="userbot:settings:texts:edit:zarinpal_pro_text")],
-            [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment")],
+            [InlineKeyboardButton(f"{icon} | {_adm_t('ub_zarinpal_gateway')}", callback_data="userbot:settings:payment:toggle:zarinpal")],
+            [InlineKeyboardButton(_adm_t("ub_zarinpal_text"), callback_data="userbot:settings:texts:edit:zarinpal_pro_text")],
+            [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:payment")],
         ]
         return InlineKeyboardMarkup(rows)
 
     rows = [[InlineKeyboardButton(f"{title} | {icon}", callback_data=f"userbot:settings:payment:toggle:{method}")]]
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment")])
+    rows.append([InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:payment")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -2429,18 +2387,18 @@ def build_payment_cards_list_keyboard(cards: List[Dict[str, str]]) -> InlineKeyb
         if not number:
             continue
         rows.append([InlineKeyboardButton(number, callback_data=f"userbot:settings:payment:card:item:{number}")])
-    rows.append([InlineKeyboardButton("افزودن کارت➕", callback_data="userbot:settings:payment:card:add")])
-    rows.append([InlineKeyboardButton("حذف کارت➖", callback_data="userbot:settings:payment:card:delete")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment:card")])
+    rows.append([InlineKeyboardButton(_adm_t("ub_card_add"), callback_data="userbot:settings:payment:card:add")])
+    rows.append([InlineKeyboardButton(_adm_t("ub_card_delete"), callback_data="userbot:settings:payment:card:delete")])
+    rows.append([InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:payment:card")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_payment_card_item_keyboard(number: str) -> InlineKeyboardMarkup:
     n = str(number or "").strip()
     rows = [
-        [InlineKeyboardButton("💳ویرایش شماره کارت", callback_data=f"userbot:settings:payment:card:edit_number:{n}")],
-        [InlineKeyboardButton("🧑ویرایش نام صاحب کارت", callback_data=f"userbot:settings:payment:card:edit_owner:{n}")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment:card:list")],
+        [InlineKeyboardButton(_adm_t("ub_card_edit_number"), callback_data=f"userbot:settings:payment:card:edit_number:{n}")],
+        [InlineKeyboardButton(_adm_t("ub_card_edit_owner"), callback_data=f"userbot:settings:payment:card:edit_owner:{n}")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:payment:card:list")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2449,11 +2407,11 @@ def build_sms_webhook_settings_keyboard() -> InlineKeyboardMarkup:
     status = _sms_webhook_status()
     enabled_icon = "✅" if status.get("enabled") else "❌"
     rows = [
-        [InlineKeyboardButton(f"تایید خودکار SMS | {enabled_icon}", callback_data="userbot:settings:payment:card:sms:toggle")],
-        [InlineKeyboardButton("🔑 ساخت / تعویض Secret", callback_data="userbot:settings:payment:card:sms:regen")],
-        [InlineKeyboardButton("👁 نمایش Secret برای اپ", callback_data="userbot:settings:payment:card:sms:show")],
-        [InlineKeyboardButton("📱 راهنمای اتصال اپ", callback_data="userbot:settings:payment:card:sms:help")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:payment:card")],
+        [InlineKeyboardButton(f"{_adm_t('ub_sms_auto')} | {enabled_icon}", callback_data="userbot:settings:payment:card:sms:toggle")],
+        [InlineKeyboardButton(_adm_t("ub_sms_secret"), callback_data="userbot:settings:payment:card:sms:regen")],
+        [InlineKeyboardButton(_adm_t("ub_sms_show_secret"), callback_data="userbot:settings:payment:card:sms:show")],
+        [InlineKeyboardButton(_adm_t("ub_sms_help"), callback_data="userbot:settings:payment:card:sms:help")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:payment:card")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2464,10 +2422,10 @@ def build_plan_categories_mode_menu_keyboard(settings: Dict[str, Any]) -> Inline
     categorized_icon = "✅" if categories_enabled else "❌"
     rows = [
         [
-            InlineKeyboardButton(f"{simple_icon} | ساده", callback_data="userbot:settings:tx_plans:plan_categories_mode:set:simple"),
-            InlineKeyboardButton(f"{categorized_icon} | دسته‌بندی", callback_data="userbot:settings:tx_plans:plan_categories_mode:set:categorized"),
+            InlineKeyboardButton(f"{simple_icon} | {_adm_t('ub_mode_simple')}", callback_data="userbot:settings:tx_plans:plan_categories_mode:set:simple"),
+            InlineKeyboardButton(f"{categorized_icon} | {_adm_t('ub_mode_categorized')}", callback_data="userbot:settings:tx_plans:plan_categories_mode:set:categorized"),
         ],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:tx_plans")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:tx_plans")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2481,14 +2439,14 @@ def build_plan_sort_mode_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboa
     asc_icon = "✅" if not desc else "❌"
     desc_icon = "✅" if desc else "❌"
     rows = [
-        [InlineKeyboardButton(f"{price_icon} | مرتب سازی بر اساس قیمت", callback_data="userbot:settings:tx_plans:plan_sort_mode:set:price")],
-        [InlineKeyboardButton(f"{gb_icon} | مرتب سازی بر اساس حجم", callback_data="userbot:settings:tx_plans:plan_sort_mode:set:gb")],
-        [InlineKeyboardButton(f"{days_icon} | مرتب سازی بر اساس زمان", callback_data="userbot:settings:tx_plans:plan_sort_mode:set:days")],
+        [InlineKeyboardButton(f"{price_icon} | {_adm_t('ub_sort_price')}", callback_data="userbot:settings:tx_plans:plan_sort_mode:set:price")],
+        [InlineKeyboardButton(f"{gb_icon} | {_adm_t('ub_sort_volume')}", callback_data="userbot:settings:tx_plans:plan_sort_mode:set:gb")],
+        [InlineKeyboardButton(f"{days_icon} | {_adm_t('ub_sort_time')}", callback_data="userbot:settings:tx_plans:plan_sort_mode:set:days")],
         [
-            InlineKeyboardButton(f"{desc_icon} | نزولی", callback_data="userbot:settings:tx_plans:plan_sort_dir:set:desc"),
-            InlineKeyboardButton(f"{asc_icon} | صعودی", callback_data="userbot:settings:tx_plans:plan_sort_dir:set:asc"),
+            InlineKeyboardButton(f"{desc_icon} | {_adm_t('ub_sort_desc')}", callback_data="userbot:settings:tx_plans:plan_sort_dir:set:desc"),
+            InlineKeyboardButton(f"{asc_icon} | {_adm_t('ub_sort_asc')}", callback_data="userbot:settings:tx_plans:plan_sort_dir:set:asc"),
         ],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:tx_plans")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:tx_plans")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2499,10 +2457,10 @@ def build_plan_columns_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboard
     two_icon = "✅" if col == 2 else "❌"
     rows = [
         [
-            InlineKeyboardButton(f"{one_icon} | یک", callback_data="userbot:settings:buy_renew:plan_columns:set:1"),
-            InlineKeyboardButton(f"{two_icon} | دو", callback_data="userbot:settings:buy_renew:plan_columns:set:2"),
+            InlineKeyboardButton(f"{one_icon} | {_adm_t('ub_one')}", callback_data="userbot:settings:buy_renew:plan_columns:set:1"),
+            InlineKeyboardButton(f"{two_icon} | {_adm_t('ub_two')}", callback_data="userbot:settings:buy_renew:plan_columns:set:2"),
         ],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:buy_renew")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:settings:buy_renew")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2514,11 +2472,11 @@ def build_server_columns_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboa
     three_icon = "✅" if col == 3 else "❌"
     rows = [
         [
-            InlineKeyboardButton(f"{one_icon} | یک", callback_data="userbot:settings:buy_renew:server_columns:set:1"),
-            InlineKeyboardButton(f"{two_icon} | دو", callback_data="userbot:settings:buy_renew:server_columns:set:2"),
-            InlineKeyboardButton(f"{three_icon} | سه", callback_data="userbot:settings:buy_renew:server_columns:set:3"),
+            InlineKeyboardButton(f"{one_icon} | {_adm_t('ub_one')}", callback_data="userbot:settings:buy_renew:server_columns:set:1"),
+            InlineKeyboardButton(f"{two_icon} | {_adm_t('ub_two')}", callback_data="userbot:settings:buy_renew:server_columns:set:2"),
+            InlineKeyboardButton(f"{three_icon} | {_adm_t('ub_three')}", callback_data="userbot:settings:buy_renew:server_columns:set:3"),
         ],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:buy_renew")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:settings:buy_renew")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2540,41 +2498,41 @@ def build_renew_policy_menu_keyboard(settings: Dict[str, Any]) -> InlineKeyboard
     time_reset_icon = "✅" if time_mode == "reset" else "❌"
     rows = [
         [
-            InlineKeyboardButton(f"پیشفرض | {default_icon}", callback_data="userbot:settings:buy_renew:renew_policy:default"),
-            InlineKeyboardButton(f"پیشرفته | {advanced_icon}", callback_data="userbot:settings:buy_renew:renew_policy:advanced"),
-            InlineKeyboardButton(f"منصفانه | {fair_icon}", callback_data="userbot:settings:buy_renew:renew_policy:fair"),
+            InlineKeyboardButton(f"{_adm_t('ub_policy_default')} | {default_icon}", callback_data="userbot:settings:buy_renew:renew_policy:default"),
+            InlineKeyboardButton(f"{_adm_t('ub_policy_advanced')} | {advanced_icon}", callback_data="userbot:settings:buy_renew:renew_policy:advanced"),
+            InlineKeyboardButton(f"{_adm_t('ub_policy_fair')} | {fair_icon}", callback_data="userbot:settings:buy_renew:renew_policy:fair"),
         ],
         [
             InlineKeyboardButton(
-                f"حجم افزایشی | {volume_add_icon}",
+                f"{_adm_t('ub_volume_add')} | {volume_add_icon}",
                 callback_data="userbot:settings:buy_renew:renew_rollover:volume:add",
             ),
             InlineKeyboardButton(
-                f"حجم ریست | {volume_reset_icon}",
+                f"{_adm_t('ub_volume_reset')} | {volume_reset_icon}",
                 callback_data="userbot:settings:buy_renew:renew_rollover:volume:reset",
             ),
         ],
         [
             InlineKeyboardButton(
-                f"زمان افزایشی | {time_add_icon}",
+                f"{_adm_t('ub_time_add')} | {time_add_icon}",
                 callback_data="userbot:settings:buy_renew:renew_rollover:time:add",
             ),
             InlineKeyboardButton(
-                f"زمان ریست | {time_reset_icon}",
+                f"{_adm_t('ub_time_reset')} | {time_reset_icon}",
                 callback_data="userbot:settings:buy_renew:renew_rollover:time:reset",
             ),
         ],
-        [InlineKeyboardButton("حداکثر زمان مجاز برای تمدید📊", callback_data="userbot:settings:buy_renew:renew_limit:days")],
-        [InlineKeyboardButton("حداکثر مصرف مجاز برای تمدید📆", callback_data="userbot:settings:buy_renew:renew_limit:usage")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:buy_renew")],
+        [InlineKeyboardButton(_adm_t("ub_renew_max_days"), callback_data="userbot:settings:buy_renew:renew_limit:days")],
+        [InlineKeyboardButton(_adm_t("ub_renew_max_usage"), callback_data="userbot:settings:buy_renew:renew_limit:usage")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:settings:buy_renew")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_reset_free_trial_confirm_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("✅تایید", callback_data="userbot:settings:subscription:reset_free_trial_confirm")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:settings:subscription")],
+        [InlineKeyboardButton(_adm_t("ub_confirm"), callback_data="userbot:settings:subscription:reset_free_trial_confirm")],
+        [InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:settings:subscription")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2668,62 +2626,35 @@ def _get_text_settings() -> Dict[str, str]:
     except Exception as e:
         logger.warning(f"Failed to load text settings from DB: {e}")
         return {
-            "welcome_message": "سلام {full_name} عزیز 👋\nبه ربات ما خوش آمدید.",
+            "welcome_message": _adm_t('ub_lit_2544c118b6da'),
             "faq_text": (
-                "❓ سوالات متداول\n\n"
-                "1) لینک اشتراک را کجا بزنم؟\n"
-                "از بخش «📊وضعیت اشتراک» وارد سرویس شوید و روی «لینک اشتراک» بزنید.\n\n"
-                "2) اگر کانفیگ وصل نشد چه کنم؟\n"
-                "اول اینترنت و تاریخ/ساعت گوشی را چک کنید، سپس «بروزرسانی اطلاعات» بزنید.\n\n"
-                "3) چطور تمدید کنم؟\n"
-                "از «♾تمدید اشتراک» سرویس را انتخاب کنید و پلن تمدید را بخرید.\n\n"
-                "4) پشتیبانی از کجاست؟\n"
-                "از دکمه «📩پشتیبانی» پیام خود را ارسال کنید."
+                _adm_t('ub_lit_e79f4b498d61')
             ),
-            "guide_text": "انتخاب سیستم عامل ⬇️",
+            "guide_text": _adm_t('ub_lit_6ba70f0fe183'),
             "guide_android_text": (
-                "📱 راهنمای اندروید\n\n"
-                "1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n"
-                "2) v2rayNG:\nhttps://github.com/2dust/v2rayNG/releases\n\n"
-                "3) NekoBox for Android:\nhttps://github.com/MatsuriDayo/NekoBoxForAndroid/releases\n\n"
-                "بعد از نصب، لینک اشتراک را Import کنید و Connect بزنید."
+                _adm_t('ub_lit_c5833c3cac4d')
             ),
             "guide_ios_text": (
-                "📱 راهنمای iOS\n\n"
-                "1) Streisand:\nhttps://apps.apple.com/app/streisand/id6450534064\n\n"
-                "2) Hiddify (iOS):\nhttps://apps.apple.com/app/hiddify-proxy-vpn/id6596777532\n\n"
-                "بعد از نصب، لینک اشتراک را Import کرده و اتصال را فعال کنید."
+                _adm_t('ub_lit_7af978c10a78')
             ),
             "guide_windows_text": (
-                "🖥️ راهنمای ویندوز\n\n"
-                "1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n"
-                "2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases\n\n"
-                "3) v2rayN:\nhttps://github.com/2dust/v2rayN/releases\n\n"
-                "پس از نصب، لینک اشتراک را Paste/Import کنید و Connect شوید."
+                _adm_t('ub_lit_efb35014c2d3')
             ),
             "guide_mac_text": (
-                "💻 راهنمای مک\n\n"
-                "1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n"
-                "2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases\n\n"
-                "پس از نصب، لینک اشتراک را Import کنید و اتصال را فعال کنید."
+                _adm_t('ub_lit_f94427f639a0')
             ),
             "guide_linux_text": (
-                "🖥️ راهنمای لینوکس\n\n"
-                "1) Hiddify Next:\nhttps://github.com/hiddify/hiddify-next/releases\n\n"
-                "2) Nekoray:\nhttps://github.com/MatsuriDayo/nekoray/releases\n\n"
-                "پس از نصب، لینک اشتراک را در برنامه وارد کنید و Connect بزنید."
+                _adm_t('ub_lit_946da096d6f1')
             ),
-            "invite_text": "💌 لینک دعوت شما:\n{invite_link}",
-            "invite_info_text": "🎁 دعوت دوستان خود از هدایای ویژه ای بهره مند شوید",
+            "invite_text": _adm_t('ub_lit_90b7f03e5d81'),
+            "invite_info_text": _adm_t('ub_lit_7be80447d717'),
             "invite_banner_text": (
-                "🎁 بنر دعوت اختصاصی شما\n\n"
-                "🔗 لینک دعوت شما:\n{invite_link}\n\n"
-                "دوستانت را دعوت کن و از مزایای ویژه بهره‌مند شو."
+                _adm_t('ub_lit_232c70278dbb')
             ),
             "invite_banner_photo_id": "",
-            "servers_list_text": "📡 **لیست سرورها**\nلطفاً لوکیشن مورد نظر خود را انتخاب کنید:",
-            "plans_list_text": "🛒 **لطفاً پلن مورد نظر خود را انتخاب کنید:**",
-            "ticket_panel_text": "📩 برای ارتباط با پشتیبانی، پیام خود را ارسال کنید.",
+            "servers_list_text": _adm_t('ub_lit_fb2f43710743'),
+            "plans_list_text": _adm_t('ub_lit_abfd4e6ea514'),
+            "ticket_panel_text": _adm_t('ub_lit_5574bffb29fc'),
             "zarinpal_pro_text": "0",
             "card_to_card_text": "0",
         }
@@ -2740,7 +2671,7 @@ def _get_marketing_settings() -> Dict[str, Any]:
             "show_gift_button": False,
             "show_user_status": True,
             "instant_gift_coupon": False,
-            "auto_gift_text": "🎁 هدیه شما فعال شد. از همراهی‌تان متشکریم.",
+            "auto_gift_text": _adm_t('ub_lit_ab667b0084a5'),
             "min_auto_gift_charge": 100000,
         }
 
@@ -2756,11 +2687,7 @@ def _get_force_join_settings() -> Dict[str, Any]:
             "channel_username": "",
             "channel_link": "",
             "guide_text": (
-                "🔒 برای استفاده از ربات، ابتدا در کانال پشتیبانی عضو شوید.\n"
-                "پس از عضویت روی «✅ بررسی عضویت» بزنید.\n\n"
-                "اگر عضویت شما تایید نشد:\n"
-                "1) مطمئن شوید دقیقاً در همان کانال اعلام‌شده عضو شده‌اید.\n"
-                "2) ربات کاربران باید در کانال، ادمین باشد تا عضویت را تشخیص دهد."
+                _adm_t('ub_lit_bb1cd626c22c')
             ),
         }
 
@@ -2799,7 +2726,11 @@ def _project_root_dir() -> Path:
 
 def _backup_storage_dir() -> Path:
     backup_dir = _project_root_dir() / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        backup_dir.chmod(0o700)
+    except OSError:
+        pass
     return backup_dir
 
 
@@ -2831,7 +2762,7 @@ def _atomic_write_bytes(target_path: Path, payload: bytes) -> None:
 
 def _normalize_plans_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
-        raise ValueError("مقدار plans.json معتبر نیست.")
+        raise ValueError(_adm_t('ub_lit_79793b18e804'))
     servers = payload.get("servers")
     if not isinstance(servers, dict):
         return payload
@@ -2855,7 +2786,7 @@ def _normalize_plans_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _normalize_servers_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
-        raise ValueError("مقدار servers.json معتبر نیست.")
+        raise ValueError(_adm_t('ub_lit_bd23571afb0d'))
     servers = payload.get("servers")
     if not isinstance(servers, list):
         return payload
@@ -2895,9 +2826,52 @@ def _restore_sqlite_db_from_file(src_db: Path, dst_db: Path) -> None:
     dst_db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(src_db)) as src_conn:
         src_conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        check = src_conn.execute("PRAGMA quick_check").fetchone()
+        if not check or str(check[0]).strip().lower() != "ok":
+            raise sqlite3.DatabaseError(
+                f"SQLite restore source integrity check failed for {src_db.name}"
+            )
         with sqlite3.connect(str(dst_db), timeout=30) as dst_conn:
             src_conn.backup(dst_conn)
             dst_conn.commit()
+    try:
+        dst_db.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _create_sqlite_backup_snapshot(src_db: Path, dst_db: Path) -> None:
+    """Create a consistent SQLite snapshot, including committed WAL data."""
+    if not src_db.exists() or not src_db.is_file():
+        raise FileNotFoundError(src_db)
+    dst_db.parent.mkdir(parents=True, exist_ok=True)
+    sidecars = [
+        dst_db,
+        dst_db.with_name(dst_db.name + "-wal"),
+        dst_db.with_name(dst_db.name + "-shm"),
+    ]
+    for candidate in sidecars:
+        candidate.unlink(missing_ok=True)
+    try:
+        src_uri = f"{src_db.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(src_uri, uri=True, timeout=30) as src_conn:
+            src_conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+            with sqlite3.connect(str(dst_db), timeout=30) as dst_conn:
+                src_conn.backup(dst_conn)
+                dst_conn.commit()
+                check = dst_conn.execute("PRAGMA quick_check").fetchone()
+                if not check or str(check[0]).strip().lower() != "ok":
+                    raise sqlite3.DatabaseError(
+                        f"SQLite backup integrity check failed for {src_db.name}"
+                    )
+        try:
+            dst_db.chmod(0o600)
+        except OSError:
+            pass
+    except BaseException:
+        for candidate in sidecars:
+            candidate.unlink(missing_ok=True)
+        raise
 
 
 LEGACY_BACKUP_CORE_KEYS = {
@@ -3076,7 +3050,7 @@ def _legacy_build_servers_json(data: Dict[str, Any]) -> Dict[str, Any]:
             continue
         entry = {
             "id": 0,
-            "title": _legacy_clean_str(item.get("title"), "دامنه"),
+            "title": _legacy_clean_str(item.get("title"), _adm_t('ub_lit_07b71d9606f0')),
             "domain": _legacy_clean_str(item.get("url")),
         }
         if not entry["domain"]:
@@ -3106,7 +3080,7 @@ def _legacy_build_servers_json(data: Dict[str, Any]) -> Dict[str, Any]:
 
         server_obj: Dict[str, Any] = {
             "id": sid,
-            "title": _legacy_clean_str(row.get("title"), f"سرور {sid}"),
+            "title": _legacy_clean_str(row.get("title"), f"{_adm_t('ub_lit_bf1e2c70cb7e')}{sid}"),
             "panel_url": _legacy_clean_str(row.get("url")),
             "admin_proxy_path": _legacy_clean_str(row.get("proxy_path_admin")),
             "admin_uuid": _legacy_clean_str(row.get("uuid_admin")),
@@ -3250,7 +3224,7 @@ def _legacy_build_plans_json(data: Dict[str, Any], money_scale: int) -> Dict[str
         blocks[key]["categories"].append(
             {
                 "id": cat_id,
-                "title": _legacy_clean_str(row.get("title"), f"دسته {cat_id}"),
+                "title": _legacy_clean_str(row.get("title"), f"{_adm_t('ub_lit_b0cc1957de2b')}{cat_id}"),
                 "priority": _legacy_to_int(row.get("priority_index"), 0),
             }
         )
@@ -3291,9 +3265,9 @@ def _legacy_build_plans_json(data: Dict[str, Any], money_scale: int) -> Dict[str
         title = _legacy_clean_str(row.get("description"))
         if not title:
             if gb > 0:
-                title = f"{_format_gb(gb)} گیگ / {days} روز"
+                title = f"{_format_gb(gb)}{_adm_t('ub_lit_7adb1e0c83a8')}{days}{_adm_t('ub_lit_6f274ee56123')}"
             else:
-                title = f"{days} روزه"
+                title = f"{days}{_adm_t('ub_lit_3155e32642fd')}"
 
         blocks[key]["plans"].append(
             {
@@ -3562,7 +3536,7 @@ def _restore_legacy_into_userbot_db(data: Dict[str, Any], money_scale: int) -> D
     db_path = root_dir / "Shared" / "hiddify_sellbot.db"
     userbot_db.init_db()
     if not db_path.exists():
-        raise ValueError("پایگاه داده اصلی ربات کاربران یافت نشد.")
+        raise ValueError(_adm_t('ub_lit_85f093f7bc00'))
 
     now = _legacy_now_str()
     temp_db = Path(tempfile.gettempdir()) / f"restore_legacy_db_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
@@ -3693,7 +3667,7 @@ def _restore_legacy_into_userbot_db(data: Dict[str, Any], money_scale: int) -> D
             for tg, balance in wallet_by_tg.items():
                 if tg in user_id_by_tg:
                     continue
-                full_name = f"کاربر {tg}"
+                full_name = f"{_adm_t('ub_lit_c6f852ead8a7')}{tg}"
                 created_at = now
                 insert_obj = {
                     "telegram_id": tg,
@@ -3736,7 +3710,7 @@ def _restore_legacy_into_userbot_db(data: Dict[str, Any], money_scale: int) -> D
                 sid = _legacy_to_int(row.get("id"), 0)
                 if sid <= 0:
                     continue
-                server_title_by_id[sid] = _legacy_clean_str(row.get("title"), f"سرور {sid}")
+                server_title_by_id[sid] = _legacy_clean_str(row.get("title"), f"{_adm_t('ub_lit_bf1e2c70cb7e')}{sid}")
 
             orders_by_id: Dict[int, Dict[str, Any]] = {}
             orders_count_by_uid: Dict[int, int] = {}
@@ -3851,7 +3825,7 @@ def _restore_legacy_into_userbot_db(data: Dict[str, Any], money_scale: int) -> D
                     "user_id": uid,
                     "telegram_id": tg,
                     "server_id": server_id,
-                    "server_title": server_title_by_id.get(server_id, f"سرور {server_id}"),
+                    "server_title": server_title_by_id.get(server_id, f"{_adm_t('ub_lit_bf1e2c70cb7e')}{server_id}"),
                     "user_uuid": user_uuid,
                     "name": service_name,
                     "usage_limit": usage_limit,
@@ -3881,7 +3855,7 @@ def _restore_legacy_into_userbot_db(data: Dict[str, Any], money_scale: int) -> D
                     "user_id": uid,
                     "telegram_id": tg,
                     "server_id": server_id,
-                    "server_title": server_title_by_id.get(server_id, f"سرور {server_id}"),
+                    "server_title": server_title_by_id.get(server_id, f"{_adm_t('ub_lit_bf1e2c70cb7e')}{server_id}"),
                     "user_uuid": user_uuid,
                     "name": service_name,
                     "usage_limit": 0.0,
@@ -3906,7 +3880,7 @@ def _restore_legacy_into_userbot_db(data: Dict[str, Any], money_scale: int) -> D
                     "usage_current": 0.0,
                     "usage_limit": max(0.0, _legacy_to_float(item.get("usage_limit"), 0.0)),
                     "days_left": max(0, _legacy_to_int(item.get("days_left"), 0)),
-                    "last_online": "نامشخص",
+                    "last_online": _adm_t('ub_lit_264f61d0e11d'),
                     "comment": _legacy_clean_str(item.get("comment")),
                     "status": "active",
                     "created_at": created_at,
@@ -4016,7 +3990,7 @@ def _restore_legacy_into_userbot_db(data: Dict[str, Any], money_scale: int) -> D
                     "sender_type": sender_type,
                     "sender_name": _legacy_clean_str(user_meta.get("full_name"))
                     or _legacy_clean_str(user_meta.get("username"))
-                    or (str(tg) if tg > 0 else ("پشتیبانی" if sender_type == "admin" else "کاربر")),
+                    or (str(tg) if tg > 0 else (_adm_t('ub_lit_4efd4a96334a') if sender_type == "admin" else _adm_t('ub_lit_883da9f030ce'))),
                     "message_text": message_text,
                     "photo_file_id": photo_id,
                     "created_at": created_at,
@@ -4226,16 +4200,14 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
                     pass
 
         # v4.0.0: Restore customer bot database
-        customer_db_member = _find_member(["CustomerBot/customer_bot.db", "customer_bot.db"])
+        customer_db_member = _find_member(["customer_bot.db", "CustomerBot/customer_bot.db"])
         if customer_db_member:
-            customer_dir = root_dir / "CustomerBot"
-            customer_dir.mkdir(parents=True, exist_ok=True)
             tmp_db = Path(tempfile.gettempdir()) / f"restore_customer_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
             try:
                 with zf.open(members[customer_db_member], "r") as src, tmp_db.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
-                _restore_sqlite_db_from_file(tmp_db, customer_dir / "customer_bot.db")
-                restored_files.append("CustomerBot/customer_bot.db")
+                _restore_sqlite_db_from_file(tmp_db, root_dir / "customer_bot.db")
+                restored_files.append("customer_bot.db")
             finally:
                 try:
                     tmp_db.unlink(missing_ok=True)
@@ -4285,7 +4257,7 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
 
         if not any(
             item in restored_files
-            for item in {"Shared/hiddify_sellbot.db", "Shared/servers.json", "Shared/plans.json", "Shared/agency.db", "CustomerBot/customer_bot.db", "AgentBot/agent_bot.db"}
+            for item in {"Shared/hiddify_sellbot.db", "Shared/servers.json", "Shared/plans.json", "Shared/agency.db", "customer_bot.db", "AgentBot/agent_bot.db"}
         ):
             legacy_payload = _extract_legacy_payload_from_zip(zf, members)
             if legacy_payload:
@@ -4297,7 +4269,7 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
                 mode = "zip-legacy"
 
     if not restored_files:
-        raise ValueError("در فایل zip هیچ داده قابل‌بازیابی پیدا نشد.")
+        raise ValueError(_adm_t('ub_lit_50ade149a68f'))
 
     result: Dict[str, Any] = {
         "mode": mode,
@@ -4317,10 +4289,10 @@ def _restore_from_json_backup(backup_file: Path) -> Dict[str, Any]:
     raw = backup_file.read_text(encoding="utf-8")
     data = json.loads(raw)
     if not isinstance(data, dict):
-        raise ValueError("فایل JSON باید یک آبجکت معتبر باشد.")
+        raise ValueError(_adm_t('ub_lit_18fdcf71f040'))
 
     if "backup_type" in data and "files" in data:
-        raise ValueError("این فایل فقط Manifest بکاپ است. لطفاً فایل zip کامل بکاپ را ارسال کنید.")
+        raise ValueError(_adm_t('ub_lit_7d50c8f383bd'))
 
     if _legacy_is_payload(data):
         legacy_result = _restore_legacy_payload(data)
@@ -4334,7 +4306,7 @@ def _restore_from_json_backup(backup_file: Path) -> Dict[str, Any]:
     if "servers_json" in data:
         payload = data.get("servers_json")
         if not isinstance(payload, dict):
-            raise ValueError("مقدار servers_json معتبر نیست.")
+            raise ValueError(_adm_t('ub_lit_6414b7fddb01'))
         payload = _normalize_servers_payload(payload)
         _atomic_write_bytes(shared_dir / "servers.json", json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
         restored_files.append("Shared/servers.json")
@@ -4346,7 +4318,7 @@ def _restore_from_json_backup(backup_file: Path) -> Dict[str, Any]:
     if "plans_json" in data:
         payload = data.get("plans_json")
         if not isinstance(payload, dict):
-            raise ValueError("مقدار plans_json معتبر نیست.")
+            raise ValueError(_adm_t('ub_lit_99d08da32614'))
         payload = _normalize_plans_payload(payload)
         _atomic_write_bytes(shared_dir / "plans.json", json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
         restored_files.append("Shared/plans.json")
@@ -4357,8 +4329,7 @@ def _restore_from_json_backup(backup_file: Path) -> Dict[str, Any]:
 
     if not restored_files:
         raise ValueError(
-            "JSON ارسال‌شده قابل بازیابی نیست.\n"
-            "برای بازیابی کامل، فایل zip بکاپ را ارسال کنید."
+            _adm_t('ub_lit_73bc194dad87')
         )
 
     return {
@@ -4375,7 +4346,7 @@ def _restore_backup_file(backup_file: Path) -> Dict[str, Any]:
     elif suffix == ".json":
         result = _restore_from_json_backup(backup_file)
     else:
-        raise ValueError("فرمت فایل نامعتبر است. فقط zip یا json پشتیبانی می‌شود.")
+        raise ValueError(_adm_t('ub_lit_875bb3f45c68'))
 
     try:
         userbot_db.init_db()
@@ -4391,25 +4362,25 @@ def _build_restore_result_text(result: Dict[str, Any]) -> str:
     mode = str(result.get("mode") or "").strip().upper() or "UNKNOWN"
     legacy_stats = result.get("legacy_stats") or {}
     lines = [
-        "✅ بازیابی بکاپ با موفقیت انجام شد.",
-        f"🧩 نوع فایل: {mode}",
-        f"📦 فایل‌های بازیابی‌شده: {len(restored_files)}",
+        _adm_t('ub_lit_9b109d98b35d'),
+        f"{_adm_t('ub_lit_f1b32b8341f6')}{mode}",
+        f"{_adm_t('ub_lit_08381a0c2d53')}{len(restored_files)}",
     ]
     if receipts_count > 0:
-        lines.append(f"🖼 تعداد رسیدهای بازیابی‌شده: {receipts_count}")
+        lines.append(f"{_adm_t('ub_lit_6dc6ee580e61')}{receipts_count}")
     if restored_files:
-        lines.append("🗂 موارد:")
+        lines.append(_adm_t('ub_lit_4dd6e1fe542d'))
         for item in restored_files:
             lines.append(f"• {item}")
     if isinstance(legacy_stats, dict) and legacy_stats:
-        lines.append("🧬 تبدیل ساختار بکاپ قدیمی انجام شد:")
+        lines.append(_adm_t('ub_lit_d7424e30ceec'))
         labels = [
-            ("users", "کاربران"),
-            ("orders", "سفارشات"),
-            ("payments", "تراکنش‌ها"),
-            ("services", "اشتراک‌ها"),
-            ("tickets", "تیکت‌ها"),
-            ("ticket_messages", "پیام‌های تیکت"),
+            ("users", _adm_t('ub_lit_b0ab872b4a12')),
+            ("orders", _adm_t('ub_lit_c6428e10990c')),
+            ("payments", _adm_t('ub_lit_4ad10a7f11aa')),
+            ("services", _adm_t('ub_lit_7dce24b8e835')),
+            ("tickets", _adm_t('ub_lit_5a4f77d7b719')),
+            ("ticket_messages", _adm_t('ub_lit_58029e6e5a8f')),
         ]
         for key, title in labels:
             if key in legacy_stats:
@@ -4445,42 +4416,55 @@ def _make_bot_backup_zip() -> Path:
         (root_dir / "Shared" / "plans.json", "Shared/plans.json"),
         # v4.0.0: Agency + Customer + Agent databases
         (root_dir / "Shared" / "agency.db", "Shared/agency.db"),
-        (root_dir / "CustomerBot" / "customer_bot.db", "CustomerBot/customer_bot.db"),
+        (root_dir / "customer_bot.db", "customer_bot.db"),
         (root_dir / "AgentBot" / "agent_bot.db", "AgentBot/agent_bot.db"),
     ]
 
     added: List[Dict[str, Any]] = []
-    with zipfile.ZipFile(out_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for src, arcname in files_to_add:
-            if not src.exists() or not src.is_file():
-                continue
-            zf.write(src, arcname=arcname)
-            try:
-                fsize = int(src.stat().st_size)
-            except Exception:
-                fsize = 0
-            added.append({"path": arcname, "size": fsize})
-
-        receipts_dir = root_dir / "Receiptions"
-        if receipts_dir.exists() and receipts_dir.is_dir():
-            for item in receipts_dir.rglob("*"):
-                if not item.is_file():
+    snapshot_dir = Path(tempfile.mkdtemp(prefix="sellbot_backup_sqlite_"))
+    try:
+        with zipfile.ZipFile(out_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for index, (src, arcname) in enumerate(files_to_add):
+                if not src.exists() or not src.is_file():
                     continue
-                arc = str(item.relative_to(root_dir))
-                zf.write(item, arcname=arc)
+                archive_src = src
+                if src.suffix.lower() == ".db":
+                    archive_src = snapshot_dir / f"{index}_{src.name}"
+                    _create_sqlite_backup_snapshot(src, archive_src)
+                zf.write(archive_src, arcname=arcname)
                 try:
-                    fsize = int(item.stat().st_size)
+                    fsize = int(archive_src.stat().st_size)
                 except Exception:
                     fsize = 0
-                added.append({"path": arc, "size": fsize})
+                added.append({"path": arcname, "size": fsize})
 
-        manifest = {
-            "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "backup_type": "bot",
-            "files_count": len(added),
-            "files": added,
-        }
-        zf.writestr(manifest_name, json.dumps(manifest, ensure_ascii=False, indent=2))
+            receipts_dir = root_dir / "Receiptions"
+            if receipts_dir.exists() and receipts_dir.is_dir():
+                for item in receipts_dir.rglob("*"):
+                    if not item.is_file():
+                        continue
+                    arc = str(item.relative_to(root_dir))
+                    zf.write(item, arcname=arc)
+                    try:
+                        fsize = int(item.stat().st_size)
+                    except Exception:
+                        fsize = 0
+                    added.append({"path": arc, "size": fsize})
+
+            manifest = {
+                "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "backup_type": "bot",
+                "files_count": len(added),
+                "files": added,
+            }
+            zf.writestr(manifest_name, json.dumps(manifest, ensure_ascii=False, indent=2))
+    finally:
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
+
+    try:
+        out_path.chmod(0o600)
+    except OSError:
+        pass
 
     return out_path
 
@@ -4576,6 +4560,11 @@ def _build_full_backup_zip(
             f"Backup_All_{ts}.json",
             json.dumps(manifest, ensure_ascii=False, indent=2),
         )
+
+    try:
+        out_path.chmod(0o600)
+    except OSError:
+        pass
 
     return out_path
 
@@ -4690,11 +4679,7 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     caption = (
-        "⏰ بکاپ خودکار کامل\n"
-        f"🕐 زمان: {now_local.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        "🤖 بکاپ ربات: ✅\n"
-        f"🖥️ بکاپ سرورها/نودها: {panel_ok_count} مورد\n"
-        f"⚠️ خطاها: {panel_err_count} مورد"
+        f"{_adm_t('ub_lit_c8ffdfa2fdfe')}{now_local.strftime('%Y-%m-%d %H:%M:%S')}{_adm_t('ub_lit_37bdced2ffa2')}{panel_ok_count}{_adm_t('ub_lit_1cb0523c4ddd')}{panel_err_count}{_adm_t('ub_lit_0806067ce85b')}"
     )
 
     try:
@@ -4712,11 +4697,11 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if panel_errors and should_report_panel_errors:
         preview = "\n".join(panel_errors[:5])
-        extra = f"\n... و {len(panel_errors) - 5} خطای دیگر" if len(panel_errors) > 5 else ""
+        extra = f"{_adm_t('ub_lit_6a765c44eb90')}{len(panel_errors) - 5}{_adm_t('ub_lit_315b0d6cee27')}" if len(panel_errors) > 5 else ""
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
-                text="⚠️ برخی بکاپ‌های پنل دریافت نشدند:\n" + preview + extra,
+                text=_adm_t('ub_lit_0996fb054887') + preview + extra,
             )
         except Exception as e:
             logger.warning("Auto backup error report to admin failed: %s", e)
@@ -4742,11 +4727,11 @@ async def run_userbot_auto_backup_job(context: ContextTypes.DEFAULT_TYPE) -> Non
                 logger.warning("Auto backup send to event channel failed: %s", e)
             if panel_errors and should_report_panel_errors:
                 preview = "\n".join(panel_errors[:5])
-                extra = f"\n... و {len(panel_errors) - 5} خطای دیگر" if len(panel_errors) > 5 else ""
+                extra = f"{_adm_t('ub_lit_6a765c44eb90')}{len(panel_errors) - 5}{_adm_t('ub_lit_315b0d6cee27')}" if len(panel_errors) > 5 else ""
                 try:
                     await context.bot.send_message(
                         chat_id=target,
-                        text="⚠️ برخی بکاپ‌های پنل دریافت نشدند:\n" + preview + extra,
+                        text=_adm_t('ub_lit_0996fb054887') + preview + extra,
                     )
                 except Exception as e:
                     logger.warning("Auto backup error report to event channel failed: %s", e)
@@ -4852,19 +4837,9 @@ async def send_agent_service_tracking_detail(message, context, service: Dict[str
     if agent:
         agent_label = str(agent.get("full_name") or agent.get("username") or f"@{agent.get('telegram_id')}" or "")
     elif svc.get("agent_id"):
-        agent_label = f"نماینده #{svc.get('agent_id')}"
+        agent_label = f"{_adm_t('ub_lit_d416fa44016d')}{svc.get('agent_id')}"
     text = (
-        "🔎 اشتراک نمایندگی\n\n"
-        f"📦 نام: {svc.get('name') or '—'}\n"
-        f"🔑 شناسه: <code>{html_escape(svc_code or '—')}</code>\n"
-        f"👤 نماینده: {html_escape(agent_label or '—')}\n"
-        f"🌍 سرور: {html_escape(str(svc.get('server_title') or '—'))}\n"
-        f"📊 حجم: {svc.get('usage_limit') or 0}GB\n"
-        f"📈 استفاده: {svc.get('usage_current') or 0}GB\n"
-        f"⏰ روز باقی‌مانده: {svc.get('days_left') or 0}\n"
-        f"💰 قیمت فروش: {int(svc.get('sale_price') or 0):,} تومان\n"
-        f"💎 قیمت عمده: {int(svc.get('wholesale_price') or 0):,} تومان\n"
-        f"🆔: {svc.get('panel_user_uuid') or '—'}"
+        f"{_adm_t('ub_lit_dd6fe220562f')}{svc.get('name') or '—'}{_adm_t('ub_lit_0937d1718c21')}{html_escape(svc_code or '—')}{_adm_t('ub_lit_5ac851a18511')}{html_escape(agent_label or '—')}{_adm_t('ub_lit_f136270018c0')}{html_escape(str(svc.get('server_title') or '—'))}{_adm_t('ub_lit_b21917455747')}{svc.get('usage_limit') or 0}{_adm_t('ub_lit_ab26ad41f913')}{svc.get('usage_current') or 0}{_adm_t('ub_lit_cd7c42825a66')}{svc.get('days_left') or 0}{_adm_t('ub_lit_28fa328d388d')}{int(svc.get('sale_price') or 0):f','}{_adm_t('ub_lit_7f516e8e3dd8')}{int(svc.get('wholesale_price') or 0):f','}{_adm_t('ub_lit_7c1e128c33e0')}{svc.get('panel_user_uuid') or '—'}"
     )
     try:
         await message.reply_text(text, reply_markup=admin_main_keyboard(), parse_mode="HTML")
@@ -4877,7 +4852,7 @@ async def send_agent_service_tracking_detail(message, context, service: Dict[str
 # ===============================
 
 async def send_payments_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "💵 مدیریت تراکنشات\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
+    text = _adm_t('ub_lit_db8fa58a2fc1')
     kb = build_payments_menu_keyboard()
     if message:
         try:
@@ -4904,16 +4879,16 @@ async def send_payments_list(
 
     if filter_type == 'approved':
         status = 'approved'
-        header_title = "لیست تراکنشات تایید شده ✅"
+        header_title = _adm_t('ub_lit_fb35b4e24fbb')
     elif filter_type == 'rejected':
         status = 'rejected'
-        header_title = "لیست تراکنشات رد شده 🚫"
+        header_title = _adm_t('ub_lit_e254bbde58ac')
     elif filter_type == 'pending':
         status = 'pending'
-        header_title = "لیست تراکنشات در انتظار ⏳"
+        header_title = _adm_t('ub_lit_ae42e2d73ef4')
     elif filter_type == 'card':
         method = 'card'
-        header_title = "لیست تراکنشات کارت به کارت 💳"
+        header_title = _adm_t('ub_lit_c3ff8c18d61e')
 
     # 1. دریافت آمار (هدر)
     stats = userbot_db.get_payment_stats(status, method)
@@ -4928,15 +4903,7 @@ async def send_payments_list(
 
     # ساخت متن با جداکننده‌ها
     text = (
-        f"🔹 {header_title}\n"
-        f"🔸 تعداد تراکنشات: {stats['total_count']}\n"
-        f"🔸 مبلغ تراکنشات: {_format_toman(stats['total_amount'])} تومان\n"
-        f"❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تراکنشات 30 روز گذشته: {stats['last30_count']}\n"
-        f"🔸 مبلغ تراکنشات 30 روز گذشته: {_format_toman(stats['last30_amount'])} تومان\n"
-        f"❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تراکنشات این ماه: {stats['month_count']}\n"
-        f"🔸 مبلغ تراکنشات این ماه: {_format_toman(stats['month_amount'])} تومان"
+        f"🔹 {header_title}{_adm_t('ub_lit_e6a4fd0222da')}{stats['total_count']}{_adm_t('ub_lit_9dc0422feb4d')}{_format_toman(stats['total_amount'])}{_adm_t('ub_lit_ccde1f8ca008')}{stats['last30_count']}{_adm_t('ub_lit_4cf4dd8b0dfc')}{_format_toman(stats['last30_amount'])}{_adm_t('ub_lit_71bf540116a3')}{stats['month_count']}{_adm_t('ub_lit_3160570278d0')}{_format_toman(stats['month_amount'])}{_adm_t('ub_lit_f6ac3483a71a')}"
     )
 
     # ساخت دکمه‌ها (گرید 3 ستونه)
@@ -4967,7 +4934,7 @@ async def send_payments_list(
     if nav_row:
         rows.append(nav_row)
 
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:payments_menu")])
+    rows.append([InlineKeyboardButton(_adm_t("adm_btn_back_no_space"), callback_data="userbot:payments_menu")])
 
     kb = InlineKeyboardMarkup(rows)
 
@@ -4990,7 +4957,7 @@ async def send_payment_detail(
 ) -> None:
     pay = userbot_db.get_payment_by_id(payment_id)
     if not pay:
-        await context.bot.send_message(chat_id, "❌ تراکنش یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t("ub_payment_not_found"))
         return
 
     st = pay.get('status', 'pending')
@@ -5046,14 +5013,14 @@ async def send_payment_detail(
                     return
                 except Exception:
                     pass
-            await context.bot.send_message(chat_id, caption + "\n(تصویر فیش در دسترس نیست)", reply_markup=kb)
+            await context.bot.send_message(chat_id, caption + _adm_t('ub_lit_ee8b68ab1d83'), reply_markup=kb)
     elif receipt_local_path and os.path.exists(receipt_local_path) and not force_text_only:
         try:
             with open(receipt_local_path, "rb") as f:
                 await context.bot.send_photo(chat_id, f, caption=caption, reply_markup=kb)
             return
         except Exception:
-            await context.bot.send_message(chat_id, caption + "\n(تصویر فیش محلی خوانده نشد)", reply_markup=kb)
+            await context.bot.send_message(chat_id, caption + _adm_t('ub_lit_f972bd5eaf56'), reply_markup=kb)
     else:
         if message:
             try:
@@ -5069,7 +5036,7 @@ async def send_payment_detail(
 # ===============================
 
 async def send_users_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "👤 مدیریت کاربران ربات\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
+    text = _adm_t('ub_lit_e446c2832f7b')
     kb = build_users_menu_keyboard()
     if message:
         try:
@@ -5087,9 +5054,9 @@ async def send_users_page(page: int, chat_id: int, context: ContextTypes.DEFAULT
     if page > total_pages: page = total_pages; users, _ = userbot_db.get_users_page(page, USERBOT_PAGE_SIZE)
 
     lines = [
-        "👥 لیست کاربران ربات",
-        f"تعداد کل: {total_count}",
-        f"صفحه: {page}/{total_pages}",
+        _adm_t('ub_lit_5d7e8874bb47'),
+        f"{_adm_t('ub_lit_dc659b6ef7d6')}{total_count}",
+        f"{_adm_t('ub_lit_38a59cdd248c')}{page}/{total_pages}",
         ""
     ]
     rows = []
@@ -5110,7 +5077,7 @@ async def send_users_page(page: int, chat_id: int, context: ContextTypes.DEFAULT
     if page < total_pages:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"userbot:users:{page+1}"))
     rows.append(nav)
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:users_menu")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:users_menu")])
 
     kb = InlineKeyboardMarkup(rows)
     text = "\n".join(lines)
@@ -5132,7 +5099,7 @@ async def send_user_profile(
 ) -> None:
     user = userbot_db.get_user_by_id(user_id)
     if not user:
-        await context.bot.send_message(chat_id, "❌ کاربر یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_c940c4b3979b'))
         return
 
     stats = userbot_db.get_full_user_stats(user_id)
@@ -5142,26 +5109,12 @@ async def send_user_profile(
     is_banned = user.get('is_banned', 0)
     got_trial = user.get('got_free_trial', 0)
     
-    trial_icon = "✅" if got_trial else "❌ (نگرفته)"
-    ban_status = "🔴 مسدود" if is_banned else "🟢 فعال"
+    trial_icon = "✅" if got_trial else _adm_t('ub_lit_6e820d8c2bbb')
+    ban_status = _adm_t('ub_lit_d31f21153610') if is_banned else _adm_t('ub_lit_0c90fe92316c')
 
     # متن پیام طبق عکس
     text = (
-        f"👤 کاربر: {_display_name(user)}\n"
-        f"🔹 نام کاربری: @{user.get('username','-')}\n"
-        f"🔸 شناسه کاربر: {user['telegram_id']}\n"
-        f"🔸 وضعیت دریافت تست رایگان: {trial_icon}\n"
-        f"🔸 موجودی کیف پول: {wallet}تومان\n"
-        f"🔸 وضعیت اکانت: {ban_status}\n"
-        "❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تعداد اشتراک‌های خریداری شده: {stats['subs_bought']}\n"
-        f"🔸 تعداد اشتراک‌های متصل شده: {stats['subs_connected']}\n"
-        f"🔸 تعداد تراکنشات: {stats['tx_total']}\n"
-        f"🔸 تعداد تراکنشات تایید شده: {stats['tx_approved']}\n"
-        "❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تعداد سفارشات: {stats['orders_count']}\n"
-        f"🔸 مجموع حجم سفارشات(GB): {stats['orders_gb']}\n"
-        f"🔸 مجموع ارزش سفارشات: {_format_toman(stats['orders_price'])}تومان"
+        f"{_adm_t('ub_lit_9a3903dac8b0')}{_display_name(user)}{_adm_t('ub_lit_82d8992ae2cf')}{user.get('username', '-')}{_adm_t('ub_lit_79f266413e33')}{user['telegram_id']}{_adm_t('ub_lit_298b95c83074')}{trial_icon}{_adm_t('ub_lit_f7ac0f0f591c')}{wallet}{_adm_t('ub_lit_47dd851a531e')}{ban_status}{_adm_t('ub_lit_ad0d1cc2cf24')}{stats['subs_bought']}{_adm_t('ub_lit_ad3814570384')}{stats['subs_connected']}{_adm_t('ub_lit_e6a4fd0222da')}{stats['tx_total']}{_adm_t('ub_lit_d5ea26a72b8f')}{stats['tx_approved']}{_adm_t('ub_lit_ac8fb63ca4b3')}{stats['orders_count']}{_adm_t('ub_lit_ccabb6312338')}{stats['orders_gb']}{_adm_t('ub_lit_10863b8ea7a1')}{_format_toman(stats['orders_price'])}{_adm_t('ub_lit_9e29f6087438')}"
     )
     
     kb = build_user_profile_keyboard(user_id, back_callback=back_callback)
@@ -5189,7 +5142,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get(SUB_TRACKING_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(SUB_TRACKING_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         sub_code = str(text or "").strip()
@@ -5201,12 +5154,12 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if not service:
             service = _find_agent_service_by_code(sub_code)
             if not service:
-                await msg.reply_text("❌اشتراکی با این شناسه یافت نشد")
+                await msg.reply_text(_adm_t('ub_lit_694c899bddd8'))
                 await msg.reply_text(_subscription_tracking_prompt_text(), reply_markup=userbot_cancel_keyboard())
                 return
 
         context.user_data.pop(SUB_TRACKING_STATE, None)
-        await msg.reply_text("✅اشتراک یافت شد", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_4090f864d3eb'), reply_markup=admin_main_keyboard())
         if str(service.get("_source") or "") == "agent":
             await send_agent_service_tracking_detail(msg, context, service)
         else:
@@ -5221,13 +5174,13 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get(BACKUP_RESTORE_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(BACKUP_RESTORE_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         doc = getattr(msg, "document", None)
         if not doc:
             await msg.reply_text(
-                "📦 لطفاً فایل بکاپ را ارسال کنید (zip/json) یا «❌لغو» بزنید.",
+                _adm_t('ub_lit_50c69b95b9bd'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -5236,7 +5189,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         low_name = file_name.lower()
         if not (low_name.endswith(".zip") or low_name.endswith(".json")):
             await msg.reply_text(
-                "❌ فرمت فایل نامعتبر است. فقط zip یا json ارسال کنید.",
+                _adm_t('ub_lit_399bdd6fe0c1'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -5250,7 +5203,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             save_path = Path(tempfile.gettempdir()) / save_name
             await fobj.download_to_drive(custom_path=str(save_path))
         except Exception as e:
-            await msg.reply_text(f"❌ دریافت فایل بکاپ ناموفق بود:\n{e}", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_07319186c9a2')}{e}", reply_markup=userbot_cancel_keyboard())
             return
 
         context.user_data.pop(BACKUP_RESTORE_STATE, None)
@@ -5259,17 +5212,17 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 save_path.unlink(missing_ok=True)
             except Exception:
                 pass
-            await msg.reply_text("⏳ یک عملیات بازیابی دیگر در حال انجام است. چند لحظه بعد دوباره تلاش کنید.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_bb0b135e4377'), reply_markup=admin_main_keyboard())
             await send_backup_restore_settings_menu(msg.chat_id, context)
             return
 
-        await msg.reply_text("⏳ فایل دریافت شد. در حال بازیابی بکاپ...", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_5d49d7ecc0d2'), reply_markup=admin_main_keyboard())
         try:
             async with BACKUP_RESTORE_LOCK:
                 result = await asyncio.to_thread(_restore_backup_file, save_path)
         except Exception as e:
             logger.exception("Backup restore failed: %s", e)
-            await msg.reply_text(f"❌ بازیابی بکاپ ناموفق بود:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_b05c1a719494')}{e}", reply_markup=admin_main_keyboard())
             await send_backup_restore_settings_menu(msg.chat_id, context)
             return
         finally:
@@ -5288,9 +5241,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                     await context.bot.send_message(
                         chat_id=target,
                         text=(
-                            "♻️ بازیابی بکاپ انجام شد.\n"
-                            f"👤 توسط ادمین: {msg.from_user.id if msg.from_user else '-'}\n"
-                            f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                            f"{_adm_t('ub_lit_c72dce7e257f')}{msg.from_user.id if msg.from_user else '-'}{_adm_t('ub_lit_fc8d6845db5e')}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                         ),
                     )
                 except Exception as e:
@@ -5302,7 +5253,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get(BACKUP_CHANNEL_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(BACKUP_CHANNEL_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_backup_restore_settings_menu(msg.chat_id, context)
             return
 
@@ -5323,7 +5274,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 channel_target = raw
             else:
                 await msg.reply_text(
-                    "❌ ورودی معتبر نیست.\nیک پیام از کانال فوروارد کنید یا @channel / -100... بفرستید.",
+                    _adm_t('ub_lit_599d5c19e2a2'),
                     reply_markup=userbot_cancel_keyboard(),
                 )
                 return
@@ -5334,11 +5285,11 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             userbot_db.set_backup_restore_settings(settings)
         except Exception as e:
             context.user_data.pop(BACKUP_CHANNEL_EDIT_STATE, None)
-            await msg.reply_text(f"❌ خطا در ذخیره کانال رویداد بکاپ:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_fb6b9ccfa1f2')}{e}", reply_markup=admin_main_keyboard())
             return
 
         context.user_data.pop(BACKUP_CHANNEL_EDIT_STATE, None)
-        await msg.reply_text(f"✅ کانال رویداد بکاپ ذخیره شد:\n{channel_target}", reply_markup=admin_main_keyboard())
+        await msg.reply_text(f"{_adm_t('ub_lit_4bf85bbf9e3d')}{channel_target}", reply_markup=admin_main_keyboard())
         await send_backup_restore_settings_menu(msg.chat_id, context)
         return
 
@@ -5346,7 +5297,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         st = context.user_data.get(BROADCAST_SEND_STATE)
         if not isinstance(st, dict):
             context.user_data.pop(BROADCAST_SEND_STATE, None)
-            await msg.reply_text("❌ وضعیت ارسال همگانی نامعتبر است.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_610ffd0c3c21'), reply_markup=admin_main_keyboard())
             return
 
         segment = str(st.get("segment") or "all").strip().lower()
@@ -5354,14 +5305,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         if text in CANCEL_WORDS:
             context.user_data.pop(BROADCAST_SEND_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         if step == "wait_text":
             body_text = str(text or "").strip()
             if not body_text:
                 await msg.reply_text(
-                    "❌ لطفاً متن پیام را کامل ارسال کنید.",
+                    _adm_t('ub_lit_0cf8c6e42c06'),
                     reply_markup=userbot_cancel_keyboard(),
                 )
                 return
@@ -5369,7 +5320,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             st["step"] = "wait_photo"
             context.user_data[BROADCAST_SEND_STATE] = st
             await msg.reply_text(
-                "🖼️ لطفا عکس خود را برای ارسال به کاربران ارسال کنید یا روی دکمه [⏩رد کردن] کلیک کنید:",
+                _adm_t('ub_lit_d1ab4a9c9a1d'),
                 reply_markup=broadcast_skip_cancel_keyboard(),
             )
             return
@@ -5382,7 +5333,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 photo_file_id = ""
             else:
                 await msg.reply_text(
-                    "❌ لطفا عکس ارسال کنید یا روی دکمه [⏩رد کردن] بزنید.",
+                    _adm_t('ub_lit_4ca4944eb907'),
                     reply_markup=broadcast_skip_cancel_keyboard(),
                 )
                 return
@@ -5391,26 +5342,26 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if not body_text:
                 st["step"] = "wait_text"
                 context.user_data[BROADCAST_SEND_STATE] = st
-                await msg.reply_text("❌ متن پیام خالی است. لطفاً دوباره متن را ارسال کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_cb6daf64f796'), reply_markup=userbot_cancel_keyboard())
                 return
 
             target_ids = userbot_db.get_broadcast_target_telegram_ids(segment)
             try:
                 await _send_broadcast_to_targets(context, target_ids, body_text, photo_file_id)
             except Exception as e:
-                await msg.reply_text(f"❌ خطا در ارسال پیام همگانی:\n{e}", reply_markup=admin_main_keyboard())
+                await msg.reply_text(f"{_adm_t('ub_lit_049a7c1fad77')}{e}", reply_markup=admin_main_keyboard())
                 context.user_data.pop(BROADCAST_SEND_STATE, None)
                 return
 
             context.user_data.pop(BROADCAST_SEND_STATE, None)
-            await msg.reply_text("✅پیام به کاربران ارسال شد", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_d98f9f5fa5e7'), reply_markup=admin_main_keyboard())
             return
 
         # fallback
         st["step"] = "wait_text"
         context.user_data[BROADCAST_SEND_STATE] = st
         await msg.reply_text(
-            f"✍ لطفا پیام خود را برای «{_broadcast_segment_label(segment)}» وارد کنید:",
+            f"{_adm_t('ub_lit_16a2b34bd26a')}{_broadcast_segment_label(segment)}{_adm_t('ub_lit_6e15e865cb28')}",
             reply_markup=userbot_cancel_keyboard(),
         )
         return
@@ -5419,7 +5370,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         st = context.user_data.get(TICKET_REPLY_STATE)
         if not isinstance(st, dict):
             context.user_data.pop(TICKET_REPLY_STATE, None)
-            await msg.reply_text("❌ وضعیت پاسخ تیکت نامعتبر است.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_e67bbca145fd'), reply_markup=admin_main_keyboard())
             return
 
         ticket_code = int(st.get("ticket_code") or 0)
@@ -5430,7 +5381,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         if text in CANCEL_WORDS:
             context.user_data.pop(TICKET_REPLY_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_ticket_detail(
                 ticket_code,
                 msg.chat_id,
@@ -5444,20 +5395,20 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         ticket = userbot_db.get_ticket_by_code(ticket_code)
         if not ticket:
             context.user_data.pop(TICKET_REPLY_STATE, None)
-            await msg.reply_text("❌ تیکت یافت نشد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_6b02b8271e76'), reply_markup=admin_main_keyboard())
             return
 
         if step == "wait_text":
             body_text = str(text or "").strip()
             if not body_text:
-                await msg.reply_text("❌ لطفاً متن پاسخ را کامل ارسال کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_9c6851bd6e22'), reply_markup=userbot_cancel_keyboard())
                 return
             st["reply_text"] = body_text
             st["photo_file_id"] = ""
             st["step"] = "wait_screenshot"
             context.user_data[TICKET_REPLY_STATE] = st
             await msg.reply_text(
-                "📱 لطفاً اسکرین‌شات خود را ارسال کنید یا روی دکمه [⏩رد کردن] کلیک کنید",
+                _adm_t('ub_lit_febf12ffd68d'),
                 reply_markup=build_ticket_reply_screenshot_keyboard(),
             )
             return
@@ -5470,7 +5421,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 photo_file_id = ""
             else:
                 await msg.reply_text(
-                    "❌ لطفا عکس ارسال کنید یا روی دکمه [⏩رد کردن] بزنید.",
+                    _adm_t('ub_lit_4ca4944eb907'),
                     reply_markup=build_ticket_reply_screenshot_keyboard(),
                 )
                 return
@@ -5498,20 +5449,20 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         if step == "wait_confirm":
             await msg.reply_text(
-                "برای ارسال پاسخ از دکمه‌های «✅ارسال» یا «✏️ویرایش» استفاده کنید.",
+                _adm_t('ub_lit_474338f5faed'),
                 reply_markup=build_ticket_reply_confirm_keyboard(),
             )
             return
         # fallback
         st["step"] = "wait_text"
         context.user_data[TICKET_REPLY_STATE] = st
-        await msg.reply_text("📩 متن پاسخ تیکت را ارسال کنید:", reply_markup=userbot_cancel_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_b36f472ee726'), reply_markup=userbot_cancel_keyboard())
         return
 
     if context.user_data.get(PAYMENT_CARD_ADD_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(PAYMENT_CARD_ADD_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_payment_cards_list_menu(msg.chat_id, context)
             return
         add_state = context.user_data.get(PAYMENT_CARD_ADD_STATE)
@@ -5523,30 +5474,29 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if step == "number":
             number = re.sub(r"\D", "", text)
             if len(number) != 16:
-                await msg.reply_text("❌ شماره کارت باید 16 رقم باشد.\nلطفا شماره کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_35660c5728c1'), reply_markup=userbot_cancel_keyboard())
                 return
             add_state["step"] = "owner"
             add_state["number"] = number
             context.user_data[PAYMENT_CARD_ADD_STATE] = add_state
-            await msg.reply_text("➡️ لطفا نام صاحب کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_73dc47115c7b'), reply_markup=userbot_cancel_keyboard())
             return
 
         if step == "owner":
             owner = text.strip()
             number = re.sub(r"\D", "", str(add_state.get("number") or ""))
             if not owner:
-                await msg.reply_text("❌ نام صاحب کارت معتبر نیست.\nلطفا نام صاحب کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_74021069a830'), reply_markup=userbot_cancel_keyboard())
                 return
             if len(number) != 16:
                 context.user_data[PAYMENT_CARD_ADD_STATE] = {"step": "number"}
-                await msg.reply_text("❌ شماره کارت نامعتبر شد. دوباره شماره کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_a681baa1c845'), reply_markup=userbot_cancel_keyboard())
                 return
             add_state["step"] = "bank"
             add_state["owner"] = owner
             context.user_data[PAYMENT_CARD_ADD_STATE] = add_state
             await msg.reply_text(
-                "🏦 لطفا نام بانک را وارد کنید:\n"
-                "برای رد شدن این مرحله عدد 0 را ارسال کنید.",
+                _adm_t('ub_lit_456f2348f2c9'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -5559,31 +5509,31 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 bank = ""
             if len(number) != 16:
                 context.user_data[PAYMENT_CARD_ADD_STATE] = {"step": "number"}
-                await msg.reply_text("❌ شماره کارت نامعتبر شد. دوباره شماره کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_a681baa1c845'), reply_markup=userbot_cancel_keyboard())
                 return
             if not owner:
                 context.user_data[PAYMENT_CARD_ADD_STATE] = {"step": "owner", "number": number}
-                await msg.reply_text("❌ نام صاحب کارت نامعتبر شد. دوباره نام صاحب کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_b11dd69cfe9f'), reply_markup=userbot_cancel_keyboard())
                 return
             try:
                 database.add_or_update_card(owner=owner, number=number, bank_name=bank)
             except Exception as e:
-                await msg.reply_text(f"❌ خطا در ذخیره کارت:\n{e}", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(f"{_adm_t('ub_lit_4b0e35409dbd')}{e}", reply_markup=userbot_cancel_keyboard())
                 return
             context.user_data.pop(PAYMENT_CARD_ADD_STATE, None)
-            await msg.reply_text("✅ کارت با موفقیت افزوده شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_2e1937659375'), reply_markup=admin_main_keyboard())
             await send_payment_card_item_menu(msg.chat_id, context, number=number)
             return
 
         context.user_data[PAYMENT_CARD_ADD_STATE] = {"step": "number"}
-        await msg.reply_text("⬇️ لطفا شماره کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_3d68f9744af8'), reply_markup=userbot_cancel_keyboard())
         return
 
     if context.user_data.get(PAYMENT_CARD_EDIT_STATE):
         edit_state = context.user_data.get(PAYMENT_CARD_EDIT_STATE)
         if not isinstance(edit_state, dict):
             context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
-            await msg.reply_text("❌ خطا در وضعیت ویرایش کارت.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_162e59238e3a'), reply_markup=admin_main_keyboard())
             await send_payment_cards_list_menu(msg.chat_id, context)
             return
 
@@ -5592,7 +5542,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         if text in CANCEL_WORDS:
             context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if target_number:
                 await send_payment_card_item_menu(msg.chat_id, context, number=target_number)
             else:
@@ -5602,61 +5552,61 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if mode == "number":
             new_number = re.sub(r"\D", "", text)
             if len(new_number) != 16:
-                await msg.reply_text("❌ شماره کارت باید 16 رقم باشد.\nشماره کارت جدید را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_f398aa65e2f8'), reply_markup=userbot_cancel_keyboard())
                 return
             if new_number != target_number and database.get_card(new_number):
-                await msg.reply_text("❌ این شماره کارت قبلاً ثبت شده است.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_204b37404152'), reply_markup=userbot_cancel_keyboard())
                 return
             ok = database.update_card_number(target_number, new_number)
             if not ok:
                 context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
-                await msg.reply_text("❌ کارت موردنظر برای ویرایش پیدا نشد.", reply_markup=admin_main_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_f990ba573889'), reply_markup=admin_main_keyboard())
                 await send_payment_cards_list_menu(msg.chat_id, context)
                 return
             context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
-            await msg.reply_text("✅ شماره کارت با موفقیت ویرایش شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_7298fac36975'), reply_markup=admin_main_keyboard())
             await send_payment_card_item_menu(msg.chat_id, context, number=new_number)
             return
 
         if mode == "owner":
             new_owner = text.strip()
             if not new_owner:
-                await msg.reply_text("❌ نام صاحب کارت معتبر نیست.\nنام جدید را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_0e6506afda04'), reply_markup=userbot_cancel_keyboard())
                 return
             ok = database.update_card_owner(target_number, new_owner)
             if not ok:
                 context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
-                await msg.reply_text("❌ کارت موردنظر برای ویرایش پیدا نشد.", reply_markup=admin_main_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_f990ba573889'), reply_markup=admin_main_keyboard())
                 await send_payment_cards_list_menu(msg.chat_id, context)
                 return
             context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
-            await msg.reply_text("✅ نام صاحب کارت با موفقیت ویرایش شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_ef8440175cbb'), reply_markup=admin_main_keyboard())
             await send_payment_card_item_menu(msg.chat_id, context, number=target_number)
             return
 
         context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
-        await msg.reply_text("❌ نوع ویرایش نامعتبر است.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_877e28d82974'), reply_markup=admin_main_keyboard())
         await send_payment_cards_list_menu(msg.chat_id, context)
         return
 
     if context.user_data.get(PAYMENT_CARD_DELETE_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(PAYMENT_CARD_DELETE_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_payment_cards_list_menu(msg.chat_id, context)
             return
         number = re.sub(r"\D", "", text)
         if len(number) < 16:
-            await msg.reply_text("❌ شماره کارت معتبر نیست.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_410801d2f0ef'), reply_markup=userbot_cancel_keyboard())
             return
         ok = False
         try:
             ok = database.delete_card(number)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در حذف کارت:\n{e}", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_573fa548ec88')}{e}", reply_markup=userbot_cancel_keyboard())
             return
         context.user_data.pop(PAYMENT_CARD_DELETE_STATE, None)
-        await msg.reply_text("✅ کارت حذف شد." if ok else "❌ کارت پیدا نشد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_aab1f54f4333') if ok else _adm_t('ub_lit_a40143a344e2'), reply_markup=admin_main_keyboard())
         await send_payment_cards_list_menu(msg.chat_id, context)
         return
 
@@ -5664,7 +5614,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         bulk_state = context.user_data.get(ZARIN_COUPON_BULK_STATE)
         if text in CANCEL_WORDS:
             context.user_data.pop(ZARIN_COUPON_BULK_STATE, None)
-            await msg.reply_text("❌ ساخت گروهی لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_e20a14ad242e'), reply_markup=admin_main_keyboard())
             await send_gifts_menu(msg.chat_id, context)
             return
         if not isinstance(bulk_state, dict):
@@ -5675,14 +5625,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             prefix = str(text or "").strip().upper()
             if not re.fullmatch(r"[A-Za-z0-9_-]{2,24}", prefix):
                 await msg.reply_text(
-                    "❌ پیشوند نامعتبر است.\nمثال درست: `GIFT` یا `VIP1405`",
+                    _adm_t('ub_lit_1ba71caae945'),
                     reply_markup=userbot_cancel_keyboard(),
                     parse_mode="Markdown",
                 )
                 return
             bulk_state.update({"step": "count", "prefix": prefix})
             context.user_data[ZARIN_COUPON_BULK_STATE] = bulk_state
-            await msg.reply_text("🔢 چند کد ساخته شود؟\nعدد بین 1 تا 200:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_57b2f72d1579'), reply_markup=userbot_cancel_keyboard())
             return
         if step == "count":
             try:
@@ -5690,11 +5640,11 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 if count <= 0 or count > 200:
                     raise ValueError
             except Exception:
-                await msg.reply_text("❌ تعداد نامعتبر است. عددی بین 1 تا 200 وارد کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_4e55347762ca'), reply_markup=userbot_cancel_keyboard())
                 return
             bulk_state.update({"step": "amount", "count": count})
             context.user_data[ZARIN_COUPON_BULK_STATE] = bulk_state
-            await msg.reply_text("💰 مبلغ هدیه هر کد را به تومان وارد کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_02084124c5ef'), reply_markup=userbot_cancel_keyboard())
             return
         if step == "amount":
             try:
@@ -5702,13 +5652,12 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 if amount <= 0:
                     raise ValueError
             except Exception:
-                await msg.reply_text("❌ مبلغ نامعتبر است. عدد مثبت وارد کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_abc8ee33bc88'), reply_markup=userbot_cancel_keyboard())
                 return
             bulk_state.update({"step": "expire", "amount": amount})
             context.user_data[ZARIN_COUPON_BULK_STATE] = bulk_state
             await msg.reply_text(
-                "🕒 انقضای کدها را به ساعت وارد کنید.\n"
-                "مثال: 24 یعنی یک روز | عدد 0 یعنی نامحدود",
+                _adm_t('ub_lit_f00926cd6a8e'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -5718,7 +5667,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 if hours < 0:
                     raise ValueError
             except Exception:
-                await msg.reply_text("❌ مقدار انقضا نامعتبر است. عدد 0 یا بیشتر وارد کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_d635df7582c1'), reply_markup=userbot_cancel_keyboard())
                 return
             prefix = str(bulk_state.get("prefix") or "GIFT").strip()
             count = max(1, min(200, int(bulk_state.get("count") or 1)))
@@ -5741,17 +5690,17 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                     )
                     codes.append(code)
             except Exception as e:
-                await msg.reply_text(f"❌ خطا در ساخت کدها:\n{e}", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(f"{_adm_t('ub_lit_0443255bee50')}{e}", reply_markup=userbot_cancel_keyboard())
                 return
             context.user_data.pop(ZARIN_COUPON_BULK_STATE, None)
             bot_username = await _get_user_bot_username(context)
             lines = [
-                "✅ کدهای هدیه ساخته شدند.",
-                f"🧩 تعداد: {len(codes)}",
-                f"💰 مبلغ هر کد: {_format_toman(amount)} تومان",
-                f"🕒 انقضا: {'نامحدود' if hours == 0 else f'{hours} ساعت'}",
+                _adm_t('ub_lit_2f403ad9c699'),
+                f"{_adm_t('ub_lit_caf8b4c732b7')}{len(codes)}",
+                f"{_adm_t('ub_lit_cce613b19867')}{_format_toman(amount)}{_adm_t('ub_lit_f6ac3483a71a')}",
+                f"{_adm_t('ub_lit_5b54e79c2658')}{_adm_t('ub_lit_2613293fcf88') if hours == 0 else _adm_t('ub_lit_d84a18536faa', h=hours)}",
                 "",
-                "🏷 لیست کدها:",
+                _adm_t('ub_lit_438ce8ced88d'),
             ]
             for code in codes:
                 deep_link = _build_telegram_start_link(bot_username, code)
@@ -5769,7 +5718,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         add_state = context.user_data.get(ZARIN_COUPON_ADD_STATE)
         if text in CANCEL_WORDS:
             context.user_data.pop(ZARIN_COUPON_ADD_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
             return
         if not isinstance(add_state, dict):
@@ -5780,18 +5729,18 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             code = str(text or "").strip()
             if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", code):
                 await msg.reply_text(
-                    "❌ کد نامعتبر است.\nفقط حروف/عدد/`_`/`-` و حداقل 4 کاراکتر.",
+                    _adm_t('ub_lit_c57c0c573216'),
                     reply_markup=userbot_cancel_keyboard(),
                     parse_mode="Markdown",
                 )
                 return
             if userbot_db.get_zarin_voucher(code):
-                await msg.reply_text("❌ این کد قبلا ثبت شده است.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_501a231d73f2'), reply_markup=userbot_cancel_keyboard())
                 return
             add_state["step"] = "amount"
             add_state["code"] = code
             context.user_data[ZARIN_COUPON_ADD_STATE] = add_state
-            await msg.reply_text("💰 مبلغ هدیه کیف پول (تومان) را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_48651659a6a6'), reply_markup=userbot_cancel_keyboard())
             return
         if step == "amount":
             code = str(add_state.get("code") or "").strip()
@@ -5800,28 +5749,28 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 if amount <= 0:
                     raise ValueError
             except Exception:
-                await msg.reply_text("❌ مبلغ نامعتبر است. عدد مثبت وارد کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_abc8ee33bc88'), reply_markup=userbot_cancel_keyboard())
                 return
             try:
                 userbot_db.upsert_zarin_voucher(code, amount, max_uses=1, is_active=1)
             except Exception as e:
-                await msg.reply_text(f"❌ خطا در ذخیره کوپن:\n{e}", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(f"{_adm_t('ub_lit_cb4c53563f62')}{e}", reply_markup=userbot_cancel_keyboard())
                 return
             context.user_data.pop(ZARIN_COUPON_ADD_STATE, None)
-            await msg.reply_text("✅ کوپن با موفقیت افزوده شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_394538939248'), reply_markup=admin_main_keyboard())
             await send_zarin_coupon_detail(msg.chat_id, context, code=code)
             return
 
     if context.user_data.get(ZARIN_COUPON_DELETE_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(ZARIN_COUPON_DELETE_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
             return
         code = str(text or "").strip()
         ok = userbot_db.delete_zarin_voucher(code)
         context.user_data.pop(ZARIN_COUPON_DELETE_STATE, None)
-        await msg.reply_text("✅ کوپن حذف شد." if ok else "❌ کوپن پیدا نشد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_2195f24993dc') if ok else _adm_t('ub_lit_ba49ec3eb391'), reply_markup=admin_main_keyboard())
         await send_zarin_coupons_menu(msg.chat_id, context)
         return
 
@@ -5830,7 +5779,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if text in CANCEL_WORDS:
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_LINK_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if code:
                 await send_zarin_coupon_detail(msg.chat_id, context, code=code)
             else:
@@ -5838,21 +5787,21 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             return
         if not isinstance(st, dict):
             context.user_data.pop(ZARIN_COUPON_LINK_STATE, None)
-            await msg.reply_text("❌ خطا در وضعیت ویرایش لینک.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_b56eb5171903'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
             return
         code = str(st.get("code") or "").strip()
         link = str(text or "").strip()
         if not (link.startswith("http://") or link.startswith("https://")):
-            await msg.reply_text("❌ لینک معتبر نیست. باید با http یا https شروع شود.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_72d0206c7dac'), reply_markup=userbot_cancel_keyboard())
             return
         try:
             userbot_db.set_zarin_voucher_link(code, link)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره لینک:\n{e}", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_3c03a9d8f9a2')}{e}", reply_markup=userbot_cancel_keyboard())
             return
         context.user_data.pop(ZARIN_COUPON_LINK_STATE, None)
-        await msg.reply_text("✅ لینک پرداخت زرین پال ثبت شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_f1deb9706840'), reply_markup=admin_main_keyboard())
         await send_zarin_coupon_detail(msg.chat_id, context, code=code)
         return
 
@@ -5861,7 +5810,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if text in CANCEL_WORDS:
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_AMOUNT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if code:
                 await send_zarin_coupon_detail(msg.chat_id, context, code=code)
             else:
@@ -5869,7 +5818,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             return
         if not isinstance(st, dict):
             context.user_data.pop(ZARIN_COUPON_AMOUNT_STATE, None)
-            await msg.reply_text("❌ خطا در وضعیت ویرایش مبلغ.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_1cff7f0fa06c'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
             return
         code = str(st.get("code") or "").strip()
@@ -5878,15 +5827,15 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if amount <= 0:
                 raise ValueError
         except Exception:
-            await msg.reply_text("❌ مبلغ نامعتبر است. عدد مثبت وارد کنید.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_abc8ee33bc88'), reply_markup=userbot_cancel_keyboard())
             return
         try:
             userbot_db.set_zarin_voucher_amount(code, amount)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره مبلغ:\n{e}", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_8a10aa2cd37b')}{e}", reply_markup=userbot_cancel_keyboard())
             return
         context.user_data.pop(ZARIN_COUPON_AMOUNT_STATE, None)
-        await msg.reply_text("✅ مبلغ هدیه کوپن به‌روزرسانی شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_c9295a8e43c6'), reply_markup=admin_main_keyboard())
         await send_zarin_coupon_detail(msg.chat_id, context, code=code)
         return
 
@@ -5895,7 +5844,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if text in CANCEL_WORDS:
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_CODE_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if code:
                 await send_zarin_coupon_detail(msg.chat_id, context, code=code)
             else:
@@ -5903,14 +5852,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             return
         if not isinstance(st, dict):
             context.user_data.pop(ZARIN_COUPON_CODE_STATE, None)
-            await msg.reply_text("❌ خطا در وضعیت ویرایش کد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3a11581a4250'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
             return
         old_code = str(st.get("code") or "").strip()
         new_code = str(text or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", new_code):
             await msg.reply_text(
-                "❌ کد نامعتبر است.\nفقط حروف/عدد/`_`/`-` و حداقل 4 کاراکتر.",
+                _adm_t('ub_lit_c57c0c573216'),
                 reply_markup=userbot_cancel_keyboard(),
                 parse_mode="Markdown",
             )
@@ -5920,7 +5869,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             await msg.reply_text(f"❌ {result}", reply_markup=userbot_cancel_keyboard())
             return
         context.user_data.pop(ZARIN_COUPON_CODE_STATE, None)
-        await msg.reply_text("✅ کد کوپن به‌روزرسانی شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_9a6f070ad821'), reply_markup=admin_main_keyboard())
         await send_zarin_coupon_detail(msg.chat_id, context, code=new_code)
         return
 
@@ -5929,7 +5878,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if text in CANCEL_WORDS:
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_LIMIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if code:
                 await send_zarin_coupon_detail(msg.chat_id, context, code=code)
             else:
@@ -5937,7 +5886,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             return
         if not isinstance(st, dict):
             context.user_data.pop(ZARIN_COUPON_LIMIT_STATE, None)
-            await msg.reply_text("❌ خطا در وضعیت ویرایش محدودیت.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_1e5e2dfbeb9b'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
             return
         code = str(st.get("code") or "").strip()
@@ -5946,15 +5895,15 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if limit <= 0:
                 raise ValueError
         except Exception:
-            await msg.reply_text("❌ مقدار محدودیت نامعتبر است. عدد مثبت وارد کنید.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_a21ea86d5bb2'), reply_markup=userbot_cancel_keyboard())
             return
         try:
             userbot_db.set_zarin_voucher_max_uses(code, limit)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره محدودیت:\n{e}", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_38a4c64e7449')}{e}", reply_markup=userbot_cancel_keyboard())
             return
         context.user_data.pop(ZARIN_COUPON_LIMIT_STATE, None)
-        await msg.reply_text("✅ محدودیت استفاده به‌روزرسانی شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_e5cc5fcaada6'), reply_markup=admin_main_keyboard())
         await send_zarin_coupon_detail(msg.chat_id, context, code=code)
         return
 
@@ -5963,7 +5912,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         if text in CANCEL_WORDS:
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_EXP_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if code:
                 await send_zarin_coupon_detail(msg.chat_id, context, code=code)
             else:
@@ -5971,7 +5920,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             return
         if not isinstance(st, dict):
             context.user_data.pop(ZARIN_COUPON_EXP_STATE, None)
-            await msg.reply_text("❌ خطا در وضعیت ویرایش انقضا.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_afd62e26cfb1'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
             return
         code = str(st.get("code") or "").strip()
@@ -5980,22 +5929,22 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if hours < 0:
                 raise ValueError
         except Exception:
-            await msg.reply_text("❌ مقدار نامعتبر است. عدد ساعت (۰ یا بیشتر) وارد کنید.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_f885235fc0db'), reply_markup=userbot_cancel_keyboard())
             return
         try:
             userbot_db.set_zarin_voucher_expire_hours(code, hours)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره انقضا:\n{e}", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_1a0fea657e8f')}{e}", reply_markup=userbot_cancel_keyboard())
             return
         context.user_data.pop(ZARIN_COUPON_EXP_STATE, None)
-        await msg.reply_text("✅ مدت زمان انقضا به‌روزرسانی شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_c0d511b14e20'), reply_markup=admin_main_keyboard())
         await send_zarin_coupon_detail(msg.chat_id, context, code=code)
         return
 
     if context.user_data.get(PAYMENT_CHANNEL_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(PAYMENT_CHANNEL_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_payment_settings_menu(msg.chat_id, context)
             return
 
@@ -6016,7 +5965,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 channel_target = raw
             else:
                 await msg.reply_text(
-                    "❌ ورودی معتبر نیست.\nیک پیام از کانال فوروارد کنید یا @channel / -100... بفرستید.",
+                    _adm_t('ub_lit_599d5c19e2a2'),
                     reply_markup=userbot_cancel_keyboard(),
                 )
                 return
@@ -6027,18 +5976,18 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             userbot_db.set_payment_settings(s)
         except Exception as e:
             context.user_data.pop(PAYMENT_CHANNEL_EDIT_STATE, None)
-            await msg.reply_text(f"❌ خطا در ذخیره کانال رویداد پرداخت:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_e58474f3c8fe')}{e}", reply_markup=admin_main_keyboard())
             return
 
         context.user_data.pop(PAYMENT_CHANNEL_EDIT_STATE, None)
-        await msg.reply_text(f"✅ کانال رویداد پرداخت ذخیره شد:\n{channel_target}", reply_markup=admin_main_keyboard())
+        await msg.reply_text(f"{_adm_t('ub_lit_2770eb216b9a')}{channel_target}", reply_markup=admin_main_keyboard())
         await send_payment_settings_menu(msg.chat_id, context)
         return
 
     if context.user_data.get(FORCE_JOIN_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(FORCE_JOIN_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_force_join_settings_menu(msg.chat_id, context)
             return
 
@@ -6066,7 +6015,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 channel_target = raw
             else:
                 await msg.reply_text(
-                    "❌ ورودی معتبر نیست.\nیک پیام از کانال فوروارد کنید یا @channel / -100... بفرستید.",
+                    _adm_t('ub_lit_599d5c19e2a2'),
                     reply_markup=userbot_cancel_keyboard(),
                 )
                 return
@@ -6075,11 +6024,11 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             userbot_db.set_force_join_channel(channel_target, channel_link)
         except Exception as e:
             context.user_data.pop(FORCE_JOIN_EDIT_STATE, None)
-            await msg.reply_text(f"❌ خطا در ذخیره کانال:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_582bd646a9f3')}{e}", reply_markup=admin_main_keyboard())
             return
 
         context.user_data.pop(FORCE_JOIN_EDIT_STATE, None)
-        await msg.reply_text(f"✅ کانال عضویت اجباری ذخیره شد:\n{channel_target}", reply_markup=admin_main_keyboard())
+        await msg.reply_text(f"{_adm_t('ub_lit_7560bbfc6c2a')}{channel_target}", reply_markup=admin_main_keyboard())
         await send_force_join_settings_menu(msg.chat_id, context)
         return
 
@@ -6087,27 +6036,27 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         edit_type = str(context.user_data.get(MARKETING_EDIT_STATE) or "").strip()
         if text in CANCEL_WORDS:
             context.user_data.pop(MARKETING_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_marketing_settings_menu(msg.chat_id, context)
             return
 
         try:
             if edit_type == "auto_gift_text":
                 userbot_db.set_marketing_value("auto_gift_text", text)
-                done_text = "✅ متن هدایای اتوماتیک ذخیره شد."
+                done_text = _adm_t('ub_lit_0443310f5f13')
             elif edit_type == "min_auto_gift_charge":
                 value = int(text.replace(",", ""))
                 if value < 0:
                     raise ValueError
                 userbot_db.set_marketing_value("min_auto_gift_charge", value)
-                done_text = f"✅ حداقل شارژ هدیه اتوماتیک روی {value:,} تومان تنظیم شد."
+                done_text = f"{_adm_t('ub_lit_43e2b7c4f62c')}{value:f','}{_adm_t('ub_lit_94916658645d')}"
             else:
                 raise ValueError("invalid marketing edit state")
         except Exception:
             if edit_type == "min_auto_gift_charge":
-                await msg.reply_text("❌ لطفاً عدد صحیح معتبر (۰ یا بیشتر) وارد کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_5d528a4feadf'), reply_markup=userbot_cancel_keyboard())
             else:
-                await msg.reply_text("❌ خطا در ذخیره تنظیمات بازاریابی.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_d4bcf57a25ff'), reply_markup=userbot_cancel_keyboard())
             return
 
         context.user_data.pop(MARKETING_EDIT_STATE, None)
@@ -6121,34 +6070,34 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         raw_text = (text or "").strip()
         if raw_text in CANCEL_WORDS:
             context.user_data.pop(REFERRAL_VALUE_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_referral_admin_settings(msg.chat_id, context)
             return
         if edit_name == "invite_intro_text":
             context.user_data.pop(REFERRAL_VALUE_EDIT_STATE, None)
             if not raw_text:
-                await msg.reply_text("❌ متن خالی است.", reply_markup=admin_main_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_4946cbeadf96'), reply_markup=admin_main_keyboard())
                 return
             try:
                 userbot_db.set_referral_value("invite_intro_text", raw_text)
             except Exception as e:
-                await msg.reply_text(f"خطا در ذخیره: {e}", reply_markup=admin_main_keyboard())
+                await msg.reply_text(f"{_adm_t('ub_lit_3e448ada69d3')}{e}", reply_markup=admin_main_keyboard())
                 return
-            await msg.reply_text("✅ متن صفحه دعوت ذخیره شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_54bcac6988a7'), reply_markup=admin_main_keyboard())
             await send_referral_admin_settings(msg.chat_id, context)
             return
         try:
             value = int(raw_text.replace(",", "").replace("٬", ""))
         except Exception:
-            await msg.reply_text("❌ عدد نامعتبر. لطفاً فقط عدد وارد کنید.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_101cc2220c54'), reply_markup=userbot_cancel_keyboard())
             return
         try:
             userbot_db.set_referral_value(edit_name, value)
         except Exception as e:
-            await msg.reply_text(f"خطا در ذخیره: {e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_3e448ada69d3')}{e}", reply_markup=admin_main_keyboard())
             return
         context.user_data.pop(REFERRAL_VALUE_EDIT_STATE, None)
-        await msg.reply_text("✅ تنظیمات رفرال ذخیره شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_e88fbb5b2933'), reply_markup=admin_main_keyboard())
         await send_referral_admin_settings(msg.chat_id, context)
         return
 
@@ -6156,13 +6105,13 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         raw_text = (text or "").strip()
         if raw_text in CANCEL_WORDS:
             context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_referral_admin_menu(msg.chat_id, context)
             return
         parts = raw_text.replace("٬", "").replace(",", "").split()
         if len(parts) != 2:
             await msg.reply_text(
-                "❌ فرمت نامعتبر است.\nبه‌صورت «شناسه داخلی مبلغ» ارسال کنید. مثال: 42 50000",
+                _adm_t('ub_lit_3fc3254f3678'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -6170,19 +6119,19 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             target_user_id = int(parts[0])
             amount = int(parts[1])
         except Exception:
-            await msg.reply_text("❌ عدد نامعتبر.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_7b7eae4c5cd0'), reply_markup=userbot_cancel_keyboard())
             return
         try:
             reward = userbot_db.grant_manual_referral_reward(target_user_id, amount)
         except Exception as e:
-            await msg.reply_text(f"خطا در ایجاد پاداش دستی: {e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_9d3e3e9ed574')}{e}", reply_markup=admin_main_keyboard())
             return
         context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
         if not reward:
-            await msg.reply_text("❌ پاداش دستی ایجاد نشد (کاربر یا مبلغ نامعتبر).", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_ab99955d41c0'), reply_markup=admin_main_keyboard())
             return
         await msg.reply_text(
-            f"✅ پاداش دستی ایجاد شد.\n👤 کاربر: {target_user_id}\n💰 مبلغ: {amount:,} تومان\n🎁 پاداش #{reward.get('id')}",
+            f"{_adm_t('ub_lit_bc9d01e34bfb')}{target_user_id}{_adm_t('ub_lit_0835446733bd')}{amount:f','}{_adm_t('ub_lit_6dfb7790bd57')}{reward.get('id')}",
             reply_markup=admin_main_keyboard(),
         )
         return
@@ -6190,13 +6139,13 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get(INVITE_BANNER_PHOTO_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(INVITE_BANNER_PHOTO_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_invite_text_settings_menu(msg.chat_id, context)
             return
 
         if not getattr(msg, "photo", None):
             await msg.reply_text(
-                "❌ لطفاً فقط عکس ارسال کنید یا برای لغو «❌لغو» را بزنید.",
+                _adm_t('ub_lit_4fd19e9d65f3'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -6206,11 +6155,11 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             userbot_db.set_text_setting("invite_banner_photo_id", file_id)
         except Exception as e:
             context.user_data.pop(INVITE_BANNER_PHOTO_EDIT_STATE, None)
-            await msg.reply_text(f"❌ خطا در ذخیره عکس بنر:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_0ec3e6bcf8b8')}{e}", reply_markup=admin_main_keyboard())
             return
 
         context.user_data.pop(INVITE_BANNER_PHOTO_EDIT_STATE, None)
-        await msg.reply_text("✅ عکس بنر دعوت ذخیره شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_75b9f3967d9d'), reply_markup=admin_main_keyboard())
         await send_invite_text_settings_menu(msg.chat_id, context)
         return
 
@@ -6218,7 +6167,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get(EVENT_CHANNEL_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(EVENT_CHANNEL_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         channel_target: str = ""
@@ -6254,8 +6203,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         if not channel_target:
             await msg.reply_text(
-                "❌ ورودی معتبر نیست.\n"
-                "لطفاً یک پیام از کانال فوروارد کنید یا @channel / -100... را بفرستید.",
+                _adm_t('ub_lit_a3435a3f2044'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -6266,13 +6214,13 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             userbot_db.set_buy_renew_settings(settings)
         except Exception as e:
             context.user_data.pop(EVENT_CHANNEL_EDIT_STATE, None)
-            await msg.reply_text(f"❌ خطا در ذخیره کانال رویداد:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_04623a2f0eec')}{e}", reply_markup=admin_main_keyboard())
             return
 
         context.user_data.pop(EVENT_CHANNEL_EDIT_STATE, None)
         title_part = f" ({channel_title})" if channel_title else ""
         await msg.reply_text(
-            f"✅ کانال رویداد ذخیره شد:\n{channel_target}{title_part}",
+            f"{_adm_t('ub_lit_3736887a37be')}{channel_target}{title_part}",
             reply_markup=admin_main_keyboard(),
         )
         await send_buy_renew_settings_menu(msg.chat_id, context)
@@ -6283,7 +6231,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         edit_type = context.user_data.get(SUB_REMINDER_EDIT_STATE)
         if text in CANCEL_WORDS:
             context.user_data.pop(SUB_REMINDER_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         try:
@@ -6291,14 +6239,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if value <= 0:
                 raise ValueError
         except ValueError:
-            unit = "گیگابایت" if edit_type == "usage_gb" else "روز"
-            await msg.reply_text(f"❌ لطفاً عدد معتبر بزرگ‌تر از صفر وارد کنید ({unit}).", reply_markup=userbot_cancel_keyboard())
+            unit = _adm_t('ub_lit_ca85caa98a61') if edit_type == "usage_gb" else _adm_t('ub_lit_6702edb75e90')
+            await msg.reply_text(f"{_adm_t('ub_lit_7754a8d49afc')}{unit}).", reply_markup=userbot_cancel_keyboard())
             return
 
         try:
             userbot_db.set_sub_reminder_value(edit_type, value)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره تنظیمات یادآور:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_2a6dd7353081')}{e}", reply_markup=admin_main_keyboard())
             context.user_data.pop(SUB_REMINDER_EDIT_STATE, None)
             return
 
@@ -6306,12 +6254,12 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         reminder = _get_sub_reminder_settings()
         if edit_type == "usage_gb":
             await msg.reply_text(
-                f"✅ مقدار یادآور مصرف روی {reminder.get('usage_gb', value)} گیگابایت تنظیم شد.",
+                f"{_adm_t('ub_lit_5386426d159e')}{reminder.get('usage_gb', value)}{_adm_t('ub_lit_d2b3c92f5bd8')}",
                 reply_markup=admin_main_keyboard(),
             )
         else:
             await msg.reply_text(
-                f"✅ مقدار یادآور زمان روی {reminder.get('days', value)} روز تنظیم شد.",
+                f"{_adm_t('ub_lit_8e906a2586a2')}{reminder.get('days', value)}{_adm_t('ub_lit_cb26b74de850')}",
                 reply_markup=admin_main_keyboard(),
             )
         await send_sub_status_reminder_menu(msg.chat_id, context)
@@ -6321,17 +6269,13 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get(SUB_BASE_URL_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         normalized = _normalize_public_base_url(text)
         if text.strip() != "0" and not normalized:
             await msg.reply_text(
-                "❌ ورودی نامعتبر است.\n"
-                "نمونه‌های صحیح:\n"
-                "user.yourdomain.com\n"
-                "https://user.yourdomain.com\n"
-                "یا برای ریست: 0",
+                _adm_t('ub_lit_2055a5e5f76b'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -6340,7 +6284,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             stored = userbot_db.set_managed_sub_base_url(normalized)
         except Exception as e:
             context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
-            await msg.reply_text(f"❌ خطا در ذخیره دامنه:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_cbe7997b4446')}{e}", reply_markup=admin_main_keyboard())
             return
 
         context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
@@ -6349,16 +6293,15 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             host_hint = _extract_host_only(stored)
             if host_hint:
                 ssl_hint = (
-                    "\n\nاگر SSL این دامنه هنوز فعال نیست، اجرا کنید:\n"
-                    f"cd ~/Hiddify-SellBot && sudo ./install.sh ssl {host_hint} your-email@example.com"
+                    f"{_adm_t('ub_lit_d5cc4438fd32')}{host_hint} your-email@example.com"
                 )
             await msg.reply_text(
-                f"✅ دامنه لینک اشتراک هوشمند ذخیره شد:\n{stored}{ssl_hint}",
+                f"{_adm_t('ub_lit_20ef85d41c70')}{stored}{ssl_hint}",
                 reply_markup=admin_main_keyboard(),
             )
         else:
             await msg.reply_text(
-                "✅ دامنه لینک اشتراک هوشمند به حالت خودکار برگشت.",
+                _adm_t('ub_lit_5d1748a5b670'),
                 reply_markup=admin_main_keyboard(),
             )
         await send_sub_link_status_menu(msg.chat_id, context)
@@ -6369,7 +6312,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         edit_type = context.user_data.get(TRIAL_SPEC_EDIT_STATE)
         if text in CANCEL_WORDS:
             context.user_data.pop(TRIAL_SPEC_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         try:
@@ -6383,15 +6326,15 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                     raise ValueError
         except ValueError:
             if edit_type == "usage_gb":
-                await msg.reply_text("❌ لطفاً مقدار معتبر وارد کنید. مثال: 0.5 یا 1", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_e10093dcd1b0'), reply_markup=userbot_cancel_keyboard())
             else:
-                await msg.reply_text("❌ لطفاً عدد صحیح معتبر بزرگ‌تر از صفر (روز) وارد کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_dd83e44eea5e'), reply_markup=userbot_cancel_keyboard())
             return
 
         try:
             userbot_db.set_trial_spec_value(edit_type, value)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره مشخصات تستی:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_d7e705e7c205')}{e}", reply_markup=admin_main_keyboard())
             context.user_data.pop(TRIAL_SPEC_EDIT_STATE, None)
             return
 
@@ -6401,12 +6344,12 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             usage_val = float(spec.get("usage_gb", value))
             usage_txt = f"{usage_val:g}"
             await msg.reply_text(
-                f"✅ حجم اشتراک تستی روی {usage_txt} گیگابایت تنظیم شد.",
+                f"{_adm_t('ub_lit_7f0c3714a503')}{usage_txt}{_adm_t('ub_lit_d2b3c92f5bd8')}",
                 reply_markup=admin_main_keyboard(),
             )
         else:
             await msg.reply_text(
-                f"✅ زمان اشتراک تستی روی {spec.get('days', value)} روز تنظیم شد.",
+                f"{_adm_t('ub_lit_fce18c0fa844')}{spec.get('days', value)}{_adm_t('ub_lit_cb26b74de850')}",
                 reply_markup=admin_main_keyboard(),
             )
         await send_trial_spec_menu(msg.chat_id, context)
@@ -6417,7 +6360,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         edit_type = context.user_data.get(RENEW_POLICY_EDIT_STATE)
         if text in CANCEL_WORDS:
             context.user_data.pop(RENEW_POLICY_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         try:
@@ -6425,39 +6368,39 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if value <= 0:
                 raise ValueError
         except ValueError:
-            await msg.reply_text("❌ لطفاً عدد صحیح بزرگ‌تر از صفر وارد کنید.", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_50674c97b118'), reply_markup=userbot_cancel_keyboard())
             return
 
         try:
             userbot_db.set_buy_renew_limit(edit_type, value)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره تنظیمات تمدید:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_ca6224a863ec')}{e}", reply_markup=admin_main_keyboard())
             context.user_data.pop(RENEW_POLICY_EDIT_STATE, None)
             return
 
         context.user_data.pop(RENEW_POLICY_EDIT_STATE, None)
         if edit_type == "renew_max_days":
             await msg.reply_text(
-                f"✅ حداکثر زمان مجاز برای تمدید روی {value} روز تنظیم شد.",
+                f"{_adm_t('ub_lit_5ea3f64978cf')}{value}{_adm_t('ub_lit_cb26b74de850')}",
                 reply_markup=admin_main_keyboard(),
             )
         elif edit_type == "renew_unlimited_volume_from_gb":
             await msg.reply_text(
-                f"✅ آستانه نمایش حجم نامحدود روی {value} گیگابایت تنظیم شد.",
+                f"{_adm_t('ub_lit_e28c806532fe')}{value}{_adm_t('ub_lit_d2b3c92f5bd8')}",
                 reply_markup=admin_main_keyboard(),
             )
             await send_buy_renew_settings_menu(msg.chat_id, context)
             return
         elif edit_type == "renew_unlimited_time_from_days":
             await msg.reply_text(
-                f"✅ آستانه نمایش زمان نامحدود روی {value} روز تنظیم شد.",
+                f"{_adm_t('ub_lit_72ccfa7bc5b3')}{value}{_adm_t('ub_lit_cb26b74de850')}",
                 reply_markup=admin_main_keyboard(),
             )
             await send_buy_renew_settings_menu(msg.chat_id, context)
             return
         else:
             await msg.reply_text(
-                f"✅ حداکثر مصرف مجاز برای تمدید روی {value} گیگابایت تنظیم شد.",
+                f"{_adm_t('ub_lit_000bcaff51c0')}{value}{_adm_t('ub_lit_d2b3c92f5bd8')}",
                 reply_markup=admin_main_keyboard(),
             )
         await send_renew_policy_menu(msg.chat_id, context)
@@ -6468,7 +6411,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         edit_type = context.user_data.get(TX_PLANS_EDIT_STATE)
         if text in CANCEL_WORDS:
             context.user_data.pop(TX_PLANS_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         try:
@@ -6476,7 +6419,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if value <= 0:
                 raise ValueError
         except ValueError:
-            await msg.reply_text("❌ لطفاً عدد صحیح بزرگ‌تر از صفر وارد کنید (تومان).", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_0666a0bc2724'), reply_markup=userbot_cancel_keyboard())
             return
 
         try:
@@ -6485,13 +6428,13 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             else:
                 raise ValueError("invalid edit state")
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره تنظیمات تراکنش/پلن:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_7ae6cfe1b810')}{e}", reply_markup=admin_main_keyboard())
             context.user_data.pop(TX_PLANS_EDIT_STATE, None)
             return
 
         context.user_data.pop(TX_PLANS_EDIT_STATE, None)
         await msg.reply_text(
-            f"✅ حداقل تراکنش روی {value:,} تومان تنظیم شد.",
+            f"{_adm_t('ub_lit_faac0ada8bac')}{value:f','}{_adm_t('ub_lit_94916658645d')}",
             reply_markup=admin_main_keyboard(),
         )
         await send_tx_plans_settings_menu(msg.chat_id, context)
@@ -6512,7 +6455,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         payment_text_fields = {"card_to_card_text"}
         if text in CANCEL_WORDS:
             context.user_data.pop(TEXT_SETTINGS_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if field_name in guide_fields:
                 await send_guide_text_settings_menu(msg.chat_id, context)
                 return
@@ -6526,12 +6469,12 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         try:
             userbot_db.set_text_setting(field_name, text)
         except Exception as e:
-            await msg.reply_text(f"❌ خطا در ذخیره متن:\n{e}", reply_markup=admin_main_keyboard())
+            await msg.reply_text(f"{_adm_t('ub_lit_969b02f6f1f7')}{e}", reply_markup=admin_main_keyboard())
             context.user_data.pop(TEXT_SETTINGS_EDIT_STATE, None)
             return
 
         context.user_data.pop(TEXT_SETTINGS_EDIT_STATE, None)
-        await msg.reply_text("✅ متن با موفقیت ذخیره شد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_522712817c45'), reply_markup=admin_main_keyboard())
         if field_name in guide_fields:
             await send_guide_text_settings_menu(msg.chat_id, context)
             return
@@ -6548,14 +6491,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get(WALLET_EDIT_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(WALLET_EDIT_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
         
         # مقدار باید عدد باشد
         try:
             amount = int(text.replace(",", ""))
         except ValueError:
-            await msg.reply_text("❌ لطفاً عدد وارد کنید (تومان).")
+            await msg.reply_text(_adm_t('ub_lit_550b38ae74e5'))
             return
         
         user_id = context.user_data.pop(WALLET_EDIT_STATE) # گرفتن ID و پاک کردن استیت
@@ -6566,7 +6509,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         # 2. دریافت اطلاعات کاربر برای ارسال نوتیفیکیشن
         user = userbot_db.get_user_by_id(user_id)
         
-        await msg.reply_text(f"✅ موجودی کیف پول کاربر با موفقیت به {_format_toman(amount)} تومان تغییر کرد.", reply_markup=admin_main_keyboard())
+        await msg.reply_text(f"{_adm_t('ub_lit_045bd25dfbaf')}{_format_toman(amount)}{_adm_t('ub_lit_06d051a09b21')}", reply_markup=admin_main_keyboard())
         await send_user_profile(user_id, msg.chat_id, context)
 
         # 3. ارسال پیام به ربات کاربر
@@ -6576,14 +6519,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 notify_text = _i18n_user_t(_user_lang_of(user['telegram_id']), "admin_wallet_set_notify", amount=_format_toman(amount))
                 await user_bot.send_message(chat_id=user['telegram_id'], text=notify_text)
             except Exception as e:
-                await msg.reply_text(f"⚠️ موجودی آپدیت شد ولی پیام به کاربر ارسال نشد: {e}")
+                await msg.reply_text(f"{_adm_t('ub_lit_97f9a7ad298d')}{e}")
         return
 
     # بررسی ویزارد ارسال پیام
     if context.user_data.get(MESSAGE_SEND_STATE):
         if text in CANCEL_WORDS:
             context.user_data.pop(MESSAGE_SEND_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
 
         raw_state = context.user_data.pop(MESSAGE_SEND_STATE)
@@ -6595,7 +6538,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             except Exception:
                 user_id = 0
         if user_id <= 0:
-            await msg.reply_text("❌ کاربر نامعتبر است.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_9024444be650'), reply_markup=admin_main_keyboard())
             return
         user = userbot_db.get_user_by_id(user_id)
 
@@ -6612,11 +6555,11 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                     text=final_msg,
                     reply_markup=kb,
                 )
-                await msg.reply_text("📩پیام ارسال شد", reply_markup=admin_main_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_c6214e61f91d'), reply_markup=admin_main_keyboard())
             except Exception as e:
-                await msg.reply_text(f"❌ خطا در ارسال پیام به کاربر: {e}", reply_markup=admin_main_keyboard())
+                await msg.reply_text(f"{_adm_t('ub_lit_fc8767e62053')}{e}", reply_markup=admin_main_keyboard())
         else:
-            await msg.reply_text("❌ کاربر یافت نشد یا شناسه تلگرام ندارد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_cf78cec0ca70'), reply_markup=admin_main_keyboard())
 
         return
 
@@ -6651,14 +6594,9 @@ async def send_user_services_list(user_id: int, chat_id: int, context: ContextTy
 
     if not visible_services:
         text = (
-            "#️⃣ لیست سرویس‌ها\n"
-            "شما می‌توانید لیست سرویس‌ها و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
-            f"📦 تعداد کل سرویس‌ها: {len(raw_services)}\n"
-            "🟢 سرویس‌های فعال: 0\n"
-            "🔴 سرویس‌های منقضی: 0\n\n"
-            "❌ سرویسی برای نمایش این کاربر یافت نشد."
+            f"{_adm_t('ub_lit_2e0758df0152')}{len(raw_services)}{_adm_t('ub_lit_49fc823d5462')}"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{user_id}")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data=f"userbot:user:{user_id}")]])
         if message:
             try: await message.edit_text(text, reply_markup=kb)
             except BadRequest: await context.bot.send_message(chat_id, text, reply_markup=kb)
@@ -6686,15 +6624,11 @@ async def send_user_services_list(user_id: int, chat_id: int, context: ContextTy
         chunk = service_buttons[i:i + 3]
         rows.append(list(reversed(chunk)))
 
-    rows.append([InlineKeyboardButton("بازگشت🔙", callback_data=f"userbot:user:{user_id}")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_95e3957c1b69'), callback_data=f"userbot:user:{user_id}")])
     
     kb = InlineKeyboardMarkup(rows)
     text = (
-        "#️⃣ لیست سرویس‌ها\n"
-        "شما می‌توانید لیست سرویس‌ها و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
-        f"📦 تعداد کل سرویس‌ها: {len(raw_services)}\n"
-        f"🟢 سرویس‌های فعال: {active_count}\n"
-        f"🔴 سرویس‌های منقضی: {expired_count}"
+        f"{_adm_t('ub_lit_2e0758df0152')}{len(raw_services)}{_adm_t('ub_lit_f72e1335fbc5')}{active_count}{_adm_t('ub_lit_8158134befd3')}{expired_count}"
     )
     if message:
         try: await message.edit_text(text, reply_markup=kb)
@@ -6715,18 +6649,7 @@ async def send_user_orders_list(user_id: int, page: int, chat_id: int, context: 
 
     # متن پیام طبق عکس دوم
     text = (
-        "🔹 لیست سفارشات\n"
-        f"🔸 تعداد سفارشات: {stats['total_count']}\n"
-        f"🔸 مجموع حجم سفارشات(GB): {fmt(stats['total_gb'])}\n"
-        f"🔸 مجموع ارزش سفارشات: {fmt(stats['total_price'])}تومان\n"
-        "❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تعداد سفارشات 30 روز گذشته: {stats['last30_count']}\n"
-        f"🔸 حجم سفارشات 30 روز گذشته(GB): {fmt(stats['last30_gb'])}\n"
-        f"🔸 ارزش سفارشات 30 روز گذشته: {fmt(stats['last30_price'])}تومان\n"
-        "❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تعداد سفارشات این ماه: {stats['month_count']}\n"
-        f"🔸 حجم سفارشات این ماه(GB): {fmt(stats['month_gb'])}\n"
-        f"🔸 ارزش سفارشات این ماه: {fmt(stats['month_price'])}تومان"
+        f"{_adm_t('ub_lit_e3a832b4ca5c')}{stats['total_count']}{_adm_t('ub_lit_ccabb6312338')}{fmt(stats['total_gb'])}{_adm_t('ub_lit_10863b8ea7a1')}{fmt(stats['total_price'])}{_adm_t('ub_lit_075fa5003b8c')}{stats['last30_count']}{_adm_t('ub_lit_46f5a090b943')}{fmt(stats['last30_gb'])}{_adm_t('ub_lit_4d5374d31fa8')}{fmt(stats['last30_price'])}{_adm_t('ub_lit_cb2ff5873dcb')}{stats['month_count']}{_adm_t('ub_lit_2d99a88d8227')}{fmt(stats['month_gb'])}{_adm_t('ub_lit_99a97b8e2595')}{fmt(stats['month_price'])}{_adm_t('ub_lit_9e29f6087438')}"
     )
 
     rows = []
@@ -6750,7 +6673,7 @@ async def send_user_orders_list(user_id: int, page: int, chat_id: int, context: 
     rows.append(nav)
 
     # دکمه بازگشت به پروفایل همان کاربر
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{user_id}")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data=f"userbot:user:{user_id}")])
 
     kb = InlineKeyboardMarkup(rows)
     
@@ -6773,15 +6696,7 @@ async def send_user_payments_list(user_id: int, page: int, chat_id: int, context
 
     # متن پیام طبق عکس سوم
     text = (
-        "🔹 لیست تراکنشات\n"
-        f"🔸 تعداد تراکنشات: {stats['total_count']}\n"
-        f"🔸 مبلغ تراکنشات: {fmt(stats['total_amount'])}تومان\n"
-        "❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تراکنشات 30 روز گذشته: {stats['last30_count']}\n"
-        f"🔸 مبلغ تراکنشات 30 روز گذشته: {fmt(stats['last30_amount'])}تومان\n"
-        "❖ ⬩----------------------------------⬩ ❖\n"
-        f"🔸 تراکنشات این ماه: {stats['month_count']}\n"
-        f"🔸 مبلغ تراکنشات این ماه: {fmt(stats['month_amount'])}تومان"
+        f"{_adm_t('ub_lit_1ac60b3bc3e0')}{stats['total_count']}{_adm_t('ub_lit_9dc0422feb4d')}{fmt(stats['total_amount'])}{_adm_t('ub_lit_4c78c73fdcce')}{stats['last30_count']}{_adm_t('ub_lit_4cf4dd8b0dfc')}{fmt(stats['last30_amount'])}{_adm_t('ub_lit_3a85cb5ba8c9')}{stats['month_count']}{_adm_t('ub_lit_3160570278d0')}{fmt(stats['month_amount'])}{_adm_t('ub_lit_9e29f6087438')}"
     )
 
     rows = []
@@ -6803,7 +6718,7 @@ async def send_user_payments_list(user_id: int, page: int, chat_id: int, context
     rows.append(nav)
 
     # بازگشت به پروفایل
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{user_id}")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data=f"userbot:user:{user_id}")])
 
     kb = InlineKeyboardMarkup(rows)
     
@@ -6823,8 +6738,8 @@ async def send_service_detail(service_id: int, chat_id: int, context: ContextTyp
         svc["_panel_expired"] = True
         is_expired = True
     if _is_locally_deleted_service(svc) or (not is_expired and panel_state == "missing"):
-        text = "❌ این سرویس حذف شده یا غیرفعال است."
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data=f"userbot:user:{svc.get('user_id')}")]])
+        text = _adm_t('ub_lit_8c4a2b05a781')
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data=f"userbot:user:{svc.get('user_id')}")]])
         if message:
             try:
                 await message.edit_text(text, reply_markup=kb)
@@ -6852,7 +6767,7 @@ async def send_service_detail(service_id: int, chat_id: int, context: ContextTyp
 # ===============================
 
 async def send_orders_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "📗 مدیریت سفارشات"
+    text = _adm_t('ub_lit_f95f745c9e5b')
     kb = build_orders_menu_keyboard()
     if message:
         try: await message.edit_text(text, reply_markup=kb)
@@ -6868,14 +6783,7 @@ async def send_gifts_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, mess
         deactivated = 0
     stats = userbot_db.get_zarin_vouchers_dashboard()
     text = (
-        "🎁 مدیریت هدایا\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"🟢 کوپن‌های فعال: {int(stats.get('active') or 0)}\n"
-        f"📦 کل کوپن‌ها: {int(stats.get('total') or 0)}\n"
-        f"🎯 مصرف‌شده: {int(stats.get('redemptions') or 0)} بار\n"
-        f"💰 مجموع هدیه مصرف‌شده: {_format_toman(stats.get('redeemed_amount'))} تومان\n\n"
-        f"🧹 خاموشی خودکار این نوبت: {deactivated} کوپن\n\n"
-        "از دکمه‌های زیر برای ساخت، گزارش و مدیریت کمپین هدیه استفاده کنید."
+        f"{_adm_t('ub_lit_7939af78c979')}{int(stats.get('active') or 0)}{_adm_t('ub_lit_f3ab0ecfcb48')}{int(stats.get('total') or 0)}{_adm_t('ub_lit_4ed63fda8474')}{int(stats.get('redemptions') or 0)}{_adm_t('ub_lit_e7774420341a')}{_format_toman(stats.get('redeemed_amount'))}{_adm_t('ub_lit_5a9315cc17f6')}{deactivated}{_adm_t('ub_lit_300e6c16f0bc')}"
     )
     kb = build_gifts_menu_keyboard()
     if message:
@@ -6898,26 +6806,15 @@ async def send_gifts_dashboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
     max_uses = int(stats.get("max_uses") or 0)
     percent = int((used / max_uses) * 100) if max_uses > 0 else 0
     text = (
-        "📊 داشبورد هدایا\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"📦 کل کوپن‌ها: {int(stats.get('total') or 0)}\n"
-        f"🟢 فعال: {int(stats.get('active') or 0)}\n"
-        f"⚫ غیرفعال/غیرقابل‌استفاده: {int(stats.get('inactive') or 0)}\n"
-        f"⏰ منقضی‌شده: {int(stats.get('expired') or 0)}\n"
-        f"🔒 تکمیل ظرفیت: {int(stats.get('full') or 0)}\n"
-        f"🎯 مصرف: {used} از {max_uses} ({percent}٪)\n"
-        f"🎁 مجموع ظرفیت هدیه: {_format_toman(stats.get('total_amount'))} تومان\n"
-        f"💰 مجموع هدیه مصرف‌شده: {_format_toman(stats.get('redeemed_amount'))} تومان\n\n"
-        f"🧹 خاموشی خودکار این بررسی: {deactivated} کوپن\n\n"
-        "💡 پیشنهاد: برای کمپین‌های تلگرام از «ساخت گروهی» و برای بررسی نتیجه از «گزارش مصرف» استفاده کن."
+        f"{_adm_t('ub_lit_d4d3b360be5c')}{int(stats.get('total') or 0)}{_adm_t('ub_lit_61149b538c4f')}{int(stats.get('active') or 0)}{_adm_t('ub_lit_bd2f8d084f58')}{int(stats.get('inactive') or 0)}{_adm_t('ub_lit_0076b2c06f4f')}{int(stats.get('expired') or 0)}{_adm_t('ub_lit_51aed5c864fc')}{int(stats.get('full') or 0)}{_adm_t('ub_lit_80ab8a9e6ab4')}{used}{_adm_t('ub_lit_7138b458fc80')}{max_uses} ({percent}{_adm_t('ub_lit_5d082cae8dab')}{_format_toman(stats.get('total_amount'))}{_adm_t('ub_lit_97fd3e927175')}{_format_toman(stats.get('redeemed_amount'))}{_adm_t('ub_lit_43608a5133af')}{deactivated}{_adm_t('ub_lit_3a27474a1805')}"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏷 مشاهده کوپن‌ها", callback_data="userbot:gifts:coupons")],
-        [InlineKeyboardButton("🎯 قالب‌های آماده", callback_data="userbot:gifts:presets")],
-        [InlineKeyboardButton("🧩 ساخت گروهی", callback_data="userbot:gifts:bulk")],
-        [InlineKeyboardButton("📜 گزارش مصرف", callback_data="userbot:gifts:redemptions")],
-        [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
+        [InlineKeyboardButton(_adm_t('ub_lit_260de9a11858'), callback_data="userbot:gifts:coupons")],
+        [InlineKeyboardButton(_adm_t('ub_lit_b89bf356fe97'), callback_data="userbot:gifts:presets")],
+        [InlineKeyboardButton(_adm_t('ub_lit_7b83d4e6526c'), callback_data="userbot:gifts:bulk")],
+        [InlineKeyboardButton(_adm_t('ub_lit_4a39cbe28b8a'), callback_data="userbot:gifts:redemptions")],
+        [InlineKeyboardButton(_adm_t('ub_lit_c5cd51abdb6e'), callback_data="userbot:gifts:security")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:gifts_menu")],
     ])
     if message:
         try:
@@ -6937,12 +6834,7 @@ async def send_zarin_coupons_menu(chat_id: int, context: ContextTypes.DEFAULT_TY
     total = len(coupons)
     active = int((userbot_db.get_zarin_vouchers_dashboard() or {}).get("active") or 0)
     text = (
-        "💼 کوپن شارژ کیف پول\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"◈ تعداد کل: {total}\n"
-        f"◈ فعال: {active}\n"
-        f"◈ غیرفعال: {max(0, total - active)}\n\n"
-        "راهنما: روی هر کوپن بزن تا جزئیات، دیپ‌لینک، QR، متن تبلیغ، خاموش/روشن و گزارش مصرف همان کوپن را ببینی."
+        f"{_adm_t('ub_lit_d5e82963223f')}{total}{_adm_t('ub_lit_287dc0bc6067')}{active}{_adm_t('ub_lit_38cbb34f3729')}{max(0, total - active)}{_adm_t('ub_lit_47ed1e8d0578')}"
     )
     kb = build_zarin_coupons_list_keyboard(coupons)
     if message:
@@ -6967,7 +6859,7 @@ async def send_zarin_coupon_detail(
         pass
     item = userbot_db.get_zarin_voucher(code)
     if not item:
-        await context.bot.send_message(chat_id, "❌ کوپن یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_50ffbd21b0e4'))
         await send_zarin_coupons_menu(chat_id, context)
         return
     c = str(item.get("code") or "").strip()
@@ -6976,14 +6868,14 @@ async def send_zarin_coupon_detail(
     max_uses = int(item.get("max_uses") or 1)
     left = max(0, max_uses - used)
     exp_raw = str(item.get("expires_at") or "").strip()
-    exp = exp_raw or "نامحدود"
-    remain = "نامحدود"
+    exp = exp_raw or _adm_t('ub_lit_2613293fcf88')
+    remain = _adm_t('ub_lit_2613293fcf88')
     if exp_raw:
         try:
             exp_dt = datetime.strptime(exp_raw, "%Y-%m-%d %H:%M:%S")
             delta = exp_dt - datetime.now(timezone.utc).replace(tzinfo=None)
             if delta.total_seconds() <= 0:
-                remain = "منقضی شده"
+                remain = _adm_t('ub_lit_1ec0363365b4')
             else:
                 total = int(delta.total_seconds())
                 h = total // 3600
@@ -6991,27 +6883,17 @@ async def send_zarin_coupon_detail(
                 s = total % 60
                 remain = f"{h:02d}:{m:02d}:{s:02d}"
         except Exception:
-            remain = "نامشخص"
-    link = str(item.get("zarinpal_link") or "").strip() or "ثبت نشده"
+            remain = _adm_t('ub_lit_264f61d0e11d')
+    link = str(item.get("zarinpal_link") or "").strip() or _adm_t('ub_lit_cdd8f534031a')
     bot_username = await _get_user_bot_username(context)
-    deep_link = _build_telegram_start_link(bot_username, c) or "در انتظار تشخیص یوزرنیم ربات کاربران"
-    status = "فعال" if int(item.get("is_active") or 0) == 1 else "غیرفعال"
+    deep_link = _build_telegram_start_link(bot_username, c) or _adm_t('ub_lit_b9bc1d35285e')
+    status = _adm_t('ub_lit_25c499f43398') if int(item.get("is_active") or 0) == 1 else _adm_t('ub_lit_7fdadc73ac3c')
     if remain == "منقضی شده":
-        status = "منقضی شده"
+        status = _adm_t('ub_lit_1ec0363365b4')
     elif left <= 0:
-        status = "تکمیل ظرفیت"
+        status = _adm_t('ub_lit_cd7d40cac442')
     text = (
-        f"🏷 کد: {c}\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"◈ وضعیت: {status}\n"
-        f"◈ استفاده: {used} از {max_uses}\n"
-        f"◈ باقی‌مانده: {left}\n"
-        f"◈ هدیه شارژ کیف پول: {amount:,} تومان\n"
-        f"◈ انقضا: {exp}\n"
-        f"◈ زمان باقی‌مانده: {remain}\n"
-        f"◈ لینک پرداخت: {link}\n"
-        f"◈ دیپ‌لینک: {deep_link}\n\n"
-        "🛡 محافظت فعال: هر کاربر فقط یک‌بار می‌تواند همین کد را مصرف کند؛ سقف مصرف و تاریخ انقضا هم کنترل می‌شود."
+        f"{_adm_t('ub_lit_2327f0d76d01')}{c}{_adm_t('ub_lit_0e95a15655c0')}{status}{_adm_t('ub_lit_2b00906ffd5d')}{used}{_adm_t('ub_lit_7138b458fc80')}{max_uses}{_adm_t('ub_lit_bbba6fbed6f5')}{left}{_adm_t('ub_lit_39b8e3414d62')}{amount:f','}{_adm_t('ub_lit_292ba1087f33')}{exp}{_adm_t('ub_lit_3414489d9d46')}{remain}{_adm_t('ub_lit_044747247e0f')}{link}{_adm_t('ub_lit_eecafadfaa06')}{deep_link}{_adm_t('ub_lit_87a29817849e')}"
     )
     kb = build_zarin_coupon_detail_keyboard(c, item)
     if message:
@@ -7025,18 +6907,12 @@ async def send_zarin_coupon_detail(
 
 async def send_gift_presets_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     text = (
-        "🎯 قالب‌های آماده کمپین هدیه\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        "با یک لمس، یک کوپن آماده با مبلغ، ظرفیت و زمان انقضای مناسب ساخته می‌شود.\n\n"
+        _adm_t('ub_lit_d2c52fc7ed8d')
     )
     for preset in GIFT_CAMPAIGN_PRESETS.values():
         hours = int(preset.get("hours") or 0)
         text += (
-            f"{preset['title']}\n"
-            f"◈ مبلغ: {_format_toman(preset['amount'])} تومان\n"
-            f"◈ ظرفیت: {int(preset['max_uses'])} کاربر\n"
-            f"◈ انقضا: {'نامحدود' if hours <= 0 else f'{hours} ساعت'}\n"
-            f"◈ کاربرد: {preset['note']}\n\n"
+            f"{preset['title']}{_adm_t('ub_lit_5cad3416ea89')}{_format_toman(preset['amount'])}{_adm_t('ub_lit_15d3784337b7')}{int(preset['max_uses'])}{_adm_t('ub_lit_dab2ec9b2f1d')}{_adm_t('ub_lit_2613293fcf88') if hours <= 0 else _adm_t('ub_lit_d84a18536faa', h=hours)}{_adm_t('ub_lit_3c7839827d7a')}{preset['note']}\n\n"
         )
     kb = build_gift_presets_keyboard()
     if message:
@@ -7078,23 +6954,12 @@ async def send_gifts_security_menu(chat_id: int, context: ContextTypes.DEFAULT_T
         deactivated = 0
     stats = userbot_db.get_zarin_vouchers_dashboard()
     text = (
-        "🛡 کنترل سوءاستفاده هدایا\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        "محافظت‌های فعال فعلی:\n"
-        "◈ هر کاربر فقط یک‌بار می‌تواند از یک کد مشخص استفاده کند.\n"
-        "◈ ظرفیت مصرف هر کوپن کنترل می‌شود.\n"
-        "◈ تاریخ انقضا کنترل می‌شود.\n"
-        "◈ کوپن‌های منقضی یا تکمیل ظرفیت شده خودکار خاموش می‌شوند.\n\n"
-        f"🧹 خاموشی خودکار همین بررسی: {deactivated} کوپن\n"
-        f"🟢 فعال قابل‌مصرف: {int(stats.get('active') or 0)}\n"
-        f"⏰ منقضی‌شده: {int(stats.get('expired') or 0)}\n"
-        f"🔒 تکمیل ظرفیت: {int(stats.get('full') or 0)}\n\n"
-        "برای امنیت بیشتر، برای کمپین عمومی از ظرفیت محدود و زمان انقضای کوتاه استفاده کنید."
+        f"{_adm_t('ub_lit_e9d1a83e577a')}{deactivated}{_adm_t('ub_lit_8b880ef6076b')}{int(stats.get('active') or 0)}{_adm_t('ub_lit_0076b2c06f4f')}{int(stats.get('expired') or 0)}{_adm_t('ub_lit_51aed5c864fc')}{int(stats.get('full') or 0)}{_adm_t('ub_lit_76d4260295c9')}"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🧹 خاموش کردن کوپن‌های تمام‌شده", callback_data="userbot:gifts:auto_off")],
-        [InlineKeyboardButton("📘 راهنمای هدایا", callback_data="userbot:gifts:help")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
+        [InlineKeyboardButton(_adm_t('ub_lit_fb71ed8d102d'), callback_data="userbot:gifts:auto_off")],
+        [InlineKeyboardButton(_adm_t('ub_lit_ab2cd3394549'), callback_data="userbot:gifts:help")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:gifts_menu")],
     ])
     if message:
         try:
@@ -7114,7 +6979,7 @@ async def send_coupon_campaign_text(
 ) -> None:
     item = userbot_db.get_zarin_voucher(code)
     if not item:
-        await context.bot.send_message(chat_id, "❌ کوپن یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_50ffbd21b0e4'))
         return
     c = str(item.get("code") or "").strip()
     bot_username = await _get_user_bot_username(context)
@@ -7122,9 +6987,9 @@ async def send_coupon_campaign_text(
     text = _build_gift_campaign_copy(c, deep_link, int(item.get("amount_toman") or 0))
     rows: List[List[InlineKeyboardButton]] = []
     if deep_link:
-        rows.append([InlineKeyboardButton("🚀 باز کردن دیپ‌لینک", url=deep_link)])
-    rows.append([InlineKeyboardButton("📱 QR دیپ‌لینک", callback_data=f"userbot:gifts:coupon:qr:{c}")])
-    rows.append([InlineKeyboardButton("🏷 برگشت به کوپن", callback_data=f"userbot:gifts:coupon:{c}")])
+        rows.append([InlineKeyboardButton(_adm_t('ub_lit_76a467ee4372'), url=deep_link)])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_e75d30bfd8a5'), callback_data=f"userbot:gifts:coupon:qr:{c}")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_030adba70185'), callback_data=f"userbot:gifts:coupon:{c}")])
     kb = InlineKeyboardMarkup(rows)
     if message:
         try:
@@ -7138,7 +7003,7 @@ async def send_coupon_campaign_text(
 async def send_coupon_deeplink_qr(chat_id: int, context: ContextTypes.DEFAULT_TYPE, *, code: str) -> None:
     item = userbot_db.get_zarin_voucher(code)
     if not item:
-        await context.bot.send_message(chat_id, "❌ کوپن یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_50ffbd21b0e4'))
         return
     c = str(item.get("code") or "").strip()
     bot_username = await _get_user_bot_username(context)
@@ -7146,19 +7011,18 @@ async def send_coupon_deeplink_qr(chat_id: int, context: ContextTypes.DEFAULT_TY
     if not deep_link:
         await context.bot.send_message(
             chat_id,
-            "❌ یوزرنیم ربات کاربران قابل تشخیص نیست.\n"
-            "لطفاً USER_BOT_TOKEN یا SUB_BOT_USERNAME را در .env بررسی کنید.",
+            _adm_t('ub_lit_06fd906729d8'),
         )
         return
     qr_image = _make_qr_image(deep_link)
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 باز کردن دیپ‌لینک", url=deep_link)],
-        [InlineKeyboardButton("🏷 برگشت به کوپن", callback_data=f"userbot:gifts:coupon:{c}")],
+        [InlineKeyboardButton(_adm_t('ub_lit_76a467ee4372'), url=deep_link)],
+        [InlineKeyboardButton(_adm_t('ub_lit_030adba70185'), callback_data=f"userbot:gifts:coupon:{c}")],
     ])
     await context.bot.send_photo(
         chat_id=chat_id,
         photo=qr_image,
-        caption=f"📱 QR دیپ‌لینک کوپن {c}\n{deep_link}",
+        caption=f"{_adm_t('ub_lit_6b621ab1fc3b')}{c}\n{deep_link}",
         reply_markup=kb,
     )
 
@@ -7181,16 +7045,16 @@ def _format_gift_redemption_card(idx: int, row: Dict[str, Any]) -> str:
     amount = int(row.get("amount_toman") or 0)
     wallet = _format_toman(row.get("wallet_balance"))
     redeemed_at = str(row.get("redeemed_at") or "-").strip()
-    amount_text = f"{_format_toman(amount)} تومان" if amount > 0 else "نامشخص / بدون مبلغ"
+    amount_text = f"{_format_toman(amount)}{_adm_t('ub_lit_f6ac3483a71a')}" if amount > 0 else _adm_t('ub_lit_4e2ba4db8557')
 
     return "\n".join(
         [
             f"#{idx}  🏷 {code}",
-            f"👤 کاربر: {user_label}",
-            f"🆔 تلگرام: {telegram_id}",
-            f"🎁 هدیه: {amount_text}",
-            f"💰 کیف پول فعلی: {wallet} تومان",
-            f"🕒 زمان مصرف: {redeemed_at}",
+            f"{_adm_t('ub_lit_9a3903dac8b0')}{user_label}",
+            f"{_adm_t('ub_lit_18386e72b90a')}{telegram_id}",
+            f"{_adm_t('ub_lit_bf97eb94d5db')}{amount_text}",
+            f"{_adm_t('ub_lit_f5e260100077')}{wallet}{_adm_t('ub_lit_f6ac3483a71a')}",
+            f"{_adm_t('ub_lit_9c7cb5396b78')}{redeemed_at}",
         ]
     )
 
@@ -7203,34 +7067,34 @@ async def send_zarin_redemptions_report(
     message=None,
 ) -> None:
     rows = userbot_db.list_zarin_voucher_redemptions(limit=50, code=code)
-    title = f"📜 گزارش مصرف کوپن {code}" if code else "📜 گزارش مصرف هدایا"
+    title = f"{_adm_t('ub_lit_b770a63e3be8')}{code}" if code else _adm_t('ub_lit_e625de0deb16')
     total_amount = sum(int(row.get("amount_toman") or 0) for row in rows)
     unique_users = len({int(row.get("user_id") or 0) for row in rows if int(row.get("user_id") or 0) > 0})
     lines = [
         title,
         "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖",
-        f"📌 رکوردها: {len(rows)}",
-        f"👥 کاربران یکتا: {unique_users}",
-        f"💰 جمع هدیه: {_format_toman(total_amount)} تومان",
+        f"{_adm_t('ub_lit_79a6ae50ad3b')}{len(rows)}",
+        f"{_adm_t('ub_lit_91130bd47e98')}{unique_users}",
+        f"{_adm_t('ub_lit_c26f77c5c483')}{_format_toman(total_amount)}{_adm_t('ub_lit_f6ac3483a71a')}",
         "",
     ]
     if not rows:
-        lines.append("هنوز مصرفی ثبت نشده است.")
+        lines.append(_adm_t('ub_lit_c0adfec4e172'))
     else:
-        lines.append("جزئیات مصرف:")
+        lines.append(_adm_t('ub_lit_3448b1b634f3'))
         lines.append("━━━━━━━━━━━━━━━━")
         for idx, row in enumerate(rows, 1):
             lines.append(_format_gift_redemption_card(idx, row))
             if idx != len(rows):
                 lines.append("────────────")
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏷 برگشت به کوپن‌ها", callback_data="userbot:gifts:coupons")],
-        [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
+        [InlineKeyboardButton(_adm_t('ub_lit_98dc8fa1c6d4'), callback_data="userbot:gifts:coupons")],
+        [InlineKeyboardButton(_adm_t('ub_lit_c5cd51abdb6e'), callback_data="userbot:gifts:security")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:gifts_menu")],
     ])
     text = "\n".join(lines)
     if len(text) > 3900:
-        text = text[:3800] + "\n\n… ادامه گزارش کوتاه شد. برای گزارش کامل، تعداد کمتر یا کوپن مشخص را باز کن."
+        text = text[:3800] + _adm_t('ub_lit_ccb230ef029d')
     if message:
         try:
             await message.edit_text(text, reply_markup=kb)
@@ -7251,22 +7115,19 @@ async def send_gifts_campaign_text(chat_id: int, context: ContextTypes.DEFAULT_T
             break
     sample_code = active_codes[0] if active_codes else "GIFT-CODE"
     bot_username = await _get_user_bot_username(context)
-    deep_link = _build_telegram_start_link(bot_username, sample_code) or f"کد هدیه: {sample_code}"
+    deep_link = _build_telegram_start_link(bot_username, sample_code) or f"{_adm_t('ub_lit_5f9b2588a592')}{sample_code}"
     amount = 0
     if active_codes:
         item = userbot_db.get_zarin_voucher(sample_code) or {}
         amount = int(item.get("amount_toman") or 0)
     text = (
-        "📣 متن آماده کمپین هدیه\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        "می‌توانی متن زیر را برای کانال یا کاربران ارسال کنی:\n\n"
-        f"{_build_gift_campaign_copy(sample_code, deep_link, amount or 0)}"
+        f"{_adm_t('ub_lit_d2cf91badde9')}{_build_gift_campaign_copy(sample_code, deep_link, amount or 0)}"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎯 قالب‌های آماده کمپین", callback_data="userbot:gifts:presets")],
-        [InlineKeyboardButton("🧩 ساخت گروهی کد", callback_data="userbot:gifts:bulk")],
-        [InlineKeyboardButton("🏷 مشاهده کوپن‌ها", callback_data="userbot:gifts:coupons")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
+        [InlineKeyboardButton(_adm_t('ub_lit_80c0569c75f6'), callback_data="userbot:gifts:presets")],
+        [InlineKeyboardButton(_adm_t('ub_lit_956f451107e4'), callback_data="userbot:gifts:bulk")],
+        [InlineKeyboardButton(_adm_t('ub_lit_260de9a11858'), callback_data="userbot:gifts:coupons")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:gifts_menu")],
     ])
     if message:
         try:
@@ -7279,25 +7140,13 @@ async def send_gifts_campaign_text(chat_id: int, context: ContextTypes.DEFAULT_T
 
 async def send_gifts_help(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     text = (
-        "📘 راهنمای مدیریت هدایا\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        "1) «داشبورد هدایا» وضعیت کل کمپین‌ها، مصرف، ظرفیت، مبلغ هدیه و خاموشی خودکار را نشان می‌دهد.\n"
-        "2) «قالب‌های آماده کمپین» برای ساخت سریع کدهای مناسبتی مثل خوش‌آمدگویی، جشنواره، VIP و بازگشت کاربر است.\n"
-        "3) «ساخت گروهی» چندین کد یک‌بارمصرف می‌سازد؛ برای کمپین عمومی امن‌ترین گزینه است.\n"
-        "4) داخل جزئیات هر کوپن، «دیپ‌لینک» لینک مستقیم Start ربات کاربران را می‌سازد.\n"
-        "5) «QR دیپ‌لینک» برای چاپ، استوری، کانال یا ارسال تصویری همان لینک است.\n"
-        "6) «متن تبلیغ همین کوپن» متن آماده ارسال به کانال/کاربر را با مبلغ و لینک همان کد می‌سازد.\n"
-        "7) «محدودیت کاربر» سقف کل مصرف آن کد است؛ برای کد اختصاصی عدد 1 بگذار.\n"
-        "8) «مدت زمان انقضا» را به ساعت تنظیم کن؛ عدد 0 یعنی نامحدود.\n"
-        "9) «گزارش مصرف» نشان می‌دهد چه کاربری، چه زمانی، با چه کدی و با چه موجودی کیف پول هدیه گرفته است.\n"
-        "10) «کنترل سوءاستفاده» کوپن‌های منقضی/تکمیل‌شده را خاموش می‌کند و وضعیت محافظت‌ها را نشان می‌دهد.\n\n"
-        "نکته امنیتی: هر کد برای هر کاربر فقط یک‌بار قابل مصرف است. برای کمپین‌های بزرگ، ظرفیت محدود و انقضای کوتاه بگذار."
+        _adm_t('ub_lit_94cdf892a63d')
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 داشبورد هدایا", callback_data="userbot:gifts:dashboard")],
-        [InlineKeyboardButton("🎯 قالب‌های آماده", callback_data="userbot:gifts:presets")],
-        [InlineKeyboardButton("🛡 کنترل سوءاستفاده", callback_data="userbot:gifts:security")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:gifts_menu")],
+        [InlineKeyboardButton(_adm_t('ub_lit_5159299b55e3'), callback_data="userbot:gifts:dashboard")],
+        [InlineKeyboardButton(_adm_t('ub_lit_b89bf356fe97'), callback_data="userbot:gifts:presets")],
+        [InlineKeyboardButton(_adm_t('ub_lit_c5cd51abdb6e'), callback_data="userbot:gifts:security")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:gifts_menu")],
     ])
     if message:
         try:
@@ -7319,17 +7168,17 @@ def build_referral_admin_menu_keyboard() -> InlineKeyboardMarkup:
         settings = {}
     enabled_icon = "✅" if bool(settings.get("referral_enabled", False)) else "❌"
     rows = [
-        [InlineKeyboardButton("📊 داشبورد رفرال", callback_data="userbot:referral:dashboard")],
+        [InlineKeyboardButton(_adm_t('ub_lit_74ffc25b9e16'), callback_data="userbot:referral:dashboard")],
         [
-            InlineKeyboardButton("⚙️ تنظیمات", callback_data="userbot:referral:settings"),
-            InlineKeyboardButton(f"🎁 فعال/غیرفعال | {enabled_icon}", callback_data="userbot:referral:toggle"),
+            InlineKeyboardButton(_adm_t('ub_lit_7a1e1a74a212'), callback_data="userbot:referral:settings"),
+            InlineKeyboardButton(f"{_adm_t('ub_lit_b2508137d51c')}{enabled_icon}", callback_data="userbot:referral:toggle"),
         ],
         [
-            InlineKeyboardButton("👥 لیست دعوت‌ها", callback_data="userbot:referral:list:1"),
-            InlineKeyboardButton("💰 لیست پاداش‌ها", callback_data="userbot:referral:rewards:1"),
+            InlineKeyboardButton(_adm_t('ub_lit_f7d7a040a5d6'), callback_data="userbot:referral:list:1"),
+            InlineKeyboardButton(_adm_t('ub_lit_0b624017a44d'), callback_data="userbot:referral:rewards:1"),
         ],
-        [InlineKeyboardButton("🧾 پاداش دستی", callback_data="userbot:referral:manual")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")],
+        [InlineKeyboardButton(_adm_t('ub_lit_26403bb1b929'), callback_data="userbot:referral:manual")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:menu")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -7342,26 +7191,26 @@ def build_referral_settings_keyboard() -> InlineKeyboardMarkup:
     trial_icon = "✅" if bool(settings.get("trial_reward_enabled", True)) else "❌"
     purchase_icon = "✅" if bool(settings.get("purchase_reward_enabled", True)) else "❌"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🧪 پاداش تست | {trial_icon}", callback_data="userbot:referral:toggle:trial_reward_enabled")],
-        [InlineKeyboardButton(f"🛒 پاداش خرید | {purchase_icon}", callback_data="userbot:referral:toggle:purchase_reward_enabled")],
-        [InlineKeyboardButton("✏️ مبلغ پاداش تست", callback_data="userbot:referral:edit:trial_reward_amount")],
-        [InlineKeyboardButton("✏️ مبلغ پاداش خرید", callback_data="userbot:referral:edit:purchase_reward_amount")],
-        [InlineKeyboardButton("✏️ سقف دعوت موفق", callback_data="userbot:referral:edit:max_successful_referrals")],
-        [InlineKeyboardButton("✏️ حداقل مبلغ خرید", callback_data="userbot:referral:edit:min_purchase_amount")],
-        [InlineKeyboardButton("✏️ متن صفحه دعوت", callback_data="userbot:referral:edit:invite_intro_text")],
-        [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")],
+        [InlineKeyboardButton(f"{_adm_t('ub_lit_0613ad29d6f6')}{trial_icon}", callback_data="userbot:referral:toggle:trial_reward_enabled")],
+        [InlineKeyboardButton(f"{_adm_t('ub_lit_925691336f67')}{purchase_icon}", callback_data="userbot:referral:toggle:purchase_reward_enabled")],
+        [InlineKeyboardButton(_adm_t('ub_lit_018fddd73811'), callback_data="userbot:referral:edit:trial_reward_amount")],
+        [InlineKeyboardButton(_adm_t('ub_lit_3bcd12c46741'), callback_data="userbot:referral:edit:purchase_reward_amount")],
+        [InlineKeyboardButton(_adm_t('ub_lit_db24b18922a5'), callback_data="userbot:referral:edit:max_successful_referrals")],
+        [InlineKeyboardButton(_adm_t('ub_lit_2bc44f60e2e5'), callback_data="userbot:referral:edit:min_purchase_amount")],
+        [InlineKeyboardButton(_adm_t('ub_lit_47b5cf054f58'), callback_data="userbot:referral:edit:invite_intro_text")],
+        [InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral_menu")],
     ])
 
 
 def _referral_setting_value_label(name: str, value: Any) -> str:
     if name == "trial_reward_amount":
-        return f"مبلغ پاداش تست (تومان): {int(value or 0):,}"
+        return f"{_adm_t('ub_lit_dd879789c45b')}{int(value or 0):f','}"
     if name == "purchase_reward_amount":
-        return f"مبلغ پاداش خرید اول (تومان): {int(value or 0):,}"
+        return f"{_adm_t('ub_lit_4b2ee92eacf2')}{int(value or 0):f','}"
     if name == "max_successful_referrals":
-        return f"سقف دعوت موفق (0 = نامحدود): {int(value or 0)}"
+        return f"{_adm_t('ub_lit_db7ec6dd678e')}{int(value or 0)}"
     if name == "min_purchase_amount":
-        return f"حداقل مبلغ خرید برای پاداش (تومان): {int(value or 0):,}"
+        return f"{_adm_t('ub_lit_d3762f432a9a')}{int(value or 0):f','}"
     return str(value)
 
 
@@ -7371,17 +7220,7 @@ async def send_referral_admin_menu(chat_id: int, context: ContextTypes.DEFAULT_T
     except Exception:
         stats = {}
     text = (
-        "🤝 مدیریت رفرال (دعوت دوستان)\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"👥 کل دعوت‌ها: {int(stats.get('total_referrals') or 0)}\n"
-        f"🟢 فعال: {int(stats.get('active_referrals') or 0)}\n"
-        f"🚫 رد شده: {int(stats.get('rejected_referrals') or 0)}\n"
-        f"🛡 پرچم تقلب: {int(stats.get('fraud_flagged') or 0)}\n"
-        f"🧪 پاداش‌های تست: {int(stats.get('trial_rewards_count') or 0)}\n"
-        f"🛒 پاداش‌های خرید: {int(stats.get('purchase_rewards_count') or 0)}\n"
-        f"💸 مجموع هزینه پاداش: {int(stats.get('total_reward_cost') or 0):,} تومان\n"
-        f"💰 درآمد ایجادشده: {int(stats.get('revenue_generated') or 0):,} تومان\n"
-        f"📈 نرخ تبدیل: {stats.get('conversion_rate') or 0}٪"
+        f"{_adm_t('ub_lit_aa2ecac8669c')}{int(stats.get('total_referrals') or 0)}{_adm_t('ub_lit_61149b538c4f')}{int(stats.get('active_referrals') or 0)}{_adm_t('ub_lit_f1c49c01b785')}{int(stats.get('rejected_referrals') or 0)}{_adm_t('ub_lit_8b3afcb8b187')}{int(stats.get('fraud_flagged') or 0)}{_adm_t('ub_lit_7e8b983ca3eb')}{int(stats.get('trial_rewards_count') or 0)}{_adm_t('ub_lit_9abf728ed96c')}{int(stats.get('purchase_rewards_count') or 0)}{_adm_t('ub_lit_4812f4807c61')}{int(stats.get('total_reward_cost') or 0):f','}{_adm_t('ub_lit_dd1c8dc14d9d')}{int(stats.get('revenue_generated') or 0):f','}{_adm_t('ub_lit_e7ce4334a0c5')}{stats.get('conversion_rate') or 0}{_adm_t('ub_lit_20ca1dcf1005')}"
     )
     kb = build_referral_admin_menu_keyboard()
     if message:
@@ -7398,15 +7237,9 @@ async def send_referral_admin_settings(chat_id: int, context: ContextTypes.DEFAU
         settings = userbot_db.get_referral_settings()
     except Exception:
         settings = {}
-    enabled = "✅ فعال" if bool(settings.get("referral_enabled", False)) else "❌ غیرفعال"
+    enabled = _adm_t('ub_lit_f1bc469f39f7') if bool(settings.get("referral_enabled", False)) else _adm_t('ub_lit_fcc2f9a81e87')
     text = (
-        "⚙️ تنظیمات رفرال\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"وضعیت: {enabled}\n"
-        f"{_referral_setting_value_label('trial_reward_amount', settings.get('trial_reward_amount'))}\n"
-        f"{_referral_setting_value_label('purchase_reward_amount', settings.get('purchase_reward_amount'))}\n"
-        f"{_referral_setting_value_label('max_successful_referrals', settings.get('max_successful_referrals'))}\n"
-        f"{_referral_setting_value_label('min_purchase_amount', settings.get('min_purchase_amount'))}\n"
+        f"{_adm_t('ub_lit_b6e1d8a89c88')}{enabled}\n{_referral_setting_value_label('trial_reward_amount', settings.get('trial_reward_amount'))}\n{_referral_setting_value_label('purchase_reward_amount', settings.get('purchase_reward_amount'))}\n{_referral_setting_value_label('max_successful_referrals', settings.get('max_successful_referrals'))}\n{_referral_setting_value_label('min_purchase_amount', settings.get('min_purchase_amount'))}\n"
     )
     kb = build_referral_settings_keyboard()
     if message:
@@ -7426,8 +7259,8 @@ async def send_referral_list(chat_id: int, context: ContextTypes.DEFAULT_TYPE, p
     except Exception:
         refs, total = [], 0
     if not refs:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")]])
-        text = "👥 هنوز دعوتی ثبت نشده است."
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral_menu")]])
+        text = _adm_t('ub_lit_ab21edd10538')
         if message:
             try:
                 await message.edit_text(text, reply_markup=kb)
@@ -7438,13 +7271,13 @@ async def send_referral_list(chat_id: int, context: ContextTypes.DEFAULT_TYPE, p
         return
 
     total_pages = max(1, math.ceil(total / page_size))
-    lines = [f"👥 لیست دعوت‌ها ({total} مورد — صفحه {page}/{total_pages})", "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖"]
+    lines = [f"{_adm_t('ub_lit_8f4daa9d91db')}{total}{_adm_t('ub_lit_0de506e0ad95')}{page}/{total_pages})", "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖"]
     for ref in refs:
         inviter = str(ref.get("inviter_full_name") or ref.get("inviter_username") or ref.get("inviter_telegram_id") or "—")
         invitee = str(ref.get("invitee_full_name") or ref.get("invitee_username") or ref.get("invitee_telegram_id") or "—")
         status_icon = "🟢" if str(ref.get("status") or "") == "active" else "🔴"
         fraud_icon = "🚩" if int(ref.get("fraud_flag") or 0) else ""
-        qualified = "" if int(ref.get("invitee_qualified", 1)) else " (فاقد شرایط)"
+        qualified = "" if int(ref.get("invitee_qualified", 1)) else _adm_t('ub_lit_86d03fa2f66e')
         lines.append(f"#{ref.get('id')} | {inviter} ⟵ {invitee} {status_icon}{fraud_icon}{qualified}")
     text = "\n".join(lines)
 
@@ -7459,12 +7292,12 @@ async def send_referral_list(chat_id: int, context: ContextTypes.DEFAULT_TYPE, p
         rows.append(row)
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("➡️ قبلی", callback_data=f"userbot:referral:list:{page - 1}"))
+        nav.append(InlineKeyboardButton(_adm_t('ub_lit_aa428b81d720'), callback_data=f"userbot:referral:list:{page - 1}"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("⬅️ بعدی", callback_data=f"userbot:referral:list:{page + 1}"))
+        nav.append(InlineKeyboardButton(_adm_t('ub_lit_24d05894b963'), callback_data=f"userbot:referral:list:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral_menu")])
     kb = InlineKeyboardMarkup(rows)
     if message:
         try:
@@ -7478,7 +7311,7 @@ async def send_referral_list(chat_id: int, context: ContextTypes.DEFAULT_TYPE, p
 async def send_referral_detail(referral_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     ref = userbot_db.get_referral_by_id(int(referral_id or 0))
     if not ref:
-        await context.bot.send_message(chat_id, "❌ دعوت یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_a496c88ae82b'))
         return
     try:
         rewards, _ = userbot_db.list_referral_rewards(limit=20, inviter_id=int(ref.get("inviter_id") or 0))
@@ -7495,43 +7328,34 @@ async def send_referral_detail(referral_id: int, chat_id: int, context: ContextT
         label = labels.get(str(rw.get("reward_type") or ""), str(rw.get("reward_type") or ""))
         amount = int(rw.get("amount_toman") or 0)
         status_icon = "✅" if str(rw.get("status") or "") == "paid" else "🔻"
-        reward_lines.append(f"• {label}: {amount:,} تومان {status_icon}")
+        reward_lines.append(f"• {label}: {amount:f','}{_adm_t('ub_lit_8180043839cb')}{status_icon}")
 
     text = (
-        f"🔎 جزئیات دعوت #{ref.get('id')}\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"👤 دعوت‌کننده: {inviter_db.get('full_name') or inviter_db.get('username') or '—'} "
-        f"(ID: {ref.get('inviter_id')})\n"
-        f"🙋 دعوت‌شده: {invitee_db.get('full_name') or invitee_db.get('username') or '—'} "
-        f"(ID: {ref.get('invitee_id')})\n"
-        f"📦 وضعیت: {ref.get('status')}\n"
-        f"🚩 پرچم تقلب: {'بله' if int(ref.get('fraud_flag') or 0) else 'خیر'}\n"
-        f"🎯 واجد شرایط پاداش: {'بله' if int(ref.get('invitee_qualified', 1)) else 'خیر'}\n"
-        f"🕐 ثبت: {ref.get('created_at') or '—'}\n"
+        f"{_adm_t('ub_lit_0827005e8e3f')}{ref.get('id')}{_adm_t('ub_lit_55c13a9592a8')}{inviter_db.get('full_name') or inviter_db.get('username') or '—'} (ID: {ref.get('inviter_id')}{_adm_t('ub_lit_0c627bb0d35d')}{invitee_db.get('full_name') or invitee_db.get('username') or '—'} (ID: {ref.get('invitee_id')}{_adm_t('ub_lit_f40be1ec7928')}{ref.get('status')}{_adm_t('ub_lit_d91719d49012')}{_adm_t('ub_lit_5e8fdd3b40a3') if int(ref.get('fraud_flag') or 0) else _adm_t('ub_lit_36f5ebadb70f')}{_adm_t('ub_lit_96d3de206fba')}{_adm_t('ub_lit_5e8fdd3b40a3') if int(ref.get('invitee_qualified', 1)) else _adm_t('ub_lit_36f5ebadb70f')}{_adm_t('ub_lit_f6b275411746')}{ref.get('created_at') or '—'}\n"
     )
     if reward_lines:
-        text += "\n💰 پاداش‌ها:\n" + "\n".join(reward_lines)
+        text += _adm_t('ub_lit_d4382309d428') + "\n".join(reward_lines)
     if str(ref.get("rejection_reason") or "").strip():
-        text += f"\n📝 دلیل رد: {ref.get('rejection_reason')}"
+        text += f"{_adm_t('ub_lit_e4e6bd03d8c6')}{ref.get('rejection_reason')}"
 
     status = str(ref.get("status") or "").lower()
     fraud = int(ref.get("fraud_flag") or 0)
     rows = []
     if status == "active":
-        rows.append([InlineKeyboardButton("🚫 رد دعوت", callback_data=f"userbot:referral:reject:{ref.get('id')}")])
+        rows.append([InlineKeyboardButton(_adm_t('ub_lit_b8a25bac25d9'), callback_data=f"userbot:referral:reject:{ref.get('id')}")])
     else:
-        rows.append([InlineKeyboardButton("✅ فعال‌سازی مجدد", callback_data=f"userbot:referral:activate:{ref.get('id')}")])
-    fraud_label = "🧹 حذف پرچم تقلب" if fraud else "🚩 ثبت پرچم تقلب"
+        rows.append([InlineKeyboardButton(_adm_t('ub_lit_02740672858f'), callback_data=f"userbot:referral:activate:{ref.get('id')}")])
+    fraud_label = _adm_t('ub_lit_f4e5a43e6c4c') if fraud else _adm_t('ub_lit_f2597d4e671b')
     rows.append([InlineKeyboardButton(fraud_label, callback_data=f"userbot:referral:fraud:{ref.get('id')}")])
     for rw in related:
         if str(rw.get("status") or "") == "paid":
             rows.append([
                 InlineKeyboardButton(
-                    f"💥 لغو پاداش #{rw.get('id')}",
+                    f"{_adm_t('ub_lit_94dfe2215003')}{rw.get('id')}",
                     callback_data=f"userbot:referral:revoke_reward:{rw.get('id')}",
                 )
             ])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral:list:1")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral:list:1")])
     kb = InlineKeyboardMarkup(rows)
     if message:
         try:
@@ -7550,8 +7374,8 @@ async def send_referral_rewards_list(chat_id: int, context: ContextTypes.DEFAULT
     except Exception:
         rewards, total = [], 0
     if not rewards:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")]])
-        text = "💰 هنوز پاداشی ثبت نشده است."
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral_menu")]])
+        text = _adm_t('ub_lit_d5bfa4163bc3')
         if message:
             try:
                 await message.edit_text(text, reply_markup=kb)
@@ -7563,13 +7387,13 @@ async def send_referral_rewards_list(chat_id: int, context: ContextTypes.DEFAULT
 
     total_pages = max(1, math.ceil(total / page_size))
     labels = userbot_db.REFERRAL_REWARD_LABELS
-    lines = [f"💰 لیست پاداش‌ها ({total} مورد — صفحه {page}/{total_pages})", "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖"]
+    lines = [f"{_adm_t('ub_lit_b5801a8790de')}{total}{_adm_t('ub_lit_0de506e0ad95')}{page}/{total_pages})", "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖"]
     for rw in rewards:
         label = labels.get(str(rw.get("reward_type") or ""), str(rw.get("reward_type") or ""))
         inviter = str(rw.get("inviter_full_name") or rw.get("inviter_username") or rw.get("inviter_id") or "—")
         amount = int(rw.get("amount_toman") or 0)
         status_icon = "✅" if str(rw.get("status") or "") == "paid" else "🔻"
-        lines.append(f"#{rw.get('id')} | {label} | {inviter} | {amount:,} تومان {status_icon}")
+        lines.append(f"#{rw.get('id')} | {label} | {inviter} | {amount:f','}{_adm_t('ub_lit_8180043839cb')}{status_icon}")
     text = "\n".join(lines)
 
     rows = []
@@ -7584,12 +7408,12 @@ async def send_referral_rewards_list(chat_id: int, context: ContextTypes.DEFAULT
         rows.append(row)
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("➡️ قبلی", callback_data=f"userbot:referral:rewards:{page - 1}"))
+        nav.append(InlineKeyboardButton(_adm_t('ub_lit_aa428b81d720'), callback_data=f"userbot:referral:rewards:{page - 1}"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("⬅️ بعدی", callback_data=f"userbot:referral:rewards:{page + 1}"))
+        nav.append(InlineKeyboardButton(_adm_t('ub_lit_24d05894b963'), callback_data=f"userbot:referral:rewards:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral_menu")])
     kb = InlineKeyboardMarkup(rows)
     if message:
         try:
@@ -7603,7 +7427,7 @@ async def send_referral_rewards_list(chat_id: int, context: ContextTypes.DEFAULT
 async def send_referral_reward_detail(reward_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     rw = userbot_db.get_referral_reward(int(reward_id or 0))
     if not rw:
-        await context.bot.send_message(chat_id, "❌ پاداش یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_a8e733bbe018'))
         return
     labels = userbot_db.REFERRAL_REWARD_LABELS
     inviter_db = userbot_db.get_user_by_id(int(rw.get("inviter_id") or 0)) or {}
@@ -7613,24 +7437,14 @@ async def send_referral_reward_detail(reward_id: int, chat_id: int, context: Con
         if invitee_db else "—"
     )
     text = (
-        f"🎁 جزئیات پاداش #{rw.get('id')}\n"
-        "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-        f"نوع: {labels.get(str(rw.get('reward_type') or ''), str(rw.get('reward_type') or ''))}\n"
-        f"منبع: {rw.get('reward_source')}\n"
-        f"👤 دریافت‌کننده: {inviter_db.get('full_name') or inviter_db.get('username') or '—'} (ID: {rw.get('inviter_id')})\n"
-        f"🙋 دعوت‌شده: {invitee_label}\n"
-        f"💰 مبلغ: {int(rw.get('amount_toman') or 0):,} تومان\n"
-        f"🏷 کوپن: {rw.get('voucher_code') or '—'}\n"
-        f"💳 پرداخت مرتبط: {int(rw.get('payment_id') or 0) or '—'}\n"
-        f"📦 وضعیت: {rw.get('status')}\n"
-        f"🕐 ثبت: {rw.get('created_at') or '—'}\n"
+        f"{_adm_t('ub_lit_d97228543d20')}{rw.get('id')}{_adm_t('ub_lit_ef4d4bf79f16')}{labels.get(str(rw.get('reward_type') or ''), str(rw.get('reward_type') or ''))}{_adm_t('ub_lit_d2df61e90759')}{rw.get('reward_source')}{_adm_t('ub_lit_cc328a6eb822')}{inviter_db.get('full_name') or inviter_db.get('username') or '—'} (ID: {rw.get('inviter_id')}{_adm_t('ub_lit_0c627bb0d35d')}{invitee_label}{_adm_t('ub_lit_0835446733bd')}{int(rw.get('amount_toman') or 0):f','}{_adm_t('ub_lit_6ec3b003fad1')}{rw.get('voucher_code') or '—'}{_adm_t('ub_lit_82d2d76ffde9')}{int(rw.get('payment_id') or 0) or '—'}{_adm_t('ub_lit_18db1bfd572c')}{rw.get('status')}{_adm_t('ub_lit_f6b275411746')}{rw.get('created_at') or '—'}\n"
     )
     if str(rw.get("revoked_at") or "").strip():
-        text += f"🔻 لغو: {rw.get('revoked_at')}"
+        text += f"{_adm_t('ub_lit_23b07572db63')}{rw.get('revoked_at')}"
     rows = []
     if str(rw.get("status") or "") == "paid":
-        rows.append([InlineKeyboardButton("💥 لغو پاداش", callback_data=f"userbot:referral:revoke_reward:{rw.get('id')}")])
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral:rewards:1")])
+        rows.append([InlineKeyboardButton(_adm_t('ub_lit_5e8daac876a1'), callback_data=f"userbot:referral:revoke_reward:{rw.get('id')}")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral:rewards:1")])
     kb = InlineKeyboardMarkup(rows)
     if message:
         try:
@@ -7642,7 +7456,7 @@ async def send_referral_reward_detail(reward_id: int, chat_id: int, context: Con
 
 
 async def send_userbot_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "⚙️تنظیمات ربات کاربران"
+    text = _adm_t('ub_lit_02a4a16af7a9')
     kb = build_userbot_settings_menu_keyboard(_get_ui_settings())
     if message:
         try:
@@ -7658,17 +7472,13 @@ async def send_colored_buttons_settings_menu(chat_id: int, context: ContextTypes
     enabled = bool(settings.get("colored_buttons", True))
     theme = normalize_button_theme(settings.get("button_theme"))
     theme_meta = BUTTON_STYLE_THEMES.get(theme, BUTTON_STYLE_THEMES["smart"])
-    status = "روشن ✅" if enabled else "خاموش ❌"
+    status = _adm_t('ub_lit_cc1ff85dd8e6') if enabled else _adm_t('ub_lit_08b951f23eae')
     descriptions = "\n".join(
         f"{'✅' if key == theme else '▫️'} {meta['title']}: {meta['description']}"
         for key, meta in BUTTON_STYLE_THEMES.items()
     )
     text = (
-        "🎨 تنظیمات دکمه‌های رنگی\n\n"
-        f"وضعیت فعلی: {status}\n"
-        f"طرح فعلی: {theme_meta['title']}\n\n"
-        f"{descriptions}\n\n"
-        "هر طرح فقط ظاهر دکمه‌ها را تغییر می‌دهد و روی عملکرد ربات اثری ندارد."
+        f"{_adm_t('ub_lit_29493b91852f')}{status}{_adm_t('ub_lit_920651a02ff8')}{theme_meta['title']}\n\n{descriptions}{_adm_t('ub_lit_b064865eb22b')}"
     )
     kb = build_colored_buttons_settings_keyboard(settings)
     if message:
@@ -7681,7 +7491,7 @@ async def send_colored_buttons_settings_menu(chat_id: int, context: ContextTypes
 
 
 async def send_subscription_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🛍تنظیمات اشتراک"
+    text = _adm_t('ub_lit_687c62e630e9')
     settings = _get_subscription_settings(context)
     kb = build_subscription_settings_menu_keyboard(
         show_user_page_link=settings["show_user_page_link"],
@@ -7700,10 +7510,9 @@ async def send_subscription_settings_menu(chat_id: int, context: ContextTypes.DE
 
 async def send_sub_link_status_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     current_base = userbot_db.get_managed_sub_base_url()
-    current_base_text = current_base if current_base else "خودکار (بر اساس دامنه سرور/ENV)"
+    current_base_text = current_base if current_base else _adm_t('ub_lit_ae46fa38dea8')
     text = (
-        "📁وضعیت نمایش لینک اشتراک\n\n"
-        f"🌐 دامنه فعلی لینک اشتراک هوشمند:\n{current_base_text}"
+        f"{_adm_t('ub_lit_3a84fa572778')}{current_base_text}"
     )
     settings = _get_subscription_settings(context)
     kb = build_sub_link_status_menu_keyboard(settings)
@@ -7718,7 +7527,7 @@ async def send_sub_link_status_menu(chat_id: int, context: ContextTypes.DEFAULT_
 
 async def send_sub_status_reminder_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     reminder = _get_sub_reminder_settings()
-    text = "🛍تنظیمات اشتراک"
+    text = _adm_t('ub_lit_687c62e630e9')
     kb = build_sub_status_reminder_menu_keyboard(reminder)
     if message:
         try:
@@ -7731,7 +7540,7 @@ async def send_sub_status_reminder_menu(chat_id: int, context: ContextTypes.DEFA
 
 async def send_trial_spec_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     spec = _get_trial_spec_settings()
-    text = "🛍تنظیمات اشتراک"
+    text = _adm_t('ub_lit_687c62e630e9')
     kb = build_trial_spec_menu_keyboard(spec)
     if message:
         try:
@@ -7743,7 +7552,7 @@ async def send_trial_spec_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
 
 
 async def send_buy_renew_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🛒تنظیمات خرید و تمدید"
+    text = _adm_t('ub_lit_afb60db755b7')
     settings = _get_buy_renew_settings()
     kb = build_buy_renew_settings_menu_keyboard(settings)
     if message:
@@ -7756,7 +7565,7 @@ async def send_buy_renew_settings_menu(chat_id: int, context: ContextTypes.DEFAU
 
 
 async def send_tx_plans_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🧮تنظیمات تراکنشات و پلن ها"
+    text = _adm_t('ub_lit_e860c9645679')
     settings = _get_tx_plans_settings()
     kb = build_tx_plans_settings_menu_keyboard(settings)
     if message:
@@ -7769,7 +7578,7 @@ async def send_tx_plans_settings_menu(chat_id: int, context: ContextTypes.DEFAUL
 
 
 async def send_text_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🧾تنظیمات متون"
+    text = _adm_t('ub_lit_bc9e898ba647')
     kb = build_text_settings_menu_keyboard()
     if message:
         try:
@@ -7781,7 +7590,7 @@ async def send_text_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TY
 
 
 async def send_guide_text_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🧾تنظیمات متنون"
+    text = _adm_t('ub_lit_7309defe7c2d')
     kb = build_guide_text_settings_menu_keyboard()
     if message:
         try:
@@ -7793,7 +7602,7 @@ async def send_guide_text_settings_menu(chat_id: int, context: ContextTypes.DEFA
 
 
 async def send_invite_text_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "📄تنظیم بنر دعوت"
+    text = _adm_t('ub_lit_e6cf02596d2f')
     kb = build_invite_text_settings_menu_keyboard()
     if message:
         try:
@@ -7806,7 +7615,7 @@ async def send_invite_text_settings_menu(chat_id: int, context: ContextTypes.DEF
 
 async def send_marketing_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     settings = _get_marketing_settings()
-    text = "🎯تنظیمات بازاریابی"
+    text = _adm_t('ub_lit_5995f47cd544')
     kb = build_marketing_settings_menu_keyboard(settings)
     if message:
         try:
@@ -7825,8 +7634,7 @@ async def send_force_join_settings_menu(chat_id: int, context: ContextTypes.DEFA
         else str(settings.get("channel_id") or "").strip() or "—"
     )
     text = (
-        "🔒تنظیمات عضویت اجباری\n"
-        f"📢 کانال فعلی: {channel_disp}"
+        f"{_adm_t('ub_lit_316e1bdc2100')}{channel_disp}"
     )
     kb = build_force_join_settings_menu_keyboard(settings)
     if message:
@@ -7855,7 +7663,7 @@ async def send_payment_settings_menu(chat_id: int, context: ContextTypes.DEFAULT
 
 async def send_backup_restore_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     settings = _get_backup_restore_settings()
-    text = "🗃تنظیمات بکاپ و بازیابی"
+    text = _adm_t('ub_lit_f578d83a8ca1')
     kb = build_backup_restore_settings_menu_keyboard(settings)
     if message:
         try:
@@ -7885,10 +7693,10 @@ async def send_payment_method_menu(
     key = key_map.get(method, "")
     enabled = bool(settings.get(key, False)) if key else False
     title_map = {
-        "card": "💳تنظیمات کارت به کارت",
-        "zarinpal": "📦تنظیمات زرین پال\n🧩راهنما:لینک",
-        "perfect": "🧰تنظیمات پرفکت مانی",
-        "crypto": "🔗تنظیمات پرداخت ارز دیجیتال",
+        "card": _adm_t('ub_lit_382c9247203e'),
+        "zarinpal": _adm_t('ub_lit_f467f9ba2646'),
+        "perfect": _adm_t('ub_lit_9b9fdba14bf1'),
+        "crypto": _adm_t('ub_lit_750a545f9880'),
     }
     text = title_map.get(method, _adm_t("us_payment_settings"))
     kb = build_payment_method_menu_keyboard(method, enabled)
@@ -7905,17 +7713,11 @@ async def send_payment_method_menu(
 
 async def send_sms_webhook_settings_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     status = _sms_webhook_status()
-    enabled = "✅ روشن" if status.get("enabled") else "❌ خاموش"
+    enabled = _adm_t('ub_lit_135fbb4fb4bd') if status.get("enabled") else _adm_t('ub_lit_e0f67de63f35')
     secret = str(status.get("secret") or "")
     secret_status = _mask_secret(secret)
     text = (
-        "🤖 تایید خودکار کارت‌به‌کارت با SMS بانک\n\n"
-        f"وضعیت: {enabled}\n"
-        f"Secret Key: {secret_status}\n"
-        f"مهلت تطبیق پرداخت: {status.get('age')} دقیقه\n\n"
-        "آدرس Webhook برای اپ اندروید:\n"
-        f"<pre><code>{html_escape(str(status.get('endpoint') or ''))}</code></pre>\n\n"
-        "Secret و وضعیت روشن/خاموش از همین منو ساخته و در فایل .env ذخیره می‌شود."
+        f"{_adm_t('ub_lit_7ed168af2c69')}{enabled}\nSecret Key: {secret_status}{_adm_t('ub_lit_a80787fe6680')}{status.get('age')}{_adm_t('ub_lit_cd134390d2eb')}{html_escape(str(status.get('endpoint') or ''))}{_adm_t('ub_lit_90871b9b0d87')}"
     )
     kb = build_sms_webhook_settings_keyboard()
     if message:
@@ -7931,7 +7733,7 @@ async def send_sms_webhook_settings_menu(chat_id: int, context: ContextTypes.DEF
 
 async def send_payment_cards_list_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     cards = database.get_cards()
-    text = "💳لیست کارت‌ها"
+    text = _adm_t('ub_lit_28e22efbe6f9')
     kb = build_payment_cards_list_keyboard(cards)
     if message:
         try:
@@ -7955,19 +7757,18 @@ async def send_payment_card_item_menu(
     if not card:
         if message:
             try:
-                await message.edit_text("❌ کارت یافت نشد.")
+                await message.edit_text(_adm_t('ub_lit_2963964ea45c'))
             except Exception:
-                await context.bot.send_message(chat_id, "❌ کارت یافت نشد.")
+                await context.bot.send_message(chat_id, _adm_t('ub_lit_2963964ea45c'))
         else:
-            await context.bot.send_message(chat_id, "❌ کارت یافت نشد.")
+            await context.bot.send_message(chat_id, _adm_t('ub_lit_2963964ea45c'))
         await send_payment_cards_list_menu(chat_id, context)
         return
 
     n = str(card.get("number") or "").strip() or "-"
     owner = str(card.get("owner") or "").strip() or "-"
     text = (
-        f"❖ شماره کارت: <code>{n}</code>\n"
-        f"❖ نام صاحب کارت: {owner}"
+        f"{_adm_t('ub_lit_1a5f71be6f9c')}{n}{_adm_t('ub_lit_a624c3ee9b5d')}{owner}"
     )
     kb = build_payment_card_item_keyboard(n)
     if message:
@@ -7982,7 +7783,7 @@ async def send_payment_card_item_menu(
 
 
 async def send_plan_categories_mode_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🧮تنظیمات تراکنشات و پلن ها"
+    text = _adm_t('ub_lit_e860c9645679')
     settings = _get_tx_plans_settings()
     kb = build_plan_categories_mode_menu_keyboard(settings)
     if message:
@@ -7995,7 +7796,7 @@ async def send_plan_categories_mode_menu(chat_id: int, context: ContextTypes.DEF
 
 
 async def send_plan_sort_mode_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🧮تنظیمات تراکنشات و پلن ها"
+    text = _adm_t('ub_lit_e860c9645679')
     settings = _get_tx_plans_settings()
     kb = build_plan_sort_mode_menu_keyboard(settings)
     if message:
@@ -8008,7 +7809,7 @@ async def send_plan_sort_mode_menu(chat_id: int, context: ContextTypes.DEFAULT_T
 
 
 async def send_plan_columns_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🛒تنظیمات خرید و تمدید"
+    text = _adm_t('ub_lit_afb60db755b7')
     settings = _get_buy_renew_settings()
     kb = build_plan_columns_menu_keyboard(settings)
     if message:
@@ -8021,7 +7822,7 @@ async def send_plan_columns_menu(chat_id: int, context: ContextTypes.DEFAULT_TYP
 
 
 async def send_server_columns_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    text = "🛒تنظیمات خرید و تمدید"
+    text = _adm_t('ub_lit_afb60db755b7')
     settings = _get_buy_renew_settings()
     kb = build_server_columns_menu_keyboard(settings)
     if message:
@@ -8038,22 +7839,17 @@ async def send_renew_policy_menu(chat_id: int, context: ContextTypes.DEFAULT_TYP
     days = int(settings.get("renew_max_days") or 3)
     usage = int(settings.get("renew_max_remaining_gb") or 3)
     policy = str(settings.get("renew_policy") or "advanced").strip().lower()
-    policy_title = {"advanced": "پیشرفته", "default": "پیشفرض", "fair": "منصفانه"}.get(policy, "پیشرفته")
+    policy_title = {"advanced": _adm_t('ub_lit_b9c0603306ff'), "default": _adm_t('ub_lit_8d125a15fc60'), "fair": _adm_t('ub_lit_f3c819cdcb0c')}.get(policy, _adm_t('ub_lit_b9c0603306ff'))
     volume_mode = str(settings.get("renew_volume_mode") or "").strip().lower()
     time_mode = str(settings.get("renew_time_mode") or "").strip().lower()
     if volume_mode not in {"add", "reset"}:
         volume_mode = "add" if policy in {"default", "fair"} else "reset"
     if time_mode not in {"add", "reset"}:
         time_mode = "add" if policy == "fair" else "reset"
-    volume_text = "افزایشی (باقیمانده + پلن جدید)" if volume_mode == "add" else "ریست (فقط پلن جدید)"
-    time_text = "افزایشی (باقیمانده + پلن جدید)" if time_mode == "add" else "ریست (فقط پلن جدید)"
+    volume_text = _adm_t('ub_lit_4f20b39bb8ce') if volume_mode == "add" else _adm_t('ub_lit_46f6951526d5')
+    time_text = _adm_t('ub_lit_4f20b39bb8ce') if time_mode == "add" else _adm_t('ub_lit_46f6951526d5')
     text = (
-        "تنظیم شیوه تمدید\n"
-        f"⚙️ پروفایل فعلی: {policy_title}\n"
-        f"📦 حالت حجم در تمدید: {volume_text}\n"
-        f"⏳ حالت زمان در تمدید: {time_text}\n"
-        f"📊 مقدار فعلی زمان: {days} روز\n"
-        f"📆 مقدار فعلی مصرف: {usage} گیگابایت"
+        f"{_adm_t('ub_lit_42f87bd98e28')}{policy_title}{_adm_t('ub_lit_1fe5cf65a7b4')}{volume_text}{_adm_t('ub_lit_024e2035262e')}{time_text}{_adm_t('ub_lit_3e5975438bc7')}{days}{_adm_t('ub_lit_0b1252e09b27')}{usage}{_adm_t('ub_lit_e5fc3be2014a')}"
     )
     kb = build_renew_policy_menu_keyboard(settings)
     if message:
@@ -8067,8 +7863,7 @@ async def send_renew_policy_menu(chat_id: int, context: ContextTypes.DEFAULT_TYP
 
 async def send_reset_free_trial_confirm(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     text = (
-        "🧨🎁 آیا از بازنشانی تست رایگان کاربران اطمینان دارید؟\n"
-        "⚠️ با تایید این مورد تمامی کاربران قادر به گرفتن تست رایگان مجدد می‌باشند."
+        _adm_t('ub_lit_1db3e812c718')
     )
     kb = build_reset_free_trial_confirm_keyboard()
     if message:
@@ -8109,18 +7904,18 @@ async def send_orders_list(page: int, chat_id: int, context: ContextTypes.DEFAUL
     # داده‌ها از دیکشنری stats خوانده می‌شوند
     
     lines = [
-        "🔹 لیست سفارشات",
-        f"🔸 تعداد سفارشات: {stats['total_count']}",
-        f"🔸 مجموع حجم سفارشات(GB): {fmt(stats['total_gb'])}",
-        f"🔸 مجموع ارزش سفارشات: {fmt(stats['total_price'])}تومان",
+        _adm_t('ub_lit_7cf5e2e43617'),
+        f"{_adm_t('ub_lit_f9aee7068ade')}{stats['total_count']}",
+        f"{_adm_t('ub_lit_f59c1811609a')}{fmt(stats['total_gb'])}",
+        f"{_adm_t('ub_lit_42e0d913c805')}{fmt(stats['total_price'])}{_adm_t('ub_lit_9e29f6087438')}",
         "❖ ⬩----------------------------------⬩ ❖",
-        f"🔸 تعداد سفارشات 30 روز گذشته: {stats['last30_count']}",
-        f"🔸 حجم سفارشات 30 روز گذشته(GB): {fmt(stats['last30_gb'])}",
-        f"🔸 ارزش سفارشات 30 روز گذشته: {fmt(stats['last30_price'])}تومان",
+        f"{_adm_t('ub_lit_9576ea746aa4')}{stats['last30_count']}",
+        f"{_adm_t('ub_lit_7244b0fb05b9')}{fmt(stats['last30_gb'])}",
+        f"{_adm_t('ub_lit_24e15088e51e')}{fmt(stats['last30_price'])}{_adm_t('ub_lit_9e29f6087438')}",
         "❖ ⬩----------------------------------⬩ ❖",
-        f"🔸 تعداد سفارشات این ماه: {stats['month_count']}",
-        f"🔸 حجم سفارشات این ماه(GB): {fmt(stats['month_gb'])}",
-        f"🔸 ارزش سفارشات این ماه: {fmt(stats['month_price'])}تومان"
+        f"{_adm_t('ub_lit_20d53f2b7c8c')}{stats['month_count']}",
+        f"{_adm_t('ub_lit_7666328876c7')}{fmt(stats['month_gb'])}",
+        f"{_adm_t('ub_lit_751a63dab25a')}{fmt(stats['month_price'])}{_adm_t('ub_lit_9e29f6087438')}"
     ]
     text = "\n".join(lines)
 
@@ -8158,7 +7953,7 @@ async def send_orders_list(page: int, chat_id: int, context: ContextTypes.DEFAUL
     rows.append(nav)
 
     # دکمه بازگشت
-    rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="userbot:menu")])
+    rows.append([InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:menu")])
     
     kb = InlineKeyboardMarkup(rows)
     
@@ -8174,19 +7969,14 @@ async def send_orders_list(page: int, chat_id: int, context: ContextTypes.DEFAUL
 async def send_order_detail(order_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     order = userbot_db.get_order_by_id(order_id)
     if not order:
-        await context.bot.send_message(chat_id, "❌ سفارش یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_7c9ac47051f9'))
         return
 
     text = (
-        f"📄 سفارش #{order.get('order_id')}\n"
-        f"👤 خریدار: {_display_name(order)}\n"
-        f"📅 تاریخ: {order.get('created_at')}\n"
-        f"📦 پلن: {order.get('plan_title')}\n"
-        f"💰 قیمت: {_format_toman(order.get('price'))} تومان\n"
-        f"📊 وضعیت: {order.get('status', 'تکمیل شده')}"
+        f"{_adm_t('ub_lit_eb5940f7a7d5')}{order.get('order_id')}{_adm_t('ub_lit_58bf58a8228f')}{_display_name(order)}{_adm_t('ub_lit_d102d9511c0a')}{order.get('created_at')}{_adm_t('ub_lit_6de942617fe4')}{order.get('plan_title')}{_adm_t('ub_lit_8fa035765635')}{_format_toman(order.get('price'))}{_adm_t('ub_lit_fe23cefdf304')}{order.get('status', _adm_t('ub_lit_9ee9b55b6605'))}"
     )
     
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data="userbot:orders_menu")]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:orders_menu")]])
     
     if message:
         try:
@@ -8200,10 +7990,10 @@ async def send_order_detail(order_id: int, chat_id: int, context: ContextTypes.D
 def _ticket_bucket_title(status: str) -> str:
     s = str(status or "").strip().lower()
     if s == "open":
-        return "📬تیکت‌های باز"
+        return _adm_t('ub_lit_3d534da229c2')
     if s == "closed":
-        return "📩تیکت‌های بسته"
-    return "📨تیکت‌های در انتظار"
+        return _adm_t('ub_lit_2c4064cc56f7')
+    return _adm_t('ub_lit_e24eb17fdeee')
 
 
 async def send_tickets_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
@@ -8239,7 +8029,7 @@ async def _send_broadcast_to_targets(
     photo_file_id: str = "",
 ) -> Tuple[int, int]:
     if not USER_BOT_TOKEN:
-        raise RuntimeError("USER_BOT_TOKEN تنظیم نشده است.")
+        raise RuntimeError(_adm_t('ub_lit_29b006b6d4f5'))
 
     user_bot = Bot(token=USER_BOT_TOKEN)
     body = str(text or "").strip()
@@ -8282,8 +8072,7 @@ async def send_tickets_list(
         p = total_pages
         tickets, total = userbot_db.get_tickets_page(s, p, TICKETS_PAGE_SIZE)
     text = (
-        f"{_ticket_bucket_title(s)}\n"
-        f"◈ تعداد تیکت‌ها: {int(total)}"
+        f"{_ticket_bucket_title(s)}{_adm_t('ub_lit_a89c572882a4')}{int(total)}"
     )
     kb = build_tickets_list_keyboard(tickets, status=s, page=p, total_pages=total_pages)
     if message:
@@ -8304,7 +8093,7 @@ async def send_user_tickets_list(
 ) -> None:
     uid = int(user_id or 0)
     if uid <= 0:
-        await context.bot.send_message(chat_id, "❌ کاربر نامعتبر است.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_9024444be650'))
         return
     user = userbot_db.get_user_by_id(uid) or {}
     tickets, total = userbot_db.get_tickets_for_user(uid, page=max(1, int(page or 1)), page_size=TICKETS_PAGE_SIZE)
@@ -8314,8 +8103,7 @@ async def send_user_tickets_list(
         tickets, total = userbot_db.get_tickets_for_user(uid, page=p, page_size=TICKETS_PAGE_SIZE)
     display = _display_name(user) if user else str(uid)
     text = (
-        f"📑 لیست تیکت‌های کاربر {display}\n"
-        f"◈ تعداد تیکت‌ها: {int(total)}"
+        f"{_adm_t('ub_lit_676d102cf101')}{display}{_adm_t('ub_lit_a89c572882a4')}{int(total)}"
     )
     kb = build_tickets_list_keyboard(
         tickets,
@@ -8346,11 +8134,11 @@ async def send_ticket_detail(
 ) -> None:
     code = int(ticket_code or 0)
     if code <= 0:
-        await context.bot.send_message(chat_id, "❌ شناسه تیکت نامعتبر است.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_649771e664cf'))
         return
     ticket = userbot_db.get_ticket_by_code(code)
     if not ticket:
-        await context.bot.send_message(chat_id, "❌ تیکت یافت نشد.")
+        await context.bot.send_message(chat_id, _adm_t('ub_lit_6b02b8271e76'))
         return
     messages = userbot_db.get_ticket_messages(code)
     photo_refs = _collect_ticket_photo_refs(messages)
@@ -8405,18 +8193,18 @@ async def handle_user_search_message(update: Update, context: ContextTypes.DEFAU
 
     if text in CANCEL_WORDS:
         context.user_data.pop(USER_SEARCH_STATE_KEY, None)
-        await message.reply_text("جستجو لغو شد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("admin_search_cancelled"), reply_markup=admin_main_keyboard())
         return
 
     # جستجو با Telegram ID
     if state == "by_id":
         if not text.isdigit():
-            await message.reply_text("❌ لطفاً فقط عدد وارد کنید.")
+            await message.reply_text(_adm_t("ub_number_only"))
             return
         results = userbot_db.search_users_by_telegram_id(int(text))
     else:
         if not text:
-            await message.reply_text("❌ لطفاً نام یا @یوزرنیم را وارد کنید.")
+            await message.reply_text(_adm_t("ub_user_name_prompt"))
             return
         # جستجو با نام
         results = userbot_db.search_users_by_name(text)
@@ -8424,22 +8212,22 @@ async def handle_user_search_message(update: Update, context: ContextTypes.DEFAU
     context.user_data.pop(USER_SEARCH_STATE_KEY, None)
 
     if not results:
-        await message.reply_text("❌ کاربری یافت نشد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("adm_err_user_not_found"), reply_markup=admin_main_keyboard())
         return
     
     if len(results) == 1:
-        await message.reply_text("✅ کاربر یافت شد", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("ub_user_found"), reply_markup=admin_main_keyboard())
         await send_user_profile(results[0]['id'], message.chat_id, context)
         return
 
     # نمایش لیست نتایج
-    lines = ["نتایج جستجو:"]
+    lines = [_adm_t('ub_lit_e46fa9ad3d4e')]
     rows = []
     for u in results:
         rows.append([InlineKeyboardButton(_display_name(u), callback_data=f"userbot:user:{u['id']}")])
-    rows.append([InlineKeyboardButton("بازگشت", callback_data="userbot:users_menu")])
+    rows.append([InlineKeyboardButton(_adm_t("btn_back"), callback_data="userbot:users_menu")])
     
-    await message.reply_text("✅ کاربر یافت شد", reply_markup=admin_main_keyboard())
+    await message.reply_text(_adm_t("ub_user_found"), reply_markup=admin_main_keyboard())
     await message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
 
@@ -8450,11 +8238,11 @@ async def handle_payment_search_input(update: Update, context: ContextTypes.DEFA
 
     if text in CANCEL_WORDS:
         context.user_data.pop(PAYMENT_SEARCH_STATE, None)
-        await message.reply_text("جستجو لغو شد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("admin_search_cancelled"), reply_markup=admin_main_keyboard())
         return
 
     if not text.isdigit():
-        await message.reply_text("❌ لطفاً فقط شناسه تراکنش (عدد) وارد کنید.")
+        await message.reply_text(_adm_t("ub_payment_id_prompt"))
         return
 
     pid = int(text)
@@ -8463,10 +8251,10 @@ async def handle_payment_search_input(update: Update, context: ContextTypes.DEFA
     context.user_data.pop(PAYMENT_SEARCH_STATE, None)
 
     if pay:
-        await message.reply_text("✅ تراکنش یافت شد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("ub_payment_found"), reply_markup=admin_main_keyboard())
         await send_payment_detail(pid, message.chat_id, context)
     else:
-        await message.reply_text(f"❌ تراکنشی با شناسه {pid} یافت نشد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("ub_payment_id_not_found", id=pid), reply_markup=admin_main_keyboard())
 
 
 async def handle_orders_search_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -8476,11 +8264,11 @@ async def handle_orders_search_input(update: Update, context: ContextTypes.DEFAU
 
     if text in CANCEL_WORDS:
         context.user_data.pop(ORDERS_SEARCH_STATE_KEY, None)
-        await message.reply_text("جستجو لغو شد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("admin_search_cancelled"), reply_markup=admin_main_keyboard())
         return
 
     if not text.isdigit():
-        await message.reply_text("❌ لطفاً فقط شناسه سفارش (عدد) وارد کنید.")
+        await message.reply_text(_adm_t("ub_order_id_prompt"))
         return
 
     oid = int(text)
@@ -8489,10 +8277,10 @@ async def handle_orders_search_input(update: Update, context: ContextTypes.DEFAU
     context.user_data.pop(ORDERS_SEARCH_STATE_KEY, None)
 
     if order:
-        await message.reply_text("✅ سفارش یافت شد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("ub_order_found"), reply_markup=admin_main_keyboard())
         await send_order_detail(oid, message.chat_id, context)
     else:
-        await message.reply_text(f"❌ سفارشی با شناسه {oid} یافت نشد.", reply_markup=admin_main_keyboard())
+        await message.reply_text(_adm_t("ub_order_id_not_found", id=oid), reply_markup=admin_main_keyboard())
 
 
 # در فایل AdminBot/userbot.py
@@ -8535,7 +8323,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             return
         service = userbot_db.get_service_by_id(sid)
         if not service:
-            await msg.reply_text("❌ اشتراک موردنظر یافت نشد.")
+            await msg.reply_text(_adm_t("ub_subscription_not_found"))
             context.user_data[SUB_TRACKING_STATE] = True
             await send_subscription_tracking_prompt(cid, context, message=msg)
             return
@@ -8569,7 +8357,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if data == "userbot:users_search_menu":
         await query.answer()
-        await msg.edit_text("روش جستجو:", reply_markup=build_users_search_menu_keyboard())
+        await msg.edit_text(_adm_t('ub_lit_c9c5fdce772b'), reply_markup=build_users_search_menu_keyboard())
         return
 
     if data.startswith("userbot:search:"):
@@ -8577,7 +8365,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         m = data.split(":")[2]
         context.user_data[USER_SEARCH_STATE_KEY] = "by_id" if m == "id" else "by_name"
         await msg.reply_text(
-            f"لطفاً {'شناسه عددی' if m=='id' else 'نام یا @یوزرنیم'} کاربر را وارد کنید:", 
+            f"{_adm_t('ub_lit_efa9ddae95b9')}{_adm_t('ub_lit_9d759792fb5a') if m == 'id' else _adm_t('ub_lit_d44a6f31a96e')}{_adm_t('ub_lit_d19849496859')}", 
             reply_markup=userbot_cancel_keyboard()
         )
         return
@@ -8586,7 +8374,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data.startswith("userbot:user:"):
         parts = data.split(":")
         if len(parts) < 3: 
-            await query.answer("داده نامعتبر", show_alert=True)
+            await query.answer(_adm_t('ub_lit_76d2e0c39c67'), show_alert=True)
             return
             
         uid = int(parts[2])
@@ -8633,24 +8421,24 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         elif act == "wallet":
             await query.answer()
             context.user_data[WALLET_EDIT_STATE] = uid
-            await msg.reply_text("💰 مبلغ جدید کیف پول (تومان) را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_802a7d278c75'), reply_markup=userbot_cancel_keyboard())
         
         elif act == "message":
             await query.answer()
             context.user_data[MESSAGE_SEND_STATE] = {"user_id": int(uid)}
             await msg.reply_text(
-                "✍ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
+                _adm_t('ub_lit_2da8e3e729d6'),
                 reply_markup=userbot_cancel_keyboard(),
             )
         
         elif act == "reset_trial":
             userbot_db.reset_free_trial(uid)
-            await query.answer("✅ اشتراک تستی بازنشانی شد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_e5943a5940e0'), show_alert=True)
             await send_user_profile(uid, cid, context, message=msg)
         
         elif act == "ban":
             nst = userbot_db.toggle_ban_user(uid)
-            alert_text = "⛔️ کاربر مسدود شد." if nst else "✅ کاربر آزاد شد."
+            alert_text = _adm_t('ub_lit_c52406fc222c') if nst else _adm_t('ub_lit_107005b9a08d')
             await query.answer(alert_text, show_alert=True)
             await send_user_profile(uid, cid, context, message=msg)
         
@@ -8670,18 +8458,18 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data.startswith("userbot:svc:"):
         parts = data.split(":")
         if len(parts) < 3:
-            await query.answer("❌ داده نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_aba30e3a701d'), show_alert=True)
             return
         try:
             service_id = int(parts[2])
         except Exception:
-            await query.answer("❌ شناسه سرویس نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_7075a9646717'), show_alert=True)
             return
 
         action = parts[3] if len(parts) >= 4 else ""
         service = userbot_db.get_service_by_id(service_id)
         if not service:
-            await query.answer("❌ سرویس یافت نشد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_d3f440f81a00'), show_alert=True)
             return
 
         if not action:
@@ -8692,7 +8480,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         target_server_id, target_user_uuid = _service_primary_target(service)
         if target_server_id <= 0 or not target_user_uuid:
             await query.answer(
-                "❌ شناسه پنل این سرویس پیدا نشد. ابتدا سرویس را همگام‌سازی کنید.",
+                _adm_t('ub_lit_1a63ed0fef0b'),
                 show_alert=True,
             )
             return
@@ -8739,25 +8527,24 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 [
                     [
                         InlineKeyboardButton(
-                            "✅ بله، حذف شود",
+                            _adm_t('ub_lit_0eae2c069e55'),
                             callback_data=f"userbot:svc:{service_id}:delete_yes",
                         ),
                         InlineKeyboardButton(
-                            "لغو❌",
+                            _adm_t('ub_lit_751a0da43792'),
                             callback_data=f"userbot:svc:{service_id}:delete_no",
                         ),
                     ]
                 ]
             )
             await msg.edit_text(
-                "❓ آیا از حذف کامل این کاربر مطمئن هستید؟\n"
-                "این عملیات قابل بازگشت نیست.",
+                _adm_t('ub_lit_69fae50e59fb'),
                 reply_markup=kb,
             )
             return
 
         if action == "delete_no":
-            await query.answer("❌ حذف لغو شد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_f4a4621817ae'), show_alert=True)
             await send_service_detail(service_id, cid, context, message=msg)
             return
 
@@ -8771,9 +8558,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             if not deleted_server_ids:
                 details = "\n".join(failed_servers[:3])
                 if details:
-                    await msg.edit_text(f"❌ حذف سرویس روی هیچ سروری موفق نشد:\n{details}")
+                    await msg.edit_text(f"{_adm_t('ub_lit_d2a385103a65')}{details}")
                 else:
-                    await msg.edit_text("❌ حذف سرویس روی هیچ سروری موفق نشد.")
+                    await msg.edit_text(_adm_t('ub_lit_594d4439eef4'))
                 return
 
             try:
@@ -8790,19 +8577,19 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
 
             if failed_servers:
                 await query.answer(
-                    f"✅ حذف شد، اما {len(failed_servers)} سرور خطا داشت.",
+                    f"{_adm_t('ub_lit_5377d83662ad')}{len(failed_servers)}{_adm_t('ub_lit_b10bc403694d')}",
                     show_alert=True,
                 )
             else:
-                await query.answer("✅ سرویس با موفقیت حذف شد.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_ca2604ee1e33'), show_alert=True)
 
             if user_id > 0:
                 await send_user_profile(user_id, cid, context, message=msg)
             else:
-                await msg.edit_text("✅ سرویس با موفقیت حذف شد.")
+                await msg.edit_text(_adm_t('ub_lit_ca2604ee1e33'))
             return
 
-        await query.answer("❌ گزینه نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_0376ef76612d'), show_alert=True)
         return
 
     # --- 5. سفارشات (Orders) ---
@@ -8823,7 +8610,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "userbot:orders:search":
         await query.answer()
         context.user_data[ORDERS_SEARCH_STATE_KEY] = True
-        await msg.reply_text("🔎 شناسه سفارش را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_677595114cf7'), reply_markup=userbot_cancel_keyboard())
         return
 
     # --- 6. تراکنشات (Payments) ---
@@ -8853,9 +8640,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             pid = int(parts[3])
             pay = userbot_db.get_payment_by_id(pid)
             if not pay:
-                await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_b23c299ea063'), show_alert=True)
                 return
-            text = _build_payment_detail_text(pay) + "\n\n⚠️ آیا از تغییر وضعیت تراکنش، اطمینان دارید؟"
+            text = _build_payment_detail_text(pay) + _adm_t('ub_lit_3bde8686c3ea')
             kb = _build_payment_change_confirm_keyboard(pid)
             receipt_raw = pay.get('receipt_image') or ""
             receipt_meta = _parse_receipt_meta(receipt_raw)
@@ -8893,9 +8680,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             if action == "yes":
                 pay = userbot_db.get_payment_by_id(pid)
                 if not pay:
-                    await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+                    await query.answer(_adm_t('ub_lit_b23c299ea063'), show_alert=True)
                     return
-                text = _build_payment_detail_text(pay) + "\n\nوضعیت جدید را انتخاب کنید:"
+                text = _build_payment_detail_text(pay) + _adm_t('ub_lit_ad6e92c58bce')
                 kb = _build_payment_change_options_keyboard(pid, str(pay.get("status") or "pending"))
                 if msg and getattr(msg, "photo", None):
                     try:
@@ -8908,18 +8695,18 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 except Exception:
                     await context.bot.send_message(chat_id=cid, text=text, reply_markup=kb)
                 return
-        await query.answer("❌ عملیات نامعتبر.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_eb5b16527169'), show_alert=True)
         return
     if data.startswith("userbot:pay:set:"):
         parts = data.split(":")
         if len(parts) != 5:
-            await query.answer("❌ داده نامعتبر.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_11a4e021aa73'), show_alert=True)
             return
         pid = int(parts[3])
         new_status = parts[4]
         prev_pay = userbot_db.get_payment_by_id(pid)
         if not prev_pay:
-            await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_b23c299ea063'), show_alert=True)
             return
         prev_status = str(prev_pay.get("status") or "pending").strip().lower()
 
@@ -8949,7 +8736,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                     ])
                 report_text = _build_payment_approved_report_text(pay)
                 if prev_status == "rejected":
-                    report_text += "\n\n🔁 تراکنش قبلا رد شده بود؛ اشتراک از نو ساخته و داخل ربات کاربران تحویل داده می‌شود."
+                    report_text += _adm_t('ub_lit_7191f2d166c6')
                 await context.bot.send_message(
                     chat_id=cid,
                     text=report_text,
@@ -8970,7 +8757,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 userbot_db.change_payment_status_with_wallet(pid, "approved")
                 await context.bot.send_message(
                     chat_id=cid,
-                    text="❌ بازگشت تراکنش انجام نشد؛ وضعیت دوباره «تایید شده» شد.\n" + (rev_msg or ""),
+                    text=_adm_t('ub_lit_d2fc384b1bd0') + (rev_msg or ""),
                 )
                 return
             text = _build_payment_detail_text(userbot_db.get_payment_by_id(pid) or prev_pay)
@@ -8978,7 +8765,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             if rev_msg:
                 lines.append(f"\n{rev_msg}")
             if failed:
-                lines.append("⚠️ سرورهای دسترسی‌ناپذیر: " + "، ".join(dict.fromkeys(failed)))
+                lines.append(_adm_t('ub_lit_dcbf864fb2b9') + _adm_t('ub_lit_8a78cc5f8f64').join(dict.fromkeys(failed)))
             await context.bot.send_message(chat_id=cid, text="\n".join(lines))
             return
 
@@ -8995,22 +8782,22 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         pid = int(data.split(":")[-1])
         pay = userbot_db.get_payment_by_id(pid)
         if not pay:
-            await query.answer("❌ تراکنش یافت نشد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_b23c299ea063'), show_alert=True)
             return
         uid = pay.get('user_id')
         if not uid:
-            await query.answer("❌ کاربر نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_9024444be650'), show_alert=True)
             return
         context.user_data[MESSAGE_SEND_STATE] = {"user_id": int(uid)}
         await msg.reply_text(
-            "✍ لطفا متن پیامی که می خواهید برای کاربر ارسال شود را وارد کنید:",
+            _adm_t('ub_lit_2da8e3e729d6'),
             reply_markup=userbot_cancel_keyboard(),
         )
         return
     if data == "userbot:payments:search":
         await query.answer()
         context.user_data[PAYMENT_SEARCH_STATE] = True
-        await msg.reply_text("🔎 شناسه تراکنش را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_977b5719f18b'), reply_markup=userbot_cancel_keyboard())
         return
     if data.startswith("userbot:pay:act:"):
         parts = data.split(":")
@@ -9092,11 +8879,11 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             except Exception:
                 pass
             if status == "approved":
-                await query.answer("✅ این پرداخت قبلاً تایید شده است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_0b1e2a6d5850'), show_alert=True)
             elif status == "rejected":
-                await query.answer("🚫 این پرداخت قبلاً رد شده است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_0499d8b9bd0b'), show_alert=True)
             else:
-                await query.answer("❌ عملیات نامعتبر یا تراکنش وجود ندارد.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_7919f18e7423'), show_alert=True)
         return
 
     # --- 7. مدیریت تیکت‌ها ---
@@ -9172,7 +8959,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             "reply_text": "",
             "photo_file_id": "",
         }
-        await msg.reply_text("✍️ لطفا پاسخ خود را به صورت کامل ارسال نمایید", reply_markup=userbot_cancel_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_f3ac5da57201'), reply_markup=userbot_cancel_keyboard())
         return
 
     if data.startswith("userbot:ticketu:reply:"):
@@ -9193,7 +8980,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             "reply_text": "",
             "photo_file_id": "",
         }
-        await msg.reply_text("✍️ لطفا پاسخ خود را به صورت کامل ارسال نمایید", reply_markup=userbot_cancel_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_f3ac5da57201'), reply_markup=userbot_cancel_keyboard())
         return
 
     if data.startswith("userbot:ticketreply:"):
@@ -9202,7 +8989,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         st = context.user_data.get(TICKET_REPLY_STATE) or {}
         if not isinstance(st, dict):
             context.user_data.pop(TICKET_REPLY_STATE, None)
-            await query.answer("وضعیت پاسخ تیکت نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_0c9cfb91d66d'), show_alert=True)
             return
 
         ticket_code = int(st.get("ticket_code") or 0)
@@ -9212,7 +8999,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         step = str(st.get("step") or "").strip().lower()
         if ticket_code <= 0:
             context.user_data.pop(TICKET_REPLY_STATE, None)
-            await query.answer("تیکت نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_d06a724c733c'), show_alert=True)
             return
 
         if act == "cancel":
@@ -9221,7 +9008,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 await msg.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=cid, text="❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await context.bot.send_message(chat_id=cid, text=_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_ticket_detail(
                 ticket_code,
                 cid,
@@ -9243,14 +9030,14 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 pass
             await context.bot.send_message(
                 chat_id=cid,
-                text="✍️ لطفا پاسخ خود را به صورت کامل ارسال نمایید",
+                text=_adm_t('ub_lit_f3ac5da57201'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
 
         if act == "skip":
             if step != "wait_screenshot":
-                await query.answer("در این مرحله قابل استفاده نیست.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_1676366173c1'), show_alert=True)
                 return
             st["photo_file_id"] = ""
             st["step"] = "wait_confirm"
@@ -9268,18 +9055,18 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
 
         if act == "send":
             if step != "wait_confirm":
-                await query.answer("ابتدا مراحل پاسخ را کامل کنید.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_30209eae4be0'), show_alert=True)
                 return
             reply_text = str(st.get("reply_text") or "").strip()
             photo_file_id = str(st.get("photo_file_id") or "").strip()
             if not reply_text:
-                await query.answer("متن پاسخ خالی است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_2e92a2d2dfe7'), show_alert=True)
                 return
 
             ticket = userbot_db.get_ticket_by_code(ticket_code)
             if not ticket:
                 context.user_data.pop(TICKET_REPLY_STATE, None)
-                await query.answer("تیکت یافت نشد.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_ba0dfc851ef2'), show_alert=True)
                 return
 
             admin_name = str(query.from_user.full_name or query.from_user.username or "admin").strip()
@@ -9291,7 +9078,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 photo_file_id=photo_file_id,
             )
             if not ok:
-                await query.answer("ثبت پاسخ انجام نشد.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_61ab962c156d'), show_alert=True)
                 return
             userbot_db.set_ticket_status(
                 ticket_code,
@@ -9327,7 +9114,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 pass
             await context.bot.send_message(
                 chat_id=cid,
-                text="✅ پاسخ تیکت ثبت شد.",
+                text=_adm_t('ub_lit_167da4fb21a5'),
                 reply_markup=admin_main_keyboard(),
             )
             await send_ticket_detail(
@@ -9340,7 +9127,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             )
             return
 
-        await query.answer("گزینه نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
         return
 
     if data.startswith("userbot:ticket:status:"):
@@ -9354,7 +9141,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             page = 1
         if new_status not in {"open", "closed"}:
-            await query.answer("وضعیت نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_b61ae6948a16'), show_alert=True)
             return
         admin_name = str(query.from_user.full_name or query.from_user.username or "admin").strip()
         ok = userbot_db.set_ticket_status(
@@ -9364,7 +9151,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             admin_telegram_id=int(query.from_user.id or 0),
         )
         if not ok:
-            await query.answer("❌ تغییر وضعیت انجام نشد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_3b65c31638dc'), show_alert=True)
             return
         await send_ticket_detail(
             code,
@@ -9387,7 +9174,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             page = 1
         if new_status not in {"open", "closed"}:
-            await query.answer("وضعیت نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_b61ae6948a16'), show_alert=True)
             return
         admin_name = str(query.from_user.full_name or query.from_user.username or "admin").strip()
         ok = userbot_db.set_ticket_status(
@@ -9397,7 +9184,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             admin_telegram_id=int(query.from_user.id or 0),
         )
         if not ok:
-            await query.answer("❌ تغییر وضعیت انجام نشد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_3b65c31638dc'), show_alert=True)
             return
         await send_ticket_detail(
             code,
@@ -9429,10 +9216,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data[ZARIN_COUPON_BULK_STATE] = {"step": "prefix"}
         await query.answer()
         await msg.reply_text(
-            "🧩 ساخت گروهی کد هدیه\n\n"
-            "قدم 1 از 4:\n"
-            "یک پیشوند برای کدها وارد کنید.\n"
-            "مثال: `GIFT` یا `VIP1405`",
+            _adm_t('ub_lit_ed951c8499d4'),
             reply_markup=userbot_cancel_keyboard(),
             parse_mode="Markdown",
         )
@@ -9449,11 +9233,11 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         try:
             item = _create_gift_preset_coupon(preset_key)
         except Exception as e:
-            await msg.reply_text(f"❌ ساخت قالب آماده ناموفق بود:\n{e}")
+            await msg.reply_text(f"{_adm_t('ub_lit_cdcc82495d59')}{e}")
             return
         code = str(item.get("code") or "").strip()
-        title = str(item.get("_preset_title") or "کمپین آماده").strip()
-        await msg.reply_text(f"✅ {title} ساخته شد.\n🏷 کد: {code}")
+        title = str(item.get("_preset_title") or _adm_t('ub_lit_28fd26df61bf')).strip()
+        await msg.reply_text(f"✅ {title}{_adm_t('ub_lit_1c891fd3b4d4')}{code}")
         await send_zarin_coupon_detail(cid, context, code=code, message=msg)
         return
 
@@ -9481,7 +9265,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "userbot:gifts:auto_off":
         await query.answer()
         changed = userbot_db.deactivate_unusable_zarin_vouchers()
-        await msg.reply_text(f"🧹 {changed} کوپن منقضی/تکمیل‌شده خاموش شد.")
+        await msg.reply_text(f"🧹 {changed}{_adm_t('ub_lit_cdd017be48c8')}")
         await send_gifts_security_menu(cid, context, message=msg)
         return
 
@@ -9494,7 +9278,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data[ZARIN_COUPON_ADD_STATE] = {"step": "code"}
         await query.answer()
         await msg.reply_text(
-            "🏷 کد کوپن جدید را وارد کنید:\n(فقط حروف/عدد/`_`/`-`)",
+            _adm_t('ub_lit_1ae4180f420a'),
             reply_markup=userbot_cancel_keyboard(),
             parse_mode="Markdown",
         )
@@ -9503,7 +9287,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "userbot:gifts:coupons:delete":
         context.user_data[ZARIN_COUPON_DELETE_STATE] = True
         await query.answer()
-        await msg.reply_text("➖ کد کوپن برای حذف را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+        await msg.reply_text(_adm_t('ub_lit_432434cfb6f4'), reply_markup=userbot_cancel_keyboard())
         return
 
     if data.startswith("userbot:gifts:coupon:"):
@@ -9511,41 +9295,41 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             item = userbot_db.get_zarin_voucher(code)
             if not item:
-                await query.answer("❌ کوپن یافت نشد.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_50ffbd21b0e4'), show_alert=True)
                 return
             new_active = int(item.get("is_active") or 0) != 1
             try:
                 userbot_db.set_zarin_voucher_active(code, new_active)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
-            await query.answer("✅ روشن شد." if new_active else "⏸ خاموش شد.")
+            await query.answer(_adm_t('ub_lit_a6c28f429af7') if new_active else _adm_t('ub_lit_bcaf1eba81cc'))
             await send_zarin_coupon_detail(cid, context, code=code, message=msg)
             return
         if data.startswith("userbot:gifts:coupon:set_link:"):
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             context.user_data[ZARIN_COUPON_LINK_STATE] = {"code": code}
             await query.answer()
-            await msg.reply_text("🔗 لینک پرداخت زرین پال را ارسال کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_dde124e9c3b9'), reply_markup=userbot_cancel_keyboard())
             return
         if data.startswith("userbot:gifts:coupon:set_code:"):
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             context.user_data[ZARIN_COUPON_CODE_STATE] = {"code": code}
             await query.answer()
-            await msg.reply_text("✏️ کد جدید کوپن را ارسال کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_f0cc9024aff7'), reply_markup=userbot_cancel_keyboard())
             return
         if data.startswith("userbot:gifts:coupon:set_limit:"):
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             context.user_data[ZARIN_COUPON_LIMIT_STATE] = {"code": code}
             await query.answer()
-            await msg.reply_text("👤 محدودیت تعداد استفاده (عدد مثبت) را ارسال کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_09c0f111d458'), reply_markup=userbot_cancel_keyboard())
             return
         if data.startswith("userbot:gifts:coupon:set_exp:"):
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             context.user_data[ZARIN_COUPON_EXP_STATE] = {"code": code}
             await query.answer()
             await msg.reply_text(
-                "🕒 مدت انقضا را به ساعت ارسال کنید.\nبرای نامحدود عدد 0 را ارسال کنید.",
+                _adm_t('ub_lit_8cb5637b13be'),
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
@@ -9553,7 +9337,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             context.user_data[ZARIN_COUPON_AMOUNT_STATE] = {"code": code}
             await query.answer()
-            await msg.reply_text("🎁 مبلغ هدیه کیف پول (تومان) را ارسال کنید:", reply_markup=userbot_cancel_keyboard())
+            await msg.reply_text(_adm_t('ub_lit_020d715277f9'), reply_markup=userbot_cancel_keyboard())
             return
         if data.startswith("userbot:gifts:coupon:campaign:"):
             code = str(data.rsplit(":", 1)[-1] or "").strip()
@@ -9569,25 +9353,24 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             code = str(data.rsplit(":", 1)[-1] or "").strip()
             await query.answer()
             if not code:
-                await msg.reply_text("❌ کد کوپن نامعتبر است.")
+                await msg.reply_text(_adm_t('ub_lit_5f4ca05563a4'))
                 return
             bot_username = await _get_user_bot_username(context)
             if not bot_username:
                 await msg.reply_text(
-                    "❌ یوزرنیم ربات کاربران قابل تشخیص نیست.\n"
-                    "لطفاً `USER_BOT_TOKEN` یا `SUB_BOT_USERNAME` را در `.env` بررسی کنید.",
+                    _adm_t('ub_lit_e003d621f181'),
                     parse_mode="Markdown",
                 )
                 return
             deep_link = _build_telegram_start_link(bot_username, code)
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚀 باز کردن دیپ لینک", url=deep_link)],
-                [InlineKeyboardButton("📱 QR دیپ‌لینک", callback_data=f"userbot:gifts:coupon:qr:{code}")],
-                [InlineKeyboardButton("📣 متن تبلیغ همین کوپن", callback_data=f"userbot:gifts:coupon:campaign:{code}")],
-                [InlineKeyboardButton("🏷 برگشت به کوپن", callback_data=f"userbot:gifts:coupon:{code}")],
+                [InlineKeyboardButton(_adm_t('ub_lit_dffe8eb29470'), url=deep_link)],
+                [InlineKeyboardButton(_adm_t('ub_lit_e75d30bfd8a5'), callback_data=f"userbot:gifts:coupon:qr:{code}")],
+                [InlineKeyboardButton(_adm_t('ub_lit_867000e0e91f'), callback_data=f"userbot:gifts:coupon:campaign:{code}")],
+                [InlineKeyboardButton(_adm_t('ub_lit_030adba70185'), callback_data=f"userbot:gifts:coupon:{code}")],
             ])
             await msg.reply_text(
-                f"🚀 دیپ لینک کوپن:\n{deep_link}",
+                f"{_adm_t('ub_lit_0abb003fa562')}{deep_link}",
                 reply_markup=kb,
                 disable_web_page_preview=True,
             )
@@ -9614,24 +9397,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         top_lines = []
         for idx, item in enumerate(top, start=1):
             name = str(item.get("inviter_full_name") or item.get("inviter_username") or item.get("inviter_id") or "—")
-            top_lines.append(f"{idx}. {name} | موفق:{int(item.get('successful') or 0)} | پاداش:{int(item.get('rewards') or 0):,}")
+            top_lines.append(f"{idx}. {name}{_adm_t('ub_lit_babb41e634ed')}{int(item.get('successful') or 0)}{_adm_t('ub_lit_1d816cdb8d22')}{int(item.get('rewards') or 0):f','}")
         text = (
-            "📊 داشبورد رفرال\n"
-            "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖\n"
-            f"👥 کل دعوت‌ها: {int(stats.get('total_referrals') or 0)}\n"
-            f"🟢 فعال: {int(stats.get('active_referrals') or 0)}\n"
-            f"⏳ در انتظار خرید: {max(0, int(stats.get('active_referrals') or 0) - int(stats.get('paid_purchase_rewards') or 0))}\n"
-            f"🧪 پاداش‌های تست: {int(stats.get('trial_rewards_count') or 0)} ({int(stats.get('trial_rewards_amount') or 0):,} تومان)\n"
-            f"🛒 پاداش‌های خرید: {int(stats.get('purchase_rewards_count') or 0)} ({int(stats.get('purchase_rewards_amount') or 0):,} تومان)\n"
-            f"💸 مجموع هزینه پاداش: {int(stats.get('total_reward_cost') or 0):,} تومان\n"
-            f"🔻 لغوشده: {int(stats.get('revoked_rewards_count') or 0)}\n"
-            f"💰 درآمد ایجادشده: {int(stats.get('revenue_generated') or 0):,} تومان\n"
-            f"📈 نرخ تبدیل: {stats.get('conversion_rate') or 0}٪\n"
-            f"🚩 پرچم تقلب: {int(stats.get('fraud_flagged') or 0)}\n"
+            f"{_adm_t('ub_lit_def59159c7c7')}{int(stats.get('total_referrals') or 0)}{_adm_t('ub_lit_61149b538c4f')}{int(stats.get('active_referrals') or 0)}{_adm_t('ub_lit_22f50ee4cb04')}{max(0, int(stats.get('active_referrals') or 0) - int(stats.get('paid_purchase_rewards') or 0))}{_adm_t('ub_lit_7e8b983ca3eb')}{int(stats.get('trial_rewards_count') or 0)} ({int(stats.get('trial_rewards_amount') or 0):f','}{_adm_t('ub_lit_7a612c8c01a7')}{int(stats.get('purchase_rewards_count') or 0)} ({int(stats.get('purchase_rewards_amount') or 0):f','}{_adm_t('ub_lit_1b740f1423e2')}{int(stats.get('total_reward_cost') or 0):f','}{_adm_t('ub_lit_6eeb2f8e4709')}{int(stats.get('revoked_rewards_count') or 0)}{_adm_t('ub_lit_1afc4e046888')}{int(stats.get('revenue_generated') or 0):f','}{_adm_t('ub_lit_e7ce4334a0c5')}{stats.get('conversion_rate') or 0}{_adm_t('ub_lit_41bd9991c2b2')}{int(stats.get('fraud_flagged') or 0)}\n"
         )
         if top_lines:
-            text += "\n🏆 برترین دعوت‌کننده‌ها:\n" + "\n".join(top_lines)
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙بازگشت", callback_data="userbot:referral_menu")]])
+            text += _adm_t('ub_lit_61cab5ddef96') + "\n".join(top_lines)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(_adm_t('ub_lit_efb588c846b7'), callback_data="userbot:referral_menu")]])
         try:
             await msg.edit_text(text, reply_markup=kb)
         except BadRequest:
@@ -9647,9 +9419,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         try:
             settings = userbot_db.toggle_referral_setting("referral_enabled")
         except Exception as e:
-            await query.answer(f"خطا: {e}", show_alert=True)
+            await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
             return
-        await query.answer("✅ رفرال فعال شد." if bool(settings.get("referral_enabled")) else "🚫 رفرال غیرفعال شد.")
+        await query.answer(_adm_t('ub_lit_b5fe65255f70') if bool(settings.get("referral_enabled")) else _adm_t('ub_lit_d1044dffa308'))
         await send_referral_admin_menu(cid, context, message=msg)
         return
 
@@ -9658,25 +9430,25 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         try:
             userbot_db.toggle_referral_setting(name)
         except Exception as e:
-            await query.answer(f"خطا: {e}", show_alert=True)
+            await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
             return
-        await query.answer("✅ تغییر کرد.")
+        await query.answer(_adm_t('ub_lit_68bc6617f02e'))
         await send_referral_admin_settings(cid, context, message=msg)
         return
 
     if data.startswith("userbot:referral:edit:"):
         name = str(data.rsplit(":", 1)[-1] or "").strip()
         if name not in {"trial_reward_amount", "purchase_reward_amount", "max_successful_referrals", "min_purchase_amount", "invite_intro_text"}:
-            await query.answer("❌ نامعتبر.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_647cf6505c85'), show_alert=True)
             return
         context.user_data[REFERRAL_VALUE_EDIT_STATE] = {"name": name}
         await query.answer()
         prompts = {
-            "trial_reward_amount": "💰 مبلغ پاداش تست (تومان) را ارسال کنید:",
-            "purchase_reward_amount": "💰 مبلغ پاداش خرید اول (تومان) را ارسال کنید:",
-            "max_successful_referrals": "🔢 سقف دعوت موفق برای هر فرد (0 = نامحدود) را ارسال کنید:",
-            "min_purchase_amount": "💰 حداقل مبلغ خرید برای پاداش (تومان) را ارسال کنید:",
-            "invite_intro_text": "📝 متن صفحه دعوت کاربران را ارسال کنید:\n(از {invite_link}، {trial_reward} و {purchase_reward} می‌توانید استفاده کنید)",
+            "trial_reward_amount": _adm_t('ub_lit_3d1180ad4ffd'),
+            "purchase_reward_amount": _adm_t('ub_lit_1cdee38cc0a2'),
+            "max_successful_referrals": _adm_t('ub_lit_2eaee928a5dd'),
+            "min_purchase_amount": _adm_t('ub_lit_595bbc73a86a'),
+            "invite_intro_text": _adm_t('ub_lit_84d62c7a1948'),
         }
         await msg.reply_text(prompts[name], reply_markup=userbot_cancel_keyboard())
         return
@@ -9704,8 +9476,8 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             ref_id = int(str(data.rsplit(":", 1)[-1] or 0))
         except ValueError:
             ref_id = 0
-        ok = userbot_db.set_referral_status(ref_id, "rejected", "رد شده توسط ادمین")
-        await query.answer("✅ دعوت رد شد." if ok else "❌ تغییر وضعیت انجام نشد.")
+        ok = userbot_db.set_referral_status(ref_id, "rejected", _adm_t('ub_lit_fd379ed76e00'))
+        await query.answer(_adm_t('ub_lit_97bf90a459b8') if ok else _adm_t('ub_lit_22b964a4b577'))
         await send_referral_detail(ref_id, cid, context, message=msg)
         return
 
@@ -9715,7 +9487,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         except ValueError:
             ref_id = 0
         ok = userbot_db.set_referral_status(ref_id, "active", "")
-        await query.answer("✅ دعوت دوباره فعال شد." if ok else "❌ تغییر وضعیت انجام نشد.")
+        await query.answer(_adm_t('ub_lit_bd161f4f843a') if ok else _adm_t('ub_lit_22b964a4b577'))
         await send_referral_detail(ref_id, cid, context, message=msg)
         return
 
@@ -9727,7 +9499,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         ref = userbot_db.get_referral_by_id(ref_id) or {}
         new_flag = int(ref.get("fraud_flag") or 0) != 1
         userbot_db.set_referral_fraud_flag(ref_id, new_flag)
-        await query.answer("🚩 پرچم تقلب ثبت شد." if new_flag else "🧹 پرچم تقلب حذف شد.")
+        await query.answer(_adm_t('ub_lit_e17a6a6edff7') if new_flag else _adm_t('ub_lit_cb3cd1bf30b7'))
         await send_referral_detail(ref_id, cid, context, message=msg)
         return
 
@@ -9738,9 +9510,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             reward_id = 0
         revoked = userbot_db.revoke_referral_reward_by_id(reward_id)
         if revoked:
-            await query.answer("💥 پاداش لغو شد و مبلغ از کیف پول کسر گردید.")
+            await query.answer(_adm_t('ub_lit_0e5080bc0a77'))
         else:
-            await query.answer("❌ پاداش قابل لغو نیست.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_66808f58ba59'), show_alert=True)
             return
         ref_id = int((revoked or {}).get("referral_id") or 0)
         if ref_id > 0:
@@ -9771,7 +9543,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data[REFERRAL_MANUAL_REWARD_STATE] = {"step": "input"}
         await query.answer()
         await msg.reply_text(
-            "🧾 پاداش دستی\nبرای یک کاربر به‌صورت «شناسه داخلی مبلغ» ارسال کنید.\nمثال: 42 50000\n(مبلغ به تومان)",
+            _adm_t('ub_lit_d1e9238354a8'),
             reply_markup=userbot_cancel_keyboard(),
         )
         return
@@ -9799,8 +9571,8 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if data == "userbot:settings:ui:colored_buttons":
         settings = userbot_db.toggle_ui_setting("colored_buttons")
-        status = "فعال شد" if settings.get("colored_buttons", True) else "غیرفعال شد"
-        await query.answer(f"🎨 دکمه‌های رنگی {status}.")
+        status = _adm_t('ub_lit_7485818ed4d2') if settings.get("colored_buttons", True) else _adm_t('ub_lit_b6f893a889d1')
+        await query.answer(f"{_adm_t('ub_lit_c7556a539276')}{status}.")
         await send_colored_buttons_settings_menu(cid, context, message=msg)
         return
 
@@ -9808,7 +9580,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         theme = normalize_button_theme(data.rsplit(":", 1)[-1])
         userbot_db.set_ui_setting("button_theme", theme)
         theme_title = BUTTON_STYLE_THEMES.get(theme, BUTTON_STYLE_THEMES["smart"])["title"]
-        await query.answer(f"طرح {theme_title} انتخاب شد.")
+        await query.answer(f"{_adm_t('ub_lit_8cfd1bf89ba0')}{theme_title}{_adm_t('ub_lit_dd20bd5a2f38')}")
         await send_colored_buttons_settings_menu(cid, context, message=msg)
         return
 
@@ -9858,7 +9630,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 context.user_data[INVITE_BANNER_PHOTO_EDIT_STATE] = True
                 await query.answer()
                 await msg.reply_text(
-                    "🖼️ لطفاً عکس بنر دعوت را ارسال کنید.\nبرای لغو «❌لغو» را بزنید.",
+                    _adm_t('ub_lit_2e7b5385de52'),
                     reply_markup=userbot_cancel_keyboard(),
                 )
                 return
@@ -9866,12 +9638,12 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 try:
                     userbot_db.set_text_setting("invite_banner_photo_id", "")
                 except Exception as e:
-                    await query.answer(f"خطا: {e}", show_alert=True)
+                    await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                     return
-                await query.answer("✅ بنر حذف شد.")
+                await query.answer(_adm_t('ub_lit_be8da7b33ce2'))
                 await send_invite_text_settings_menu(cid, context, message=msg)
                 return
-            await query.answer("گزینه نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
             return
         if data == "userbot:settings:texts:guide_menu":
             await query.answer()
@@ -9880,25 +9652,25 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         if ":edit:" in data:
             field_name = data.rsplit(":edit:", 1)[-1].strip()
             labels = {
-                "welcome_message": "پیام خوش آمدگویی",
-                "faq_text": "متن سوالات متداول",
-                "guide_text": "متن معرفی راهنما",
-                "guide_android_text": "راهنمای اندروید",
-                "guide_ios_text": "راهنمای IOS",
-                "guide_windows_text": "راهنمای ویندوز",
-                "guide_mac_text": "راهنمای مک",
-                "guide_linux_text": "راهنمای لینوکس",
-                "invite_text": "متن بنر دعوت (قدیمی)",
-                "invite_info_text": "متن اطلاعات دعوت",
-                "invite_banner_text": "متن بنر دعوت",
-                "servers_list_text": "متن لیست سرورها",
-                "plans_list_text": "متن لیست پلن‌ها",
-                "ticket_panel_text": "متن پنل تیکت",
-                "zarinpal_pro_text": "متن زرین پال",
-                "card_to_card_text": "متن کارت به کارت",
+                "welcome_message": _adm_t('ub_lit_16a4894155c6'),
+                "faq_text": _adm_t('ub_lit_fe0c9752289d'),
+                "guide_text": _adm_t('ub_lit_e0bb77a3e0b9'),
+                "guide_android_text": _adm_t('ub_lit_26226141ec4f'),
+                "guide_ios_text": _adm_t('ub_lit_457d0c610f42'),
+                "guide_windows_text": _adm_t('ub_lit_c3793fb8bb0d'),
+                "guide_mac_text": _adm_t('ub_lit_001643349e09'),
+                "guide_linux_text": _adm_t('ub_lit_7f3f16b09ee6'),
+                "invite_text": _adm_t('ub_lit_427df668b29e'),
+                "invite_info_text": _adm_t('ub_lit_c7d3dfbeb307'),
+                "invite_banner_text": _adm_t('ub_lit_867b52c86c46'),
+                "servers_list_text": _adm_t('ub_lit_5b1832a63ddc'),
+                "plans_list_text": _adm_t('ub_lit_6483c6b7f5d2'),
+                "ticket_panel_text": _adm_t('ub_lit_fd47940c17b7'),
+                "zarinpal_pro_text": _adm_t('ub_lit_bcd826eb617a'),
+                "card_to_card_text": _adm_t('ub_lit_9d2a0c9b5195'),
             }
             if field_name not in labels:
-                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
                 return
             settings = _get_text_settings()
             current = str(settings.get(field_name) or "").strip()
@@ -9908,16 +9680,14 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[TEXT_SETTINGS_EDIT_STATE] = field_name
             await query.answer()
             prompt = (
-                f"📝 {labels[field_name]}\n"
-                f"📌 متن فعلی:\n{current}\n\n"
-                "متن جدید را ارسال کنید."
+                f"📝 {labels[field_name]}{_adm_t('ub_lit_a1828ebe872a')}{current}{_adm_t('ub_lit_d393c498139d')}"
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
             return
-        await query.answer("این مورد نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_1b41f2d33558'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:subscription:"):
@@ -9943,7 +9713,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 changed = userbot_db.reset_all_free_trials()
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             try:
                 await msg.delete()
@@ -9951,7 +9721,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 pass
             await context.bot.send_message(
                 chat_id=cid,
-                text=f"✅ بازنشانی تست رایگان برای همه کاربران انجام شد.\n👥 تعداد کاربران ریست‌شده: {changed}",
+                text=f"{_adm_t('ub_lit_ae268766695d')}{changed}",
             )
             await send_subscription_settings_menu(cid, context)
             return
@@ -9967,7 +9737,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await send_subscription_settings_menu(cid, context, message=msg)
             return
 
-        await query.answer("این مورد در آپدیت بعدی فعال می‌شود 🚧", show_alert=True)
+        await query.answer(_adm_t('ub_lit_035417d71a9c'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:buy_renew:"):
@@ -9978,8 +9748,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[RENEW_POLICY_EDIT_STATE] = "renew_unlimited_volume_from_gb"
             await query.answer()
             prompt = (
-                f"📝 مقدار فعلی: {current} گیگابایت\n"
-                "♾ لطفاً حداقل مقدار (گیگابایت) برای نمایش حجم نامحدود را مشخص کنید:"
+                f"{_adm_t('ub_lit_2558ae156361')}{current}{_adm_t('ub_lit_64aa243a8eb6')}"
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
@@ -9992,8 +9761,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[RENEW_POLICY_EDIT_STATE] = "renew_unlimited_time_from_days"
             await query.answer()
             prompt = (
-                f"📝 مقدار فعلی: {current} روز\n"
-                "♾ لطفاً حداقل مقدار (روز) برای نمایش زمان نامحدود را مشخص کنید:"
+                f"{_adm_t('ub_lit_2558ae156361')}{current}{_adm_t('ub_lit_3602351b8c52')}"
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
@@ -10013,7 +9781,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 col = int(data.rsplit(":", 1)[-1])
                 userbot_db.set_buy_renew_columns("plans", col)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_plan_columns_menu(cid, context, message=msg)
@@ -10023,7 +9791,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 col = int(data.rsplit(":", 1)[-1])
                 userbot_db.set_buy_renew_columns("servers", col)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_server_columns_menu(cid, context, message=msg)
@@ -10037,7 +9805,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_buy_renew_setting(action)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_buy_renew_settings_menu(cid, context, message=msg)
@@ -10052,11 +9820,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             settings = _get_buy_renew_settings()
             current = str(settings.get("event_channel_id") or "—").strip() or "—"
             prompt = (
-                "📢 تنظیم کانال رویداد\n"
-                f"🔹 کانال فعلی: {current}\n\n"
-                "🔗 ابتدا ربات ادمین را در کانال ادمین ادمین کنید، سپس یک پیام از همان کانال "
-                "به اینجا فوروارد کنید.\n"
-                "یا @channel / -100... را مستقیم ارسال کنید."
+                f"{_adm_t('ub_lit_9ff807b4e182')}{current}{_adm_t('ub_lit_c6ee28167a1d')}"
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
@@ -10068,19 +9832,19 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 kind, mode = tail.split(":", 1)
             except ValueError:
-                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
                 return
             kind = str(kind or "").strip().lower()
             mode = str(mode or "").strip().lower()
             if kind not in {"volume", "time"} or mode not in {"add", "reset"}:
-                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
                 return
             try:
                 userbot_db.set_buy_renew_rollover_mode(kind, mode)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
-            await query.answer("✅ ذخیره شد")
+            await query.answer(_adm_t('ub_lit_5d7b6f5551fb'))
             await send_renew_policy_menu(cid, context, message=msg)
             return
         if ":renew_policy:" in data:
@@ -10088,7 +9852,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.set_buy_renew_policy(policy)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_renew_policy_menu(cid, context, message=msg)
@@ -10100,18 +9864,16 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 current = int(settings.get("renew_max_days") or 3)
                 context.user_data[RENEW_POLICY_EDIT_STATE] = "renew_max_days"
                 prompt = (
-                    f"📊 مقدار فعلی: {current} روز\n"
-                    "📝 تعیین کنید حداکثر چند روز مانده به پایان اشتراک، تمدید مجاز باشد:"
+                    f"{_adm_t('ub_lit_330d3bdc5d09')}{current}{_adm_t('ub_lit_af71b6b54da9')}"
                 )
             elif limit_key == "usage":
                 current = int(settings.get("renew_max_remaining_gb") or 3)
                 context.user_data[RENEW_POLICY_EDIT_STATE] = "renew_max_remaining_gb"
                 prompt = (
-                    f"📆 مقدار فعلی: {current} گیگابایت\n"
-                    "📝 تعیین کنید حداکثر چند گیگابایتِ باقی‌مانده، تمدید مجاز باشد:"
+                    f"{_adm_t('ub_lit_6b316581a513')}{current}{_adm_t('ub_lit_b81d6d664163')}"
                 )
             else:
-                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
                 return
             await query.answer()
             try:
@@ -10123,12 +9885,12 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.set_buy_renew_mode(action)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_buy_renew_settings_menu(cid, context, message=msg)
             return
-        await query.answer("این مورد نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_1b41f2d33558'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:tx_plans:"):
@@ -10145,11 +9907,11 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 elif mode == "categorized":
                     current["plan_categories_enabled"] = True
                 else:
-                    await query.answer("گزینه نامعتبر است.", show_alert=True)
+                    await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
                     return
                 userbot_db.set_tx_plans_settings(current)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_plan_categories_mode_menu(cid, context, message=msg)
@@ -10165,7 +9927,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 current["plan_sort_mode"] = mode if mode in {"price", "gb", "days"} else "price"
                 userbot_db.set_tx_plans_settings(current)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_plan_sort_mode_menu(cid, context, message=msg)
@@ -10177,7 +9939,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 current["plan_sort_desc"] = True if direction == "desc" else False
                 userbot_db.set_tx_plans_settings(current)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_plan_sort_mode_menu(cid, context, message=msg)
@@ -10188,7 +9950,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_tx_plans_setting(action)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_tx_plans_settings_menu(cid, context, message=msg)
@@ -10199,15 +9961,14 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[TX_PLANS_EDIT_STATE] = "min_transaction_toman"
             await query.answer()
             prompt = (
-                f"📝 مقدار فعلی: {current:,} تومان\n"
-                "💳 لطفاً حداقل مبلغ مجاز تراکنش را وارد کنید:"
+                f"{_adm_t('ub_lit_2558ae156361')}{current:f','}{_adm_t('ub_lit_514253239f55')}"
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
             return
-        await query.answer("این مورد نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_1b41f2d33558'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:trial_spec:"):
@@ -10216,7 +9977,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_trial_spec_enabled()
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_trial_spec_menu(cid, context, message=msg)
@@ -10225,7 +9986,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_trial_spec_announce_enabled()
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_trial_spec_menu(cid, context, message=msg)
@@ -10236,15 +9997,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 current = float(spec.get("usage_gb") or 1)
                 context.user_data[TRIAL_SPEC_EDIT_STATE] = "usage_gb"
                 prompt = (
-                    f"📝 مقدار فعلی: {current:g} گیگابایت\n"
-                    "📊 لطفا حجم(گیگابایت) اشتراک تست را تنظیم کنید:"
+                    f"{_adm_t('ub_lit_2558ae156361')}{current:f'g'}{_adm_t('ub_lit_3d39cb23c5fe')}"
                 )
             else:
                 current = int(spec.get("days") or 1)
                 context.user_data[TRIAL_SPEC_EDIT_STATE] = "days"
                 prompt = (
-                    f"📝 مقدار فعلی: {current} روز\n"
-                    "🕐 لطفا تعداد روزهای اشتراک تست را تنظیم کنید:"
+                    f"{_adm_t('ub_lit_2558ae156361')}{current}{_adm_t('ub_lit_e0a2efebc00f')}"
                 )
             await query.answer()
             try:
@@ -10252,7 +10011,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
             return
-        await query.answer("این مورد نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_1b41f2d33558'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:sub_status_reminder:"):
@@ -10261,7 +10020,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_sub_reminder_enabled()
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_sub_status_reminder_menu(cid, context, message=msg)
@@ -10272,15 +10031,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 current = int(reminder.get("usage_gb") or 3)
                 context.user_data[SUB_REMINDER_EDIT_STATE] = "usage_gb"
                 prompt = (
-                    f"📊 مقدار فعلی: {current} گیگابایت\n"
-                    "📝 تعیین کنید چند گیگ مانده به اتمام اشتراک پیام یادآوری تمدید اشتراک ارسال شود:"
+                    f"{_adm_t('ub_lit_330d3bdc5d09')}{current}{_adm_t('ub_lit_8fcb1814c790')}"
                 )
             else:
                 current = int(reminder.get("days") or 3)
                 context.user_data[SUB_REMINDER_EDIT_STATE] = "days"
                 prompt = (
-                    f"⏳ مقدار فعلی: {current} روز\n"
-                    "📝 تعیین کنید چند روز قبل از اتمام اشتراک پیام یادآوری تمدید اشتراک ارسال شود:"
+                    f"{_adm_t('ub_lit_bb1b25c38952')}{current}{_adm_t('ub_lit_77be89d84c8a')}"
                 )
             await query.answer()
             try:
@@ -10288,23 +10045,17 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
             return
-        await query.answer("این مورد نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_1b41f2d33558'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:sub_link_status:"):
         action = data.split(":")[-1]
         if action == "set_base_url":
             context.user_data[SUB_BASE_URL_EDIT_STATE] = "edit"
-            current = userbot_db.get_managed_sub_base_url() or "خودکار"
+            current = userbot_db.get_managed_sub_base_url() or _adm_t('ub_lit_084da407a88d')
             await query.answer()
             prompt = (
-                "🌐 دامنه عمومی لینک اشتراک هوشمند را وارد کنید.\n"
-                "نمونه‌های معتبر:\n"
-                "site.example.com\n"
-                "https://site.example.com\n\n"
-                "مقدار فعلی:\n"
-                f"{current}\n\n"
-                "برای بازگشت به حالت خودکار عدد 0 را ارسال کنید."
+                f"{_adm_t('ub_lit_79a350aec8a6')}{current}{_adm_t('ub_lit_6a3be198e482')}"
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
@@ -10315,11 +10066,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer()
             hint_domain = _guess_ssl_domain_hint()
             guide = (
-                "🔐 راهنمای فعال‌سازی SSL برای لینک‌های اشتراک هوشمند\n\n"
-                "1) DNS دامنه را روی IP همین سرور ست کنید.\n"
-                "2) روی سرور این دستور را اجرا کنید:\n"
-                f"`cd ~/Hiddify-SellBot && sudo ./install.sh ssl {hint_domain} your-email@example.com`\n\n"
-                "بعد از موفقیت، دامنه را در همین منو تنظیم کنید (با یا بدون https)."
+                f"{_adm_t('ub_lit_c4e8ee0d8e4b')}{hint_domain}{_adm_t('ub_lit_c26ce342c4ef')}"
             )
             try:
                 await msg.reply_text(guide, parse_mode="Markdown", reply_markup=userbot_cancel_keyboard())
@@ -10343,7 +10090,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer()
             await send_sub_link_status_menu(cid, context, message=msg)
             return
-        await query.answer("این مورد نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_1b41f2d33558'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:marketing:"):
@@ -10352,7 +10099,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_marketing_setting(name)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_marketing_settings_menu(cid, context, message=msg)
@@ -10364,20 +10111,16 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 current = str(settings.get("auto_gift_text") or "").strip() or "—"
                 context.user_data[MARKETING_EDIT_STATE] = "auto_gift_text"
                 prompt = (
-                    "⚙️ تنظیم متن هدایای اتوماتیک\n"
-                    f"📌 متن فعلی:\n{current}\n\n"
-                    "متن جدید را ارسال کنید."
+                    f"{_adm_t('ub_lit_7aa9994a2ecc')}{current}{_adm_t('ub_lit_d393c498139d')}"
                 )
             elif edit_name == "min_auto_gift_charge":
                 current = int(settings.get("min_auto_gift_charge") or 0)
                 context.user_data[MARKETING_EDIT_STATE] = "min_auto_gift_charge"
                 prompt = (
-                    "⚙️ حداقل شارژ هدیه اتوماتیک\n"
-                    f"📌 مقدار فعلی: {current:,} تومان\n\n"
-                    "مقدار جدید را به تومان ارسال کنید."
+                    f"{_adm_t('ub_lit_3a9288de90d0')}{current:f','}{_adm_t('ub_lit_d245af6d7e5d')}"
                 )
             else:
-                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
                 return
             await query.answer()
             try:
@@ -10385,7 +10128,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
             return
-        await query.answer("این مورد نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_1b41f2d33558'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:force_join:"):
@@ -10394,18 +10137,18 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             settings = _get_force_join_settings()
             await query.answer()
             try:
-                await msg.reply_text(str(settings.get("guide_text") or "").strip() or "راهنما تنظیم نشده است.")
+                await msg.reply_text(str(settings.get("guide_text") or "").strip() or _adm_t('ub_lit_c31fe348e1cb'))
             except Exception:
                 await context.bot.send_message(
                     chat_id=cid,
-                    text=str(settings.get("guide_text") or "").strip() or "راهنما تنظیم نشده است.",
+                    text=str(settings.get("guide_text") or "").strip() or _adm_t('ub_lit_c31fe348e1cb'),
                 )
             return
         if action == "toggle":
             try:
                 userbot_db.toggle_force_join_enabled()
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_force_join_settings_menu(cid, context, message=msg)
@@ -10414,15 +10157,14 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[FORCE_JOIN_EDIT_STATE] = True
             await query.answer()
             prompt = (
-                "📢 تنظیم کانال پشتیبانی برای عضویت اجباری\n\n"
-                "یک پیام از کانال فوروارد کنید یا @channel / -100... ارسال کنید."
+                _adm_t('ub_lit_335033076585')
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
             return
-        await query.answer("گزینه نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:payment:"):
@@ -10436,12 +10178,12 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             }
             key = key_map.get(method)
             if not key:
-                await query.answer("گزینه نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
                 return
             try:
                 userbot_db.toggle_payment_setting(key)
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_payment_method_menu(cid, context, method=method, message=msg)
@@ -10461,9 +10203,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 _write_env_values(updates)
             except Exception as e:
-                await query.answer(f"خطا در ذخیره .env: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_890ce1b4b903')}{e}", show_alert=True)
                 return
-            await query.answer("ذخیره شد.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_55a39817f190'), show_alert=True)
             await send_sms_webhook_settings_menu(cid, context, message=msg)
             return
         if data == "userbot:settings:payment:card:sms:regen":
@@ -10477,14 +10219,12 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                     }
                 )
             except Exception as e:
-                await query.answer(f"خطا در ذخیره .env: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_890ce1b4b903')}{e}", show_alert=True)
                 return
-            await query.answer("Secret جدید ساخته شد.")
+            await query.answer(_adm_t('ub_lit_165d6b096dda'))
             await send_sms_webhook_settings_menu(cid, context, message=msg)
             copy_text = (
-                "🔐 Secret Key جدید اپ\n"
-                "برای کپی، متن داخل کادر را انتخاب کنید:\n\n"
-                f"<pre><code>{html_escape(new_secret)}</code></pre>"
+                f"{_adm_t('ub_lit_01c80f1c876d')}{html_escape(new_secret)}</code></pre>"
             )
             try:
                 await msg.reply_text(copy_text, parse_mode="HTML")
@@ -10495,14 +10235,10 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             status = _sms_webhook_status()
             secret = str(status.get("secret") or "").strip()
             if not secret:
-                await query.answer("Secret هنوز ساخته نشده است. اول «ساخت Secret» را بزنید.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_30e18cf10903'), show_alert=True)
                 return
             text = (
-                "🔐 Secret Key اپ\n"
-                "برای کپی، متن داخل کادر را انتخاب کنید:\n\n"
-                f"<pre><code>{html_escape(secret)}</code></pre>\n\n"
-                "Webhook URL:\n"
-                f"<pre><code>{html_escape(str(status.get('endpoint') or ''))}</code></pre>"
+                f"{_adm_t('ub_lit_d0079edbfe95')}{html_escape(secret)}</code></pre>\n\nWebhook URL:\n<pre><code>{html_escape(str(status.get('endpoint') or ''))}</code></pre>"
             )
             await query.answer()
             try:
@@ -10513,15 +10249,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         if data == "userbot:settings:payment:card:sms:help":
             status = _sms_webhook_status()
             text = (
-                "📱 راهنمای اتصال اپ SMS Verifier\n\n"
-                "داخل اپ این مقدارها را وارد کنید:\n\n"
-                "Webhook URL:\n"
-                f"<pre><code>{html_escape(str(status.get('endpoint') or ''))}</code></pre>\n\n"
-                "Secret Key:\n"
-                "از دکمه «👁 نمایش Secret برای اپ» کپی کنید.\n\n"
-                "سرشماره بانک:\n"
-                "مثلاً برای نمونه‌های فعلی: <code>20004861</code>\n\n"
-                "اگر بانک چهار رقم کارت را داخل SMS می‌فرستد، فیلتر چهار رقم کارت را روشن کنید؛ اگر نمی‌فرستد خاموش بگذارید."
+                f"{_adm_t('ub_lit_3aec5931b2c8')}{html_escape(str(status.get('endpoint') or ''))}{_adm_t('ub_lit_ee8e61f0d905')}"
             )
             await query.answer()
             try:
@@ -10533,7 +10261,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             raw = data.rsplit(":", 1)[-1].strip()
             number = re.sub(r"\D", "", raw)
             if len(number) != 16:
-                await query.answer("شماره کارت نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_4dae3ea921f5'), show_alert=True)
                 return
             await query.answer()
             await send_payment_card_item_menu(cid, context, number=number, message=msg)
@@ -10542,35 +10270,35 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             raw = data.rsplit(":", 1)[-1].strip()
             number = re.sub(r"\D", "", raw)
             if len(number) != 16:
-                await query.answer("شماره کارت نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_4dae3ea921f5'), show_alert=True)
                 return
-            await query.answer(f"شماره کارت:\n{number}", show_alert=True)
+            await query.answer(f"{_adm_t('ub_lit_0028ef6bbfb2')}{number}", show_alert=True)
             return
         if data.startswith("userbot:settings:payment:card:edit_number:"):
             raw = data.rsplit(":", 1)[-1].strip()
             number = re.sub(r"\D", "", raw)
             if len(number) != 16:
-                await query.answer("شماره کارت نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_4dae3ea921f5'), show_alert=True)
                 return
             context.user_data[PAYMENT_CARD_EDIT_STATE] = {"mode": "number", "number": number}
             await query.answer()
             try:
-                await msg.reply_text("💳 شماره کارت جدید را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_c4191e107229'), reply_markup=userbot_cancel_keyboard())
             except Exception:
-                await context.bot.send_message(chat_id=cid, text="💳 شماره کارت جدید را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await context.bot.send_message(chat_id=cid, text=_adm_t('ub_lit_c4191e107229'), reply_markup=userbot_cancel_keyboard())
             return
         if data.startswith("userbot:settings:payment:card:edit_owner:"):
             raw = data.rsplit(":", 1)[-1].strip()
             number = re.sub(r"\D", "", raw)
             if len(number) != 16:
-                await query.answer("شماره کارت نامعتبر است.", show_alert=True)
+                await query.answer(_adm_t('ub_lit_4dae3ea921f5'), show_alert=True)
                 return
             context.user_data[PAYMENT_CARD_EDIT_STATE] = {"mode": "owner", "number": number}
             await query.answer()
             try:
-                await msg.reply_text("👤 نام جدید صاحب کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(_adm_t('ub_lit_942dd32d8c8a'), reply_markup=userbot_cancel_keyboard())
             except Exception:
-                await context.bot.send_message(chat_id=cid, text="👤 نام جدید صاحب کارت را وارد کنید:", reply_markup=userbot_cancel_keyboard())
+                await context.bot.send_message(chat_id=cid, text=_adm_t('ub_lit_942dd32d8c8a'), reply_markup=userbot_cancel_keyboard())
             return
         if data == "userbot:settings:payment:card:list":
             await query.answer()
@@ -10580,8 +10308,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[PAYMENT_CARD_ADD_STATE] = {"step": "number"}
             await query.answer()
             prompt = (
-                "⬇️ لطفا اطلاعات زیر را برای افزودن کارت وارد کنید\n"
-                "💳 لطفا شماره کارت را وارد کنید:"
+                _adm_t('ub_lit_b4de48857dac')
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
@@ -10591,7 +10318,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         if data == "userbot:settings:payment:card:delete":
             context.user_data[PAYMENT_CARD_DELETE_STATE] = True
             await query.answer()
-            prompt = "➖ حذف کارت\nشماره کارت را ارسال کنید:"
+            prompt = _adm_t('ub_lit_8aff19585c27')
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
             except Exception:
@@ -10605,26 +10332,20 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 current = ""
             current = current or "0"
             prompt = (
-                "⚙️ در تعریف متن کارت به کارت، به جایگذاری مقادیر زیر توجه کنید:\n"
-                "- شماره کارت: {CARD}\n"
-                "- صاحب کارت: {HOLDER}\n"
-                "- نام بانک: {BANK}\n"
-                "- مقدار تومانی: {AMOUNT}\n"
-                "- مقدار ریالی: {RIAL}\n"
-                "❗️در بخش موردنظر، مقدار درج‌شده را همراه با کاراکترهای {} درج کنید تا مقدار موردنظر جایگزین شود."
+                _adm_t('ub_lit_9370b34ab82b')
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
-                await msg.reply_text(f"📝 مقدار فعلی: {current}", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(f"{_adm_t('ub_lit_2558ae156361')}{current}", reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
-                await context.bot.send_message(chat_id=cid, text=f"📝 مقدار فعلی: {current}", reply_markup=userbot_cancel_keyboard())
+                await context.bot.send_message(chat_id=cid, text=f"{_adm_t('ub_lit_2558ae156361')}{current}", reply_markup=userbot_cancel_keyboard())
             return
         if data == "userbot:settings:payment:card:random_tx_spec":
             try:
                 userbot_db.toggle_tx_plans_setting("random_tx_spec")
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_payment_method_menu(cid, context, method="card", message=msg)
@@ -10633,7 +10354,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_payment_setting("require_last4_for_card_receipt")
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_payment_method_menu(cid, context, method="card", message=msg)
@@ -10647,7 +10368,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_payment_setting("event_channel_enabled")
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_payment_settings_menu(cid, context, message=msg)
@@ -10656,15 +10377,14 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[PAYMENT_CHANNEL_EDIT_STATE] = True
             await query.answer()
             prompt = (
-                "📢 تنظیم کانال رویداد پرداخت\n\n"
-                "یک پیام از کانال فوروارد کنید یا @channel / -100... ارسال کنید."
+                _adm_t('ub_lit_d4979d7ba1fe')
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(chat_id=cid, text=prompt, reply_markup=userbot_cancel_keyboard())
             return
-        await query.answer("گزینه نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
         return
 
     if data.startswith("userbot:settings:backup_restore:"):
@@ -10673,7 +10393,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_backup_restore_setting("auto_backup_enabled")
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_backup_restore_settings_menu(cid, context, message=msg)
@@ -10682,7 +10402,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 userbot_db.toggle_backup_restore_setting("event_channel_enabled")
             except Exception as e:
-                await query.answer(f"خطا: {e}", show_alert=True)
+                await query.answer(f"{_adm_t('ub_lit_05f6ce76ab68')}{e}", show_alert=True)
                 return
             await query.answer()
             await send_backup_restore_settings_menu(cid, context, message=msg)
@@ -10691,8 +10411,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             context.user_data[BACKUP_CHANNEL_EDIT_STATE] = True
             await query.answer()
             prompt = (
-                "📢 تنظیم کانال رویداد بکاپ\n\n"
-                "یک پیام از کانال فوروارد کنید یا @channel / -100... ارسال کنید."
+                _adm_t('ub_lit_869c28957a0c')
             )
             try:
                 await msg.reply_text(prompt, reply_markup=userbot_cancel_keyboard())
@@ -10704,13 +10423,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer()
             try:
                 await msg.reply_text(
-                    "📦 فایل بکاپ را ارسال کنید.\n(فرمت قابل قبول: zip یا json)",
+                    _adm_t('ub_lit_5f85aff13323'),
                     reply_markup=userbot_cancel_keyboard(),
                 )
             except Exception:
                 await context.bot.send_message(
                     chat_id=cid,
-                    text="📦 فایل بکاپ را ارسال کنید.\n(فرمت قابل قبول: zip یا json)",
+                    text=_adm_t('ub_lit_5f85aff13323'),
                     reply_markup=userbot_cancel_keyboard(),
                 )
             return
@@ -10719,7 +10438,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             try:
                 backup_path = _make_bot_backup_zip()
             except Exception as e:
-                await context.bot.send_message(chat_id=cid, text=f"❌ خطا در ساخت فایل بکاپ:\n{e}")
+                await context.bot.send_message(chat_id=cid, text=f"{_adm_t('ub_lit_6e7e87d6d4bc')}{e}")
                 return
             try:
                 with backup_path.open("rb") as fh:
@@ -10727,12 +10446,12 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                         chat_id=cid,
                         document=fh,
                         filename=backup_path.name,
-                        caption="فایل پشتیبان ربات🗃",
+                        caption=_adm_t('ub_lit_e4f3841765e2'),
                     )
             except Exception as e:
-                await context.bot.send_message(chat_id=cid, text=f"❌ خطا در ارسال فایل بکاپ:\n{e}")
+                await context.bot.send_message(chat_id=cid, text=f"{_adm_t('ub_lit_3de8b26e7d5a')}{e}")
             return
-        await query.answer("گزینه نامعتبر است.", show_alert=True)
+        await query.answer(_adm_t('ub_lit_57af267e1a57'), show_alert=True)
         return
 
     # --- 8. ارسال پیام همگانی ---
@@ -10754,7 +10473,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             "expired_8w",
         }
         if segment not in allowed_segments:
-            await query.answer("گروه ارسال نامعتبر است.", show_alert=True)
+            await query.answer(_adm_t('ub_lit_6808a6dd39e5'), show_alert=True)
             return
         context.user_data[BROADCAST_SEND_STATE] = {
             "segment": segment,
@@ -10763,13 +10482,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         }
         await query.answer()
         await msg.reply_text(
-            f"✍ لطفا پیام خود را برای ارسال به «{_broadcast_segment_label(segment)}» وارد کنید:",
+            f"{_adm_t('ub_lit_4deb504a809a')}{_broadcast_segment_label(segment)}{_adm_t('ub_lit_6e15e865cb28')}",
             reply_markup=userbot_cancel_keyboard(),
         )
         return
 
     if data.startswith("userbot:settings:"):
-        await query.answer("این بخش در آپدیت بعدی فعال می‌شود 🚧", show_alert=True)
+        await query.answer(_adm_t('ub_lit_bd549efdc483'), show_alert=True)
         return
 
     # لاگ کردن دکمه‌های ناشناخته برای دیباگ

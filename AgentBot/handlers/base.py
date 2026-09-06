@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 
 from Shared import agent_db
 from AgentBot.constants import UD_AGENT_ID, UD_AGENT_DATA, UD_STATE
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 

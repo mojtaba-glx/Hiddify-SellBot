@@ -78,6 +78,7 @@ async def buy_service(
     customer_id: int,
     plan_id: int,
     service_name: str = "",
+    lang: str = "fa",
 ) -> Dict[str, Any]:
     """Customer buys a service: deduct from agent wallet, create on panel."""
     # استفاده از پلن‌های نماینده
@@ -171,7 +172,7 @@ async def buy_service(
             created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if not created_uuid:
                 if idx == 0:
-                    raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
+                    raise RuntimeError(i18n_mod.t("svc_no_panel_uuid", lang))
                 continue
             created_nodes.append(
                 {
@@ -456,7 +457,7 @@ def _parse_service_comment(comment: str) -> dict:
     return parsed
 
 
-def _resolve_live_server_title(svc: dict, default: str = "نامشخص") -> str:
+def _resolve_live_server_title(svc: dict, default: str = "", lang: str = "fa") -> str:
     stored_title = str(svc.get("server_title") or "").strip()
     try:
         server_id = int(svc.get("server_id") or 0)
@@ -473,8 +474,8 @@ def _resolve_live_server_title(svc: dict, default: str = "نامشخص") -> str:
                 return live_title
         if stored_title:
             return stored_title
-        return f"سرور #{server_id}"
-    return stored_title or default
+        return i18n_mod.t("server_fallback", lang, id=server_id)
+    return stored_title or default or i18n_mod.t("unknown", lang)
 
 
 def _is_unlimited_volume(limit_gb: float, br: dict) -> bool:
@@ -571,24 +572,10 @@ async def service_is_renewable_live(service_id: int, agent_id: int) -> bool:
 
 
 def renew_not_allowed_text(agent_id: int, lang: str = "fa") -> str:
-    if (lang or "fa").strip().lower() != "fa":
-        return i18n_mod.t(
-            "renew_not_allowed", lang,
-            max_days=_renew_limits(agent_id)[0], max_gb=_renew_limits(agent_id)[1],
-        )
-    br = _renew_br_settings(agent_id)
-    try:
-        max_days = int(br.get("renew_max_days") or 3)
-    except (TypeError, ValueError):
-        max_days = 3
-    try:
-        max_remaining_gb = int(br.get("renew_max_remaining_gb") or 3)
-    except (TypeError, ValueError):
-        max_remaining_gb = 3
-    return (
-        "🛑 در حال حاضر شما امکان تمدید اشتراک خود را ندارید.\n"
-        f"1- کمتر از {max_days} روز تا اتمام اشتراک شما باقی مانده باشد.\n"
-        f"2- حجم باقی مانده اشتراک شما کمتر از {max_remaining_gb} گیگابایت باشد."
+    max_days, max_remaining_gb = _renew_limits(agent_id)
+    return i18n_mod.t(
+        "renew_not_allowed", lang,
+        max_days=max_days, max_gb=max_remaining_gb,
     )
 
 
@@ -631,10 +618,10 @@ def is_customer_service_visible(svc: Optional[Dict[str, Any]]) -> bool:
     return is_active or days_left > -30
 
 
-def build_subscription_status_text(svc: dict, subs_settings: Optional[dict] = None, br: Optional[dict] = None) -> str:
+def build_subscription_status_text(svc: dict, subs_settings: Optional[dict] = None, br: Optional[dict] = None, lang: str = "fa") -> str:
     """متن «📄اطلاعات اشتراک شما» با فرمت دقیق ربات کاربران"""
-    service_name = svc.get("name") or "سرویس"
-    server_title = _resolve_live_server_title(svc, default="نامشخص")
+    service_name = svc.get("name") or i18n_mod.t("service_fallback", lang)
+    server_title = _resolve_live_server_title(svc, default=i18n_mod.t("unknown", lang), lang=lang)
     usage_current = _to_float(svc.get("usage_current"), 0.0)
     usage_limit = _to_float(svc.get("usage_limit"), 0.0)
     days_left = _to_int(svc.get("days_left"), 0)
@@ -651,20 +638,22 @@ def build_subscription_status_text(svc: dict, subs_settings: Optional[dict] = No
     unlimited_volume = _is_unlimited_volume(usage_limit, br)
     unlimited_time = _is_unlimited_time(days_left, br)
 
+    unit_gb = i18n_mod.t("unit_gb", lang)
+    usage_limit_text = i18n_mod.t("unlimited_word", lang) if unlimited_volume else f"{usage_limit:.1f} {unit_gb}"
     if usage_limit > 0:
-        usage_line = f"{usage_current:.1f} از {'نامحدود' if unlimited_volume else f'{usage_limit:.1f} گیگ'}"
+        usage_line = f"{usage_current:.1f} {unit_gb} {i18n_mod.t('of_word', lang)} {usage_limit_text}"
     else:
-        usage_line = f"{usage_current:.1f} گیگ"
+        usage_line = f"{usage_current:.1f} {unit_gb}"
 
-    lines = ["📄اطلاعات اشتراک شما", ""]
+    lines = [i18n_mod.t("subscription_info_title", lang), ""]
     if subs.get("show_username", True):
-        lines.append(f"👤نام: {service_name}")
+        lines.append(f"{i18n_mod.t('subscription_name', lang)}{service_name}")
     lines.extend([
-        f"📡سرور: {server_title}",
-        f"📊میزان استفاده: {usage_line}",
-        f"⏳زمان باقی مانده: {'نامحدود' if unlimited_time else f'{days_left} روز'}",
-        f"💰قیمت اشتراک: {price_toman:,} تومان",
-        f"🔑شناسه: `{service_code}`",
+        f"{i18n_mod.t('subscription_server', lang)}{server_title}",
+        f"{i18n_mod.t('subscription_usage', lang)}{usage_line}",
+        f"{i18n_mod.t('subscription_time_left', lang)}{i18n_mod.t('unlimited_word', lang) if unlimited_time else i18n_mod.t('days_word', lang, d=days_left)}",
+        f"{i18n_mod.t('subscription_price', lang)}{price_toman:,} {i18n_mod.t('currency_toman', lang)}",
+        f"{i18n_mod.t('subscription_id', lang)}`{service_code}`",
     ])
     return "\n".join(lines)
 
@@ -1135,10 +1124,10 @@ async def sync_service_status_from_panels(service_id: int) -> Dict[str, Any]:
 
 # ---------- تغییر نام روی همه پنل‌ها ----------
 
-async def rename_service_on_panels(svc: dict, new_name: str) -> Tuple[bool, str]:
+async def rename_service_on_panels(svc: dict, new_name: str, lang: str = "fa") -> Tuple[bool, str]:
     targets = get_service_panel_targets(svc)
     if not targets:
-        return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
+        return False, i18n_mod.t("svc_no_panel_paths", lang)
     errors: List[str] = []
     ok_count = 0
     for srv, uuid, _un in targets:
@@ -1149,31 +1138,30 @@ async def rename_service_on_panels(svc: dict, new_name: str) -> Tuple[bool, str]
             errors.append(f"{srv.get('title') or srv.get('id')}: {str(e)[:60]}")
     if ok_count == 0:
         preview = "\n".join(errors[:3])
-        extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
-        return False, "❌ تغییر نام روی همه سرورها انجام نشد.\n" + preview + extra
+        extra = i18n_mod.t("svc_more_errors", lang, n=len(errors) - 3) if len(errors) > 3 else ""
+        return False, i18n_mod.t("svc_rename_all_failed", lang) + preview + extra
     ok = agent_db.update_service(int(svc.get("id") or 0), {"name": new_name})
     if not ok:
-        return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
+        return False, i18n_mod.t("svc_rename_db_failed", lang)
     margin = ""
     if errors:
-        margin = ("\n\n⚠️ نام روی همه نودها اعمال شد اما " + str(len(errors)) +
-                  " نود در دسترس نبود (تا برگشتنشان بعداً همگام می‌شود):\n- " +
+        margin = (i18n_mod.t("svc_rename_partial", lang, n=str(len(errors))) +
                   "\n- ".join(errors[:3]))
-    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد." + margin
+    return True, i18n_mod.t("svc_rename_ok", lang) + margin
 
 
 # ---------- تغییر لینک اشتراک (بازسازی UUID روی همه پنل‌ها) ----------
 
-async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
+async def regenerate_service_uuid(svc: dict, lang: str = "fa") -> Tuple[bool, str, Optional[str]]:
     service_id = int(svc.get("id") or 0)
     if service_id <= 0:
-        return False, "❌ سرویس نامعتبر است.", None
+        return False, i18n_mod.t("svc_invalid", lang), None
     current_uuid = str(svc.get("panel_user_uuid") or "").strip()
     if not current_uuid:
-        return False, "❌ UUID فعلی اشتراک تعیین نشده است.", None
+        return False, i18n_mod.t("svc_no_current_uuid", lang), None
     targets = get_service_panel_targets(svc)
     if not targets:
-        return False, "❌ مسیرهای پنل این اشتراک پیدا نشد.", None
+        return False, i18n_mod.t("svc_no_panel_paths", lang), None
 
     desired_uuid = str(uuid4())
     final_uuid: Optional[str] = None
@@ -1191,9 +1179,9 @@ async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
                     await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
                 except Exception:
                     rollback_ok = False
-            where = str(srv.get("title") or f"سرور #{srv.get('id')}")
-            extra = "" if rollback_ok else "\n⚠️ برگرداندن برخی نودها به UUID قبلی ممکن نشد؛ لطفاً با پشتیبانی هماهنگ کنید."
-            return False, f"❌ بازسازی UUID روی «{where}» انجام نشد.\nجزئیات: {str(e)[:120]}{extra}", None
+            where = str(srv.get("title") or i18n_mod.t("svc_server_hash", lang, n=srv.get('id')))
+            extra = "" if rollback_ok else i18n_mod.t("svc_rollback_warn", lang)
+            return False, i18n_mod.t("svc_uuid_rebuild_failed", lang, w=where, e=str(e)[:120]) + extra, None
 
         returned_uuid = str(patched.get("uuid") or patched.get("id") or "").strip()
         if not returned_uuid:
@@ -1206,11 +1194,11 @@ async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
                     await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
                 except Exception:
                     pass
-            return False, "❌ UUID جدید روی همه سرورها همگن نشد. لطفاً مجدداً تلاش کنید.", None
+            return False, i18n_mod.t("svc_uuid_not_homogeneous", lang), None
         updated_targets.append((srv, old_uuid, returned_uuid))
 
     if not final_uuid:
-        return False, "❌ UUID جدید تهیه نشد.", None
+        return False, i18n_mod.t("svc_no_new_uuid", lang), None
 
     agent_db.update_service(service_id, {"panel_user_uuid": final_uuid})
     for srv, old_uuid, new_uuid in updated_targets:
@@ -1218,4 +1206,4 @@ async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
             agent_db.update_service_node_uuid(service_id, int(srv.get("id") or 0), old_uuid, new_uuid)
         except Exception:
             pass
-    return True, "✅ لینک اشتراک با موفقیت تغییر یافت.", final_uuid
+    return True, i18n_mod.t("svc_link_changed_ok", lang), final_uuid

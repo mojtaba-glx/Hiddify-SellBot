@@ -15,6 +15,7 @@ from AgentBot import database as agentbot_db
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import wallet_menu_keyboard, back_keyboard, cancel_keyboard, agent_lang
 from AgentBot.utils.helpers import _escape, _fmt_toman, _normalize_digits
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ async def _delete_back_kb_message(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         await _delete_message(context, chat_id, msg_id)
 
 
-async def _send_back_reply_keyboard(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
+async def _send_back_reply_keyboard(context: ContextTypes.DEFAULT_TYPE, chat_id: int, lang: str = "fa") -> int:
     """ارسال یک پیام با کیبورد پایین (دکمه بزرگ قرمز بازگشت) و برگرداندن message_id آن."""
     sent = await context.bot.send_message(
         chat_id=chat_id,
@@ -67,19 +68,25 @@ async def _send_back_reply_keyboard(context: ContextTypes.DEFAULT_TYPE, chat_id:
     return sent.message_id
 
 
-def _wallet_back_reply_keyboard() -> ReplyKeyboardMarkup:
+def _wallet_back_reply_keyboard( lang: str = "fa") -> ReplyKeyboardMarkup:
     """کیبورد پایین (زیر منو) با دکمه بزرگ و قرمز «بازگشت»."""
     return ReplyKeyboardMarkup(
-        [[KButton(BTN_BACK_TEXT, style="danger")]],
+        [[KButton(i18n.t("back", lang), style="danger")]],
         resize_keyboard=True,
     )
 
 
 def _agent_display(agent: dict) -> str:
-    return str(agent.get("full_name") or agent.get("username") or agent.get("telegram_id") or "نماینده")
+    _lg = "fa"
+    return str(agent.get("full_name") or agent.get("username") or agent.get("telegram_id") or i18n.t('نماینده', _lg))
 
 
 async def _notify_admin_wallet_payment(context: ContextTypes.DEFAULT_TYPE, agent_id: int, payment: dict) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     admin_id = int(os.getenv("ADMIN_ID", "0") or 0)
     admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip()
     if not admin_id or not admin_token:
@@ -96,21 +103,18 @@ async def _notify_admin_wallet_payment(context: ContextTypes.DEFAULT_TYPE, agent
     ref_id = str(payment.get("ref_id") or payment.get("id") or "")
     agent_name = _agent_display(agent)
     caption = (
-        "🕊 <b>گزارش تایید پرداخت نماینده</b> 🕊\n\n"
-        "💸 شیوه پرداخت: کارت به کارت\n"
-        f"🔑 شناسه تراکنش: <code>{ref_id}</code>\n"
-        f"👤 نماینده: <b>{_escape(agent_name)}</b>\n"
-        f"💰 مبلغ پرداخت: <b>{_fmt_toman(amount)}</b> تومان\n"
-        f"💳 4 رقم آخر کارت مبدا: <code>{_escape(last4)}</code>"
+        f"{i18n.t('🕊 <b>گزارش تایید پرداخت نماینده</b> 🕊\n\n💸 شیوه پرداخت: کارت به کارت\n🔑 شناسه تراکنش: <code>', _lg)}{ref_id}{i18n.t('</code>\n👤 نماینده: <b>', _lg)}{_escape(agent_name)}{i18n.t('</b>\n💰 مبلغ پرداخت: <b>', _lg)}{_fmt_toman(amount)}{i18n.t('</b> تومان\n💳 4 رقم آخر کارت مبدا: <code>', _lg)}{_escape(last4)}</code>"
     )
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("رد ❌", callback_data=f"agency:payno:{payment['id']}"),
-            InlineKeyboardButton("تایید ✅", callback_data=f"agency:payok:{payment['id']}") ,
+            InlineKeyboardButton(i18n.t('رد ❌', _lg), callback_data=f"agency:payno:{payment['id']}"),
+            InlineKeyboardButton(i18n.t('تایید ✅', _lg), callback_data=f"agency:payok:{payment['id']}") ,
         ],
         [InlineKeyboardButton(f"{agent_name} 👤", callback_data=f"agency:view:{agent_id}")],
     ])
     bot = Bot(token=admin_token)
+    sent_message = None
+    sent_kind = "text"
     if receipt_file_id:
         try:
             tg_file = await context.bot.get_file(receipt_file_id)
@@ -118,11 +122,80 @@ async def _notify_admin_wallet_payment(context: ContextTypes.DEFAULT_TYPE, agent
             await tg_file.download_to_memory(out=bio)
             bio.seek(0)
             bio.name = f"agent_wallet_{payment['id']}.jpg"
-            await bot.send_photo(chat_id=admin_id, photo=bio, caption=caption[:1024], reply_markup=kb, parse_mode="HTML")
-            return
+            sent_message = await bot.send_photo(
+                chat_id=admin_id,
+                photo=bio,
+                caption=caption[:1024],
+                reply_markup=kb,
+                parse_mode="HTML",
+            )
+            sent_kind = "photo"
         except Exception as e:
             logger.warning("Failed sending wallet receipt photo to admin: %s", e)
-    await bot.send_message(chat_id=admin_id, text=caption, reply_markup=kb, parse_mode="HTML")
+    if sent_message is None:
+        sent_message = await bot.send_message(
+            chat_id=admin_id, text=caption, reply_markup=kb, parse_mode="HTML"
+        )
+    if sent_message is not None:
+        agentbot_db.patch_wallet_charge_payment_meta(
+            int(payment.get("id") or 0),
+            {
+                "admin_chat_id": int(admin_id),
+                "admin_message_id": int(sent_message.message_id),
+                "admin_message_kind": sent_kind,
+            },
+        )
+
+
+async def _mark_admin_wallet_payment_auto_approved(
+    payment: dict,
+    wallet_result: dict,
+) -> None:
+    """Replace the pending admin report after late SMS reconciliation."""
+    _lg = "fa"
+    admin_id = int(os.getenv("ADMIN_ID", "0") or 0)
+    admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip()
+    if not admin_id or not admin_token:
+        return
+    latest = agentbot_db.get_payment_by_id(int(payment.get("id") or 0)) or payment
+    try:
+        import json
+        meta = json.loads(str(latest.get("receipt_image") or "{}"))
+        if not isinstance(meta, dict):
+            meta = {}
+    except Exception:
+        meta = {}
+    amount = int(latest.get("amount") or 0)
+    balance = int((wallet_result.get("wallet") or {}).get("balance") or 0)
+    event = wallet_result.get("event") or {}
+    text = (
+        f"{i18n.t('✅ <b>شارژ کیف پول نماینده با SMS تایید شد</b>\n\n👤 نماینده: <b>', _lg)}{_escape(latest.get('customer_name') or latest.get('agent_id'))}{i18n.t('</b>\n💰 مبلغ: <b>', _lg)}{_fmt_toman(amount)}{i18n.t('</b> تومان\n💼 موجودی جدید: <b>', _lg)}{_fmt_toman(balance)}{i18n.t('</b> تومان\n📨 سرشماره: <code>', _lg)}{_escape(event.get('sender') or '-')}{i18n.t('</code>\n🔖 پیگیری SMS: <code>', _lg)}{_escape(event.get('reference') or '-')}</code>"
+    )
+    bot = Bot(token=admin_token)
+    message_id = int(meta.get("admin_message_id") or 0)
+    message_kind = str(meta.get("admin_message_kind") or "").strip().lower()
+    if message_id:
+        try:
+            if message_kind == "photo":
+                await bot.edit_message_caption(
+                    chat_id=admin_id,
+                    message_id=message_id,
+                    caption=text[:1024],
+                    parse_mode="HTML",
+                    reply_markup=None,
+                )
+            else:
+                await bot.edit_message_text(
+                    chat_id=admin_id,
+                    message_id=message_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=None,
+                )
+            return
+        except Exception as exc:
+            logger.warning("Failed editing auto-approved agent wallet report: %s", exc)
+    await bot.send_message(chat_id=admin_id, text=text, parse_mode="HTML")
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -150,14 +223,24 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """بازگشت از هر مرحله شارژ به منوی کیف پول و بازگرداندن کیبورد اصلی."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     _clear_wallet_charge_state(context)
     await show_menu(update, context)
     from AgentBot.keyboards import main_menu_keyboard
     if update.message:
-        await update.message.reply_text("منوی اصلی:", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(i18n.t('منوی اصلی:', _lg), reply_markup=main_menu_keyboard())
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -184,8 +267,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
         sent = await context.bot.send_message(
             chat_id=chat_id,
-            text="\U0001f3e6 <b>\u0634\u0627\u0631\u0698 \u06a9\u06cc\u0641 \u067e\u0648\u0644</b>\n\n"
-                 "\U0001f4b0 \u0645\u0628\u0644\u063a \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0628\u0647 \u062a\u0648\u0645\u0627\u0646 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+            text=i18n.t('🏦 <b>شارژ کیف پول</b>\n\n💰 مبلغ مورد نظر به تومان وارد کنید:', _lg),
             reply_markup=_wallet_back_reply_keyboard(), parse_mode="HTML",
         )
         context.user_data["charge_prompt_msg_id"] = sent.message_id
@@ -200,7 +282,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
         sent = await context.bot.send_message(
             chat_id=chat_id,
-            text="لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید: 🔻",
+            text=i18n.t('لطفا مبلغی که قصد شارژ حساب خود دارید را به تومان وارد کنید: 🔻', _lg),
             reply_markup=_wallet_back_reply_keyboard(), parse_mode="HTML",
         )
         context.user_data["charge_prompt_msg_id"] = sent.message_id
@@ -211,7 +293,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         chat_id = query.message.chat_id
         try:
             await query.edit_message_text(
-                "⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:",
+                i18n.t('⬇️ لطفا رسید پرداخت خود را در زیر این پیام ارسال کنید:', _lg),
                 reply_markup=InlineKeyboardMarkup([]),
             )
             context.user_data["charge_prompt_msg_id"] = query.message.message_id
@@ -235,7 +317,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 chat_id=chat_id,
                 text="\u200b",
                 reply_markup=ReplyKeyboardMarkup(
-                    [[KButton(BTN_BACK_TEXT, style="danger")]],
+                    [[KButton(i18n.t("back", _lg), style="danger")]],
                     resize_keyboard=True,
                     one_time_keyboard=True,
                 ),
@@ -247,6 +329,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if not agent_id:
         return False
@@ -254,7 +341,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     text = (update.message.text or update.message.caption or "").strip()
 
     # دکمه «بازگشت» در کیبورد پایین: در هر مرحله از شارژ به منوی کیف پول برمی‌گردد
-    if text == BTN_BACK_TEXT and state in (
+    if (text == BTN_BACK_TEXT or i18n.resolve_button(text, ("back", "btn_back", "btn_back_plain")) == "back" or text == "/cancel") and state in (
         STATE_WALLET_CHARGE_AMOUNT,
         STATE_WALLET_CHARGE_RECEIPT,
         STATE_WALLET_CHARGE_LAST4,
@@ -269,7 +356,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             if amount <= 0:
                 raise ValueError
         except ValueError:
-            await update.message.reply_text("\u274c \u0645\u0628\u0644\u063a \u0646\u0627\u0645\u0639\u062a\u0628\u0631 \u0627\u0633\u062a.")
+            await update.message.reply_text(i18n.t('❌ مبلغ نامعتبر است.', _lg))
             return True
         marker = random.randint(100, 999)
         final_amount = amount + marker
@@ -279,15 +366,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_RECEIPT
         card = shared_db.get_random_card() or {}
         card_text = (
-            f"مشخصه تراکنش اعمال شد: +{_fmt_toman(marker)} تومان 🔢\n\n"
-            f"💰 لطفا دقیقا مبلغ: <b>{_fmt_toman(final_amount * 10)}</b> ریال\n\n"
-            f"💰 معادل: <b>{_fmt_toman(final_amount)}</b> تومان\n\n"
-            f"💳 به شماره کارت: <code>{card.get('number', '?')}</code>\n\n"
-            f"👤 به نام: {_escape(card.get('owner', '?'))}\n\n"
-            f"❗ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید."
+            f"{i18n.t('مشخصه تراکنش اعمال شد: +', _lg)}{_fmt_toman(marker)}{i18n.t(' تومان 🔢\n\n💰 لطفا دقیقا مبلغ: <b>', _lg)}{_fmt_toman(final_amount * 10)}{i18n.t('</b> ریال\n\n💰 معادل: <b>', _lg)}{_fmt_toman(final_amount)}{i18n.t('</b> تومان\n\n💳 به شماره کارت: <code>', _lg)}{card.get('number', '?')}{i18n.t('</code>\n\n👤 به نام: ', _lg)}{_escape(card.get('owner', '?'))}{i18n.t('\n\n❗ بعد از واریز مبلغ اسکرین شات از تراکنش برای ما ارسال کنید.', _lg)}"
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ پرداخت کردم، ارسال رسید", callback_data="agbot:wallet:paid")],
+            [InlineKeyboardButton(i18n.t('✅ پرداخت کردم، ارسال رسید', _lg), callback_data="agbot:wallet:paid")],
         ])
         chat_id = update.message.chat_id
         user_msg_id = update.message.message_id
@@ -305,7 +387,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if state == STATE_WALLET_CHARGE_RECEIPT:
         photo = update.message.photo[-1] if update.message.photo else None
         if not photo:
-            await update.message.reply_text("❌ لطفاً عکس رسید پرداخت را ارسال کنید.")
+            await update.message.reply_text(i18n.t('❌ لطفاً عکس رسید پرداخت را ارسال کنید.', _lg))
             return True
         context.user_data["charge_receipt_id"] = photo.file_id
         context.user_data[UD_STATE] = STATE_WALLET_CHARGE_LAST4
@@ -313,7 +395,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         user_msg_id = update.message.message_id
         sent = await context.bot.send_message(
             chat_id=chat_id,
-            text="🔢 لطفا 4 رقم آخر کارت مبدا را ارسال کنید:",
+            text=i18n.t('🔢 لطفا 4 رقم آخر کارت مبدا را ارسال کنید:', _lg),
             reply_markup=_wallet_back_reply_keyboard(),
         )
         # حذف پیام کیبورد بازگشت مرحله قبل
@@ -327,7 +409,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if state == STATE_WALLET_CHARGE_LAST4:
         last4 = _normalize_digits(text).strip()
         if not (last4.isdigit() and len(last4) == 4):
-            await update.message.reply_text("❌ لطفاً دقیقاً 4 رقم آخر کارت مبدا را ارسال کنید.")
+            await update.message.reply_text(i18n.t('❌ لطفاً دقیقاً 4 رقم آخر کارت مبدا را ارسال کنید.', _lg))
             return True
         amount = int(context.user_data.get("charge_amount") or 0)
         marker = int(context.user_data.get("charge_marker") or 0)
@@ -342,6 +424,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             card_last4=last4,
         )
         await _notify_admin_wallet_payment(context, agent_id, payment)
+        try:
+            auto_result = agentbot_db.try_approve_wallet_charge_from_unmatched_sms(
+                int(payment.get("id") or 0)
+            )
+        except Exception as exc:
+            logger.warning(
+                "Agent wallet SMS reconciliation failed payment=%s: %s",
+                payment.get("id"),
+                exc,
+            )
+            auto_result = {"ok": False, "reason": "reconciliation_failed"}
+        auto_approved = bool(auto_result.get("ok"))
+        if auto_approved:
+            await _mark_admin_wallet_payment_auto_approved(payment, auto_result)
         chat_id = update.message.chat_id
         user_msg_id = update.message.message_id
         # حذف پیام کیبورد بازگشت مرحله قبل
@@ -353,7 +449,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         from AgentBot.keyboards import main_menu_keyboard
         await context.bot.send_message(
             chat_id=chat_id,
-            text="✅ تراکنش شما در انتظار تایید توسط ادمین است. لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
+            text=(
+                f"{i18n.t('✅ پرداخت شما با پیامک بانک تایید شد و مبلغ ', _lg)}{_fmt_toman(payment.get('amount'))}{i18n.t(' تومان به کیف پول اضافه شد.', _lg)}"
+                if auto_approved
+                else i18n.t('✅ تراکنش شما در انتظار تایید توسط ادمین است. لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.', _lg)
+            ),
             reply_markup=main_menu_keyboard(), parse_mode="HTML",
         )
         return True
@@ -365,16 +465,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             if amount < 0:
                 raise ValueError
         except ValueError:
-            await update.message.reply_text("\u274c \u0645\u0628\u0644\u063a \u0646\u0627\u0645\u0639\u062a\u0628\u0631 \u0627\u0633\u062a.")
+            await update.message.reply_text(i18n.t('❌ مبلغ نامعتبر است.', _lg))
             return True
         if amount > 0:
-            agent_db.charge_wallet(agent_id, amount, description="\u0634\u0627\u0631\u0698 \u0627\u0648\u0644\u06cc\u0647 \u06a9\u06cc\u0641 \u067e\u0648\u0644")
+            agent_db.charge_wallet(agent_id, amount, description=i18n.t('شارژ اولیه کیف پول', _lg))
         wallet = agent_db.get_wallet(agent_id)
         context.user_data.pop(UD_STATE, None)
         from AgentBot.keyboards import main_menu_keyboard
         await update.message.reply_text(
-            f"\u2705 <b>\u06a9\u06cc\u0641 \u067e\u0648\u0644 \u0628\u0627 \u0645\u0648\u0641\u0642\u06cc\u062a \u0633\u0627\u062e\u062a\u0647 \u0634\u062f!</b>\n\n"
-            f"\U0001f4b5 \u0645\u0648\u062c\u0648\u062f\u06cc: {_fmt_toman(wallet['balance'])} \u062a\u0648\u0645\u0627\u0646",
+            f"{i18n.t('✅ <b>کیف پول با موفقیت ساخته شد!</b>\n\n💵 موجودی: ', _lg)}{_fmt_toman(wallet['balance'])}{i18n.t(' تومان', _lg)}",
             reply_markup=main_menu_keyboard(), parse_mode="HTML",
         )
         return True

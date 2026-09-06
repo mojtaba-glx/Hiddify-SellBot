@@ -5,11 +5,17 @@ from telegram.ext import ContextTypes
 
 from AgentBot.handlers.base import get_agent_id
 from AgentBot.keyboards import back_keyboard
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -23,9 +29,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         agent_id = get_agent_id(context)
         from AgentBot.database import get_gifts
         gifts = get_gifts(agent_id)
-        text = "\U0001f381 <b>\u0645\u062f\u06cc\u0631\u06cc\u062a \u0647\u062f\u0627\u06cc\u0627</b>\n\n"
+        text = i18n.t('🎁 <b>مدیریت هدایا</b>\n\n', _lg)
         if not gifts:
-            text += "\u0647\u0646\u0648\u0632 \u0647\u062f\u06cc\u0647\u200c\u0627\u06cc \u062b\u0628\u062a \u0646\u0634\u062f\u0647.\n\n(\u0627\u06cc\u0646 \u0628\u062e\u0634 \u062f\u0631 \u062d\u0627\u0644 \u062a\u0648\u0633\u0639\u0647 \u0627\u0633\u062a)"
+            text += i18n.t('هنوز هدیه‌ای ثبت نشده.\n\n(این بخش در حال توسعه است)', _lg)
         else:
             for g in gifts:
                 text += f"\u2022 {g.get('gift_type', '')} - {g.get('amount', 0)} - {g.get('customer_name', '')}\n"
@@ -39,7 +45,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         from AgentBot.keyboards import settings_menu_keyboard
         try:
             await query.edit_message_text(
-                "\u2699\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u0631\u0628\u0627\u062a</b>",
+                i18n.t('⚙️ <b>تنظیمات ربات</b>', _lg),
                 reply_markup=settings_menu_keyboard(), parse_mode="HTML",
             )
         except Exception:

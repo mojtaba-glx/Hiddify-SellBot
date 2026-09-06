@@ -1,7 +1,5 @@
 """Callback branch handlers extracted verbatim from UserBot/main.py inline_handler."""
 
-import re
-
 from Shared import userbot_db
 from Shared.qr_utils import make_qr_image
 from UserBot.utils.helpers import _parse_service_comment
@@ -232,18 +230,8 @@ async def _cb_support(update, context, query, data, user_id, text_settings):
             await _send_support_panel(context=context, user_id=user_id, message=query.message, text_settings=text_settings)
             return
 
-        def _norm_txt(v: str) -> str:
-            v = (v or "").replace("\u200e", "").replace("\u200f", "")
-            v = v.replace("\ufe0f", "")  # strip emoji VS16 so ♾️ == ♾
-            return re.sub(r"\s+", " ", v).strip()
-
         if action == "faq":
-            faq_text = str(text_settings.get("faq_text") or "").strip()
-            faq_norm = _norm_txt(faq_text)
-            faq_def_norm = _norm_txt(str(userbot_db.DEFAULT_TEXT_SETTINGS.get("faq_text") or ""))
-            faq_is_admin_custom = bool(faq_norm) and faq_norm != faq_def_norm
-            if not faq_is_admin_custom:
-                faq_text = _cfg_text(user_id, "faq_text", "cfg_faq_default", text_settings)
+            faq_text = _cfg_text(user_id, "faq_text", "cfg_faq_default", text_settings)
             try:
                 await query.message.edit_text(faq_text, reply_markup=support_panel_keyboard(lang=_user_lang(user_id)))
             except Exception:
@@ -658,7 +646,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
         if not service:
             await _safe_edit_message_text(
                 query,
-                "❌ سرویس موردنظر یافت نشد یا حذف شده است.",
+                i18n.t("service_missing_deleted", _user_lang(user_id)),
             )
             return
 
@@ -687,7 +675,7 @@ async def _cb_status(update, context, query, data, user_id, br, text_settings):
                     logger.warning("Failed deleting stale service id=%s from callback: %s", service.get("id"), e)
             await _safe_edit_message_text(
                 query,
-                "❌ اشتراک وجود ندارد.",
+                i18n.t("sub_target_missing", _user_lang(user_id)),
             )
             return
         try:
@@ -1033,11 +1021,12 @@ async def _cb_wallet(update, context, query, data, user_id):
             await context.bot.send_message(chat_id=user_id, text=i18n.t("zarinpal_disabled", _user_lang(user_id)), reply_markup=_main_menu_keyboard(user_id=user_id))
             return
         text_settings = _get_text_settings()
-        ztxt = str(text_settings.get("zarinpal_pro_text") or "").strip()
-        if ztxt.lower() in {"none", "null"}:
-            ztxt = ""
-        if not ztxt or ztxt == "0":
-            ztxt = _default_zarinpal_text(_user_lang(user_id))
+        ztxt = _cfg_text(
+            user_id,
+            "zarinpal_pro_text",
+            "zarinpal_default_text",
+            text_settings,
+        )
         vouchers = userbot_db.list_active_zarin_vouchers(limit=20)
         if not vouchers:
             await context.bot.send_message(
@@ -1460,7 +1449,10 @@ async def _cb_buy_router(update, context, query, data, user_id, br, text_setting
             # در تمدید: نام سرویس قبلی حفظ می‌شود و نباید دوباره از کاربر پرسیده شود.
             if renew_target_service_id > 0:
                 renew_service = userbot_db.get_service_by_id(renew_target_service_id) or {}
-                service_name = (renew_service.get("name") or "").strip() or "سرویس"
+                service_name = (
+                    (renew_service.get("name") or "").strip()
+                    or i18n.t("word_service", _user_lang(user_id))
+                )
                 try:
                     await query.message.delete()
                 except Exception:
@@ -1661,15 +1653,16 @@ async def _rs_admin_direct_reply(update, context, user_id, text, step):
             )
             return
 
+        admin_lang = _admin_lang()
         admin_text = (
-            "📬 تیکت جدیدی دریافت شد\n"
-            f"📄 متن تیکت: {reply_text}"
+            i18n.t("ub_ticket_new", admin_lang, code="-") + "\n"
+            + i18n.t("ub_ticket_message", admin_lang, message=reply_text)
         )
 
         rows = []
         if internal_uid > 0:
-            rows.append([InlineKeyboardButton(display_name, callback_data=f"userbot:user:{internal_uid}")])
-            rows.append([InlineKeyboardButton(i18n.t("btn_reply_ticket", _user_lang(user_id)), callback_data=f"userbot:user:{internal_uid}:message")])
+            rows.append([InlineKeyboardButton(i18n.t("ub_user_button", admin_lang, name=display_name), callback_data=f"userbot:user:{internal_uid}")])
+            rows.append([InlineKeyboardButton(i18n.t("btn_reply_ticket", admin_lang), callback_data=f"userbot:user:{internal_uid}:message")])
         admin_kb = InlineKeyboardMarkup(rows) if rows else None
 
         try:
@@ -1956,7 +1949,10 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
 
         # سرور اصلی اتصال: اولین سرور پیدا‌شده
         primary_server, primary_user = targets[0]
-        service_name = str(primary_user.get("name") or "اشتراک متصل‌شده").strip() or "اشتراک متصل‌شده"
+        service_name = (
+            str(primary_user.get("name") or "").strip()
+            or i18n.t("word_service", _user_lang(user_id))
+        )
         usage_limit = _to_float(primary_user.get("usage_limit_GB"), 0.0)
         total_usage = 0.0
         min_days_left: Optional[int] = None
@@ -1971,7 +1967,9 @@ async def _rs_connect_sub_input(update, context, user_id, text, step):
                 latest_last_online = dt
 
         server_id = int(primary_server.get("id") or 0)
-        server_title = str(primary_server.get("title") or f"سرور #{server_id}").strip()
+        server_title = str(primary_server.get("title") or "").strip() or (
+            f"{i18n.t('server_hash_default', _user_lang(user_id))}{server_id}"
+        )
         service_code = _generate_service_code()
         service_comment = f"uuid:{parsed_uuid}|code:{service_code}|linked:1|source:connect"
         service_db_id = None
@@ -2203,7 +2201,9 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
 
         panel_user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
         panel_user_id = created.get("id")
-        server_title = server.get("title") or f"سرور #{sid}"
+        server_title = server.get("title") or (
+            f"{i18n.t('server_hash_default', _user_lang(user_id))}{sid}"
+        )
         usage_limit = float(created.get("usage_limit_GB") or gb)
         usage_current = float(created.get("current_usage_GB") or 0)
 
@@ -2337,7 +2337,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
                 admin_bot = Bot(token=ADMIN_BOT_TOKEN)
                 user_btn_title = (update.effective_user.full_name or update.effective_user.username or str(user_id)).strip()
                 kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(f"👤 {user_btn_title}", callback_data=f"userbot:user:{internal_user_id}")]
+                    [InlineKeyboardButton(i18n.t("ub_user_button", _admin_lang(), name=user_btn_title), callback_data=f"userbot:user:{internal_user_id}")]
                 ])
 
                 await admin_bot.send_message(
@@ -2350,6 +2350,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
                         service_code=service_code,
                         amount=None,
                         is_trial=True,
+                        lang=_admin_lang(),
                     ),
                     reply_markup=kb,
                 )
@@ -2358,7 +2359,7 @@ async def _rs_trial_service_name(update, context, user_id, text, step):
 
         await _send_event_channel_subscription_report(
             context,
-            action_title="ایجاد تست رایگان",
+            action_title=i18n.t("ub_flow_trial", _admin_lang()),
             telegram_id=int(user_id),
             display_name=(update.effective_user.full_name or update.effective_user.username or str(user_id)).strip(),
             service_name=service_name,

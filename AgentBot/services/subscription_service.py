@@ -11,6 +11,7 @@ from AgentBot.services.hiddify_service import (
     delete_user_on_panel, get_user_configs, revoke_user_link_on_panel,
 )
 from AgentBot.database import create_order as db_create_order
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
     Returns: (primary_created, created_nodes) که created_nodes هر پیروز شامل
     server_id/server_title/panel_user_uuid/is_primary است.
     """
+    _lg = "fa"
     shared_uuid = str((payload or {}).get("uuid") or "").strip() or (str(len(targets) and __import__("uuid").uuid4()))
     payload_base = dict(payload or {})
     payload_base["uuid"] = shared_uuid
@@ -82,14 +84,14 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
         user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
         if not user_uuid:
             if idx == 0:
-                raise RuntimeError("uuid \u06a9\u0627\u0631\u0628\u0631 \u0633\u0627\u062e\u062a\u0647\u200c\u0634\u062f\u0647 \u0627\u0632 \u067e\u0646\u0644 \u062f\u0631\u06cc\u0627\u0641\u062a \u0646\u0634\u062f.")
+                raise RuntimeError(i18n.t('uuid کاربر ساخته‌شده از پنل دریافت نشد.', _lg))
             continue
         if idx == 0:
             primary_created = created
         created_nodes.append(
             {
                 "server_id": int(srv.get("id") or 0),
-                "server_title": srv.get("title") or f"\u0633\u0631\u0648\u0631 #{srv.get('id')}",
+                "server_title": srv.get("title") or f"{i18n.t('سرور #', _lg)}{srv.get('id')}",
                 "panel_user_uuid": user_uuid,
                 "is_primary": idx == 0,
             }
@@ -106,6 +108,10 @@ async def _rollback_node_if_failed(item: dict) -> None:
 
 
 async def create_subscription(agent_id: int, customer_id: int, server_id: int, plan: Dict[str, Any], name: str, note: str = "") -> Optional[Dict[str, Any]]:
+    try:
+        _lg = i18n.get_agent_lang(int(agent_id or 0))
+    except Exception:
+        _lg = "fa"
     server = get_server_by_id(server_id)
     if not server:
         return None
@@ -115,7 +121,7 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
     wholesale = int(plan.get("wholesale_price", 0))
     sale = int(plan.get("sale_price", 0))
 
-    ok, wallet = agent_db.deduct_wallet(agent_id, wholesale, description=f"\u062e\u0631\u06cc\u062f \u0633\u0631\u0648\u06cc\u0633: {name}", service_id=0)
+    ok, wallet = agent_db.deduct_wallet(agent_id, wholesale, description=f"{i18n.t('خرید سرویس: ', _lg)}{name}", service_id=0)
     if not ok:
         return None
 
@@ -135,14 +141,14 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         panel_result, created_nodes = await _create_user_on_cluster(targets, payload)
     except Exception as e:
         logger.error("Cluster create failed for %s: %s", name, e)
-        agent_db.charge_wallet(agent_id, wholesale, description=f"\u0628\u0627\u0632\u06af\u0631\u062f\u0627\u0646\u062a \u0645\u0648\u062c\u0648\u062f\u06cc \u0628\u0647 \u062f\u0644\u06cc\u0644 \u062e\u0637\u0627\u06cc \u0633\u0627\u062e\u062a \u06a9\u0627\u0631\u0628\u0631: {name}")
+        agent_db.charge_wallet(agent_id, wholesale, description=f"{i18n.t('بازگردانت موجودی به دلیل خطای ساخت کاربر: ', _lg)}{name}")
         try:
             from Shared.admin_reports import notify_admin_delivery_report
             await notify_admin_delivery_report(
-                action_title="ساخت سرویس نماینده",
+                action_title=i18n.t('ساخت سرویس نماینده', _lg),
                 agent=agent_db.get_agent_by_id(agent_id),
                 service_name=name,
-                server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+                server_title=server.get("title", f"{i18n.t('سرور #', _lg)}{server_id}"),
                 volume_gb=gb,
                 days=days,
                 amount=wholesale,
@@ -158,7 +164,7 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         agent_id=agent_id,
         customer_id=customer_id,
         server_id=server_id,
-        server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+        server_title=server.get("title", f"{i18n.t('سرور #', _lg)}{server_id}"),
         name=name,
         panel_user_uuid=panel_uuid,
         usage_limit=gb,
@@ -179,7 +185,7 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
     # اگر بعضی نودها در دسترس نبودند → گزارش partial به ادمین + دکمه sync.
     created_set = {int(int(n.get("server_id") or 0)) for n in (created_nodes or [])}
     pending_servers = [
-        str(t.get("title") or f"\u0633\u0631\u0648\u0631 #{t.get('id')}")
+        str(t.get("title") or f"{i18n.t('سرور #', _lg)}{t.get('id')}")
         for t in targets
         if int(t.get("id") or 0) not in created_set
     ]
@@ -187,11 +193,11 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         try:
             from Shared.admin_reports import notify_admin_delivery_report
             await notify_admin_delivery_report(
-                action_title="ساخت سرویس نماینده",
+                action_title=i18n.t('ساخت سرویس نماینده', _lg),
                 agent=agent_db.get_agent_by_id(agent_id),
                 customer_name=_customer_display_name(customer_id),
                 service_name=name,
-                server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+                server_title=server.get("title", f"{i18n.t('سرور #', _lg)}{server_id}"),
                 volume_gb=gb,
                 days=days,
                 amount=wholesale,
@@ -205,11 +211,11 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         try:
             from Shared.admin_reports import notify_admin_delivery_report
             await notify_admin_delivery_report(
-                action_title="ساخت سرویس نماینده",
+                action_title=i18n.t('ساخت سرویس نماینده', _lg),
                 agent=agent_db.get_agent_by_id(agent_id),
                 customer_name=_customer_display_name(customer_id),
                 service_name=name,
-                server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+                server_title=server.get("title", f"{i18n.t('سرور #', _lg)}{server_id}"),
                 volume_gb=gb,
                 days=days,
                 amount=wholesale,
@@ -234,6 +240,10 @@ def _customer_display_name(customer_id: int) -> str:
 
 
 async def renew_subscription(agent_id: int, service_id: int, extra_days: int, extra_gb: float = 0, override_cost: Optional[int] = None, volume_mode: str = None, time_mode: str = None) -> Optional[Dict[str, Any]]:
+    try:
+        _lg = i18n.get_agent_lang(int(agent_id or 0))
+    except Exception:
+        _lg = "fa"
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return None
@@ -256,7 +266,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         else:
             original_days = int(svc.get("days_left", 30)) or 30
             cost = int(wholesale * extra_days / original_days) if original_days > 0 else wholesale
-        ok, _ = agent_db.deduct_wallet(agent_id, cost, description=f"\u062a\u0645\u062f\u06cc\u062f \u0633\u0631\u0648\u06cc\u0633: {svc.get('name', '')}", service_id=service_id)
+        ok, _ = agent_db.deduct_wallet(agent_id, cost, description=f"{i18n.t('تمدید سرویس: ', _lg)}{svc.get('name', '')}", service_id=service_id)
         if not ok:
             return None
 
@@ -292,7 +302,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                     primary_ok = True
             except Exception as e:
                 logger.warning("renew panel sync failed svc=%s server=%s: %s", service_id, tgt_id, e)
-                renew_failed.append(str(tgt.get("title") or f"\u0633\u0631\u0648\u0631 #{tgt_id}"))
+                renew_failed.append(str(tgt.get("title") or f"{i18n.t('سرور #', _lg)}{tgt_id}"))
 
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         for tgt in targets:
@@ -308,11 +318,11 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             from Shared.admin_reports import notify_admin_delivery_report
             if not primary_ok and renew_failed:
                 await notify_admin_delivery_report(
-                    action_title="تمدید سرویس نماینده",
+                    action_title=i18n.t('تمدید سرویس نماینده', _lg),
                     agent=agent_db.get_agent_by_id(agent_id),
                     customer_name=_customer_display_name(int(svc.get("customer_id") or 0)),
                     service_name=str(svc.get("name") or ""),
-                    server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{sid}") if server else f"\u0633\u0631\u0648\u0631 #{sid}",
+                    server_title=server.get("title", f"{i18n.t('سرور #', _lg)}{sid}") if server else f"{i18n.t('سرور #', _lg)}{sid}",
                     volume_gb=new_usage,
                     days=new_days,
                     amount=cost if extra_days > 0 else 0,
@@ -321,11 +331,11 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                 )
             elif renew_failed:
                 await notify_admin_delivery_report(
-                    action_title="تمدید سرویس نماینده",
+                    action_title=i18n.t('تمدید سرویس نماینده', _lg),
                     agent=agent_db.get_agent_by_id(agent_id),
                     customer_name=_customer_display_name(int(svc.get("customer_id") or 0)),
                     service_name=str(svc.get("name") or ""),
-                    server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{sid}") if server else f"\u0633\u0631\u0648\u0631 #{sid}",
+                    server_title=server.get("title", f"{i18n.t('سرور #', _lg)}{sid}") if server else f"{i18n.t('سرور #', _lg)}{sid}",
                     volume_gb=new_usage,
                     days=new_days,
                     amount=cost if extra_days > 0 else 0,
@@ -446,22 +456,26 @@ async def change_subscription_link(agent_id: int, service_id: int) -> Optional[D
 
 async def rename_service_on_panels(agent_id: int, service_id: int, new_name: str) -> Tuple[bool, str]:
     """تغییر نام اشتراک روی همه پنل‌ها (اصلی + نودها) و سپس در DB نماینده."""
+    try:
+        _lg = i18n.get_agent_lang(int(agent_id or 0))
+    except Exception:
+        _lg = "fa"
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
-        return False, "❌ سرویس پیدا نشد."
+        return False, i18n.t('❌ سرویس پیدا نشد.', _lg)
     old_name = str(svc.get("name") or "").strip()
     if new_name == old_name:
-        return False, "ℹ️ نام جدید با نام فعلی یکسان است."
+        return False, i18n.t('ℹ️ نام جدید با نام فعلی یکسان است.', _lg)
     # اعتبارسنجی طول
     if len(new_name) < 3:
-        return False, "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید."
+        return False, i18n.t('❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.', _lg)
     if len(new_name) > 64:
-        return False, "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید."
+        return False, i18n.t('❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.', _lg)
 
     from Shared.sub_links import get_service_panel_targets
     targets = get_service_panel_targets(svc)
     if not targets:
-        return False, "❌ مسیرهای پنل این اشتراک یافت نشد."
+        return False, i18n.t('❌ مسیرهای پنل این اشتراک یافت نشد.', _lg)
 
     errors: List[str] = []
     ok_count = 0
@@ -470,27 +484,27 @@ async def rename_service_on_panels(agent_id: int, service_id: int, new_name: str
             await multi_panel.patch_user(srv, uuid, {"name": new_name})
             ok_count += 1
         except Exception as e:
-            title = str(srv.get("title") or f"سرور #{srv.get('id')}")
+            title = str(srv.get("title") or f"{i18n.t('سرور #', _lg)}{srv.get('id')}")
             errors.append(f"{title}: {str(e)[:80]}")
 
     if ok_count == 0:
         preview = "\n".join(errors[:3])
-        extra = f"\n... و {len(errors) - 3} خطای دیگر" if len(errors) > 3 else ""
-        return False, "❌ تغییر نام روی همه سرورها انجام نشد.\n" + preview + extra
+        extra = f"{i18n.t('\n... و ', _lg)}{len(errors) - 3}{i18n.t(' خطای دیگر', _lg)}" if len(errors) > 3 else ""
+        return False, i18n.t('❌ تغییر نام روی همه سرورها انجام نشد.\n', _lg) + preview + extra
 
     ok_db = agent_db.update_service(service_id, {"name": new_name})
     if not ok_db:
-        return False, "❌ بروزرسانی نام در دیتابیس انجام نشد."
+        return False, i18n.t('❌ بروزرسانی نام در دیتابیس انجام نشد.', _lg)
 
     margin = ""
     if errors:
         margin = (
-            "\n\n⚠️ نام روی همه نودها اعمال شد اما "
+            i18n.t('\n\n⚠️ نام روی همه نودها اعمال شد اما ', _lg)
             + str(len(errors))
-            + " نود در دسترس نبود (تا برگشتنشان بعداً همگام می‌شود):\n- "
+            + i18n.t(' نود در دسترس نبود (تا برگشتنشان بعداً همگام می‌شود):\n- ', _lg)
             + "\n- ".join(errors[:3])
         )
-    return True, "✅ نام اشتراک با موفقیت بروزرسانی شد." + margin
+    return True, i18n.t('✅ نام اشتراک با موفقیت بروزرسانی شد.', _lg) + margin
 
 
 async def get_configs(agent_id: int, service_id: int) -> list:
@@ -573,29 +587,31 @@ def get_sub_link_for_type(agent_id: int, service_id: int, link_type: str) -> str
 
 def _human_duration(value: float) -> str:
     """تبدیل ثانیه به بازه‌ی انسانی (مثال: «1 ساعت پیش»)."""
+    _lg = "fa"
     try:
         seconds = float(value)
     except (TypeError, ValueError):
-        return "چند لحظه پیش"
+        return i18n.t('چند لحظه پیش', _lg)
     if seconds < 0:
-        return "چند لحظه پیش"
+        return i18n.t('چند لحظه پیش', _lg)
     if seconds < 60:
-        return "چند ثانیه پیش"
+        return i18n.t('چند ثانیه پیش', _lg)
     if seconds < 3600:
-        return f"{int(seconds // 60)} دقیقه پیش"
+        return f"{int(seconds // 60)}{i18n.t(' دقیقه پیش', _lg)}"
     if seconds < 86400:
-        return f"{int(seconds // 3600)} ساعت پیش"
+        return f"{int(seconds // 3600)}{i18n.t(' ساعت پیش', _lg)}"
     days = seconds / 86400
     if days < 30:
-        return f"{int(days)} روز پیش"
+        return f"{int(days)}{i18n.t(' روز پیش', _lg)}"
     if days < 365:
-        return f"{int(days // 30)} ماه پیش"
-    return f"{int(days // 365)} سال پیش"
+        return f"{int(days // 30)}{i18n.t(' ماه پیش', _lg)}"
+    return f"{int(days // 365)}{i18n.t(' سال پیش', _lg)}"
 
 
 async def get_service_last_online(svc) -> str:
     """وضعیت آخرین اتصال کاربر از پنل:
     «آنلاین» اگر در حال استفاده است، «X پیش» اگر مدتی قبل وصل شده، در غیر این صورت «هرگز»."""
+    _lg = "fa"
     ONLINE_WINDOW = 15 * 60  # ثانیه
     CLOCK_SKEW = 120
     try:
@@ -603,11 +619,11 @@ async def get_service_last_online(svc) -> str:
         server = get_server_by_id(sid)
         uuid = str(svc.get("panel_user_uuid") or "").strip()
         if not server or not uuid:
-            return "هرگز"
+            return i18n.t('هرگز', _lg)
         panel_user = await hiddify_api.get_user_by_uuid(server, uuid)
         raw = (panel_user or {}).get("last_online")
         if not raw:
-            return "هرگز"
+            return i18n.t('هرگز', _lg)
         last_dt = None
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
             try:
@@ -616,15 +632,15 @@ async def get_service_last_online(svc) -> str:
             except ValueError:
                 continue
         if last_dt is None:
-            return "هرگز"
+            return i18n.t('هرگز', _lg)
     except Exception:
-        return "هرگز"
+        return i18n.t('هرگز', _lg)
 
     try:
         now = datetime.now()
         seconds = (now - last_dt).total_seconds()
     except Exception:
-        return "هرگز"
+        return i18n.t('هرگز', _lg)
     if -CLOCK_SKEW <= seconds <= ONLINE_WINDOW:
-        return "آنلاین"
+        return i18n.t('آنلاین', _lg)
     return _human_duration(seconds)

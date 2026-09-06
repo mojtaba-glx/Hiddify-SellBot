@@ -236,6 +236,22 @@ DEFAULT_TEXT_SETTINGS = {
     "zarinpal_pro_text": "0",
 }
 
+# Localized values are optional additions to the original scalar settings.  Keep
+# the old keys intact so existing admin data and callers remain valid.
+LOCALIZED_TEXT_FIELDS = (
+    "welcome_message",
+    "faq_text",
+    "guide_text",
+    "guide_android_text",
+    "guide_ios_text",
+    "guide_windows_text",
+    "guide_mac_text",
+    "guide_linux_text",
+)
+for _field in LOCALIZED_TEXT_FIELDS:
+    for _lang in ("fa", "en", "ru"):
+        DEFAULT_TEXT_SETTINGS.setdefault(f"{_field}_{_lang}", "")
+
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
@@ -544,6 +560,10 @@ def _migrate_db():
             created_at TEXT DEFAULT ''
         )
         """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_userbot_sms_events_status_created "
+        "ON userbot_sms_webhook_events(status, created_at, event_id)"
     )
 
     # probe table migrations
@@ -1115,7 +1135,7 @@ def set_buy_renew_limit(name: str, value: int) -> Dict[str, Any]:
     return set_buy_renew_settings(settings)
 
 
-def get_text_settings() -> Dict[str, str]:
+def get_text_settings() -> Dict[str, Any]:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
@@ -1129,7 +1149,8 @@ def get_text_settings() -> Dict[str, str]:
                 if isinstance(raw, dict):
                     for k in DEFAULT_TEXT_SETTINGS.keys():
                         if k in raw and raw[k] is not None:
-                            settings[k] = str(raw[k])
+                            # A localized field may be a {fa,en,ru} object.
+                            settings[k] = raw[k] if isinstance(raw[k], dict) else str(raw[k])
             except Exception:
                 pass
         return settings
@@ -1137,12 +1158,12 @@ def get_text_settings() -> Dict[str, str]:
         conn.close()
 
 
-def set_text_settings(settings: Dict[str, Any]) -> Dict[str, str]:
+def set_text_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     current = dict(DEFAULT_TEXT_SETTINGS)
     if isinstance(settings, dict):
         for k in DEFAULT_TEXT_SETTINGS.keys():
             if k in settings and settings[k] is not None:
-                current[k] = str(settings[k])
+                current[k] = settings[k] if isinstance(settings[k], dict) else str(settings[k])
 
     payload = json.dumps(current, ensure_ascii=False)
     init_db()
@@ -1162,11 +1183,23 @@ def set_text_settings(settings: Dict[str, Any]) -> Dict[str, str]:
     return current
 
 
-def set_text_setting(name: str, value: str) -> Dict[str, str]:
+def set_text_setting(name: str, value: str) -> Dict[str, Any]:
     if name not in DEFAULT_TEXT_SETTINGS:
         raise ValueError("invalid text setting name")
     settings = get_text_settings()
     raw_value = str(value or "")
+    for field in LOCALIZED_TEXT_FIELDS:
+        if name.startswith(f"{field}_") and name.rsplit("_", 1)[-1] in {"fa", "en", "ru"}:
+            lang = name.rsplit("_", 1)[-1]
+            existing = settings.get(field)
+            localized = {"fa": "", "en": "", "ru": ""}
+            if isinstance(existing, dict):
+                localized.update({k: str(v or "") for k, v in existing.items() if k in localized})
+            if isinstance(existing, str) and existing.strip():
+                localized["fa"] = existing
+            localized[lang] = raw_value
+            settings[field] = localized
+            return set_text_settings(settings)
     resettable_by_zero = (
         name.startswith("guide_")
         or name in {
@@ -4113,7 +4146,7 @@ def find_prior_approved_sms_webhook_event(
             """
             SELECT *
             FROM userbot_sms_webhook_events
-            WHERE status = 'approved'
+            WHERE status IN ('approved', 'agent_wallet_approved')
               AND amount_toman = ?
               AND event_id != ?
             ORDER BY id DESC
@@ -4394,6 +4427,143 @@ def attach_sms_event_to_approved_payment(
         return True
     except Exception:
         return False
+
+
+def find_unmatched_main_sms_webhook_events(
+    amount_toman: int,
+    *,
+    payment_created_at: str,
+    payment_card_last4: str = "",
+    allow_pre_receipt_without_last4: bool = False,
+    max_age_minutes: int = 360,
+    receipt_lookback_minutes: int = 30,
+) -> List[Dict[str, Any]]:
+    """Find unmatched events from the main/admin bank SMS webhook.
+
+    Agent wallet charges use the admin's card and therefore the main/global
+    webhook. Agency-customer event ids (``agency:<id>:...``) are deliberately
+    excluded so those tenant-scoped messages can never fund an agent wallet.
+    """
+    init_db()
+    amount = int(amount_toman or 0)
+    payment_dt = _parse_db_datetime(payment_created_at)
+    if amount <= 0 or payment_dt is None:
+        return []
+
+    translated_last4 = str(payment_card_last4 or "").strip().translate(
+        str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    )
+    payment_last4 = "".join(ch for ch in translated_last4 if ch in "0123456789")
+    if payment_last4 and len(payment_last4) != 4:
+        return []
+
+    age = max(5, int(max_age_minutes or 360))
+    lookback = max(1, min(120, int(receipt_lookback_minutes or 30)))
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=age)
+    cutoff_s = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+    sms_not_before = payment_dt - timedelta(minutes=lookback)
+    sms_not_after = payment_dt + timedelta(minutes=5)
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT *
+            FROM userbot_sms_webhook_events
+            WHERE status = 'no_pending_match'
+              AND event_id NOT LIKE 'agency:%'
+              AND COALESCE(created_at, '') >= ?
+            ORDER BY id DESC
+            LIMIT 100
+            """,
+            (cutoff_s,),
+        )
+        events = [dict(row) for row in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    matches: List[Dict[str, Any]] = []
+    for event in events:
+        candidates = _sms_amount_candidates_toman(
+            int(event.get("amount_raw") or 0),
+            str(event.get("currency_raw") or ""),
+        )
+        if amount not in candidates:
+            continue
+
+        event_time = _sms_webhook_event_datetime(event)
+        if event_time is None or event_time < sms_not_before or event_time > sms_not_after:
+            continue
+
+        event_last4 = str(event.get("card_last4") or "").strip()
+        if event_last4:
+            if not payment_last4 or event_last4 != payment_last4:
+                continue
+        elif payment_last4 and not allow_pre_receipt_without_last4:
+            continue
+
+        if event_time < payment_dt and not event_last4 and not allow_pre_receipt_without_last4:
+            continue
+        matches.append(event)
+
+    return matches
+
+
+def transition_sms_webhook_event(
+    event_id: str,
+    *,
+    expected_status: str,
+    new_status: str,
+    matched_payment_id: int = 0,
+    expected_matched_payment_id: Optional[int] = None,
+    message: str = "",
+    amount_toman: Optional[int] = None,
+) -> bool:
+    """Compare-and-swap one SMS event so it cannot fund two payments."""
+    init_db()
+    eid = str(event_id or "").strip()
+    old = str(expected_status or "").strip()
+    new = str(new_status or "").strip()
+    if not eid or not old or not new:
+        return False
+    assignments = "status=?, matched_payment_id=?, message=?"
+    params: List[Any] = [new[:40], int(matched_payment_id or 0), str(message or "")[:500]]
+    if amount_toman is not None:
+        assignments += ", amount_toman=?"
+        params.append(int(amount_toman or 0))
+    where = "event_id=? AND status=?"
+    params.extend([eid, old])
+    if expected_matched_payment_id is not None:
+        where += " AND matched_payment_id=?"
+        params.append(int(expected_matched_payment_id or 0))
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            f"UPDATE userbot_sms_webhook_events SET {assignments} WHERE {where}",
+            params,
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def get_sms_webhook_events_by_status(status: str, limit: int = 100) -> List[Dict[str, Any]]:
+    init_db()
+    wanted = str(status or "").strip()
+    if not wanted:
+        return []
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM userbot_sms_webhook_events WHERE status=? "
+            "ORDER BY id LIMIT ?",
+            (wanted, max(1, min(500, int(limit or 100)))),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def try_approve_payment_from_unmatched_sms(

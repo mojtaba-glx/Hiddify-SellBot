@@ -32,6 +32,7 @@ from AgentBot.services.subscription_service import (
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
 from Shared.qr_utils import make_qr_image
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -65,28 +66,31 @@ async def _safe_answer(query, text: str = "", alert: bool = False) -> None:
 
 
 def _link_type_title(link_type: str) -> str:
+    _lg = "fa"
     titles = {
-        "sub_link": "لینک اشتراک",
-        "auto_sub": "لینک اشتراک خودکار",
-        "sub_b64": "لینک اشتراک b64",
-        "multi": "لینک اشتراک هوشمند",
-        "multi_b64": "لینک اشتراک هوشمند b64",
+        "sub_link": i18n.t('لینک اشتراک', _lg),
+        "auto_sub": i18n.t('لینک اشتراک خودکار', _lg),
+        "sub_b64": i18n.t('لینک اشتراک b64', _lg),
+        "multi": i18n.t('لینک اشتراک هوشمند', _lg),
+        "multi_b64": i18n.t('لینک اشتراک هوشمند b64', _lg),
     }
-    return titles.get(link_type, "لینک اشتراک")
+    return titles.get(link_type, i18n.t('لینک اشتراک', _lg))
 
 
 async def _send_sub_link_with_qr(update: Update, context: ContextTypes.DEFAULT_TYPE, svc_id: int, sub_link: str, link_type: str = "") -> None:
     """ارسال لینک همراه با QR (دقیقاً مثل ربات مشتری)."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     chat_id = query.message.chat_id if query and query.message else update.effective_chat.id
     svc = agent_db.get_service_by_id(svc_id) or {}
     title = _link_type_title(link_type)
-    name_line = f"\U0001f4e6 <b>{_escape(svc.get('name') or 'سرویس')}</b>"
+    name_line = f"\U0001f4e6 <b>{_escape(svc.get('name') or i18n.t('svc_fallback', _lg))}</b>"
     caption = (
-        f"{name_line}\n\n"
-        f"\U0001f517 <b>{title}</b>\n"
-        "\U0001f4c4 جهت کپی شدن لینک کافیست یک بار لینک زیر را لمس کنید \U0001f447\n\n"
-        f"<code>{_escape(sub_link)}</code>"
+        f"{name_line}\n\n🔗 <b>{title}{i18n.t('</b>\n📄 جهت کپی شدن لینک کافیست یک بار لینک زیر را لمس کنید 👇\n\n<code>', _lg)}{_escape(sub_link)}</code>"
     )
     if len(caption) > 1000:
         caption = name_line
@@ -114,16 +118,21 @@ async def _send_sub_link_with_qr(update: Update, context: ContextTypes.DEFAULT_T
 
 async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, svc_id: int) -> None:
     """ارسال کانفیگ‌های مستقیم (مثل ربات مشتری)."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     chat_id = query.message.chat_id if query and query.message else update.effective_chat.id
     svc = agent_db.get_service_by_id(svc_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
-        await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
+        await _safe_answer(query, i18n.t('سرویس پیدا نشد.', _lg), alert=True)
         return
     from Shared.sub_links import collect_all_direct_configs_for_service
     import asyncio
     try:
-        await query.edit_message_text("⏳ در حال استخراج کانفیگ‌های مستقیم... لطفاً صبر کنید.", parse_mode="HTML")
+        await query.edit_message_text(i18n.t('⏳ در حال استخراج کانفیگ‌های مستقیم... لطفاً صبر کنید.', _lg), parse_mode="HTML")
     except Exception:
         pass
     try:
@@ -132,15 +141,13 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
         links = []
     source_hint = ""
     if not links:
-        await _safe_answer(query, "کانفیگ مستقیمی برای این سرویس ایجاد نشد.", alert=True)
+        await _safe_answer(query, i18n.t('کانفیگ مستقیمی برای این سرویس ایجاد نشد.', _lg), alert=True)
         return
-    header = "\U0001f512 کانفیگ‌های مستقیم"
+    header = i18n.t('🔒 کانفیگ‌های مستقیم', _lg)
     clean_links = [str(x).strip() for x in links if str(x).strip()]
     all_text = "\n".join(clean_links)
     one_block = (
-        f"{source_hint}{header}\n"
-        "برای کپی، کل باکس زیر را یکجا کپی کنید:\n"
-        f"<pre><code class=\"language-shell\">{_escape(all_text)}</code></pre>"
+        f"{source_hint}{header}{i18n.t('\nبرای کپی، کل باکس زیر را یکجا کپی کنید:\n<pre><code class="language-shell">', _lg)}{_escape(all_text)}</code></pre>"
     )
     if len(one_block) <= 3900:
         try:
@@ -166,9 +173,7 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
     for idx, chunk in enumerate(parts_list, start=1):
         part_header = header if len(parts_list) == 1 else f"{header} ({idx}/{len(parts_list)})"
         part_text = (
-            f"{source_hint if idx == 1 else ''}{part_header}\n"
-            "برای کپی، باکس زیر را کپی کنید:\n"
-            f"<pre><code class=\"language-shell\">{_escape(chr(10).join(chunk))}</code></pre>"
+            f"{source_hint if idx == 1 else ''}{part_header}{i18n.t('\nبرای کپی، باکس زیر را کپی کنید:\n<pre><code class="language-shell">', _lg)}{_escape(chr(10).join(chunk))}</code></pre>"
         )
         try:
             await context.bot.send_message(chat_id=chat_id, text=part_text, parse_mode="HTML", disable_web_page_preview=True)
@@ -176,44 +181,37 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 
-def _service_detail_text(svc, last_online: str = "هرگز") -> str:
+def _service_detail_text(svc, last_online: str = "", lang: str = "fa") -> str:
     """متن کارت جزئیات سرویس (بدون قیمت و بدون UUID)."""
-    name = _escape(svc.get('name') or 'سرویس')
+    _lg = lang
+    name = _escape(svc.get('name') or i18n.t('svc_fallback', _lg))
     server = _escape(svc.get('server_title') or '—')
     gb = _fmt_gb(svc.get('usage_limit', 0))
     days = svc.get('days_left') or svc.get('days') or 0
     used = _fmt_gb(svc.get('usage_current', 0))
     code = agent_db._service_code_from_comment(svc.get("comment") or "")
     note = agent_db._service_note_from_comment(svc.get("comment") or "") or '—'
-    online_line = _escape(last_online or 'هرگز')
+    online_line = _escape(last_online or i18n.t('never_word', _lg))
     return (
-        f"\U0001f464 کاربر: <b>{name}</b>\n"
-        f"❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
-        f"⬖ سرور: {server}\n"
-        f"\U0001f4ca مصرف: {used} از {gb} گیگابایت\n"
-        f"\U0001f4c6 انقضا: {days} روز دیگر\n"
-        f"\U0001f4f6 آخرین اتصال: {online_line}\n"
-        f"\U0001f4dd یادداشت: {_escape(note)}\n"
-        f"\U0001f511 شناسه: <code>{_escape(code or '—')}</code>"
+        f"{i18n.t('👤 کاربر: <b>', _lg)}{name}{i18n.t('</b>\n❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n⬖ سرور: ', _lg)}{server}{i18n.t('\n📊 مصرف: ', _lg)}{used}{i18n.t(' از ', _lg)}{gb}{i18n.t(' گیگابایت\n📆 انقضا: ', _lg)}{days}{i18n.t(' روز دیگر\n📶 آخرین اتصال: ', _lg)}{online_line}{i18n.t('\n📝 یادداشت: ', _lg)}{_escape(note)}{i18n.t('\n🔑 شناسه: <code>', _lg)}{_escape(code or '—')}</code>"
     )
 
 
-def _service_created_text(svc) -> str:
+def _service_created_text(svc, lang: str = "fa") -> str:
     """متن کوتاه «ساخته شد» — پیام اول."""
-    name = _escape(svc.get('name') or 'سرویس')
+    _lg = lang
+    name = _escape(svc.get('name') or i18n.t('svc_fallback', _lg))
     gb = _fmt_gb(svc.get('usage_limit', 0))
     days = svc.get('days_left') or svc.get('days') or 0
     return (
-        f"✅ <b>اشتراک با موفقیت ساخته شد!</b>\n\n"
-        f"\U0001f464 نام: <b>{name}</b>\n"
-        f"\U0001f4ca حجم: {gb} گیگابایت\n"
-        f"\U0001f4c5 مدت: {days} روز"
+        f"{i18n.t('✅ <b>اشتراک با موفقیت ساخته شد!</b>\n\n👤 نام: <b>', _lg)}{name}{i18n.t('</b>\n📊 حجم: ', _lg)}{gb}{i18n.t(' گیگابایت\n📅 مدت: ', _lg)}{days}{i18n.t(' روز', _lg)}"
     )
 
 
-def _service_detail_card_text(svc, note: str = "", last_online: str = "هرگز") -> str:
+def _service_detail_card_text(svc, note: str = "", last_online: str = "", lang: str = "fa") -> str:
     """متن جزئیات کامل اکانت — پیام دوم (بالای دکمه‌ها)."""
-    name = _escape(svc.get('name') or 'سرویس')
+    _lg = lang
+    name = _escape(svc.get('name') or i18n.t('svc_fallback', _lg))
     server = _escape(svc.get('server_title') or '—')
     gb = _fmt_gb(svc.get('usage_limit', 0))
     days = svc.get('days_left') or svc.get('days') or 0
@@ -222,17 +220,9 @@ def _service_detail_card_text(svc, note: str = "", last_online: str = "هرگز"
     wholesale = _fmt_toman(svc.get('wholesale_price') or 0)
     sale = _fmt_toman(svc.get('sale_price') or 0)
     note_line = _escape(note or '—')
-    online_line = _escape(last_online or 'هرگز')
+    online_line = _escape(last_online or i18n.t('never_word', _lg))
     return (
-        f"\U0001f464 کاربر: <b>{name}</b>\n"
-        f"❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
-        f"⬖ سرور: {server}\n"
-        f"\U0001f4ca مصرف: {used} از {gb} گیگابایت\n"
-        f"\U0001f4c6 انقضا: {days} روز دیگر\n"
-        f"\U0001f4f6 آخرین اتصال: {online_line}\n"
-        f"\U0001f4dd یادداشت: {note_line}\n"
-        f"\U0001f511 شناسه: <code>{_escape(code or '—')}</code>\n"
-        f"💎 عمده: {wholesale} | 💸 فروش: {sale} تومان"
+        f"{i18n.t('👤 کاربر: <b>', _lg)}{name}{i18n.t('</b>\n❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n⬖ سرور: ', _lg)}{server}{i18n.t('\n📊 مصرف: ', _lg)}{used}{i18n.t(' از ', _lg)}{gb}{i18n.t(' گیگابایت\n📆 انقضا: ', _lg)}{days}{i18n.t(' روز دیگر\n📶 آخرین اتصال: ', _lg)}{online_line}{i18n.t('\n📝 یادداشت: ', _lg)}{note_line}{i18n.t('\n🔑 شناسه: <code>', _lg)}{_escape(code or '—')}{i18n.t('</code>\n💎 عمده: ', _lg)}{wholesale}{i18n.t(' | 💸 فروش: ', _lg)}{sale}{i18n.t(' تومان', _lg)}"
     )
 
 
@@ -255,6 +245,11 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1) -> None:
     """جدول کاربران منقضی‌شده: هدر آمار + جدول ۳ ستونه با 🔴 + دکمه حذف همه."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if page < 1:
         page = 1
@@ -275,7 +270,7 @@ async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
     rows = []
     row = []
     for s, st in page_items:
-        name = (s.get("name") or "بی‌نام").strip()
+        name = (s.get("name") or i18n.t('بی‌نام', _lg)).strip()
         sid = int(s["id"])
         row.append(IButton(f"🔴 |{name}", callback_data=f"agbot:subs:detail:{sid}:expired:{page}"))
         if len(row) == 3:
@@ -286,28 +281,24 @@ async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     # دکمه حذف همه کاربران منقضی
     if total > 0:
-        rows.append([IButton("🗑 حذف همه کاربران منقضی", callback_data="agbot:subs:delexpired")])
+        rows.append([IButton(i18n.t('🗑 حذف همه کاربران منقضی', _lg), callback_data="agbot:subs:delexpired")])
 
     # صفحه‌بندی
     nav = []
     if page < total_pages:
-        nav.append(IButton("بعدی ➡️", callback_data=f"agbot:subs:expired:{page + 1}"))
+        nav.append(IButton(i18n.t('بعدی ➡️', _lg), callback_data=f"agbot:subs:expired:{page + 1}"))
     nav.append(IButton(f"{page}/{total_pages}", callback_data="noop"))
     if page > 1:
-        nav.append(IButton("⬅️ قبلی", callback_data=f"agbot:subs:expired:{page - 1}"))
+        nav.append(IButton(i18n.t('⬅️ قبلی', _lg), callback_data=f"agbot:subs:expired:{page - 1}"))
     if nav:
         rows.append(nav)
     rows.append([IButton(BTN_BACK, callback_data="agbot:subs:back")])
 
     text = (
-        f"⚠️ <b>لیست کاربران منقضی شده</b>\n"
-        f"# لیست کاربران\n"
-        f"شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید.\n\n"
-        f"👤 تعداد کاربران: {total}\n"
-        f"🔵 کاربران آنلاین: {online_cnt}"
+        f"{i18n.t('⚠️ <b>لیست کاربران منقضی شده</b>\n# لیست کاربران\nشما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید.\n\n👤 تعداد کاربران: ', _lg)}{total}{i18n.t('\n🔵 کاربران آنلاین: ', _lg)}{online_cnt}"
     )
     if not expired_items:
-        text = "⚠️ <b>لیست کاربران منقضی شده</b>\n\nهیچ کاربر منقضی‌شده‌ای یافت نشد."
+        text = i18n.t('⚠️ <b>لیست کاربران منقضی شده</b>\n\nهیچ کاربر منقضی‌شده‌ای یافت نشد.', _lg)
 
     query = update.callback_query
     try:
@@ -436,6 +427,11 @@ async def _fetch_services_with_status(agent_id: int):
 
 async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1) -> None:
     """جدول لیست کاربران: فقط از دیتابیس نماینده خوانده و وجود/وضعیت روی سرور چک می‌شود."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if page < 1:
         page = 1
@@ -456,7 +452,7 @@ async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     rows = []
     row = []
     for s, st in page_items:
-        name = (s.get("name") or "بی‌نام").strip()
+        name = (s.get("name") or i18n.t('بی‌نام', _lg)).strip()
         sid = int(s["id"])
         row.append(IButton(f"{STATUS_ICON.get(st, '🟡')} {name}", callback_data=f"agbot:subs:detail:{sid}:list:{page}"))
         if len(row) == 3:
@@ -468,25 +464,19 @@ async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     # صفحه‌بندی (صفحه فعلی وسط، قبلی/بعدی)
     nav = []
     if page < total_pages:
-        nav.append(IButton("بعدی ➡️", callback_data=f"agbot:subs:list:{page + 1}"))
+        nav.append(IButton(i18n.t('بعدی ➡️', _lg), callback_data=f"agbot:subs:list:{page + 1}"))
     nav.append(IButton(f"{page}/{total_pages}", callback_data="noop"))
     if page > 1:
-        nav.append(IButton("⬅️ قبلی", callback_data=f"agbot:subs:list:{page - 1}"))
+        nav.append(IButton(i18n.t('⬅️ قبلی', _lg), callback_data=f"agbot:subs:list:{page - 1}"))
     if nav:
         rows.append(nav)
     rows.append([IButton(BTN_BACK, callback_data="agbot:subs:back")])
 
     text = (
-        f"📃 <b>لیست کاربران</b>\n"
-        f"شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید.\n\n"
-        f"📄 صفحه: {page}/{total_pages}\n"
-        f"👥 تعداد کاربران: {total}\n"
-        f"🔵 آنلاین: {online_cnt}\n"
-        f"🟡 آفلاین: {offline_cnt}\n"
-        f"🔴 منقضی شده: {expired_cnt}"
+        f"{i18n.t('📃 <b>لیست کاربران</b>\nشما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید.\n\n📄 صفحه: ', _lg)}{page}/{total_pages}{i18n.t('\n👥 تعداد کاربران: ', _lg)}{total}{i18n.t('\n🔵 آنلاین: ', _lg)}{online_cnt}{i18n.t('\n🟡 آفلاین: ', _lg)}{offline_cnt}{i18n.t('\n🔴 منقضی شده: ', _lg)}{expired_cnt}"
     )
     if not items:
-        text = f"📃 <b>لیست کاربران</b>\n\nهیچ کاربری (روی سرور) یافت نشد."
+        text = f"{i18n.t('📃 <b>لیست کاربران</b>\n\nهیچ کاربری (روی سرور) یافت نشد.', _lg)}"
 
     query = update.callback_query
     try:
@@ -497,6 +487,11 @@ async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, p
 
 async def _send_name_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1, use_callback: bool = False) -> None:
     """نمایش نتایج جستجو با نام به صورت جدول (۳ ستونه + صفحه‌بندی)، فقط آن‌هایی که روی سرور موجودند."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if page < 1:
         page = 1
@@ -504,7 +499,7 @@ async def _send_name_search_results(update: Update, context: ContextTypes.DEFAUL
 
     services, _ = agent_db.search_services_by_name(agent_id, term, page=1, page_size=1000)
     if not services:
-        text = "❌ اشتراکی با این نام یافت نشد."
+        text = i18n.t('❌ اشتراکی با این نام یافت نشد.', _lg)
         kb = None
     else:
         sem = asyncio.Semaphore(8)
@@ -516,7 +511,7 @@ async def _send_name_search_results(update: Update, context: ContextTypes.DEFAUL
         statuses = await asyncio.gather(*[_check(s) for s in services]) if services else []
         items = [(s, st) for s, st in zip(services, statuses) if st is not None]
         if not items:
-            text = "❌ اشتراک موردنظر در دیتابیس هست اما روی سرور یافت نشد."
+            text = i18n.t('❌ اشتراک موردنظر در دیتابیس هست اما روی سرور یافت نشد.', _lg)
             kb = None
         else:
             total = len(items)
@@ -533,7 +528,7 @@ async def _send_name_search_results(update: Update, context: ContextTypes.DEFAUL
             rows = []
             row = []
             for s, st in page_items:
-                name = (s.get("name") or "بی‌نام").strip()
+                name = (s.get("name") or i18n.t('بی‌نام', _lg)).strip()
                 sid = int(s["id"])
                 row.append(IButton(f"{STATUS_ICON.get(st, '🟡')} {name}", callback_data=f"agbot:subs:detail:{sid}"))
                 if len(row) == 3:
@@ -544,18 +539,16 @@ async def _send_name_search_results(update: Update, context: ContextTypes.DEFAUL
 
             nav = []
             if page < total_pages:
-                nav.append(IButton("بعدی ➡️", callback_data=f"agbot:subs:namesearch:{page + 1}"))
+                nav.append(IButton(i18n.t('بعدی ➡️', _lg), callback_data=f"agbot:subs:namesearch:{page + 1}"))
             nav.append(IButton(f"{page}/{total_pages}", callback_data="noop"))
             if page > 1:
-                nav.append(IButton("⬅️ قبلی", callback_data=f"agbot:subs:namesearch:{page - 1}"))
+                nav.append(IButton(i18n.t('⬅️ قبلی', _lg), callback_data=f"agbot:subs:namesearch:{page - 1}"))
             if nav:
                 rows.append(nav)
             rows.append([IButton(BTN_BACK, callback_data="agbot:subs:back")])
 
             text = (
-                f"🔍 <b>نتایج جستجو</b> «{_escape(term)}»\n\n"
-                f"📄 صفحه: {page}/{total_pages}\n"
-                f"👥 تعداد یافت‌شده: {total}"
+                f"{i18n.t('🔍 <b>نتایج جستجو</b> «', _lg)}{_escape(term)}{i18n.t('»\n\n📄 صفحه: ', _lg)}{page}/{total_pages}{i18n.t('\n👥 تعداد یافت‌شده: ', _lg)}{total}"
             )
             kb = _ikb(rows)
 
@@ -570,6 +563,11 @@ async def _send_name_search_results(update: Update, context: ContextTypes.DEFAUL
 
 async def _notify_customer_deleted(context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int) -> None:
     """پس از حذف اشتراک، به مشتری صاحب سرویس اطلاع بده (از طریق ربات مشتری)."""
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     try:
         svc = agent_db.get_service_by_id(service_id)
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
@@ -589,9 +587,7 @@ async def _notify_customer_deleted(context: ContextTypes.DEFAULT_TYPE, agent_id:
             return
         name = str(svc.get("name") or "")
         text = (
-            f"⚠️ اشتراک شما حذف شد.\n\n"
-            f"📄 نام سرویس: {_escape(name)}\n"
-            f"❌ دسترسی شما به این سرویس قطع شد."
+            f"{i18n.t('⚠️ اشتراک شما حذف شد.\n\n📄 نام سرویس: ', _lg)}{_escape(name)}{i18n.t('\n❌ دسترسی شما به این سرویس قطع شد.', _lg)}"
         )
         try:
             await Bot(token=token).send_message(chat_id=tg_id, text=text, parse_mode="HTML")
@@ -602,6 +598,11 @@ async def _notify_customer_deleted(context: ContextTypes.DEFAULT_TYPE, agent_id:
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -639,17 +640,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data["subs_back_to"] = f"agbot:subs:{src}:{pg}"
         svc = agent_db.get_service_by_id(svc_id)
         if not svc:
-            await query.answer("سرویس پیدا نشد.", show_alert=True)
+            await query.answer(i18n.t('سرویس پیدا نشد.', _lg), show_alert=True)
             return
         is_active = bool(int(svc.get("is_active", 0) or 0))
-        last_online = "هرگز"
+        last_online = i18n.t('never_word', _lg)
         try:
             from AgentBot.services.subscription_service import get_service_last_online
             last_online = await get_service_last_online(svc)
         except Exception:
-            last_online = "هرگز"
+            last_online = i18n.t('never_word', _lg)
         await query.edit_message_text(
-            _service_detail_text(svc, last_online),
+            _service_detail_text(svc, last_online, lang=_lg),
             reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
             parse_mode="HTML",
         )
@@ -661,8 +662,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         try:
             from AgentBot.keyboards import subs_search_keyboard
             await query.edit_message_text(
-                "🔍 <b>جستجوی اشتراک</b>\n\n"
-                "یکی از گزینه‌های زیر را انتخاب کنید:",
+                i18n.t('🔍 <b>جستجوی اشتراک</b>\n\nیکی از گزینه‌های زیر را انتخاب کنید:', _lg),
                 reply_markup=subs_search_keyboard(lang=agent_lang(context)),
                 parse_mode="HTML",
             )
@@ -675,8 +675,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data[UD_STATE] = STATE_SEARCH_NAME
         try:
             await query.edit_message_text(
-                "🔍 <b>جستجو با نام</b>\n\n"
-                "نام اشتراک را بفرستید:",
+                i18n.t('🔍 <b>جستجو با نام</b>\n\nنام اشتراک را بفرستید:', _lg),
                 reply_markup=back_keyboard("agbot:subs:back"),
                 parse_mode="HTML",
             )
@@ -689,8 +688,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data[UD_STATE] = STATE_SEARCH_SERVICE
         try:
             await query.edit_message_text(
-                "🔍 <b>جستجوی اشتراک با شناسه</b>\n\n"
-                "شناسه ۷ رقمی اشتراک را بفرستید:",
+                i18n.t('🔍 <b>جستجوی اشتراک با شناسه</b>\n\nشناسه ۷ رقمی اشتراک را بفرستید:', _lg),
                 reply_markup=back_keyboard("agbot:subs:back"),
                 parse_mode="HTML",
             )
@@ -714,16 +712,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if action == "create":
         servers = shared_db.get_main_servers() or []
         if not servers:
-            await query.answer("\u0647\u06cc\u0686 \u0633\u0631\u0648\u0631 \u0627\u0635\u0644\u06cc \u062b\u0628\u062a \u0646\u0634\u062f\u0647.", show_alert=True)
+            await query.answer(i18n.t('هیچ سرور اصلی ثبت نشده.', _lg), show_alert=True)
             return
         from AgentBot.keyboards import _ikb
         from Shared.tg_button_styles import inline_button as IButton
-        rows = [[IButton(_escape(s.get("title") or f"\u0633\u0631\u0648\u0631 #{s['id']}"),
+        rows = [[IButton(_escape(s.get("title") or f"{i18n.t('سرور #', _lg)}{s['id']}"),
                          callback_data=f"agbot:subs:picksrv:{s['id']}")] for s in servers]
-        rows.append([IButton("\U0001f519 \u0628\u0627\u0632\u06af\u0634\u062a", callback_data="agbot:subs:back")])
+        rows.append([IButton(i18n.t('🔙 بازگشت', _lg), callback_data="agbot:subs:back")])
         try:
             await query.edit_message_text(
-                "\U0001f5a5 <b>\u0627\u0646\u062a\u062e\u0627\u0628 \u0633\u0631\u0648\u0631</b>\n\n\u0644\u0637\u0641\u0627 \u0633\u0631\u0648\u0631 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u0627\u0646\u062a\u062e\u0627\u0628 \u06a9\u0646\u06cc\u062f:",
+                i18n.t('🖥 <b>انتخاب سرور</b>\n\nلطفا سرور مورد نظر را انتخاب کنید:', _lg),
                 reply_markup=_ikb(rows), parse_mode="HTML",
             )
         except Exception:
@@ -744,7 +742,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         kb = agent_dynamic_wizard_keyboard(server_id, gb, months, sale, off_pct, wholesale)
         try:
             await query.edit_message_text(
-                "\U0001f3af <b>\u0633\u06cc\u0633\u062a\u0645 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u062c\u0647\u062a \u062e\u0631\u06cc\u062f \u0637\u0631\u0627\u062d\u06cc \u06a9\u0646\u06cc\u062f:</b>",
+                i18n.t('🎯 <b>سیستم مورد نظر را جهت خرید طراحی کنید:</b>', _lg),
                 reply_markup=kb, parse_mode="HTML",
             )
         except Exception:
@@ -783,7 +781,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
             try:
                 await query.edit_message_text(
-                    "\U0001f4e1 <b>\u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633</b>\n\n\u062d\u0627\u0644\u0627 \u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+                    i18n.t('📡 <b>نام سرویس</b>\n\nحالا نام سرویس را وارد کنید:', _lg),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -819,7 +817,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         kb = agent_dynamic_wizard_keyboard(server_id, gb, months, sale, off_pct, wholesale)
         try:
             await query.edit_message_text(
-                "\U0001f3af <b>\u0633\u06cc\u0633\u062a\u0645 \u0645\u0648\u0631\u062f \u0646\u0638\u0631 \u0631\u0627 \u062c\u0647\u062a \u062e\u0631\u06cc\u062f \u0637\u0631\u0627\u062d\u06cc \u06a9\u0646\u06cc\u062f:</b>",
+                i18n.t('🎯 <b>سیستم مورد نظر را جهت خرید طراحی کنید:</b>', _lg),
                 reply_markup=kb, parse_mode="HTML",
             )
         except Exception:
@@ -832,7 +830,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         from AgentBot.database import get_fixed_plan
         plan = get_fixed_plan(agent_id, plan_id)
         if not plan:
-            await query.answer("\u067e\u0644\u0646 \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.", show_alert=True)
+            await query.answer(i18n.t('پلن پیدا نشد.', _lg), show_alert=True)
             return
         server_id = context.user_data.get(UD_SELECTED_SERVER, 0) or 0
         plan["wholesale_price"] = agent_db.calculate_wholesale_price(agent_id, plan.get("gb", 0), plan.get("days", 30), server_id)
@@ -841,7 +839,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
         try:
             await query.edit_message_text(
-                "\U0001f4e1 <b>\u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633</b>\n\n\u062d\u0627\u0644\u0627 \u0646\u0627\u0645 \u0633\u0631\u0648\u06cc\u0633 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f:",
+                i18n.t('📡 <b>نام سرویس</b>\n\nحالا نام سرویس را وارد کنید:', _lg),
                 parse_mode="HTML",
             )
         except Exception:
@@ -857,12 +855,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         from AgentBot.keyboards import _ikb
         from Shared.tg_button_styles import inline_button as IButton
         kb = _ikb([
-            [IButton("🗑 بله، همه را حذف کن", callback_data="agbot:subs:dodelexpired")],
-            [IButton("❌ لغو", callback_data="agbot:subs:expired:1")],
+            [IButton(i18n.t('🗑 بله، همه را حذف کن', _lg), callback_data="agbot:subs:dodelexpired")],
+            [IButton(i18n.t('❌ لغو', _lg), callback_data="agbot:subs:expired:1")],
         ])
         try:
             await query.edit_message_text(
-                "⚠️ از حذف همه کاربران منقضی اطمینان دارید؟\n\nاین عملیات قابل بازگشت نیست.",
+                i18n.t('⚠️ از حذف همه کاربران منقضی اطمینان دارید؟\n\nاین عملیات قابل بازگشت نیست.', _lg),
                 reply_markup=kb, parse_mode="HTML",
             )
         except Exception:
@@ -871,7 +869,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "dodelexpired":
         try:
-            await query.edit_message_text("⏳ در حال حذف کاربران منقضی... لطفاً صبر کنید.", parse_mode="HTML")
+            await query.edit_message_text(i18n.t('⏳ در حال حذف کاربران منقضی... لطفاً صبر کنید.', _lg), parse_mode="HTML")
         except Exception:
             pass
         items, _, _, _ = await _fetch_services_with_status(agent_id)
@@ -888,10 +886,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     fail += 1
             except Exception:
                 fail += 1
-        await _safe_answer(query, f"حذف شد ({ok})", alert=False)
+        await _safe_answer(query, f"{i18n.t('حذف شد (', _lg)}{ok})", alert=False)
         try:
             await query.edit_message_text(
-                f"✅ حذف کاربران منقضی انجام شد.\n\n🗑 حذف‌شده: {ok} | ❌ خطا: {fail}",
+                f"{i18n.t('✅ حذف کاربران منقضی انجام شد.\n\n🗑 حذف‌شده: ', _lg)}{ok}{i18n.t(' | ❌ خطا: ', _lg)}{fail}",
                 reply_markup=subs_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
             )
         except Exception:
@@ -907,11 +905,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         svc = agent_db.get_service_by_id(svc_id)
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
-            await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
+            await _safe_answer(query, i18n.t('سرویس پیدا نشد.', _lg), alert=True)
             return
         ss = get_subs_link_settings()
         await query.edit_message_text(
-            "🔗 <b>دریافت کانفیگ</b>\n\nلطفاً نوع اتصال را انتخاب کنید:",
+            i18n.t('🔗 <b>دریافت کانفیگ</b>\n\nلطفاً نوع اتصال را انتخاب کنید:', _lg),
             reply_markup=subs_configs_keyboard(
                 svc_id,
                 show_direct_config=ss.get("show_direct_config", True),
@@ -920,6 +918,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 show_sub_link_b64=ss.get("show_sub_link_b64", False),
                 show_multi_server=ss.get("show_multi_server", False),
                 show_multi_server_b64=ss.get("show_multi_server_b64", False),
+                lang=_lg,
             ),
             parse_mode="HTML",
         )
@@ -933,7 +932,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         sub_link = get_sub_link_for_type(agent_id, svc_id, link_type)
         if not sub_link:
-            await _safe_answer(query, "لینکی برای این نوع پیدا نشد.", alert=True)
+            await _safe_answer(query, i18n.t('لینکی برای این نوع پیدا نشد.', _lg), alert=True)
             return
         await _send_sub_link_with_qr(update, context, svc_id, sub_link)
         return
@@ -942,7 +941,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         svc = agent_db.get_service_by_id(svc_id)
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
-            await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
+            await _safe_answer(query, i18n.t('سرویس پیدا نشد.', _lg), alert=True)
             return
         server_id = int(svc.get("server_id") or 0)
         context.user_data[UD_SELECTED_SERVICE] = svc_id
@@ -956,17 +955,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         vol_mode = time_mode = "reset"
         context.user_data["rewiz_vol_mode"] = vol_mode
         context.user_data["rewiz_time_mode"] = time_mode
-        vol_label = "ریست"
-        time_label = "ریست"
+        vol_label = i18n.t('ریست', _lg)
+        time_label = i18n.t('ریست', _lg)
         from AgentBot.keyboards import agent_renew_wizard_keyboard
         kb = agent_renew_wizard_keyboard(svc_id, gb, months, sale, off_pct, wholesale)
         try:
             await query.edit_message_text(
-                "🔄 <b>تمدید اشتراک</b>\n\n"
-                f"📦 <b>{_escape(svc.get('name') or 'سرویس')}</b>\n"
-                f"\U0001f4ca حجم: <b>{vol_label}</b> | ⏳ زمان: <b>{time_label}</b>\n"
-                "مقدار «حجم تمدید» و «مدت تمدید» را انتخاب کنید.\n"
-                "هزینه از کیف پول شما کسر می‌شود:",
+                f"{i18n.t('🔄 <b>تمدید اشتراک</b>\n\n📦 <b>', _lg)}{_escape(svc.get('name') or i18n.t('svc_fallback', _lg))}{i18n.t('</b>\n📊 حجم: <b>', _lg)}{vol_label}{i18n.t('</b> | ⏳ زمان: <b>', _lg)}{time_label}{i18n.t('</b>\nمقدار «حجم تمدید» و «مدت تمدید» را انتخاب کنید.\nهزینه از کیف پول شما کسر می‌شود:', _lg)}",
                 reply_markup=kb, parse_mode="HTML",
             )
         except Exception:
@@ -978,7 +973,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         svc_id = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
         svc = agent_db.get_service_by_id(svc_id)
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
-            await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
+            await _safe_answer(query, i18n.t('سرویس پیدا نشد.', _lg), alert=True)
             return
         server_id = int(svc.get("server_id") or 0)
         gb = context.user_data.get("rewiz_gb", 1)
@@ -996,13 +991,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if not updated:
                 try:
                     await query.edit_message_text(
-                        "❌ موجودی کیف پول کافی نیست.\nلطفاً ابتدا کیف پول خود را شارژ کنید.",
+                        i18n.t('❌ موجودی کیف پول کافی نیست.\nلطفاً ابتدا کیف پول خود را شارژ کنید.', _lg),
                         reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0)), lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
                 except Exception:
                     pass
-                await _safe_answer(query, "موجودی کافی نیست!", alert=True)
+                await _safe_answer(query, i18n.t('موجودی کافی نیست!', _lg), alert=True)
                 return
             context.user_data.pop("rewiz_gb", None)
             context.user_data.pop("rewiz_months", None)
@@ -1032,15 +1027,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 logger.warning("Failed to send renew subscription report svc=%s: %s", svc_id, report_err)
             try:
                 await query.edit_message_text(
-                    f"✅ <b>اشتراک با موفقیت تمدید شد!</b>\n\n"
-                    f"📦 <b>{_escape(updated.get('name') or 'سرویس')}</b>\n"
-                    f"📊 حجم تمدید: {_fmt_gb(gb)}GB\n"
-                    f"⏰ مدت تمدید: {days} روز\n"
-                    f"{'📦 حجم: افزایشی (باقی‌مانده + تمدید)' if vol_mode == 'add' else '📦 حجم: ریست (پلن جدید)'}\n"
-                    f"{'⏳ زمان: افزایشی (باقی‌مانده + تمدید)' if time_mode == 'add' else '⏳ زمان: ریست (شروع از امروز)'}\n"
-                    f"💴 کسر از کیف پول: {_fmt_toman(wholesale)} تومان\n\n"
-                    f"📈 کل حجم: {_fmt_gb(updated.get('usage_limit', 0))}GB\n"
-                    f"⏳ روز باقی‌مانده: {updated.get('days_left') or updated.get('days') or 0}",
+                    f"{i18n.t('✅ <b>اشتراک با موفقیت تمدید شد!</b>\n\n📦 <b>', _lg)}{_escape(updated.get('name') or i18n.t('svc_fallback', _lg))}{i18n.t('</b>\n📊 حجم تمدید: ', _lg)}{_fmt_gb(gb)}{i18n.t('GB\n⏰ مدت تمدید: ', _lg)}{days}{i18n.t(' روز\n', _lg)}{i18n.t('📦 حجم: افزایشی (باقی\u200cمانده + تمدید)' if vol_mode == 'add' else '📦 حجم: ریست (پلن جدید)', _lg)}\n{i18n.t('⏳ زمان: افزایشی (باقی\u200cمانده + تمدید)' if time_mode == 'add' else '⏳ زمان: ریست (شروع از امروز)', _lg)}{i18n.t('\n💴 کسر از کیف پول: ', _lg)}{_fmt_toman(wholesale)}{i18n.t(' تومان\n\n📈 کل حجم: ', _lg)}{_fmt_gb(updated.get('usage_limit', 0))}{i18n.t('GB\n⏳ روز باقی‌مانده: ', _lg)}{updated.get('days_left') or updated.get('days') or 0}",
                     reply_markup=service_detail_keyboard(svc_id, bool(int(updated.get("is_active", 0) or 0)), lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
@@ -1077,10 +1064,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         kb = agent_renew_wizard_keyboard(svc_id, gb, months, sale, off_pct, wholesale)
         try:
             await query.edit_message_text(
-                "🔄 <b>تمدید اشتراک</b>\n\n"
-                f"📦 <b>{_escape(svc.get('name') or 'سرویس')}</b>\n"
-                "مقدار «حجم تمدید» و «مدت تمدید» را انتخاب کنید.\n"
-                "هزینه از کیف پول شما کسر می‌شود:",
+                f"{i18n.t('🔄 <b>تمدید اشتراک</b>\n\n📦 <b>', _lg)}{_escape(svc.get('name') or i18n.t('svc_fallback', _lg))}{i18n.t('</b>\nمقدار «حجم تمدید» و «مدت تمدید» را انتخاب کنید.\nهزینه از کیف پول شما کسر می‌شود:', _lg)}",
                 reply_markup=kb, parse_mode="HTML",
             )
         except Exception:
@@ -1091,11 +1075,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if action == "disable":
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         try:
-            await query.edit_message_text("⏳ در حال غیرفعال کردن سرویس... لطفاً صبر کنید.", parse_mode="HTML")
+            await query.edit_message_text(i18n.t('⏳ در حال غیرفعال کردن سرویس... لطفاً صبر کنید.', _lg), parse_mode="HTML")
         except Exception:
             pass
         ok = await disable_subscription(agent_id, svc_id)
-        await _safe_answer(query, "غیرفعال شد ✅" if ok else "خطا!", alert=not ok)
+        await _safe_answer(query, i18n.t('غیرفعال شد ✅', _lg) if ok else i18n.t('خطا!', _lg), alert=not ok)
         if ok:
             svc = agent_db.get_service_by_id(svc_id)
             if svc:
@@ -1103,7 +1087,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     from AgentBot.services.subscription_service import get_service_last_online
                     _lo = await get_service_last_online(svc)
                     await query.edit_message_text(
-                        _service_detail_text(svc, _lo),
+                        _service_detail_text(svc, _lo, lang=_lg),
                         reply_markup=service_detail_keyboard(svc_id, False, lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
@@ -1114,11 +1098,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if action == "enable":
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         try:
-            await query.edit_message_text("⏳ در حال فعال کردن سرویس... لطفاً صبر کنید.", parse_mode="HTML")
+            await query.edit_message_text(i18n.t('⏳ در حال فعال کردن سرویس... لطفاً صبر کنید.', _lg), parse_mode="HTML")
         except Exception:
             pass
         ok = await enable_subscription(agent_id, svc_id)
-        await _safe_answer(query, "فعال شد ✅" if ok else "خطا!", alert=not ok)
+        await _safe_answer(query, i18n.t('فعال شد ✅', _lg) if ok else i18n.t('خطا!', _lg), alert=not ok)
         if ok:
             svc = agent_db.get_service_by_id(svc_id)
             if svc:
@@ -1126,7 +1110,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     from AgentBot.services.subscription_service import get_service_last_online
                     _lo = await get_service_last_online(svc)
                     await query.edit_message_text(
-                        _service_detail_text(svc, _lo),
+                        _service_detail_text(svc, _lo, lang=_lg),
                         reply_markup=service_detail_keyboard(svc_id, True, lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
@@ -1139,13 +1123,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         from AgentBot.keyboards import _ikb
         from Shared.tg_button_styles import inline_button as IButton
         kb = _ikb([
-            [IButton("\U0001f5d1 \u0628\u0644\u0647\u060c \u062d\u0630\u0641 \u06a9\u0646", callback_data=f"agbot:subs:dodelete:{svc_id}")],
-            [IButton("\u274c \u0644\u063a\u0648", callback_data=f"agbot:subs:detail:{svc_id}")],
+            [IButton(i18n.t('🗑 بله، حذف کن', _lg), callback_data=f"agbot:subs:dodelete:{svc_id}")],
+            [IButton(i18n.t('❌ لغو', _lg), callback_data=f"agbot:subs:detail:{svc_id}")],
         ])
         try:
             await query.edit_message_text(
-                f"\u26a0\ufe0f \u0627\u0632 \u062d\u0630\u0641 \u0633\u0631\u0648\u06cc\u0633 \u0627\u0637\u0645\u06cc\u0646\u0627\u0646 \u062f\u0627\u0631\u06cc\u062f\u061f\n\n"
-                f"\u0627\u06cc\u0646 \u0639\u0645\u0644 \u0642\u0627\u0628\u0644 \u0628\u0627\u0632\u06af\u0634\u062a \u0646\u06cc\u0633\u062a.",
+                f"{i18n.t('⚠️ از حذف سرویس اطمینان دارید؟\n\nاین عمل قابل بازگشت نیست.', _lg)}",
                 reply_markup=kb, parse_mode="HTML",
             )
         except Exception:
@@ -1159,16 +1142,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         svc_name = str((svc_before or {}).get("name") or f"#{svc_id}").strip()
         # نمایش حالت لودینگ
         try:
-            await query.edit_message_text("⏳ در حال حذف اشتراک... لطفاً صبر کنید.", parse_mode="HTML")
+            await query.edit_message_text(i18n.t('⏳ در حال حذف اشتراک... لطفاً صبر کنید.', _lg), parse_mode="HTML")
         except Exception:
             pass
         ok = await delete_subscription(agent_id, svc_id)
-        await _safe_answer(query, "حذف شد ✅" if ok else "خطا در حذف!", alert=not ok)
+        await _safe_answer(query, i18n.t('حذف شد ✅', _lg) if ok else i18n.t('خطا در حذف!', _lg), alert=not ok)
         if ok:
             await _notify_customer_deleted(context, agent_id, svc_id)
             try:
                 await query.edit_message_text(
-                    f"✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «{_escape(svc_name)}» با موفقیت حذف شد.",
+                    f"{i18n.t('✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «', _lg)}{_escape(svc_name)}{i18n.t('» با موفقیت حذف شد.', _lg)}",
                     reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
@@ -1177,7 +1160,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     chat_id = query.message.chat_id if query and query.message else update.effective_chat.id
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=f"✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «{_escape(svc_name)}» با موفقیت حذف شد.",
+                        text=f"{i18n.t('✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «', _lg)}{_escape(svc_name)}{i18n.t('» با موفقیت حذف شد.', _lg)}",
                         reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
@@ -1186,7 +1169,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             try:
                 await query.edit_message_text(
-                    "❌ خطا در حذف اشتراک. لطفاً دوباره تلاش کنید.",
+                    i18n.t('❌ خطا در حذف اشتراک. لطفاً دوباره تلاش کنید.', _lg),
                     reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
@@ -1198,7 +1181,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         svc = agent_db.get_service_by_id(svc_id)
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
-            await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
+            await _safe_answer(query, i18n.t('سرویس پیدا نشد.', _lg), alert=True)
             return
         context.user_data[UD_STATE] = STATE_RENAME_SERVICE
         context.user_data[UD_SELECTED_SERVICE] = svc_id
@@ -1209,11 +1192,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"✏️ <b>تغییر نام اشتراک</b>\n\n"
-                    f"📦 نام فعلی: <b>{_escape(svc.get('name') or '—')}</b>\n\n"
-                    "نام جدید را ارسال کنید:\n"
-                    "• حداقل 3 و حداکثر 64 کاراکتر\n"
-                    "• برای انصراف «🔙 بازگشت» در کیبورد پایین را بزنید."
+                    f"{i18n.t('✏️ <b>تغییر نام اشتراک</b>\n\n📦 نام فعلی: <b>', _lg)}{_escape(svc.get('name') or '—')}{i18n.t('</b>\n\nنام جدید را ارسال کنید:\n• حداقل 3 و حداکثر 64 کاراکتر\n• برای انصراف «🔙 بازگشت» در کیبورد پایین را بزنید.', _lg)}"
                 ),
                 reply_markup=rename_cancel_keyboard(),
                 parse_mode="HTML",
@@ -1232,7 +1211,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             chat_id = query.message.chat_id if query and query.message else update.effective_chat.id
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="لغو شد.",
+                text=i18n.t('لغو شد.', _lg),
                 reply_markup=main_menu_keyboard(),
             )
         except Exception:
@@ -1242,11 +1221,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 from AgentBot.services.subscription_service import get_service_last_online
                 last_online = await get_service_last_online(svc)
             except Exception:
-                last_online = "هرگز"
+                last_online = i18n.t('never_word', _lg)
             is_active = bool(int(svc.get("is_active", 0) or 0))
             try:
                 await query.edit_message_text(
-                    _service_detail_text(svc, last_online),
+                    _service_detail_text(svc, last_online, lang=_lg),
                     reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
@@ -1260,20 +1239,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         svc = agent_db.get_service_by_id(svc_id)
         if not svc:
-            await query.answer("\u0633\u0631\u0648\u06cc\u0633 \u067e\u06cc\u062f\u0627 \u0646\u0634\u062f.", show_alert=True)
+            await query.answer(i18n.t('سرویس پیدا نشد.', _lg), show_alert=True)
             return
         await query.edit_message_text(
-            "\u23f3 \u062f\u0631 \u062d\u0627\u0644 \u062a\u063a\u06cc\u06cc\u0631 \u0644\u06cc\u0646\u06a9... \u0644\u0637\u0641\u0627 \u0635\u0628\u0631 \u06a9\u0646\u06cc\u062f.",
+            i18n.t('⏳ در حال تغییر لینک... لطفا صبر کنید.', _lg),
             parse_mode="HTML",
         )
         result = await change_subscription_link(agent_id, svc_id)
         if result:
             is_active = bool(int(result.get("is_active", 0) or 0))
             text = (
-                f"\u2705 <b>\u0644\u06cc\u0646\u06a9 \u0628\u0627 \u0645\u0648\u0641\u0642\u06cc\u062a \u062a\u063a\u06cc\u06cc\u0631 \u06a9\u0631\u062f!</b>\n\n"
-                f"\U0001f4e1 \u0633\u0631\u0648\u06cc\u0633: {_escape(result.get('name') or '')}\n"
-                f"\U0001f4e1 \u06cc\u0648\u06cc\u06cc\u062f\u06cc \u062c\u062f\u06cc\u062f: <code>{_escape(result.get('panel_user_uuid') or '')}</code>\n\n"
-                "\U0001f447 \u0644\u06cc\u0646\u06a9 \u062c\u062f\u06cc\u062f \u0647\u0645\u0631\u0627\u0647 \u0628\u0627 QR \u062f\u0631 \u067e\u06cc\u0627\u0645 \u0628\u0639\u062f\u06cc \u0627\u0631\u0633\u0627\u0644 \u0645\u06cc\u0634\u0648\u062f."
+                f"{i18n.t('✅ <b>لینک با موفقیت تغییر کرد!</b>\n\n📡 سرویس: ', _lg)}{_escape(result.get('name') or '')}{i18n.t('\n📡 یوییدی جدید: <code>', _lg)}{_escape(result.get('panel_user_uuid') or '')}{i18n.t('</code>\n\n👇 لینک جدید همراه با QR در پیام بعدی ارسال میشود.', _lg)}"
             )
             try:
                 await query.edit_message_text(text, reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)), parse_mode="HTML")
@@ -1285,7 +1261,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 pass
             ss = get_subs_link_settings()
             await query.edit_message_text(
-                "✅ <b>لینک با موفقیت تغییر کرد!</b>\n\n🔗 لطفاً نوع اتصال را انتخاب کنید:",
+                i18n.t('✅ <b>لینک با موفقیت تغییر کرد!</b>\n\n🔗 لطفاً نوع اتصال را انتخاب کنید:', _lg),
                 reply_markup=subs_configs_keyboard(
                     svc_id,
                     show_direct_config=ss.get("show_direct_config", True),
@@ -1294,12 +1270,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     show_sub_link_b64=ss.get("show_sub_link_b64", False),
                     show_multi_server=ss.get("show_multi_server", False),
                     show_multi_server_b64=ss.get("show_multi_server_b64", False),
+                    lang=_lg,
                 ),
                 parse_mode="HTML",
             )
         else:
             await query.edit_message_text(
-                "\u274c \u062e\u0637\u0627 \u062f\u0631 \u062a\u063a\u06cc\u06cc\u0631 \u0644\u06cc\u0646\u06a9. \u0644\u0637\u0641\u0627 \u062f\u0648\u0628\u0627\u0631\u0647 \u062a\u0644\u0627\u0634 \u06a9\u0646\u06cc\u062f.",
+                i18n.t('❌ خطا در تغییر لینک. لطفا دوباره تلاش کنید.', _lg),
                 reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0)), lang=agent_lang(context)),
                 parse_mode="HTML",
             )
@@ -1307,6 +1284,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     agent_id = get_agent_id(context)
     if not agent_id:
         return False
@@ -1316,11 +1298,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if state == STATE_SEARCH_SERVICE:
         code = _normalize_digits(text)
         if not code.isdigit():
-            await update.message.reply_text("❌ شناسه نامعتبر است. شناسه ۷ رقمی اشتراک را بفرستید.")
+            await update.message.reply_text(i18n.t('❌ شناسه نامعتبر است. شناسه ۷ رقمی اشتراک را بفرستید.', _lg))
             return True
         svc = agent_db.get_service_by_code(code, agent_id=agent_id)
         if not svc:
-            await update.message.reply_text("❌ اشتراکی با این شناسه یافت نشد.")
+            await update.message.reply_text(i18n.t('❌ اشتراکی با این شناسه یافت نشد.', _lg))
             return True
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop("subs_back_to", None)
@@ -1329,8 +1311,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             from AgentBot.services.subscription_service import get_service_last_online
             _lo = await get_service_last_online(svc)
         except Exception:
-            _lo = "هرگز"
-        detail = f"✅ <b>اشتراک یافت شد</b>\n\n" + _service_detail_text(svc, _lo)
+            _lo = i18n.t('never_word', _lg)
+        detail = f"{i18n.t('✅ <b>اشتراک یافت شد</b>\n\n', _lg)}" + _service_detail_text(svc, _lo, lang=_lg)
         await update.message.reply_text(detail, reply_markup=service_detail_keyboard(int(svc["id"]), is_active, lang=agent_lang(context)), parse_mode="HTML")
         return True
 
@@ -1346,7 +1328,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             svc_id_cancel = int(context.user_data.get(UD_SELECTED_SERVICE) or 0)
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_SELECTED_SERVICE, None)
-            await update.message.reply_text("لغو شد.", reply_markup=main_menu_keyboard())
+            await update.message.reply_text(i18n.t('لغو شد.', _lg), reply_markup=main_menu_keyboard())
             if svc_id_cancel:
                 svc_cancel = agent_db.get_service_by_id(svc_id_cancel)
                 if svc_cancel and int(svc_cancel.get("agent_id", 0)) == agent_id:
@@ -1354,10 +1336,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                         from AgentBot.services.subscription_service import get_service_last_online
                         last_online = await get_service_last_online(svc_cancel)
                     except Exception:
-                        last_online = "هرگز"
+                        last_online = i18n.t('never_word', _lg)
                     is_active = bool(int(svc_cancel.get("is_active", 0) or 0))
                     await update.message.reply_text(
-                        _service_detail_text(svc_cancel, last_online),
+                        _service_detail_text(svc_cancel, last_online, lang=_lg),
                         reply_markup=service_detail_keyboard(svc_id_cancel, is_active, lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
@@ -1366,13 +1348,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         new_name = re.sub(r"\s+", " ", (text or "").strip())
         if len(new_name) < 3:
             await update.message.reply_text(
-                "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.",
+                i18n.t('❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.', _lg),
                 reply_markup=rename_cancel_keyboard(),
             )
             return True
         if len(new_name) > 64:
             await update.message.reply_text(
-                "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.",
+                i18n.t('❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.', _lg),
                 reply_markup=rename_cancel_keyboard(),
             )
             return True
@@ -1380,16 +1362,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_SELECTED_SERVICE, None)
-            await update.message.reply_text("❌ اشتراک موردنظر یافت نشد.", reply_markup=main_menu_keyboard())
+            await update.message.reply_text(i18n.t('❌ اشتراک موردنظر یافت نشد.', _lg), reply_markup=main_menu_keyboard())
             return True
         old_name = str(svc.get("name") or "").strip()
         if new_name == old_name:
             await update.message.reply_text(
-                "ℹ️ نام جدید با نام فعلی یکسان است. نام دیگری وارد کنید.",
+                i18n.t('ℹ️ نام جدید با نام فعلی یکسان است. نام دیگری وارد کنید.', _lg),
                 reply_markup=rename_cancel_keyboard(),
             )
             return True
-        await update.message.reply_text("⏳ در حال بروزرسانی نام اشتراک... لطفاً صبر کنید.")
+        await update.message.reply_text(i18n.t('⏳ در حال بروزرسانی نام اشتراک... لطفاً صبر کنید.', _lg))
         ok, result_text = await rename_service_on_panels(agent_id, svc_id, new_name)
         if not ok:
             await update.message.reply_text(result_text, reply_markup=rename_cancel_keyboard())
@@ -1404,10 +1386,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 from AgentBot.services.subscription_service import get_service_last_online
                 last_online = await get_service_last_online(refreshed)
             except Exception:
-                last_online = "هرگز"
+                last_online = i18n.t('never_word', _lg)
             is_active = bool(int(refreshed.get("is_active", 0) or 0))
             await update.message.reply_text(
-                _service_detail_text(refreshed, last_online),
+                _service_detail_text(refreshed, last_online, lang=_lg),
                 reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
                 parse_mode="HTML",
             )
@@ -1417,18 +1399,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         plan = context.user_data.get(UD_SELECTED_PLAN)
         server_id = context.user_data.get(UD_SELECTED_SERVER)
         if not plan or not server_id:
-            await update.message.reply_text("\u062e\u0637\u0627: \u0627\u0637\u0644\u0627\u0639\u0627\u062a \u06af\u0645 \u0634\u062f. \u062f\u0648\u0628\u0627\u0631\u0647 \u0634\u0631\u0648\u0639 \u06a9\u0646\u06cc\u062f.")
+            await update.message.reply_text(i18n.t('خطا: اطلاعات گم شد. دوباره شروع کنید.', _lg))
             context.user_data.pop(UD_STATE, None)
             return True
         note_text = agent_db.make_service_note(agent_id)
         svc = await create_subscription(agent_id, 0, server_id, plan, text, note=note_text)
         if not svc:
             await update.message.reply_text(
-                "\u062e\u0637\u0627 \u062f\u0631 \u0633\u0627\u062e\u062a \u0633\u0631\u0648\u06cc\u0633. \u0645\u0648\u062c\u0648\u062f\u06cc \u06a9\u0627\u0641\u06cc \u0646\u06cc\u0633\u062a \u06cc\u0627 \u062e\u0637\u0627\u06cc \u0633\u06cc\u0633\u062a\u0645.",
+                i18n.t('خطا در ساخت سرویس. موجودی کافی نیست یا خطای سیستم.', _lg),
                 reply_markup=cancel_keyboard(),
             )
             return True
-        plan_title = f"{plan['days']} \u0631\u0648\u0632 / {_fmt_gb(plan['gb'])}GB"
+        plan_title = f"{plan['days']}{i18n.t(' روز / ', _lg)}{_fmt_gb(plan['gb'])}GB"
         db_create_order(agent_id, 0, "", plan.get("wholesale_price", 0), "new", plan.get("id", 0), text, volume_gb=plan.get("gb", 0))
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_SELECTED_PLAN, None)
@@ -1438,7 +1420,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
         # پیام اول: تأیید کوتاه ساخت
         await update.message.reply_text(
-            _service_created_text(svc),
+            _service_created_text(svc, lang=_lg),
             parse_mode="HTML",
         )
 
@@ -1449,16 +1431,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             note = f"{random.randint(0, 9999999):07d}"
 
         # آخرین اتصال: از پنل (بلافاصله بعد از ساخت «هرگز» است)
-        last_online = "هرگز"
+        last_online = i18n.t('never_word', _lg)
         try:
             from AgentBot.services.subscription_service import get_service_last_online
             last_online = await get_service_last_online(svc)
         except Exception:
-            last_online = "هرگز"
+            last_online = i18n.t('never_word', _lg)
 
         # پیام دوم: جزئیات اکانت + دکمه‌ها
         await update.message.reply_text(
-            _service_detail_card_text(svc, note, last_online),
+            _service_detail_card_text(svc, note, last_online, lang=_lg),
             reply_markup=service_detail_keyboard(svc_id, is_active, lang=agent_lang(context)),
             parse_mode="HTML",
         )

@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from Shared import hiddify_api, multi_panel, database, agent_db
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 

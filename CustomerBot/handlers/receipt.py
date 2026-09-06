@@ -55,27 +55,31 @@ def _fmt_ticket_time(ts) -> str:
         return s
 
 
-def _build_ticket_detail_text(ticket, messages, screenshot_links=None) -> str:
+def _build_ticket_detail_text(ticket, messages, screenshot_links=None, lang: str = "fa") -> str:
     """متن جزئیات تیکت — دقیقاً مثل ربات کاربران/ادمین (اسکرین‌شات به‌صورت لینک قابل‌کلیک)."""
     from html import escape
     try:
         code = str(ticket.get("ticket_code") or ticket.get("id") or "-")
     except Exception:
         code = "-"
-    title = str(ticket.get("title") or "").strip() or "-"
+    title = str(ticket.get("title") or "").strip() or i18n.t("no_subject_label", lang)
+    q_label = i18n.t("ticket_q_label", lang)
+    a_label = i18n.t("ticket_a_label", lang)
+    title_label = i18n.t("ticket_title_label", lang)
+    created_label = i18n.t("ticket_created_label", lang)
     lines = [
-        f"🧾 شناسه تیکت: {escape(code)}",
+        f"🧾 {i18n.t('ticket_id_label', lang)}{escape(code)}",
         "❖⬩--------------------------------⬩❖",
     ]
     for idx, item in enumerate(messages or [], start=1):
         sender_type = str(item.get("sender_type") or "").strip().lower()
-        sender_title = "◈سوال:" if sender_type == "user" else "◈پاسخ:"
+        sender_title = q_label if sender_type == "user" else a_label
         text_part = str(item.get("message_text") or "").strip()
         when = _fmt_ticket_time(item.get("created_at"))
         has_photo = bool(str(item.get("photo_file_id") or "").strip())
-        lines.append(f"📅تاریخ ایجاد: {escape(when)}")
+        lines.append(f"📅{created_label}{escape(when)}")
         if idx == 1:
-            lines.append("◈عنوان:")
+            lines.append(title_label)
             lines.append(escape(title))
         lines.append(sender_title)
         if text_part:
@@ -83,9 +87,9 @@ def _build_ticket_detail_text(ticket, messages, screenshot_links=None) -> str:
         if has_photo:
             link = str((screenshot_links or {}).get(idx) or "").strip()
             if link:
-                lines.append(f'<a href="{escape(link, quote=True)}">اسکرین‌شات</a>')
+                lines.append(f'<a href="{escape(link, quote=True)}">{i18n.t("screenshot_label", lang)}</a>')
             else:
-                lines.append("اسکرین‌شات")
+                lines.append(i18n.t("screenshot_label", lang))
         lines.append("❖⬩------------------------------⬩❖")
     out = "\n".join(lines)
     if len(out) > 3900:
@@ -148,6 +152,7 @@ async def handle_ticket_shot_start(update: Update, context: ContextTypes.DEFAULT
     agent_id = context.bot_data.get("agent_id", 0)
     if not agent_id:
         return True
+    lang = i18n.get_customer_lang(agent_id, update.effective_user.id) if update.effective_user else "fa"
     try:
         rows = get_ticket_messages(agent_id, code)
     except Exception:
@@ -160,15 +165,15 @@ async def handle_ticket_shot_start(update: Update, context: ContextTypes.DEFAULT
             idx = i
             break
     if not target or not str(target.get("photo_file_id") or "").strip():
-        await update.message.reply_text("❌ اسکرین‌شات یافت نشد یا دسترسی ندارید.")
+        await update.message.reply_text(i18n.t("screenshot_not_found", lang))
         return True
-    caption = f"🖼 اسکرین‌شات #{idx} | تیکت #{code}"
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به تیکت", callback_data=f"support:view:{code}:1")]])
+    caption = i18n.t("screenshot_caption", lang, i=idx, c=code)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(i18n.t("back_to_ticket", lang), callback_data=f"support:view:{code}:1")]])
     try:
         await update.message.reply_photo(photo=target["photo_file_id"], caption=caption, reply_markup=kb)
     except Exception:
         try:
-            await update.message.reply_text("❌ نمایش اسکرین‌شات ممکن نشد.", reply_markup=kb)
+            await update.message.reply_text(i18n.t("screenshot_failed", lang), reply_markup=kb)
         except Exception:
             pass
     return True
@@ -183,18 +188,19 @@ async def _notify_agent_ticket_reply(context: ContextTypes.DEFAULT_TYPE, agent_i
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()
         if not agent_tg_id or not token:
             return
+        _ag = i18n.get_agent_lang(agent_id)
         bot = Bot(token=token)
         code = ticket.get("ticket_code", "?")
-        title = ticket.get("title") or "بدون موضوع"
+        title = ticket.get("title") or i18n.t("no_subject_label", _ag)
         notify_text = (
-            f"💬 پاسخ جدید مشتری به تیکت #{code}\n"
-            f"📋 موضوع: {title}\n\n"
-            f"{message_text or '[بدون متن]'}"
+            i18n.t("agent_notify_reply", _ag, c=code) + "\n"
+            + i18n.t("ticket_subject_label", _ag) + title + "\n\n"
+            + (message_text or i18n.t("no_text_label", _ag))
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👁 مشاهده تیکت", callback_data=f"agbot:ticket:view:{code}")],
-            [InlineKeyboardButton("💬 پاسخ", callback_data=f"agbot:ticket:reply:{code}"),
-             InlineKeyboardButton("✅ بستن", callback_data=f"agbot:ticket:close:{code}")],
+            [InlineKeyboardButton(i18n.t("👁 مشاهده تیکت", _ag), callback_data=f"agbot:ticket:view:{code}")],
+            [InlineKeyboardButton(i18n.t("💬 پاسخ", _ag), callback_data=f"agbot:ticket:reply:{code}"),
+             InlineKeyboardButton(i18n.t("✅ بستن", _ag), callback_data=f"agbot:ticket:close:{code}")],
         ])
         if photo_file_id:
             try:
@@ -220,19 +226,20 @@ async def _notify_agent_new_ticket(context: ContextTypes.DEFAULT_TYPE, agent_id:
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()
         if not agent_tg_id or not token:
             return
+        _ag = i18n.get_agent_lang(agent_id)
         bot = Bot(token=token)
         code = ticket.get("ticket_code", "?")
-        title = ticket.get("title") or "بدون موضوع"
+        title = ticket.get("title") or i18n.t("no_subject_label", _ag)
         notify_text = (
-            f"📩 تیکت جدید #{code}\n"
-            f"📋 موضوع: {title}\n"
-            f"👤 مشتری: {ticket.get('full_name') or ticket.get('username') or ticket.get('telegram_id')}\n\n"
-            f"{message_text or '[بدون متن]'}"
+            i18n.t("agent_notify_new", _ag, c=code) + "\n"
+            + i18n.t("ticket_subject_label", _ag) + title + "\n"
+            + i18n.t("👤 مشتری: ", _ag) + str(ticket.get('full_name') or ticket.get('username') or ticket.get('telegram_id')) + "\n\n"
+            + (message_text or i18n.t("no_text_label", _ag))
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👁 مشاهده تیکت", callback_data=f"agbot:ticket:view:{code}")],
-            [InlineKeyboardButton("💬 پاسخ", callback_data=f"agbot:ticket:reply:{code}"),
-             InlineKeyboardButton("✅ بستن", callback_data=f"agbot:ticket:close:{code}")],
+            [InlineKeyboardButton(i18n.t("👁 مشاهده تیکت", _ag), callback_data=f"agbot:ticket:view:{code}")],
+            [InlineKeyboardButton(i18n.t("💬 پاسخ", _ag), callback_data=f"agbot:ticket:reply:{code}"),
+             InlineKeyboardButton(i18n.t("✅ بستن", _ag), callback_data=f"agbot:ticket:close:{code}")],
         ])
         if photo_file_id:
             try:
@@ -274,35 +281,38 @@ async def _notify_agent_new_payment(
         tx_code = str(pay.get("tx_code") or "-")
         user_tg_id = int(getattr(customer_user, "id", 0) or 0)
         name = getattr(customer_user, "full_name", "") or getattr(customer_user, "username", "") or str(user_tg_id)
+        _ag = i18n.get_agent_lang(agent_id)
         caption = (
-            "💳 <b>رسید پرداخت مشتری</b>\n"
-            f"👤 مشتری: <b>{name}</b>\n"
-            f"🔖 کد پیگیری: <code>{tx_code}</code>\n"
-            f"💰 مبلغ: <b>{amount:,}</b> تومان\n"
+            i18n.t("custpay_receipt_title", _ag) + "\n"
+            + i18n.t("👤 مشتری: ", _ag) + f"<b>{name}</b>\n"
+            + i18n.t("custpay_tracking", _ag, c=tx_code) + "\n"
+            + i18n.t("custpay_amount", _ag, a=f"{amount:,}") + "\n"
         )
         card_last4 = str(meta.get("card_last4") or "").strip()
         if card_last4:
-            caption += f"💳 ۴ رقم آخر کارت: <code>{card_last4}</code>\n"
+            caption += i18n.t("custpay_last4", _ag, c=card_last4) + "\n"
         tx_marker = 0
         try:
             tx_marker = int(meta.get("tx_marker") or 0)
         except (TypeError, ValueError):
             pass
         if tx_marker > 0:
-            caption += f"🔢 مشخصه تراکنش: <code>{tx_marker}</code>\n"
+            caption += i18n.t("custpay_tx_marker", _ag, m=tx_marker) + "\n"
         if order:
-            order_kind = "♻️ تمدید" if int(order.get("renew_service_id") or 0) else "📦 سفارش"
+            is_renew = bool(order and int(order.get('renew_service_id') or 0))
+            order_kind = i18n.t("order_kind_renew", _ag) if is_renew else i18n.t("order_kind_buy", _ag)
             caption += (
-                f"{order_kind}: <code>{order_id}</code> | 📊 حجم: {float(meta.get('gb') or order.get('volume_gb') or 0):g} گیگ\n"
-                f"⏰ زمان: {int(meta.get('days') or order.get('days') or 0)} روز | 🏷 هزینه عمده: <b>{wholesale:,}</b> تومان\n"
-                f"💼 کیف پول نماینده: <b>{wallet_balance:,}</b> تومان\n"
+                i18n.t("custpay_order_line", _ag, k=order_kind, o=order_id, g=f"{float(meta.get('gb') or order.get('volume_gb') or 0):g}") + "\n"
+                + i18n.t("custpay_renew_line", _ag, d=int(meta.get('days') or order.get('days') or 0), w=f"{wholesale:,}") + "\n"
+                + i18n.t("custpay_wallet_line", _ag, b=f"{wallet_balance:,}") + "\n"
             )
-        caption += "\nدر تایید، " + ("اشتراک مشتری تمدید می‌شود." if (order and int(order.get('renew_service_id') or 0)) else "اشتراک مشتری پس از بررسی کیف پول نماینده فعال می‌شود.")
+        is_renew2 = bool(order and int(order.get('renew_service_id') or 0))
+        caption += "\n" + (i18n.t("custpay_approve_renew_note", _ag) if is_renew2 else i18n.t("custpay_approve_buy_note", _ag))
 
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("❌ رد پرداخت", callback_data=f"agbot:custpay:reject:{pay['id']}"),
-                InlineKeyboardButton("✅ تایید پرداخت", callback_data=f"agbot:custpay:approve:{pay['id']}"),
+                InlineKeyboardButton(i18n.t("❌ رد پرداخت", _ag), callback_data=f"agbot:custpay:reject:{pay['id']}"),
+                InlineKeyboardButton(i18n.t("✅ تایید پرداخت", _ag), callback_data=f"agbot:custpay:approve:{pay['id']}"),
             ],
             [
                 InlineKeyboardButton(f"👤 {name}", callback_data=f"agbot:custpay:profile:{user_tg_id}"),
@@ -344,14 +354,14 @@ def _append_receipt_meta_marker(receipt_meta: str, marker: str) -> str:
     return raw
 
 
-def _format_ticket_confirm_text(pending: dict) -> str:
-    has_photo = "✅ ارسال شده" if pending.get("photo_file_id") else "❌ ارسال نشده"
+def _format_ticket_confirm_text(pending: dict, lang: str = "fa") -> str:
+    has_photo = i18n.t("sent_ok", lang) if pending.get("photo_file_id") else i18n.t("not_sent", lang)
     return (
-        "📩 <b>تایید اطلاعات تیکت</b>\n\n"
-        f"📌 <b>عنوان:</b>\n{pending.get('title') or 'بدون موضوع'}\n\n"
-        f"📝 <b>سوال:</b>\n{pending.get('question') or '[بدون متن]'}\n\n"
-        f"📎 <b>اسکرین‌شات:</b> {has_photo}\n\n"
-        "❗️در صورت تایید اطلاعات، برای ارسال تیکت گزینه ✅ ارسال را انتخاب نمایید."
+        i18n.t("ticket_confirm_title", lang) + "\n\n"
+        + i18n.t("ticket_confirm_subject", lang, t=pending.get('title') or i18n.t('no_subject_label', lang)) + "\n\n"
+        + i18n.t("ticket_confirm_question", lang, q=pending.get('question') or i18n.t('no_text_label', lang)) + "\n\n"
+        + i18n.t("ticket_confirm_screenshot", lang, p=has_photo) + "\n\n"
+        + i18n.t("ticket_confirm_footer", lang)
     )
 
 
@@ -359,23 +369,28 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     user = update.effective_user
     if not user:
         return
-    receipt_meta = json.dumps(meta, ensure_ascii=False)
-    order_id = int(meta.get("order_id") or 0)
-    idempotency_key = f"receipt_{user.id}_{order_id}_0"
-    pay = get_payment_by_idempotency_key(agent_id, idempotency_key)
-    notify_agent = False
-    existing_receipt_meta = str((pay or {}).get("receipt_image") or "")
 
-    if pay and str(pay.get("status") or "") == "pending" and str(pay.get("receipt_image") or "").strip():
-        updated = update_payment_status(
-            agent_id=agent_id,
-            payment_id=pay["id"],
-            status="pending",
-            receipt_image=receipt_meta,
+    lang = i18n.get_customer_lang(agent_id, user.id)
+
+    async def _reply_for_status(payment_status: str):
+        normalized = str(payment_status or "").strip().lower()
+        if normalized == "approved":
+            key = "receipt_already_approved"
+        elif normalized in {"pending", "processing"}:
+            key = "pay_receipt_pending"
+        else:
+            key = "receipt_error_retry"
+        return await update.message.reply_text(
+            i18n.t(key, lang),
+            reply_markup=main_menu_keyboard(lang=lang),
         )
-        if updated and not _receipt_meta_has_agent_notified_marker(existing_receipt_meta):
-            notify_agent = True
-    else:
+
+    try:
+        receipt_meta = json.dumps(meta, ensure_ascii=False)
+        order_id = int(meta.get("order_id") or 0)
+        idempotency_key = f"receipt_{user.id}_{order_id}_0"
+        pay = get_payment_by_idempotency_key(agent_id, idempotency_key)
+
         if not pay:
             try:
                 pay = create_payment(
@@ -386,71 +401,102 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                     idempotency_key=idempotency_key,
                 )
             except sqlite3.IntegrityError:
+                # A concurrent submission may have inserted the same key.
                 pay = get_payment_by_idempotency_key(agent_id, idempotency_key)
-        if pay:
-            existing_receipt_meta = str(pay.get("receipt_image") or existing_receipt_meta or "")
-            updated = update_payment_status(
-                agent_id=agent_id,
-                payment_id=pay["id"],
-                status="pending",
-                receipt_image=receipt_meta,
+
+        if not pay:
+            await _reply_for_status("")
+            return
+
+        source_status = str(pay.get("status") or "").strip().lower()
+        if source_status in {"approved", "processing"}:
+            await _reply_for_status(source_status)
+            return
+        if source_status not in {"pending", "rejected"}:
+            await _reply_for_status(source_status)
+            return
+
+        existing_receipt_meta = str(pay.get("receipt_image") or "")
+        retrying_rejected = source_status == "rejected"
+        already_notified = (
+            source_status == "pending"
+            and _receipt_meta_has_agent_notified_marker(existing_receipt_meta)
+        )
+
+        # Preserve notification markers only for the same pending attempt.
+        # A rejected receipt starts a fresh attempt and must notify the agent.
+        current_meta = receipt_meta
+        if already_notified:
+            current_meta = _append_receipt_meta_marker(current_meta, "agent_notified:1")
+            for marker_part in existing_receipt_meta.split("|"):
+                if marker_part.startswith("agent_pending_message_id:"):
+                    current_meta = _append_receipt_meta_marker(current_meta, marker_part)
+                    break
+
+        if not update_payment_status(
+            agent_id=agent_id,
+            payment_id=int(pay["id"]),
+            status="pending",
+            receipt_image=current_meta,
+            expected_status=source_status,
+        ):
+            # Approval/SMS may have claimed the payment after our initial read.
+            latest = get_payment_by_idempotency_key(agent_id, idempotency_key) or {}
+            await _reply_for_status(str(latest.get("status") or ""))
+            return
+
+        pay = dict(pay)
+        pay["status"] = "pending"
+        pay["receipt_image"] = current_meta
+
+        order = None
+        if order_id:
+            from CustomerBot.database import get_order
+            order = get_order(agent_id, order_id)
+
+        agent_msg_id = None
+        if retrying_rejected or not already_notified:
+            agent_msg_id = await _notify_agent_new_payment(context, agent_id, pay, meta, order, user)
+
+        if agent_msg_id:
+            current_meta = _append_receipt_meta_marker(current_meta, "agent_notified:1")
+            current_meta = _append_receipt_meta_marker(
+                current_meta,
+                f"agent_pending_message_id:{agent_msg_id}",
             )
-            notify_agent = updated and not _receipt_meta_has_agent_notified_marker(existing_receipt_meta)
-
-    order = None
-    if order_id:
-        from CustomerBot.database import get_order
-        order = get_order(agent_id, order_id)
-
-    if pay and notify_agent:
-        agent_msg_id = await _notify_agent_new_payment(context, agent_id, pay, meta, order, user)
-        try:
-            pay = get_payment_by_idempotency_key(agent_id, idempotency_key) or pay
-            meta_after_agent = _append_receipt_meta_marker(receipt_meta, "agent_notified:1")
-            if agent_msg_id:
-                meta_after_agent = _append_receipt_meta_marker(meta_after_agent, f"agent_pending_message_id:{agent_msg_id}")
-            update_payment_status(
+            if not update_payment_status(
                 agent_id=agent_id,
                 payment_id=int(pay["id"]),
                 status="pending",
-                receipt_image=meta_after_agent,
+                receipt_image=current_meta,
+                expected_status="pending",
+            ):
+                latest = get_payment_by_idempotency_key(agent_id, idempotency_key) or {}
+                await _reply_for_status(str(latest.get("status") or ""))
+                return
+
+        pending_msg = await _reply_for_status("pending")
+        if pending_msg:
+            pending_meta = _append_receipt_meta_marker(
+                current_meta,
+                f"customer_pending_message_id:{pending_msg.message_id}",
             )
-        except Exception:
-            pass
-    else:
-        agent_msg_id = None
-    pending_msg = await update.message.reply_text(
-        i18n.t("pay_receipt_pending", i18n.get_customer_lang(agent_id, user.id)),
-        reply_markup=main_menu_keyboard(lang=i18n.get_customer_lang(agent_id, user.id)),
-    )
-    if pay and pending_msg:
-        try:
-            pending_meta = _append_receipt_meta_marker(receipt_meta, f"customer_pending_message_id:{pending_msg.message_id}")
-            pending_meta = _append_receipt_meta_marker(pending_meta, "agent_notified:1")
-            if agent_msg_id:
-                pending_meta = _append_receipt_meta_marker(pending_meta, f"agent_pending_message_id:{agent_msg_id}")
-            else:
-                # رسید دوباره ارسال شده و پیام جدیدی برای نماینده نرفته؛
-                # شناسه پیام قبلی در چت نماینده را حفظ کن
-                for marker_part in str(existing_receipt_meta or "").split("|"):
-                    if marker_part.startswith("agent_pending_message_id:"):
-                        pending_meta = _append_receipt_meta_marker(pending_meta, marker_part)
-                        break
             update_payment_status(
                 agent_id=agent_id,
                 payment_id=int(pay["id"]),
                 status="pending",
                 receipt_image=pending_meta,
+                expected_status="pending",
             )
-        except Exception:
-            pass
-    context.user_data.pop(UD_STATE, None)
-    context.user_data.pop("card_last4", None)
-    context.user_data.pop("pending_receipt_meta", None)
-    context.user_data.pop("pending_amount", None)
-    context.user_data.pop("pending_order_id", None)
-    context.user_data.pop("pending_pay_price", None)
-    context.user_data.pop("pending_tx_marker", None)
+
+    finally:
+        context.user_data.pop(UD_STATE, None)
+        context.user_data.pop("card_last4", None)
+        context.user_data.pop("pending_receipt_meta", None)
+        context.user_data.pop("pending_amount", None)
+        context.user_data.pop("pending_order_id", None)
+        context.user_data.pop("pending_pay_price", None)
+        context.user_data.pop("pending_tx_marker", None)
 
 
 async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -597,7 +643,8 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop("pending_trial_server_id", None)
             context.user_data.pop("pending_trial_server", None)
-            await update.message.reply_text("🔙 عملیات لغو شد.", reply_markup=main_menu_keyboard())
+            _lg = i18n.get_customer_lang(agent_id, user.id)
+            await update.message.reply_text(i18n.t("cancelled_msg", _lg), reply_markup=main_menu_keyboard(lang=_lg))
             return
         from CustomerBot.handlers.callback import _build_trial_service
         await _build_trial_service(update, context, agent_id, update.effective_user, text or "")
@@ -608,12 +655,13 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == STATE_TICKET_WAITING_TITLE:
         mode = context.user_data.get(UD_TICKET_MODE, "new")
         if mode == "new":
-            title = text or "بدون موضوع"
+            _lg = i18n.get_customer_lang(agent_id, user.id)
+            title = text or i18n.t("no_subject_label", _lg)
             context.user_data[UD_TICKET_QUESTION] = title
             context.user_data[UD_STATE] = STATE_TICKET_WAITING_TEXT
             await update.message.reply_text(
                 i18n.t("ticket_text_prompt", i18n.get_customer_lang(agent_id, user.id), t=title),
-                reply_markup=cancel_keyboard(),
+                reply_markup=cancel_keyboard(lang=_lg),
             )
             return
 
@@ -621,13 +669,14 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == STATE_TICKET_WAITING_TEXT:
         mode = context.user_data.get(UD_TICKET_MODE, "new")
         msg_text = text or ""
+        _lg = i18n.get_customer_lang(agent_id, user.id)
 
         if mode == "new":
-            title = context.user_data.get(UD_TICKET_QUESTION, "بدون موضوع")
+            title = context.user_data.get(UD_TICKET_QUESTION) or i18n.t("no_subject_label", _lg)
             if update.message.photo and not msg_text:
-                msg_text = "[عکس]"
+                msg_text = i18n.t("photo_label", _lg)
             if not msg_text:
-                await update.message.reply_text("❌ لطفاً متن سوال را ارسال کنید.", reply_markup=cancel_keyboard())
+                await update.message.reply_text(i18n.t("ticket_no_text", _lg), reply_markup=cancel_keyboard(lang=_lg))
                 return
             context.user_data["pending_ticket"] = {
                 "title": title,
@@ -636,21 +685,19 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             context.user_data[UD_STATE] = STATE_TICKET_WAITING_PHOTO
             await update.message.reply_text(
-                "🖼 لطفاً اگر اسکرین‌شات دارید ارسال کنید (عکس + کپشن).\n"
-                "اگر اسکرین‌شات ندارید روی دکمه «رد کردن» بزنید.\n\n"
-                "💡 می‌توانید عکس هم ضمیمه کنید (عکس + کپشن):",
-                reply_markup=ticket_skip_screenshot_keyboard("new"),
+                i18n.t("ticket_photo_prompt", _lg),
+                reply_markup=ticket_skip_screenshot_keyboard("new", lang=_lg),
             )
             return
         elif mode.startswith("reply:"):
             code = int(mode.split(":")[1])
             ticket = get_ticket(agent_id, code)
             if not ticket:
-                await update.message.reply_text("❌ تیکت یافت نشد.", reply_markup=main_menu_keyboard())
+                await update.message.reply_text(i18n.t("ticket_not_found_local", _lg), reply_markup=main_menu_keyboard(lang=_lg))
                 context.user_data.pop(UD_STATE, None)
                 return
             if str(ticket.get("status") or "").strip().lower() == "closed":
-                await update.message.reply_text("❌ این تیکت بسته شده است.", reply_markup=main_menu_keyboard())
+                await update.message.reply_text(i18n.t("ticket_closed_local", _lg), reply_markup=main_menu_keyboard(lang=_lg))
                 context.user_data.pop(UD_STATE, None)
                 return
             # مرحله ۱: ثبت متن پاسخ سپس رفتن به مرحله اسکرین‌شات (مثل ربات کاربران)
@@ -661,9 +708,8 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             context.user_data[UD_STATE] = STATE_TICKET_WAITING_PHOTO
             await update.message.reply_text(
-                "🖼 لطفاً اگر اسکرین‌شات دارید ارسال کنید.\n"
-                "اگر اسکرین‌شات ندارید روی دکمه «رد کردن» بزنید.",
-                reply_markup=ticket_skip_screenshot_keyboard("reply"),
+                i18n.t("ticket_photo_prompt_short", _lg),
+                reply_markup=ticket_skip_screenshot_keyboard("reply", lang=_lg),
             )
             return
 
@@ -674,6 +720,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- Ticket optional screenshot handler ----
     if state == STATE_TICKET_WAITING_PHOTO:
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         is_reply = bool(context.user_data.get("pending_reply"))
         if is_reply:
             pending = context.user_data.get("pending_reply", {})
@@ -681,31 +728,32 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending = context.user_data.get("pending_ticket", {})
         if not pending:
             context.user_data.pop(UD_STATE, None)
-            await update.message.reply_text("❌ اطلاعات تیکت پیدا نشد. دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+            await update.message.reply_text(i18n.t("ticket_info_missing", _lg), reply_markup=main_menu_keyboard(lang=_lg))
             return
         _flow = "reply" if is_reply else "new"
         if not update.message.photo:
             await update.message.reply_text(
-                "🖼 لطفاً عکس ارسال کنید یا دکمه «رد کردن» را بزنید.",
-                reply_markup=ticket_skip_screenshot_keyboard(_flow),
+                i18n.t("ticket_photo_required", _lg),
+                reply_markup=ticket_skip_screenshot_keyboard(_flow, lang=_lg),
             )
             return
         pending["photo_file_id"] = update.message.photo[-1].file_id
         context.user_data["pending_reply" if is_reply else "pending_ticket"] = pending
         context.user_data[UD_STATE] = STATE_TICKET_CONFIRM
         if is_reply:
-            preview_text = f"📩 <b>تایید اطلاعات پاسخ تیکت</b>\n\n📝 پاسخ: {pending.get('reply_text', '')}\n\n❗️در صورت تایید، دکمه «✅ارسال» را بزنید."
-            await update.message.reply_text(preview_text, reply_markup=ticket_confirm_keyboard("reply"), parse_mode="HTML")
+            preview_text = i18n.t("ticket_reply_confirm", _lg, t=pending.get('reply_text', ''))
+            await update.message.reply_text(preview_text, reply_markup=ticket_confirm_keyboard("reply", lang=_lg), parse_mode="HTML")
         else:
             await update.message.reply_text(
-                _format_ticket_confirm_text(pending),
-                reply_markup=ticket_confirm_keyboard(_flow),
+                _format_ticket_confirm_text(pending, lang=_lg),
+                reply_markup=ticket_confirm_keyboard(_flow, lang=_lg),
                 parse_mode="HTML",
             )
         return
 
     # ---- Connect subscription handler ----
     if state == "WAIT_CONNECT_SUB_INPUT":
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         context.user_data.pop(UD_STATE, None)
         uuid_pattern = re.findall(
             r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
@@ -713,8 +761,8 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if not uuid_pattern:
             await update.message.reply_text(
-                "❌ UUID معتبر یافت نشد. لطفاً یک کانفیگ یا UUID معتبر ارسال کنید.",
-                reply_markup=main_menu_keyboard(),
+                i18n.t("connect_no_uuid", _lg),
+                reply_markup=main_menu_keyboard(lang=_lg),
             )
             return
         parsed_uuid = uuid_pattern[0]
@@ -737,8 +785,8 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
         if not found_server:
             await update.message.reply_text(
-                "❌ این اشتراک در هیچ سروری یافت نشد.",
-                reply_markup=main_menu_keyboard(),
+                i18n.t("connect_not_found", _lg),
+                reply_markup=main_menu_keyboard(lang=_lg),
             )
             return
         cust = get_customer_by_telegram_id(agent_id, user.id)
@@ -750,8 +798,8 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for svc in existing:
             if svc.get("panel_user_uuid") == parsed_uuid:
                 await update.message.reply_text(
-                    "❌ این اشتراک قبلاً متصل شده است.",
-                    reply_markup=main_menu_keyboard(),
+                    i18n.t("connect_already", _lg),
+                    reply_markup=main_menu_keyboard(lang=_lg),
                 )
                 return
         note = make_service_note(agent_id)
@@ -765,7 +813,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             customer_id=cust_id,
             server_id=found_server["id"],
             server_title=found_server.get("title", ""),
-            name=f"اشتراک متصل {parsed_uuid[:8]}",
+            name=i18n.t("connected_svc_name", _lg, n=parsed_uuid[:8]),
             panel_user_uuid=parsed_uuid,
             usage_limit=0,
             days=0,
@@ -782,47 +830,48 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from Shared.agent_db import update_service
             update_service(svc["id"], {"comment": "connected"})
         await update.message.reply_text(
-            "✅ اشتراک با موفقیت متصل شد.",
-            reply_markup=main_menu_keyboard(),
+            i18n.t("connect_ok", _lg),
+            reply_markup=main_menu_keyboard(lang=_lg),
         )
         return
 
     # ---- Rename handler (مثل ربات کاربران: اعتبارسنجی + اعمال روی همه پنل‌ها) ----
     if state and state.startswith("rename:"):
+        _lg = i18n.get_customer_lang(agent_id, user.id)
         svc_id = int(state.split(":")[1])
         new_name = re.sub(r"\s+", " ", (text or "").strip())
         if len(new_name) < 3:
             await update.message.reply_text(
-                "❌ نام اشتراک خیلی کوتاه است. حداقل 3 کاراکتر وارد کنید.",
-                reply_markup=cancel_keyboard(),
+                i18n.t("rename_too_short", _lg),
+                reply_markup=cancel_keyboard(lang=_lg),
             )
             return
         if len(new_name) > 64:
             await update.message.reply_text(
-                "❌ نام اشتراک خیلی طولانی است. حداکثر 64 کاراکتر وارد کنید.",
-                reply_markup=cancel_keyboard(),
+                i18n.t("rename_too_long", _lg),
+                reply_markup=cancel_keyboard(lang=_lg),
             )
             return
         svc = get_service_by_id(svc_id)
         if not svc:
             context.user_data.pop(UD_STATE, None)
-            await update.message.reply_text("❌ اشتراک موردنظر یافت نشد.", reply_markup=main_menu_keyboard())
+            await update.message.reply_text(i18n.t("service_not_found_local", _lg), reply_markup=main_menu_keyboard(lang=_lg))
             return
         old_name = str(svc.get("name") or "").strip()
         if new_name == old_name:
             await update.message.reply_text(
-                "ℹ️ نام جدید با نام فعلی یکسان است. نام دیگری وارد کنید.",
-                reply_markup=cancel_keyboard(),
+                i18n.t("rename_same", _lg),
+                reply_markup=cancel_keyboard(lang=_lg),
             )
             return
-        await update.message.reply_text("⏳ در حال بروزرسانی نام اشتراک...")
+        await update.message.reply_text(i18n.t("rename_updating", _lg))
         from CustomerBot.services import rename_service_on_panels
-        ok, result_text = await rename_service_on_panels(svc, new_name)
+        ok, result_text = await rename_service_on_panels(svc, new_name, lang=_lg)
         if not ok:
-            await update.message.reply_text(result_text, reply_markup=cancel_keyboard())
+            await update.message.reply_text(result_text, reply_markup=cancel_keyboard(lang=_lg))
             return
         context.user_data.pop(UD_STATE, None)
-        await update.message.reply_text(result_text, reply_markup=main_menu_keyboard())
+        await update.message.reply_text(result_text, reply_markup=main_menu_keyboard(lang=_lg))
         # نمایش مجدد وضعیت با نام جدید (مثل ربات کاربران)
         try:
             from CustomerBot.services import build_subscription_status_text
@@ -831,12 +880,12 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             refreshed = get_service_by_id(svc_id)
             if refreshed:
                 status_text = build_subscription_status_text(
-                    refreshed, get_subs_settings(agent_id), get_buy_renew_settings(agent_id)
+                    refreshed, get_subs_settings(agent_id), get_buy_renew_settings(agent_id), lang=_lg
                 )
                 await update.message.reply_text(
                     status_text,
                     parse_mode="Markdown",
-                    reply_markup=subscription_status_keyboard(svc_id),
+                    reply_markup=subscription_status_keyboard(svc_id, lang=_lg),
                 )
         except Exception:
             pass

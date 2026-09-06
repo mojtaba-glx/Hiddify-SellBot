@@ -1,5 +1,6 @@
 from typing import Any
 from html import escape
+from Shared import i18n
 
 
 def _escape(text: Any) -> str:

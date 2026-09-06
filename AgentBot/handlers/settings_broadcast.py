@@ -14,46 +14,56 @@ from AgentBot.keyboards import (
     broadcast_skip_cancel_keyboard,
     cancel_keyboard,
     main_menu_keyboard,
+    agent_lang,
 )
 from CustomerBot.database import get_broadcast_stats, get_broadcast_target_telegram_ids
 from Shared.agent_db import get_active_customer_bot
+from Shared import i18n
 
 logger = logging.getLogger(__name__)
 CANCEL_WORDS = {"❌ لغو", "/cancel"}
 
 
-async def _restore_main_menu(message) -> None:
+def _is_cancel_word(text: str) -> bool:
+    """دکمه لغو/انصراف در هر ۳ زبان + /cancel."""
+    t = str(text or "").strip()
+    if t in CANCEL_WORDS:
+        return True
+    try:
+        return i18n.resolve_button(t, ("cancel_btn2", "btn_cancel", "btn_back", "back")) is not None
+    except Exception:
+        return False
+
+
+async def _restore_main_menu(message, lang: str = "fa") -> None:
+    _lg = lang
     await message.reply_text(
-        "📊 <b>پنل نمایندگی</b>\nاز منوی زیر گزینه مورد نظر را انتخاب کنید.",
-        reply_markup=main_menu_keyboard(),
+        i18n.t('📊 <b>پنل نمایندگی</b>\nاز منوی زیر گزینه مورد نظر را انتخاب کنید.', _lg),
+        reply_markup=main_menu_keyboard(lang=_lg),
         parse_mode="HTML",
     )
 
 
 def _build_broadcast_stats_text(stats: Dict[str, Any]) -> str:
+    _lg = "fa"
     return (
-        f"◈ تعداد کاربران تلگرام: {int(stats.get('total_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی: {int(stats.get('expired_users') or 0)}\n"
-        f"◈ تعداد کاربران بدون سفارش: {int(stats.get('no_order_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از یک هفته: {int(stats.get('expired_1w_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از دو هفته: {int(stats.get('expired_2w_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از چهار هفته: {int(stats.get('expired_4w_users') or 0)}\n"
-        f"◈ تعداد کاربران منقضی شده بیش از هشت هفته: {int(stats.get('expired_8w_users') or 0)}"
+        f"{i18n.t('◈ تعداد کاربران تلگرام: ', _lg)}{int(stats.get('total_users') or 0)}{i18n.t('\n◈ تعداد کاربران منقضی: ', _lg)}{int(stats.get('expired_users') or 0)}{i18n.t('\n◈ تعداد کاربران بدون سفارش: ', _lg)}{int(stats.get('no_order_users') or 0)}{i18n.t('\n◈ تعداد کاربران منقضی شده بیش از یک هفته: ', _lg)}{int(stats.get('expired_1w_users') or 0)}{i18n.t('\n◈ تعداد کاربران منقضی شده بیش از دو هفته: ', _lg)}{int(stats.get('expired_2w_users') or 0)}{i18n.t('\n◈ تعداد کاربران منقضی شده بیش از چهار هفته: ', _lg)}{int(stats.get('expired_4w_users') or 0)}{i18n.t('\n◈ تعداد کاربران منقضی شده بیش از هشت هفته: ', _lg)}{int(stats.get('expired_8w_users') or 0)}"
     )
 
 
 def _broadcast_segment_label(segment: str) -> str:
+    _lg = "fa"
     seg = str(segment or "").strip().lower()
     mapping = {
-        "all": "تمام کاربران",
-        "expired_all": "تمام کاربران منقضی شده",
-        "no_order": "کاربران بدون سفارش",
-        "expired_1w": "کاربران منقضی شده بیش از یک هفته",
-        "expired_2w": "کاربران منقضی شده بیش از دو هفته",
-        "expired_4w": "کاربران منقضی شده بیش از چهار هفته",
-        "expired_8w": "کاربران منقضی شده بیش از هشت هفته",
+        "all": i18n.t('تمام کاربران', _lg),
+        "expired_all": i18n.t('تمام کاربران منقضی شده', _lg),
+        "no_order": i18n.t('کاربران بدون سفارش', _lg),
+        "expired_1w": i18n.t('کاربران منقضی شده بیش از یک هفته', _lg),
+        "expired_2w": i18n.t('کاربران منقضی شده بیش از دو هفته', _lg),
+        "expired_4w": i18n.t('کاربران منقضی شده بیش از چهار هفته', _lg),
+        "expired_8w": i18n.t('کاربران منقضی شده بیش از هشت هفته', _lg),
     }
-    return mapping.get(seg, "تمام کاربران")
+    return mapping.get(seg, i18n.t('تمام کاربران', _lg))
 
 
 def _is_skip_text(text: str) -> bool:
@@ -88,6 +98,11 @@ async def _send_broadcast_to_targets(
     text: str,
     photo_file_id: str = "",
 ) -> Tuple[int, int]:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     sender_bot = Bot(token=token)
     body = str(text or "").strip()
     photo_id = str(photo_file_id or "").strip()
@@ -116,7 +131,7 @@ async def _send_broadcast_to_targets(
                     await sender_bot.send_photo(chat_id=tg_id, photo=photo_bytes)
                     await sender_bot.send_message(chat_id=tg_id, text=body)
             elif photo_id:
-                fallback_text = body or "📷 تصویر ضمیمه شده بود ولی ارسال تصویر ممکن نشد."
+                fallback_text = body or i18n.t('📷 تصویر ضمیمه شده بود ولی ارسال تصویر ممکن نشد.', _lg)
                 await sender_bot.send_message(chat_id=tg_id, text=fallback_text)
             else:
                 await sender_bot.send_message(chat_id=tg_id, text=body)
@@ -129,6 +144,11 @@ async def _send_broadcast_to_targets(
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     query = update.callback_query
     if not query:
         return
@@ -154,7 +174,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "expired_8w",
         }
         if segment not in allowed_segments:
-            await query.answer("گروه ارسال نامعتبر است.", show_alert=True)
+            await query.answer(i18n.t('گروه ارسال نامعتبر است.', _lg), show_alert=True)
             return
         context.user_data["broadcast_state"] = {
             "segment": segment,
@@ -165,13 +185,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data[UD_STATE] = STATE_BROADCAST_MESSAGE
         await query.answer()
         await query.message.reply_text(
-            f"✍ لطفا پیام خود را برای ارسال به «{_broadcast_segment_label(segment)}» وارد کنید:",
-            reply_markup=cancel_keyboard(),
+            f"{i18n.t('✍ لطفا پیام خود را برای ارسال به «', _lg)}{_broadcast_segment_label(segment)}{i18n.t('» وارد کنید:', _lg)}",
+            reply_markup=cancel_keyboard(lang=_lg),
         )
         return
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        from AgentBot.keyboards import agent_lang as _ag_lang_fn
+        _lg = _ag_lang_fn(context)
+    except Exception:
+        _lg = "fa"
     if not update.message:
         return False
     if context.user_data.get(UD_STATE) != STATE_BROADCAST_MESSAGE:
@@ -184,8 +209,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     payload = context.user_data.get("broadcast_state") or {}
     if not isinstance(payload, dict):
         clear_state(context)
-        await update.message.reply_text("❌ وضعیت ارسال همگانی نامعتبر است.", reply_markup=ReplyKeyboardRemove())
-        await _restore_main_menu(update.message)
+        await update.message.reply_text(i18n.t('❌ وضعیت ارسال همگانی نامعتبر است.', _lg), reply_markup=ReplyKeyboardRemove())
+        await _restore_main_menu(update.message, lang=agent_lang(context))
         return True
 
     segment = str(payload.get("segment") or "all").strip().lower()
@@ -193,22 +218,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     photo_file_id = update.message.photo[-1].file_id if update.message.photo else ""
     step = str(payload.get("step") or "wait_text").strip().lower()
 
-    if text in CANCEL_WORDS:
+    if _is_cancel_word(text):
         clear_state(context)
-        await update.message.reply_text("❌ عملیات ارسال همگانی لغو شد.", reply_markup=ReplyKeyboardRemove())
-        await _restore_main_menu(update.message)
+        await update.message.reply_text(i18n.t('❌ عملیات ارسال همگانی لغو شد.', _lg), reply_markup=ReplyKeyboardRemove())
+        await _restore_main_menu(update.message, lang=agent_lang(context))
         return True
 
     if step == "wait_text":
         if not text:
-            await update.message.reply_text("❌ لطفاً متن پیام را کامل ارسال کنید.", reply_markup=cancel_keyboard())
+            await update.message.reply_text(i18n.t('❌ لطفاً متن پیام را کامل ارسال کنید.', _lg), reply_markup=cancel_keyboard(lang=_lg))
             return True
         payload["text"] = text
         payload["step"] = "wait_photo"
         context.user_data["broadcast_state"] = payload
         await update.message.reply_text(
-            "🖼️ لطفا عکس خود را برای ارسال به کاربران ارسال کنید یا روی دکمه [⏩رد کردن] کلیک کنید:",
-            reply_markup=broadcast_skip_cancel_keyboard(),
+            i18n.t('🖼️ لطفا عکس خود را برای ارسال به کاربران ارسال کنید یا روی دکمه [⏩رد کردن] کلیک کنید:', _lg),
+            reply_markup=broadcast_skip_cancel_keyboard(lang=_lg),
         )
         return True
 
@@ -216,8 +241,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         payload["step"] = "wait_text"
         context.user_data["broadcast_state"] = payload
         await update.message.reply_text(
-            f"✍ لطفا پیام خود را برای ارسال به «{_broadcast_segment_label(segment)}» وارد کنید:",
-            reply_markup=cancel_keyboard(),
+            f"{i18n.t('✍ لطفا پیام خود را برای ارسال به «', _lg)}{_broadcast_segment_label(segment)}{i18n.t('» وارد کنید:', _lg)}",
+            reply_markup=cancel_keyboard(lang=_lg),
         )
         return True
 
@@ -227,8 +252,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         payload["photo_file_id"] = ""
     else:
         await update.message.reply_text(
-            "❌ لطفا عکس ارسال کنید یا روی دکمه [⏩رد کردن] بزنید.",
-            reply_markup=broadcast_skip_cancel_keyboard(),
+            i18n.t('❌ لطفا عکس ارسال کنید یا روی دکمه [⏩رد کردن] بزنید.', _lg),
+            reply_markup=broadcast_skip_cancel_keyboard(lang=_lg),
         )
         return True
 
@@ -239,10 +264,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if not token:
         clear_state(context)
         await update.message.reply_text(
-            "ربات مشتری فعال برای این نماینده پیدا نشد. ارسال پیام همگانی فقط از طریق ربات مشتری همان نماینده انجام می‌شود.",
+            i18n.t('ربات مشتری فعال برای این نماینده پیدا نشد. ارسال پیام همگانی فقط از طریق ربات مشتری همان نماینده انجام می‌شود.', _lg),
             reply_markup=ReplyKeyboardRemove(),
         )
-        await _restore_main_menu(update.message)
+        await _restore_main_menu(update.message, lang=agent_lang(context))
         return True
 
     telegram_ids = get_broadcast_target_telegram_ids(agent_id, segment)
@@ -250,10 +275,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     if not telegram_ids:
         clear_state(context)
         await update.message.reply_text(
-            "هیچ کاربری برای ارسال پیام همگانی پیدا نشد.",
+            i18n.t('هیچ کاربری برای ارسال پیام همگانی پیدا نشد.', _lg),
             reply_markup=ReplyKeyboardRemove(),
         )
-        await _restore_main_menu(update.message)
+        await _restore_main_menu(update.message, lang=agent_lang(context))
         return True
 
     sent_count, fail_count = await _send_broadcast_to_targets(
@@ -266,8 +291,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
     clear_state(context)
     await update.message.reply_text(
-        f"✅ پیام همگانی ارسال شد.\n\nگروه: {_broadcast_segment_label(segment)}\nموفق: {sent_count}\nناموفق: {fail_count}",
+        f"{i18n.t('✅ پیام همگانی ارسال شد.\n\nگروه: ', _lg)}{_broadcast_segment_label(segment)}{i18n.t('\nموفق: ', _lg)}{sent_count}{i18n.t('\nناموفق: ', _lg)}{fail_count}",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await _restore_main_menu(update.message)
+    await _restore_main_menu(update.message, lang=agent_lang(context))
     return True
