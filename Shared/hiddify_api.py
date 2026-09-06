@@ -1235,6 +1235,13 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
     """
     if _is_xui_server(server):
         from Shared import xui_api
+        try:
+            logger.debug(
+                "delete_user routing to X-UI adapter (sanaei=%s) server=%s uuid=%s",
+                xui_api._use_sanaei(server), (server or {}).get("id"), user_uuid,
+            )
+        except Exception:
+            pass
         return await xui_api.delete_user(server, user_uuid)
 
     base = _get_panel_url(server)

@@ -1487,6 +1487,14 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
             except Exception as exc:
                 logger.warning("xui delete on inbound %s failed: %s", _to_int(inbound.get("id"), 0), exc)
     _invalidate_xui_inbounds_cache(server)
+    # تأیید حذف: اگر کلاینت هنوز روی پنل هست، خطا بده تا caller
+    # موفقیت جعلی گزارش نکند (مشکل حذف‌نشدن X-UI با پیام ✅).
+    try:
+        fresh_inbounds = await _list_inbounds(server, _force_refresh=True)
+    except Exception:
+        fresh_inbounds = []
+    if _find_all_clients_for_uuid(fresh_inbounds, user_uuid):
+        raise XuiApiError(f"user still exists after delete (uuid={user_uuid})")
 
 
 async def get_subscription_url(server: Dict[str, Any], user_uuid: str) -> str:

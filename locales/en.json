@@ -3580,5 +3580,6 @@
   "ub_lit_149670029304": "purchase",
   "ub_lit_a7976da7948a": "back",
   "ub_lit_494367d01a08": "?",
-  "ub_lit_d84a18536faa": "{h} hours"
+  "ub_lit_d84a18536faa": "{h} hours",
+  "del_partial_warn": "⚠️ Partial delete — not removed from these servers:"
 }

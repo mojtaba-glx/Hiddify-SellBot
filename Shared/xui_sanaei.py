@@ -1132,10 +1132,27 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
         _, cl = pairs[0]
         email = str(cl.get("email") or "").strip() or user_uuid
     else:
-        email = str(target.get("email") or "").strip()
+        # ایمیل ممکن است خالی باشد؛ در این صورت با uuid ادامه بده تا
+        # درخواست خراب (clients/del/ خالی) ارسال نشود.
+        email = str(target.get("email") or "").strip() or user_uuid
     async with _XuiContext(server) as ctx:
         await ctx.request("POST", f"clients/del/{quote(email, safe='')}")
     _invalidate_caches(server)
+    # تأیید حذف: اگر کلاینت هنوز روی پنل هست، خطا بده تا caller
+    # موفقیت جعلی گزارش نکند (مشکل حذف‌نشدن X-UI با پیام ✅).
+    try:
+        fresh_clients = await _list_clients(server, _force_refresh=True)
+    except Exception:
+        fresh_clients = []
+    still_there = bool(_sanaei_find_client(fresh_clients, user_uuid))
+    if not still_there:
+        try:
+            fresh_inbounds = await _list_inbounds(server)
+        except Exception:
+            fresh_inbounds = []
+        still_there = bool(_find_all_clients_for_uuid(fresh_inbounds, user_uuid))
+    if still_there:
+        raise XuiApiError(f"user still exists after delete (uuid={user_uuid})")
 
 
 async def get_subscription_url(server: Dict[str, Any], user_uuid: str) -> str:

@@ -388,10 +388,19 @@ async def enable_subscription(agent_id: int, service_id: int) -> bool:
     return True
 
 
-async def delete_subscription(agent_id: int, service_id: int) -> bool:
+async def delete_subscription(agent_id: int, service_id: int) -> Tuple[bool, List[str]]:
+    """حذف اشتراک از همه پنل‌ها + دیتابیس.
+
+    برمی‌گرداند (ok, failures)؛ failures لیست «عنوان سرور: خطا» است تا
+    هندلر به‌جای ✅ جعلی، نتیجه صادقانه به نماینده نشان دهد.
+    """
+    try:
+        _lg = i18n.get_agent_lang(int(agent_id or 0))
+    except Exception:
+        _lg = "fa"
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
-        return False
+        return False, [i18n.t('سرویس پیدا نشد.', _lg)]
     sid = int(svc.get("server_id") or 0)
 
     # کل خوشه (سرور اصلی + همه نودهای mapping شده) را با uuid هر سرور حذف کن.
@@ -412,21 +421,47 @@ async def delete_subscription(agent_id: int, service_id: int) -> bool:
         targets.append((msid, m_uuid))
         seen_server.add(msid)
 
+    def _server_title(t_sid: int) -> str:
+        try:
+            srv = database.get_server_by_id(int(t_sid or 0)) or {}
+            title = str(srv.get("title") or "").strip()
+            if title:
+                return title
+        except Exception:
+            pass
+        return f"{i18n.t('سرور #', _lg)}{t_sid}"
+
     failures: List[str] = []
+    attempted = 0
     for t_sid, t_uuid in targets:
         if not t_sid or not t_uuid:
             continue
+        attempted += 1
         try:
             await delete_user_on_panel(t_uuid, t_sid)
             agent_db.delete_service_node(service_id, t_sid, t_uuid)
         except Exception as e:
-            failures.append(f"server={t_sid}: {str(e)[:100]}")
+            # کاربر از قبل روی پنل نیست = عملاً حذف‌شده؛ خطا حساب نکن
+            # تا سرویس به‌خاطر رکورد یتیم گیر نکند.
+            if "user not found" in str(e).lower():
+                try:
+                    agent_db.delete_service_node(service_id, t_sid, t_uuid)
+                except Exception:
+                    pass
+                continue
+            failures.append(f"{_server_title(t_sid)}: {str(e)[:120]}")
             logger.error("delete panel node failed svc=%s server=%s: %s", service_id, t_sid, e)
 
     if failures:
         logger.warning("delete_subscription partial failures svc=%s: %s", service_id, "; ".join(failures))
 
-    return agent_db.delete_service(service_id)
+    # اگر هیچ پنلی حذف نشد، ردیف DB را نگه دار تا نماینده بتواند
+    # بعد از رفع مشکل پنل دوباره تلاش کند (جلوگیری از orphan روی پنل).
+    if attempted > 0 and len(failures) >= attempted:
+        return False, failures
+
+    ok = bool(agent_db.delete_service(service_id))
+    return ok, failures
 
 
 async def change_subscription_link(agent_id: int, service_id: int) -> Optional[Dict[str, Any]]:

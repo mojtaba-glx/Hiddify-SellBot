@@ -876,20 +876,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         expired_items = [(s, st) for s, st in items if st == "expired"]
         ok = 0
         fail = 0
+        fail_details: list = []
         for s, _ in expired_items:
             try:
-                done = await delete_subscription(agent_id, int(s["id"]))
+                done, failures = await delete_subscription(agent_id, int(s["id"]))
                 if done:
                     ok += 1
+                    if failures:
+                        fail_details.extend(failures[:3])
                     await _notify_customer_deleted(context, agent_id, int(s["id"]))
                 else:
                     fail += 1
+                    fail_details.extend(failures[:3])
             except Exception:
                 fail += 1
         await _safe_answer(query, f"{i18n.t('حذف شد (', _lg)}{ok})", alert=False)
         try:
             await query.edit_message_text(
-                f"{i18n.t('✅ حذف کاربران منقضی انجام شد.\n\n🗑 حذف‌شده: ', _lg)}{ok}{i18n.t(' | ❌ خطا: ', _lg)}{fail}",
+                f"{i18n.t('✅ حذف کاربران منقضی انجام شد.\n\n🗑 حذف‌شده: ', _lg)}{ok}{i18n.t(' | ❌ خطا: ', _lg)}{fail}"
+                + (("\n" + "\n".join(fail_details[:5])) if fail_details else ""),
                 reply_markup=subs_menu_keyboard(lang=agent_lang(context)), parse_mode="HTML",
             )
         except Exception:
@@ -1145,13 +1150,41 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(i18n.t('⏳ در حال حذف اشتراک... لطفاً صبر کنید.', _lg), parse_mode="HTML")
         except Exception:
             pass
-        ok = await delete_subscription(agent_id, svc_id)
-        await _safe_answer(query, i18n.t('حذف شد ✅', _lg) if ok else i18n.t('خطا در حذف!', _lg), alert=not ok)
-        if ok:
-            await _notify_customer_deleted(context, agent_id, svc_id)
+        ok, failures = await delete_subscription(agent_id, svc_id)
+        if not ok:
+            await _safe_answer(
+                query,
+                i18n.t('خطا در حذف!', _lg) + "\n" + "\n".join(failures[:5]),
+                alert=True,
+            )
             try:
                 await query.edit_message_text(
-                    f"{i18n.t('✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «', _lg)}{_escape(svc_name)}{i18n.t('» با موفقیت حذف شد.', _lg)}",
+                    i18n.t('❌ خطا در حذف اشتراک. لطفاً دوباره تلاش کنید.', _lg)
+                    + "\n\n"
+                    + "\n".join(failures[:5]),
+                    reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return
+        if failures:
+            await _safe_answer(
+                query,
+                i18n.t('del_partial_warn', _lg) + "\n" + "\n".join(failures[:5]),
+                show_alert=True,
+            )
+        else:
+            await _safe_answer(query, i18n.t('حذف شد ✅', _lg))
+        if ok:
+            await _notify_customer_deleted(context, agent_id, svc_id)
+            partial_note = (
+                ("\n\n" + i18n.t('del_partial_warn', _lg) + "\n" + "\n".join(failures[:5]))
+                if failures else ""
+            )
+            try:
+                await query.edit_message_text(
+                    f"{i18n.t('✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «', _lg)}{_escape(svc_name)}{i18n.t('» با موفقیت حذف شد.', _lg)}{partial_note}",
                     reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                     parse_mode="HTML",
                 )
@@ -1160,21 +1193,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     chat_id = query.message.chat_id if query and query.message else update.effective_chat.id
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=f"{i18n.t('✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «', _lg)}{_escape(svc_name)}{i18n.t('» با موفقیت حذف شد.', _lg)}",
+                        text=f"{i18n.t('✅ <b>کاربر حذف شد</b>\n\n📦 اشتراک «', _lg)}{_escape(svc_name)}{i18n.t('» با موفقیت حذف شد.', _lg)}{partial_note}",
                         reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
                         parse_mode="HTML",
                     )
                 except Exception:
                     pass
-        else:
-            try:
-                await query.edit_message_text(
-                    i18n.t('❌ خطا در حذف اشتراک. لطفاً دوباره تلاش کنید.', _lg),
-                    reply_markup=subs_menu_keyboard(lang=agent_lang(context)),
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
         return
 
     if action == "rename":
