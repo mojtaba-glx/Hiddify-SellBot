@@ -257,6 +257,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not i18n.is_supported(new_lang):
             new_lang = "fa"
         try:
+            upsert_user(agent_id, user.id, user.username or "", user.full_name or "")
+        except Exception:
+            pass
+        try:
             from CustomerBot.database import set_customer_language
             set_customer_language(agent_id, user.id, new_lang)
         except Exception as e:
@@ -281,7 +285,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- Guide ----
     elif data.startswith("guide:"):
-        await _handle_guide(query, context, agent_id, data)
+        await _handle_guide(query, context, agent_id, data, lang=i18n.get_customer_lang(agent_id, user.id))
 
     # ---- Support ----
     elif data.startswith("support:"):
@@ -321,7 +325,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == CB_BUY_EXIT_MAIN:
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop("wallet_card_amount", None)
-        await _back_to_main_menu(query.message)
+        await _back_to_main_menu(query.message, lang=i18n.get_customer_lang(agent_id, user.id))
 
     # ---- Buy ----
     elif data.startswith("buy:") or data.startswith("wiz:"):
@@ -390,7 +394,7 @@ async def _handle_guide(query, context, agent_id, data, lang: str = "fa"):
     action = parts[1]
     back_token = parts[2] if len(parts) > 2 else "m"
 
-    _gl = i18n.get_customer_lang(agent_id, user.id)
+    _gl = str(lang or "fa").strip().lower()
     guide_map = {
         "android": get_localized_text(agent_id, "guide_android_text", _gl),
         "ios": get_localized_text(agent_id, "guide_ios_text", _gl),

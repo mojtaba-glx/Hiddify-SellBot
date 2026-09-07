@@ -17,6 +17,11 @@ async def _cb_lang_set(update, context, query, data, user_id):
     if not i18n.is_supported(new_lang):
         new_lang = "fa"
     try:
+        _fu = query.from_user if query else None
+        userbot_db.upsert_user(int(user_id or 0), (_fu.username if _fu else "") or "", (_fu.full_name if _fu else "") or "")
+    except Exception:
+        pass
+    try:
         userbot_db.set_user_language(user_id, new_lang)
     except Exception as e:
         logger.warning("set_user_language failed user=%s: %s", user_id, e)

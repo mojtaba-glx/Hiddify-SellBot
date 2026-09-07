@@ -566,12 +566,20 @@ def upsert_user(agent_id: int, telegram_id: int, username: str = "", full_name: 
 
 
 def set_customer_language(agent_id: int, telegram_id: int, lang: str) -> bool:
-    """ذخیره زبان رابط کاربری مشتری نماینده."""
+    """ذخیره زبان رابط کاربری مشتری نماینده.
+
+    اگر ردیف کاربر هنوز ساخته نشده باشد (مثلاً /language قبل از /start)،
+    اول ردیف را می‌سازد تا زبان گم نشود و تعامل‌های بعدی فارسی برنگردند.
+    """
     lg = str(lang or "fa").strip().lower()
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
     try:
+        cur.execute(
+            "INSERT OR IGNORE INTO customer_users (agent_id, telegram_id) VALUES (?, ?)",
+            (int(agent_id or 0), int(telegram_id or 0)),
+        )
         cur.execute(
             "UPDATE customer_users SET language = ? WHERE agent_id = ? AND telegram_id = ?",
             (lg, int(agent_id or 0), int(telegram_id or 0)),

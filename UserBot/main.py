@@ -5637,6 +5637,11 @@ async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id if update.effective_user else 0
     if not user_id:
         return
+    try:
+        _eu = update.effective_user
+        userbot_db.upsert_user(user_id, (_eu.username if _eu else "") or "", (_eu.full_name if _eu else "") or "")
+    except Exception:
+        pass
     _lg = i18n.get_user_lang(user_id)
     await update.message.reply_text(
         i18n.t("lang_choose", _lg),

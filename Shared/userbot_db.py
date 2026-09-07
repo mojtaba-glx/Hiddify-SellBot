@@ -1969,12 +1969,20 @@ def set_user_wallet(user_id: int, new_amount: int) -> None:
 # ==========================================
 
 def set_user_language(telegram_id: int, lang: str) -> bool:
-    """ذخیره زبان رابط کاربری کاربر ربات کاربران."""
+    """ذخیره زبان رابط کاربری کاربر ربات کاربران.
+
+    اگر ردیف کاربر هنوز ساخته نشده باشد (مثلاً /language قبل از /start)،
+    اول ردیف را می‌سازد تا زبان گم نشود و تعامل‌های بعدی فارسی برنگردند.
+    """
     lg = str(lang or "fa").strip().lower()
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
     try:
+        cur.execute(
+            "INSERT OR IGNORE INTO userbot_users (telegram_id) VALUES (?)",
+            (int(telegram_id or 0),),
+        )
         cur.execute(
             "UPDATE userbot_users SET language = ? WHERE telegram_id = ?",
             (lg, int(telegram_id or 0)),

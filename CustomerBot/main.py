@@ -125,7 +125,12 @@ async def language_command(update: Update, context) -> None:
         return
     from CustomerBot.handlers.menu import _menu_lang
     from CustomerBot.keyboards import language_keyboard
+    from CustomerBot.database import upsert_user
     agent_id = context.bot_data.get("agent_id", 0)
+    try:
+        upsert_user(agent_id, user.id, user.username or "", user.full_name or "")
+    except Exception:
+        pass
     lang = _menu_lang(agent_id, user.id)
     await update.message.reply_text(
         i18n.t("lang_choose", lang),
