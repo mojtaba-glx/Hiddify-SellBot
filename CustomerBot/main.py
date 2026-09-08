@@ -132,7 +132,6 @@ async def run_single_bot(token: str, agent_id: int):
     app = (
         ApplicationBuilder()
         .token(token)
-        .concurrent_updates(True)
         .build()
     )
 
@@ -157,7 +156,7 @@ async def run_single_bot(token: str, agent_id: int):
     async with app:
         await app.start()
         if app.updater:
-            await app.updater.start_polling(drop_pending_updates=True)
+            await app.updater.start_polling(drop_pending_updates=False)
         import time as _t
         last_reminder_ts = 0.0
         while True:
