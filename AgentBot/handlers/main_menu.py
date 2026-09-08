@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from Shared import agent_db
-from AgentBot.handlers.base import authenticate, get_agent_id, clear_state
+from AgentBot.handlers.base import authenticate, clear_state
 from AgentBot.keyboards import main_menu_keyboard
 from AgentBot.constants import MENU_MAIN, UD_STATE
 from AgentBot.handlers import (
@@ -62,12 +62,17 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
         except Exception:
             pass
 
-    agent_id = get_agent_id(context)
-    if not agent_id:
-        agent = await authenticate(update, context)
-        if not agent:
-            return
-        agent_id = agent["id"]
+    # Re-authenticate every update. A cached context ID must not survive an
+    # admin deactivation or account change.
+    agent = await authenticate(update, context)
+    if not agent:
+        clear_state(context)
+        try:
+            await query.answer("⚠️ احراز هویت ناموفق بود.", show_alert=True)
+        except Exception:
+            pass
+        return
+    agent_id = agent["id"]
 
     if action == "menu" or action == "":
         clear_state(context)
@@ -146,11 +151,14 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
 async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
-    agent_id = get_agent_id(context)
-    if not agent_id:
-        agent = await authenticate(update, context)
-        if not agent:
-            return
+    agent = await authenticate(update, context)
+    if not agent:
+        clear_state(context)
+        try:
+            await update.message.reply_text("⚠️ احراز هویت ناموفق بود.")
+        except Exception:
+            pass
+        return
     text = (update.message.text or update.message.caption or "").strip()
     from AgentBot.keyboards import (
         BTN_SUBSCRIPTIONS, BTN_WALLET, BTN_PLANS, BTN_CUSTOMER_BOT,

@@ -743,15 +743,27 @@ def search_payments(agent_id: int, query: str, limit: int = 20) -> List[Dict[str
     return [dict(r) for r in rows]
 
 
-def set_payment_status(payment_id: int, agent_id: int, status: str) -> bool:
+def set_payment_status(
+    payment_id: int,
+    agent_id: int,
+    status: str,
+    *,
+    expected_status: Optional[str] = None,
+) -> bool:
     init_db()
     conn = _conn()
     try:
             cur = conn.cursor()
-            cur.execute(
-            "UPDATE agent_payments SET status=?, updated_at=? WHERE id=? AND agent_id=?",
-            (status, _now(), payment_id, agent_id),
-            )
+            if expected_status is None:
+                cur.execute(
+                "UPDATE agent_payments SET status=?, updated_at=? WHERE id=? AND agent_id=?",
+                (status, _now(), payment_id, agent_id),
+                )
+            else:
+                cur.execute(
+                "UPDATE agent_payments SET status=?, updated_at=? WHERE id=? AND agent_id=? AND status=?",
+                (status, _now(), payment_id, agent_id, expected_status),
+                )
             ok = cur.rowcount > 0
             conn.commit()
     finally:
@@ -905,7 +917,13 @@ def get_customer_payment_by_id_enriched(agent_id: int, payment_id: int) -> Optio
         conn.close()
 
 
-def update_customer_payment_status(agent_id: int, payment_id: int, status: str) -> bool:
+def update_customer_payment_status(
+    agent_id: int,
+    payment_id: int,
+    status: str,
+    *,
+    expected_status: Optional[str] = None,
+) -> bool:
     conn = _customer_conn()
     if not conn:
         return False
@@ -921,10 +939,16 @@ def update_customer_payment_status(agent_id: int, payment_id: int, status: str) 
         if str(dict(row).get("status") or "").strip().lower() == "approved" and str(status).strip().lower() != "approved":
             return False
         now = _now()
-        cur.execute(
-            "UPDATE customer_payments SET status=?, updated_at=? WHERE agent_id=? AND id=?",
-            (status, now, agent_id, payment_id),
-        )
+        if expected_status is None:
+            cur.execute(
+                "UPDATE customer_payments SET status=?, updated_at=? WHERE agent_id=? AND id=?",
+                (status, now, agent_id, payment_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE customer_payments SET status=?, updated_at=? WHERE agent_id=? AND id=? AND status=?",
+                (status, now, agent_id, payment_id, expected_status),
+            )
         ok = cur.rowcount > 0
         conn.commit()
         return ok

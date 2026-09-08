@@ -139,6 +139,20 @@ def _is_cancel_text(text: str) -> bool:
     return key in {"لغو", "cancel"}
 
 
+def _is_authorized_admin(update: Update) -> bool:
+    """Reject text/callback updates that do not come from ADMIN_ID.
+
+    Command handlers perform their own check, but the generic text and callback
+    handlers below receive every update and must enforce the same boundary.
+    """
+    user = getattr(update, "effective_user", None)
+    try:
+        admin_id = int(os.getenv("ADMIN_ID", "0") or "0")
+    except (TypeError, ValueError):
+        return False
+    return bool(user and admin_id > 0 and int(user.id) == admin_id)
+
+
 def _is_confirm_text(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
@@ -7198,7 +7212,7 @@ async def handle_server_inline_callback(
                             src_users = await hiddify_api.list_users(database.get_server_by_id(server_id))
                             tgt_users = await hiddify_api.list_users(target_srv)
                             from collections import Counter
-                            s_by = {str((u or {}).get("uuid") or (u or {}).get("id") or "").strip(): u for u in s_users if isinstance(u, dict)}
+                            s_by = {str((u or {}).get("uuid") or (u or {}).get("id") or "").strip(): u for u in src_users if isinstance(u, dict)}
                             t_by = {str((u or {}).get("uuid") or (u or {}).get("id") or "").strip(): u for u in tgt_users if isinstance(u, dict)}
                             extra_uuids = [uuid for uuid in t_by if uuid not in s_by]
                         for uuid in extra_uuids[:10]:
@@ -7332,7 +7346,9 @@ async def handle_server_inline_callback(
 #   هندلر اصلی منوی ادمین
 # ===============================
 
-async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): 
+async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized_admin(update):
+        return
     message = update.message
     if not message:
         return
@@ -7469,6 +7485,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ===============================
 
 async def admin_inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized_admin(update):
+        return
     query = update.callback_query
     if not query:
         return

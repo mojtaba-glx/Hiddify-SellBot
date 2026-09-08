@@ -4210,8 +4210,8 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
             try:
                 with zf.open(members[customer_db_member], "r") as src, tmp_db.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
-                _restore_sqlite_db_from_file(tmp_db, customer_dir / "customer_bot.db")
-                restored_files.append("CustomerBot/customer_bot.db")
+                _restore_sqlite_db_from_file(tmp_db, root_dir / "customer_bot.db")
+                restored_files.append("customer_bot.db")
             finally:
                 try:
                     tmp_db.unlink(missing_ok=True)
@@ -4261,7 +4261,7 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
 
         if not any(
             item in restored_files
-            for item in {"Shared/hiddify_sellbot.db", "Shared/servers.json", "Shared/plans.json", "Shared/agency.db", "CustomerBot/customer_bot.db", "AgentBot/agent_bot.db"}
+            for item in {"Shared/hiddify_sellbot.db", "Shared/servers.json", "Shared/plans.json", "Shared/agency.db", "customer_bot.db", "CustomerBot/customer_bot.db", "AgentBot/agent_bot.db"}
         ):
             legacy_payload = _extract_legacy_payload_from_zip(zf, members)
             if legacy_payload:
@@ -4421,7 +4421,7 @@ def _make_bot_backup_zip() -> Path:
         (root_dir / "Shared" / "plans.json", "Shared/plans.json"),
         # v4.0.0: Agency + Customer + Agent databases
         (root_dir / "Shared" / "agency.db", "Shared/agency.db"),
-        (root_dir / "CustomerBot" / "customer_bot.db", "CustomerBot/customer_bot.db"),
+        (root_dir / "customer_bot.db", "customer_bot.db"),
         (root_dir / "AgentBot" / "agent_bot.db", "AgentBot/agent_bot.db"),
     ]
 

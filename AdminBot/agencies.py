@@ -874,8 +874,18 @@ async def approve_agent_payment(update: Update, context: ContextTypes.DEFAULT_TY
         return
     agent_id = int(payment.get("agent_id") or 0)
     amount = int(payment.get("amount") or 0)
-    agentbot_db.set_payment_status(payment_id, agent_id, "approved")
-    wallet = agent_db.charge_wallet(agent_id, amount, description=f"شارژ کارت به کارت نماینده - تراکنش {payment.get('ref_id')}")
+    # Claim the payment atomically before crediting the separate wallet DB.
+    # A second callback can no longer approve/credit the same pending payment.
+    if not agentbot_db.set_payment_status(payment_id, agent_id, "processing", expected_status="pending"):
+        await query.answer("این پرداخت قبلاً در حال بررسی یا بررسی شده است.", show_alert=True)
+        return
+    try:
+        wallet = agent_db.charge_wallet(agent_id, amount, description=f"شارژ کارت به کارت نماینده - تراکنش {payment.get('ref_id')}")
+        if not agentbot_db.set_payment_status(payment_id, agent_id, "approved", expected_status="processing"):
+            logger.error("Wallet credited but payment status could not be finalized (payment=%s)", payment_id)
+    except Exception:
+        agentbot_db.set_payment_status(payment_id, agent_id, "pending", expected_status="processing")
+        raise
     agent = agent_db.get_agent_by_id(agent_id) or {}
     try:
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()
@@ -910,7 +920,9 @@ async def reject_agent_payment(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     agent_id = int(payment.get("agent_id") or 0)
     amount = int(payment.get("amount") or 0)
-    agentbot_db.set_payment_status(payment_id, agent_id, "rejected")
+    if not agentbot_db.set_payment_status(payment_id, agent_id, "rejected", expected_status="pending"):
+        await query.answer("این پرداخت قبلاً در حال بررسی یا بررسی شده است.", show_alert=True)
+        return
     agent = agent_db.get_agent_by_id(agent_id) or {}
     try:
         token = os.getenv("AGENT_BOT_TOKEN", "").strip()

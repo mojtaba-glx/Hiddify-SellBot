@@ -15,7 +15,9 @@ from typing import Any, Dict, List, Optional, Tuple
 DB_FILE_NAME = "agency.db"
 DB_PATH = Path(__file__).with_name(DB_FILE_NAME)
 
-_CUSTOMER_BOT_DB_PATH = Path(__file__).resolve().parent.parent / "CustomerBot" / "customer_bot.db"
+# CustomerBot stores its SQLite database at the project root.  Keep this
+# path aligned so cross-bot customer lookups and backups use the same file.
+_CUSTOMER_BOT_DB_PATH = Path(__file__).resolve().parent.parent / "customer_bot.db"
 
 _db_initialized = False
 _init_db_path = ""

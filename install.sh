@@ -337,7 +337,7 @@ create_snapshot_backup() {
     Shared/servers.json \
     Shared/plans.json \
     Shared/agency.db \
-    CustomerBot/customer_bot.db \
+    customer_bot.db \
     AgentBot/agent_bot.db \
     Receiptions \
     2>/dev/null || true
@@ -361,7 +361,7 @@ RUNTIME_GIT_PRESERVE_PATHS=(
   "Shared/servers.json"
   "Shared/plans.json"
   "Shared/agency.db"
-  "CustomerBot/customer_bot.db"
+  "customer_bot.db"
   "AgentBot/agent_bot.db"
 )
 
@@ -412,7 +412,7 @@ is_runtime_local_path() {
     .env|.env.bak*|.env.*.bak|logs|logs/*|backups|backups/*|Receiptions|Receiptions/*)
       return 0
       ;;
-    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db|Shared/*.db-*|Shared/agency.db|CustomerBot/customer_bot.db|AgentBot/agent_bot.db)
+    Shared/hiddify_sellbot.db|Shared/data.db|Shared/servers.json|Shared/plans.json|Shared/*.db|Shared/*.db-*|Shared/agency.db|customer_bot.db|CustomerBot/customer_bot.db|AgentBot/agent_bot.db)
       return 0
       ;;
     *.pid|*.log|*.bak|*.tmp|Backup_Bot_*|Backup_All_*|Pre*.tar.gz|Pre*.zip)
@@ -1419,6 +1419,10 @@ factory_reset() {
   stop_bots
 
   rm -f "$ROOT_DIR/Shared/hiddify_sellbot.db"
+  rm -f "$ROOT_DIR/customer_bot.db" "$ROOT_DIR/customer_bot.db-wal" "$ROOT_DIR/customer_bot.db-shm"
+  rm -f "$ROOT_DIR/CustomerBot/customer_bot.db" "$ROOT_DIR/CustomerBot/customer_bot.db-wal" "$ROOT_DIR/CustomerBot/customer_bot.db-shm"
+  rm -f "$ROOT_DIR/Shared/agency.db" "$ROOT_DIR/Shared/agency.db-wal" "$ROOT_DIR/Shared/agency.db-shm"
+  rm -f "$ROOT_DIR/AgentBot/agent_bot.db" "$ROOT_DIR/AgentBot/agent_bot.db-wal" "$ROOT_DIR/AgentBot/agent_bot.db-shm"
   printf '{\n  "servers": []\n}\n' > "$ROOT_DIR/Shared/servers.json"
   printf '{\n  "servers": {}\n}\n' > "$ROOT_DIR/Shared/plans.json"
 

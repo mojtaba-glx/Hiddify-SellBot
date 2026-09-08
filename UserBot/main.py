@@ -70,7 +70,7 @@ def _check_package_version(package_name: str, min_version: str) -> bool:
 def _safe_import_with_validation():
     """Safely import external packages with validation."""
     global load_dotenv, Update, InlineKeyboardMarkup, InlineKeyboardButton, Bot, ApplicationBuilder, CommandHandler, MessageHandler
-    global CallbackQueryHandler, ContextTypes, filters, TelegramError, BadRequest, NetworkError, Conflict, BotCommand, MenuButtonCommands, HTTPXRequest
+    global CallbackQueryHandler, ContextTypes, filters, TelegramError, BadRequest, NetworkError, Conflict, BotCommand, MenuButtonCommands, HTTPXRequest, ApplicationHandlerStop
     
     try:
         # Check versions first
@@ -82,8 +82,8 @@ def _safe_import_with_validation():
         from telegram import Update, InlineKeyboardMarkup, Bot, BotCommand, MenuButtonCommands
         from Shared.tg_button_styles import inline_button as InlineKeyboardButton
         from telegram.ext import (
-            ApplicationBuilder, CommandHandler, MessageHandler, 
-            CallbackQueryHandler, ContextTypes, filters
+            ApplicationBuilder, CommandHandler, MessageHandler,
+            CallbackQueryHandler, ContextTypes, filters, ApplicationHandlerStop
         )
         from telegram.error import TelegramError, BadRequest, NetworkError, Conflict
         from telegram.request import HTTPXRequest
@@ -317,7 +317,7 @@ DEFAULT_SUBS_SETTINGS = {
 }
 SUB_SERVICE_BASE_URL = (os.getenv("SUB_SERVICE_BASE_URL", "") or "").strip().rstrip("/")
 SUB_SERVER_ENABLED = (os.getenv("SUB_SERVER_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SUB_SERVER_HOST = (os.getenv("SUB_SERVER_HOST", "0.0.0.0") or "0.0.0.0").strip()
+SUB_SERVER_HOST = (os.getenv("SUB_SERVER_HOST", "127.0.0.1") or "127.0.0.1").strip()
 SUB_SERVER_PORT = int(os.getenv("SUB_SERVER_PORT", "8787") or "8787")
 SUB_SERVER_PUBLIC_SCHEME = (os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower()
 SUB_SERVER_PUBLIC_PORT = int(os.getenv("SUB_SERVER_PUBLIC_PORT", str(SUB_SERVER_PORT)) or str(SUB_SERVER_PORT))
@@ -635,6 +635,41 @@ async def _user_joined_force_channel(context: ContextTypes.DEFAULT_TYPE, user_id
         return status in {"member", "administrator", "creator", "owner"}
     except Exception:
         return False
+
+
+async def _userbot_ban_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop every update from a user marked banned in the UserBot database."""
+    user = getattr(update, "effective_user", None)
+    if not user:
+        return
+    try:
+        row = userbot_db.get_user_by_telegram_id(int(user.id)) or {}
+        is_banned = int(row.get("is_banned") or 0) == 1
+    except Exception:
+        # A database failure must not silently bypass the ban control.
+        logger.exception("Failed to check UserBot ban status for telegram_id=%s", user.id)
+        query = getattr(update, "callback_query", None)
+        message = getattr(update, "effective_message", None)
+        try:
+            if query:
+                await query.answer("⏳ سرویس موقتاً در دسترس نیست.", show_alert=True)
+            elif message:
+                await message.reply_text("⏳ سرویس موقتاً در دسترس نیست.")
+        except Exception:
+            pass
+        raise ApplicationHandlerStop
+    if not is_banned:
+        return
+    query = getattr(update, "callback_query", None)
+    message = getattr(update, "effective_message", None)
+    try:
+        if query:
+            await query.answer("🚫 حساب شما توسط مدیر مسدود شده است.", show_alert=True)
+        elif message:
+            await message.reply_text("🚫 حساب شما توسط مدیر مسدود شده است.")
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
 
 
 async def _enforce_force_join(
@@ -2559,12 +2594,6 @@ async def _deactivate_created_users(created_nodes: list[dict]) -> None:
             if not server:
                 continue
             await hiddify_api.disable_user(server, uuid)
-            if marzban_un:
-                try:
-                    from Shared import marzban_api
-                    await marzban_api.disable_user(server, marzban_un)
-                except Exception:
-                    pass
         except Exception as e:
             logger.warning(
                 "Rollback deactivate failed for sid=%s uuid=%s: %s",
@@ -5118,6 +5147,17 @@ async def _process_wallet_purchase(
             )
             return False
 
+    # Validate the target before charging the wallet. A stale/deleted server
+    # must never turn into a charge that cannot be refunded.
+    server = database.get_server_by_id(sid)
+    if not server:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ سرور انتخاب‌شده یافت نشد. لطفاً دوباره خرید را انجام دهید.",
+            reply_markup=_main_menu_keyboard(),
+        )
+        return False
+
     if not skip_wallet_charge:
         current_user = userbot_db.get_user_by_id(internal_user_id) or {}
         wallet_balance = int(current_user.get("wallet_balance") or 0)
@@ -5141,15 +5181,6 @@ async def _process_wallet_purchase(
             )
             return False
         wallet_charged = True
-
-    server = database.get_server_by_id(sid)
-    if not server:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="❌ سرور انتخاب‌شده یافت نشد. لطفاً دوباره خرید را انجام دهید.",
-            reply_markup=_main_menu_keyboard(),
-        )
-        return False
 
     created_nodes: list[dict] = []
     panel_user_uuid = ""
@@ -9221,6 +9252,10 @@ async def _userbot_error_handler(update: object, context: ContextTypes.DEFAULT_T
 
 
 def _attach_userbot_handlers(app) -> None:
+    # Global authorization gate: this must run before every command, message,
+    # callback and receipt handler so a banned user cannot use an alternate path.
+    app.add_handler(MessageHandler(filters.ALL, _userbot_ban_middleware), group=-1)
+    app.add_handler(CallbackQueryHandler(_userbot_ban_middleware), group=-1)
     app.add_handler(CommandHandler("start", start))
 
     # هندلرهای منوی متنی پایین صفحه

@@ -405,7 +405,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     "\u270f\ufe0f <b>\u062a\u0646\u0638\u06cc\u0645 \u0645\u062a\u0646 \u06a9\u0627\u0631\u062a \u0628\u0647 \u06a9\u0627\u0631\u062a</b>\n\n"
                     f"\u0645\u062a\u0646 \u0641\u0639\u0644\u06cc:\n<code>{_escape(current) or _empty_label}</code>\n\n"
                     "\u0645\u062a\u0646 \u062c\u062f\u06cc\u062f \u0631\u0627 \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f (\u06cc\u0627 \u0628\u0631\u0627\u06cc \u062e\u0627\u0644\u06cc \u06a9\u0631\u062f\u0646 \u2014 \u0628\u0641\u0631\u0633\u062a\u06cc\u062f):",
-                    reply_markup=cancel_keyounter(), parse_mode="HTML",
+                    reply_markup=cancel_keyboard(), parse_mode="HTML",
                 )
             except Exception:
                 pass

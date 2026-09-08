@@ -170,11 +170,11 @@ def _get_api_key(server: Dict[str, Any]) -> str:
 def _get_ssl_mode() -> str:
     """
     SSL mode:
-      - auto (default): secure first, fallback to insecure on TLS errors
-      - secure: strict certificate validation
+      - secure (default): strict certificate validation
+      - auto: secure first, fallback to insecure on TLS errors (legacy opt-in)
       - insecure: disable certificate validation
     """
-    raw = (os.getenv(SSL_MODE_ENV, SSL_MODE_AUTO) or "").strip().lower()
+    raw = (os.getenv(SSL_MODE_ENV, SSL_MODE_SECURE) or "").strip().lower()
     aliases = {
         "on": SSL_MODE_SECURE,
         "true": SSL_MODE_SECURE,
@@ -185,7 +185,7 @@ def _get_ssl_mode() -> str:
     }
     mode = aliases.get(raw, raw)
     if mode not in {SSL_MODE_AUTO, SSL_MODE_SECURE, SSL_MODE_INSECURE}:
-        return SSL_MODE_AUTO
+        return SSL_MODE_SECURE
     return mode
 
 

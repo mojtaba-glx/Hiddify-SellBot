@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 import random
 from html import escape
@@ -79,6 +80,8 @@ from telegram import ReplyKeyboardRemove
 from CustomerBot.utils.helpers import (
     is_rate_limited, format_price, escape_markdown, safe_int, safe_float,
 )
+
+logger = logging.getLogger(__name__)
 from CustomerBot.services import (
     build_subscription_status_text, get_service_node_base_urls,
     get_service_panel_targets, collect_all_direct_configs_for_service,
@@ -682,6 +685,14 @@ async def _show_subscription_status(msg, agent_id, svc_id):
     return svc
 
 
+def _customer_owns_service(agent_id: int, telegram_id: int, svc) -> bool:
+    """Validate callback service IDs before any read or mutation."""
+    if not svc:
+        return False
+    customer = get_customer_by_telegram_id(agent_id, telegram_id)
+    return bool(customer and int(svc.get("customer_id") or 0) == int(customer.get("id") or 0))
+
+
 async def _send_service_direct_configs(msg, svc):
     """کانفیگ‌های مستقیم: استخراج از لینک اشتراک همه نودها (بدون API پنل).
 
@@ -903,6 +914,12 @@ async def _send_subscription_link_with_qr(query, agent_id, svc, data):
 async def _handle_status(query, context, agent_id, user, data):
     msg = query.message
     parts = data.split(":")
+    callback_svc_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    if callback_svc_id:
+        callback_svc = get_service_by_id(callback_svc_id)
+        if not _customer_owns_service(agent_id, user.id, callback_svc):
+            await msg.edit_text("❌ این سرویس متعلق به شما نیست.", reply_markup=main_menu_keyboard())
+            return
 
     if data.startswith(CB_STATUS_LIST):
         svc_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
@@ -1126,6 +1143,9 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not svc:
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
+        if not _customer_owns_service(agent_id, user.id, svc):
+            await msg.reply_text("❌ این سرویس متعلق به شما نیست.", reply_markup=main_menu_keyboard())
+            return
         # قوانین تمدید (حالت پیشرفته): حجم/زمان باقی‌مانده باید کمتر از حد مجاز باشد
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
@@ -1230,6 +1250,9 @@ async def _handle_renew(query, context, agent_id, user, data):
         if not svc:
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
             return
+        if not _customer_owns_service(agent_id, user.id, svc):
+            await msg.reply_text("❌ این سرویس متعلق به شما نیست.", reply_markup=main_menu_keyboard())
+            return
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())
             return
@@ -1272,6 +1295,9 @@ async def _handle_renew(query, context, agent_id, user, data):
         svc = get_service_by_id(service_id)
         if not svc:
             await msg.reply_text("❌ سرویس یافت نشد.", reply_markup=main_menu_keyboard())
+            return
+        if not _customer_owns_service(agent_id, user.id, svc):
+            await msg.reply_text("❌ این سرویس متعلق به شما نیست.", reply_markup=main_menu_keyboard())
             return
         if not await service_is_renewable_live(int(svc.get("id") or 0), agent_id):
             await _edit_or_reply(msg, renew_not_allowed_text(agent_id), reply_markup=main_menu_keyboard())

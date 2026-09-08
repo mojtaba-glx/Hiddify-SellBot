@@ -428,7 +428,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
                 show_alert=True,
             )
             return
-        if not update_customer_payment_status(agent_id, pay_id, "processing"):
+        if not update_customer_payment_status(agent_id, pay_id, "processing", expected_status="pending"):
             await query.answer("خطا در قفل کردن پرداخت.", show_alert=True)
             return
         deducted, _ = agent_db.deduct_wallet(
@@ -437,7 +437,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
             description=f"کسر عمده سفارش مشتری #{order.get('order_id') or pay.get('tx_code')}",
         )
         if not deducted:
-            update_customer_payment_status(agent_id, pay_id, "pending")
+            update_customer_payment_status(agent_id, pay_id, "pending", expected_status="processing")
             await query.answer("موجودی کیف پول کافی نیست. لطفاً کیف پول خود را شارژ کنید.", show_alert=True)
             return
         if renew_service_id:
@@ -445,7 +445,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
                 svc = await _renew_subscription_from_order(context, agent_id, user_tg_id, order, tx_code=str(pay.get("tx_code") or ""))
             except Exception as e:
                 agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای تمدید سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
+                update_customer_payment_status(agent_id, pay_id, "pending", expected_status="processing")
                 if int(order.get("order_id") or 0):
                     update_order_status(agent_id, int(order.get("order_id")), "pending")
                 logger.error(f"Failed to renew subscription for payment {pay_id}: {e}")
@@ -456,13 +456,13 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
                 svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
             except Exception as e:
                 agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
+                update_customer_payment_status(agent_id, pay_id, "pending", expected_status="processing")
                 if int(order.get("order_id") or 0):
                     update_order_status(agent_id, int(order.get("order_id")), "pending")
                 logger.error(f"Failed to create subscription for payment {pay_id}: {e}")
                 await query.answer(f"خطا در ساخت سرویس؛ مبلغ از کیف پول نماینده برگشت خورد: {e}", show_alert=True)
                 return
-        if not update_customer_payment_status(agent_id, pay_id, "approved"):
+        if not update_customer_payment_status(agent_id, pay_id, "approved", expected_status="processing"):
             logger.error("Payment %s approved service %s but status update failed", pay_id, (svc or {}).get("id"))
             await query.answer("سرویس ساخته شد اما ثبت وضعیت پرداخت خطا داد. لاگ را بررسی کنید.", show_alert=True)
             return
@@ -484,7 +484,7 @@ async def _approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, a
                 logger.warning("Failed to send subscription report for payment %s: %s", pay_id, report_err)
     else:
         # No order info - just mark approved
-        ok = update_customer_payment_status(agent_id, pay_id, "approved")
+        ok = update_customer_payment_status(agent_id, pay_id, "approved", expected_status="pending")
         if not ok:
             await query.answer("خطا در به‌روزرسانی.", show_alert=True)
             return
@@ -553,11 +553,16 @@ async def process_sms_webhook_queue(context: ContextTypes.DEFAULT_TYPE, limit: i
         except Exception as e:
             ok, note = False, f"{type(e).__name__}: {e}"
             logger.exception("sms auto approve failed (agent=%s pay=%s)", agent_id, pay_id)
-        try:
-            mark_sms_auto_queue_processed(qid, note=note)
-        except Exception as e:
-            logger.warning("sms queue mark processed failed (id=%s): %s", qid, e)
-        processed += 1
+        if ok:
+            try:
+                mark_sms_auto_queue_processed(qid, note=note)
+            except Exception as e:
+                logger.warning("sms queue mark processed failed (id=%s): %s", qid, e)
+            processed += 1
+        else:
+            # Keep transient failures pending so the worker can retry after a
+            # temporary panel/wallet/database outage.
+            logger.warning("sms queue item left pending for retry (id=%s): %s", qid, note)
     return processed
 
 
@@ -589,7 +594,7 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
         if wallet_balance < wholesale_price:
             return False, f"insufficient agent wallet ({int(wallet_balance)} < {wholesale_price}); left pending"
 
-        if not update_customer_payment_status(agent_id, pay_id, "processing"):
+        if not update_customer_payment_status(agent_id, pay_id, "processing", expected_status="pending"):
             return False, "failed to lock payment"
         deducted, _ = agent_db.deduct_wallet(
             agent_id,
@@ -597,7 +602,7 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
             description=f"کسر عمده سفارش مشتری #{order.get('order_id') or pay.get('tx_code')} (تایید خودکار SMS)",
         )
         if not deducted:
-            update_customer_payment_status(agent_id, pay_id, "pending")
+            update_customer_payment_status(agent_id, pay_id, "pending", expected_status="processing")
             return False, "wallet deduction failed; left pending"
 
         # پیام تایید خودکار باید اول از همه در چت مشتری بیاید (بالای پیام‌های تحویل اشتراک)
@@ -616,7 +621,7 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
                 svc = await _renew_subscription_from_order(context, agent_id, user_tg_id, order, tx_code=str(pay.get("tx_code") or ""))
             except Exception as e:
                 agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای تمدید سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
+                update_customer_payment_status(agent_id, pay_id, "pending", expected_status="processing")
                 logger.error("sms auto renew failed for payment %s: %s", pay_id, e)
                 try:
                     await _notify_customer(
@@ -633,7 +638,7 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
                 svc = await _create_subscription_from_order(context, agent_id, user_tg_id, order, wholesale_price, tx_code=str(pay.get("tx_code") or ""))
             except Exception as e:
                 agent_db.refund_wallet(agent_id, wholesale_price, description=f"بازگشت بابت خطای ساخت سرویس سفارش #{order.get('order_id')}")
-                update_customer_payment_status(agent_id, pay_id, "pending")
+                update_customer_payment_status(agent_id, pay_id, "pending", expected_status="processing")
                 logger.error("sms auto service creation failed for payment %s: %s", pay_id, e)
                 try:
                     await _notify_customer(
@@ -646,12 +651,12 @@ async def _auto_approve_from_sms_webhook(context: ContextTypes.DEFAULT_TYPE, age
                     pass
                 return False, f"service creation failed: {e}"
 
-        if not update_customer_payment_status(agent_id, pay_id, "approved"):
+        if not update_customer_payment_status(agent_id, pay_id, "approved", expected_status="processing"):
             return False, "service created but payment status update failed"
         if int(order.get("order_id") or 0):
             update_order_status(agent_id, int(order.get("order_id") or 0), "approved")
     else:
-        if not update_customer_payment_status(agent_id, pay_id, "approved"):
+        if not update_customer_payment_status(agent_id, pay_id, "approved", expected_status="pending"):
             return False, "status update failed (no-order payment)"
 
     # پیام‌های «در انتظار تایید» (چت مشتری و چت نماینده) پاک می‌شوند

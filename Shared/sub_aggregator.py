@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
-from Shared import database, userbot_db, hiddify_api, marzban_api, multi_panel, xui_api
+from Shared import database, userbot_db, hiddify_api, multi_panel, xui_api
 
 
 ALLOWED_CONFIG_SCHEMES = (
@@ -583,7 +583,7 @@ def _service_targets(service: dict) -> List[dict]:
 def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: str = "") -> List[str]:
     """
     Fallback: fetch user configs via admin API and extract direct links.
-    Also fetches from Marzban if marzban_username is provided.
+    The legacy marzban_username argument is ignored for compatibility.
     """
     lines: List[str] = []
     # X-UI: native subscription is the most faithful source of config lines
@@ -609,19 +609,6 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: 
                 lines.append(link)
     except Exception:
         pass
-
-    # Marzban configs
-    if marzban_username:
-        try:
-            marzban_links = _run_async(marzban_api.get_user_configs(server, marzban_username))
-            existing = set(lines)
-            for link in marzban_links or []:
-                link_str = str(link or "").strip()
-                if link_str and "://" in link_str and link_str not in existing:
-                    lines.append(link_str)
-                    existing.add(link_str)
-        except Exception:
-            pass
 
     return lines
 

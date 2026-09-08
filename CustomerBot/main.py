@@ -5,7 +5,11 @@ import signal
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from dotenv import load_dotenv
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+load_dotenv(ROOT_DIR / ".env")
 
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -41,7 +45,9 @@ def _is_user_banned(agent_id: int, telegram_id: int) -> bool:
         u = get_user(agent_id, telegram_id)
         return bool(u and int(u.get("is_banned") or 0) == 1)
     except Exception:
-        return False
+        # Do not fail open when the ban database is unavailable.
+        logger.exception("Failed to check customer ban status (agent=%s user=%s)", agent_id, telegram_id)
+        return True
 
 
 async def force_join_middleware(update: Update, context) -> None:

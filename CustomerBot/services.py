@@ -99,6 +99,11 @@ async def buy_service(
     if sale_price <= 0:
         return {"ok": False, "error": "sale_price_not_set"}
 
+    # Validate the target before charging the agent wallet.
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return {"ok": False, "error": "server_not_found"}
+
     # Check agent wallet
     wallet = agent_db.get_wallet(agent_id)
     if int(wallet.get("balance", 0)) < wholesale:
@@ -111,12 +116,6 @@ async def buy_service(
     )
     if not ok:
         return {"ok": False, "error": "deduct_failed"}
-
-    # Get server
-    server = database.get_server_by_id(server_id)
-    if not server:
-        agent_db.charge_wallet(agent_id, wholesale, description="Refund: server not found")
-        return {"ok": False, "error": "server_not_found"}
 
     # Create user on Hiddify panel
     user_uuid = str(uuid4())
@@ -239,6 +238,9 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
 
     agent_id = int(svc["agent_id"])
     server_id = int(svc["server_id"])
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return {"ok": False, "error": "server_not_found"}
     panel_uuid = str(svc.get("panel_user_uuid", "")).strip()
     wholesale = int(svc.get("wholesale_price", 0))
     original_days = int(svc.get("days_left", 0)) or int(svc.get("days", 0)) or 30
@@ -256,55 +258,53 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
         return {"ok": False, "error": "deduct_failed"}
 
     if panel_uuid:
-        server = database.get_server_by_id(server_id)
-        if server:
-            try:
-                current_svc = agent_db.get_service_by_id(service_id) or svc
-                new_end = str(current_svc.get("end_date", "")).strip()
-                if new_end:
-                    targets = get_service_panel_targets(current_svc)
-                    if not targets:
-                        targets = [(server, panel_uuid, "")]
+        try:
+            current_svc = agent_db.get_service_by_id(service_id) or svc
+            new_end = str(current_svc.get("end_date", "")).strip()
+            if new_end:
+                targets = get_service_panel_targets(current_svc)
+                if not targets:
+                    targets = [(server, panel_uuid, "")]
 
-                    # سرور اصلی (primary) اول و جدا؛ اگر در دسترس نبود پول کسر نشود.
-                    primary_sid = server_id
-                    primary_target = next(
-                        (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
-                        targets[0],
+                # سرور اصلی (primary) اول و جدا؛ اگر در دسترس نبود پول کسر نشود.
+                primary_sid = server_id
+                primary_target = next(
+                    (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
+                    targets[0],
+                )
+                try:
+                    await multi_panel.patch_user(
+                        primary_target[0], primary_target[1],
+                        {"expire_date": new_end.split(" ")[0]},
+                        marzban_username=primary_target[2],
                     )
+                except Exception as e:
+                    logger.warning("renew primary patch failed svc=%s: %s", service_id, e)
+                    agent_db.charge_wallet(agent_id, cost, description=f"Refund: renew svc #{service_id}")
+                    return {"ok": False, "error": f"api_error: {str(e)[:100]}"}
+
+                # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.
+                failed_nodes: List[str] = []
+                for srv, uuid, marzban_un in targets:
+                    if int(srv.get("id") or 0) == primary_sid:
+                        continue
                     try:
                         await multi_panel.patch_user(
-                            primary_target[0], primary_target[1],
+                            srv, uuid,
                             {"expire_date": new_end.split(" ")[0]},
-                            marzban_username=primary_target[2],
+                            marzban_username=marzban_un,
                         )
                     except Exception as e:
-                        logger.warning("renew primary patch failed svc=%s: %s", service_id, e)
-                        agent_db.charge_wallet(agent_id, cost, description=f"Refund: renew svc #{service_id}")
-                        return {"ok": False, "error": f"api_error: {str(e)[:100]}"}
-
-                    # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.
-                    failed_nodes: List[str] = []
-                    for srv, uuid, marzban_un in targets:
-                        if int(srv.get("id") or 0) == primary_sid:
-                            continue
-                        try:
-                            await multi_panel.patch_user(
-                                srv, uuid,
-                                {"expire_date": new_end.split(" ")[0]},
-                                marzban_username=marzban_un,
-                            )
-                        except Exception as e:
-                            failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
-                            logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
-                    if failed_nodes:
-                        logger.warning(
-                            "Renew applied on primary but some nodes are pending sync (service_id=%s): %s",
-                            service_id,
-                            ", ".join(failed_nodes),
-                        )
-            except Exception as e:
-                logger.warning("renew patch failed svc=%s: %s", service_id, e)
+                        failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
+                        logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
+                if failed_nodes:
+                    logger.warning(
+                        "Renew applied on primary but some nodes are pending sync (service_id=%s): %s",
+                        service_id,
+                        ", ".join(failed_nodes),
+                    )
+        except Exception as e:
+            logger.warning("renew patch failed svc=%s: %s", service_id, e)
 
     agent_db.renew_service(service_id, extra_days=extra_days)
 
