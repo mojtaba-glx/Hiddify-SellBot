@@ -4397,6 +4397,21 @@ def _build_restore_result_text(result: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _checkpoint_sqlite(path: Path) -> None:
+    """Flush WAL pages before copying a live SQLite database into a backup."""
+    if not path.exists() or not path.is_file():
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(str(path), timeout=20)
+        conn.execute("PRAGMA wal_checkpoint(FULL)")
+    except Exception as e:
+        logger.warning("SQLite checkpoint failed for %s: %s", path, e)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _make_bot_backup_zip() -> Path:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     ts = now.strftime("%d-%m-%Y_%H-%M-%S")
@@ -4411,6 +4426,13 @@ def _make_bot_backup_zip() -> Path:
                 break
             suffix += 1
     root_dir = _project_root_dir()
+    for db_path in (
+        root_dir / "Shared" / "hiddify_sellbot.db",
+        root_dir / "Shared" / "agency.db",
+        root_dir / "customer_bot.db",
+        root_dir / "AgentBot" / "agent_bot.db",
+    ):
+        _checkpoint_sqlite(db_path)
     manifest_name = f"Backup_Bot_{ts}.json"
 
     files_to_add: List[Tuple[Path, str]] = [

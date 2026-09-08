@@ -20,7 +20,7 @@ from AgentBot.database import (
     get_customer_payment_by_id_enriched,
 )
 from CustomerBot.database import update_order_status
-from Shared import agent_db
+from Shared import agent_db, database
 from Shared.agent_db import get_active_customer_bot
 
 logger = logging.getLogger(__name__)
@@ -990,6 +990,21 @@ async def _create_subscription_from_order(context: ContextTypes.DEFAULT_TYPE, ag
         sale_price=price,
         note=note,
     )
+    if not svc:
+        # The wallet is refunded by the caller; remove remote users here so a
+        # failed local INSERT cannot leave orphan subscriptions on the nodes.
+        for item in created_nodes:
+            try:
+                target_server = database.get_server_by_id(int(item.get("server_id") or 0))
+                if target_server:
+                    await multi_panel.delete_user(
+                        target_server,
+                        str(item.get("panel_user_uuid") or ""),
+                        marzban_username=str(item.get("marzban_username") or ""),
+                    )
+            except Exception as rollback_error:
+                logger.error("Failed rolling back orphan payment-created user: %s", rollback_error)
+        raise RuntimeError("local service persistence failed")
     if svc:
         for item in created_nodes:
             add_service_node(

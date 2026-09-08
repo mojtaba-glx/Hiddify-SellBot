@@ -211,6 +211,23 @@ async def buy_service(
         note=note,
     )
 
+    if not svc:
+        # Do not leave panel users or a wallet debit behind when local
+        # persistence fails after a successful multi-node create.
+        for item in created_nodes:
+            try:
+                target_server = database.get_server_by_id(int(item.get("server_id") or 0))
+                if target_server:
+                    await multi_panel.delete_user(
+                        target_server,
+                        str(item.get("panel_user_uuid") or ""),
+                        marzban_username=str(item.get("marzban_username") or ""),
+                    )
+            except Exception as rollback_error:
+                logger.error("Failed rolling back orphan customer panel user: %s", rollback_error)
+        agent_db.charge_wallet(agent_id, wholesale, description="Refund: local service persistence failed")
+        return {"ok": False, "error": "local_persistence_failed"}
+
     if svc:
         for item in created_nodes:
             agent_db.add_service_node(

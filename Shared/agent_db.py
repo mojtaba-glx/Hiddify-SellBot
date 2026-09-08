@@ -30,6 +30,7 @@ def _get_conn() -> sqlite3.Connection:
         # چند پروسه/ترد روی یک فایل: WAL + busy_timeout از
         # «database is locked» در عملیات همزمان جلوگیری می‌کند
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=20000")
         conn.execute("PRAGMA synchronous=NORMAL")
     except Exception:
@@ -291,6 +292,16 @@ def _migrate_db():
             cur.execute("ALTER TABLE agent_service_reminder_state ADD COLUMN expired_sent INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+
+    # Older schemas did not declare a foreign key on service-node mappings.
+    # Remove orphan mappings during startup so they cannot be served as real
+    # subscriptions, while keeping the migration non-destructive for services.
+    cur.execute(
+        "DELETE FROM agent_service_nodes WHERE service_id NOT IN (SELECT id FROM agent_services)"
+    )
+    cur.execute(
+        "DELETE FROM agent_service_probe WHERE service_id NOT IN (SELECT id FROM agent_services)"
+    )
 
     conn.commit()
     conn.close()

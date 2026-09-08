@@ -323,9 +323,30 @@ setup_venv_and_requirements() {
   _green "OK: dependencies installed."
 }
 
+checkpoint_sqlite_db() {
+  local db_path="$1"
+  [ -f "$db_path" ] || return 0
+  # SQLite WAL files are not always safe to archive by copying only the main
+  # file.  Checkpoint first so the tar backup contains committed data.
+  python3 - "$db_path" <<'PY' >/dev/null 2>&1 || true
+import sqlite3
+import sys
+path = sys.argv[1]
+conn = sqlite3.connect(path, timeout=20)
+try:
+    conn.execute("PRAGMA wal_checkpoint(FULL)")
+finally:
+    conn.close()
+PY
+}
+
 create_snapshot_backup() {
   local prefix="$1"
   ensure_dirs
+  checkpoint_sqlite_db "$ROOT_DIR/Shared/hiddify_sellbot.db"
+  checkpoint_sqlite_db "$ROOT_DIR/Shared/agency.db"
+  checkpoint_sqlite_db "$ROOT_DIR/customer_bot.db"
+  checkpoint_sqlite_db "$ROOT_DIR/AgentBot/agent_bot.db"
   local ts backup_file
   ts="$(date '+%d-%m-%Y_%H-%M-%S')"
   backup_file="$BACKUP_DIR/${prefix}_${ts}.tar.gz"

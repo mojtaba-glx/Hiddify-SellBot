@@ -170,6 +170,19 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         sale_price=sale,
         note=note,
     )
+    if not svc or not panel_uuid:
+        # Remote users must not be orphaned when local persistence fails.
+        for item in created_nodes:
+            try:
+                await delete_user_on_panel(
+                    str(item.get("panel_user_uuid") or ""),
+                    int(item.get("server_id") or 0),
+                    marzban_username=str(item.get("marzban_username") or ""),
+                )
+            except Exception as rollback_error:
+                logger.error("Failed rolling back orphan panel user: %s", rollback_error)
+        agent_db.charge_wallet(agent_id, wholesale, description=f"بازگشت وجه ساخت ناموفق سرویس: {name}")
+        return None
     if svc and panel_uuid:
         for item in created_nodes:
             agent_db.add_service_node(
@@ -241,6 +254,9 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return None
+    if not get_server_by_id(int(svc.get("server_id") or 0)):
+        logger.error("Cannot renew service %s: primary server is missing", service_id)
+        return None
 
     if volume_mode is None or time_mode is None:
         admin_volume, admin_time, _ = get_admin_renew_policy()
@@ -264,7 +280,16 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         if not ok:
             return None
 
-    agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, volume_mode, time_mode)
+    # Keep the previous local state so a primary-panel failure cannot leave a
+    # paid renewal in the database without a real subscription.
+    old_state = {
+        key: svc.get(key)
+        for key in ("days_left", "usage_limit", "usage_current", "start_date", "end_date", "is_active")
+    }
+    if not agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, volume_mode, time_mode):
+        if cost > 0:
+            agent_db.charge_wallet(agent_id, cost, description=f"بازگشت وجه تمدید ناموفق سرویس #{service_id}")
+        return None
     updated = agent_db.get_service_by_id(service_id)
 
     # Sync with panel (update usage_limit_GB and package_days) on all cluster nodes
@@ -299,16 +324,35 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             except Exception as e:
                 logger.warning("renew panel sync failed svc=%s server=%s: %s", service_id, tgt_id, e)
                 renew_failed.append(str(tgt.get("title") or f"\u0633\u0631\u0648\u0631 #{tgt_id}"))
+                if tgt_id == sid:
+                    break
+
+        if targets and not primary_ok:
+            # Do not touch secondary nodes after the authoritative node fails.
+            agent_db.update_service(service_id, old_state)
+            if cost > 0:
+                agent_db.charge_wallet(agent_id, cost, description=f"بازگشت وجه تمدید ناموفق سرویس #{service_id}")
+            logger.error("Primary panel renewal failed; local state and wallet restored (service=%s)", service_id)
+            return None
 
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
+        primary_enable_ok = False
         for tgt in targets:
             tgt_id = int(tgt.get("id") or 0)
             marzban_un = _lookup_marzban_username(service_id, tgt_id)
             try:
                 await enable_user_on_panel(updated["panel_user_uuid"], tgt_id, marzban_username=marzban_un)
+                if tgt_id == sid:
+                    primary_enable_ok = True
             except Exception as e:
                 logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, tgt_id, e)
-        agent_db.set_service_active(service_id, True)
+                renew_failed.append(str(tgt.get("title") or f"سرور #{tgt_id}"))
+
+        if targets and not primary_enable_ok:
+            agent_db.set_service_active(service_id, False)
+            logger.error("Primary panel renewal applied but re-activation failed (service=%s)", service_id)
+        else:
+            agent_db.set_service_active(service_id, True)
 
         # گزارش به ادمین
         try:
