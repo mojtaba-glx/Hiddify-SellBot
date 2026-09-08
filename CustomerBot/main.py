@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT_DIR))
 load_dotenv(ROOT_DIR / ".env")
 
 from telegram import Update, BotCommand
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -18,6 +19,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ContextTypes,
     filters,
 )
 
@@ -128,6 +130,63 @@ async def _post_init(app: Application) -> None:
         logger.warning("Failed to set customer bot commands: %s", e)
 
 
+async def _customer_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """سراسری: خطای پردازش هر Update را با جزئیات کافی و بدون دادهٔ حساس ثبت میکند."""
+    error = context.error
+    agent_id = context.bot_data.get("agent_id", 0)
+
+    # شناسه‌ها/نوع Update را استخراج کن؛ هرگز callback_data یا متن پیام را لاگ نکن.
+    update_id = None
+    user_id = None
+    update_kind = "unknown"
+    if isinstance(update, Update):
+        update_id = update.update_id
+        user = update.effective_user
+        if user:
+            user_id = user.id
+        if update.callback_query:
+            update_kind = "callback"
+        elif update.message:
+            update_kind = "message"
+        elif update.edited_message:
+            update_kind = "edited_message"
+        elif update.pre_checkout_query:
+            update_kind = "pre_checkout_query"
+
+    if isinstance(error, (NetworkError, TimedOut)):
+        logger.warning(
+            "CustomerBot transient network error (agent=%s update_id=%s tg_user=%s kind=%s): %s: %s",
+            agent_id, update_id, user_id, update_kind,
+            type(error).__name__, error,
+        )
+        return
+
+    if error is not None:
+        logger.error(
+            "CustomerBot unhandled exception (agent=%s update_id=%s tg_user=%s kind=%s, %s)",
+            agent_id, update_id, user_id, update_kind, type(error).__name__,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+    else:
+        logger.error(
+            "CustomerBot unhandled exception (agent=%s update_id=%s tg_user=%s kind=%s, unknown error)",
+            agent_id, update_id, user_id, update_kind,
+        )
+
+    # پیام عمومی کوتاه — شکست ارسالش نباید error handler را دوباره خراب کند.
+    generic_text = "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید."
+    try:
+        if isinstance(update, Update) and update.callback_query:
+            await update.callback_query.answer(text=generic_text, show_alert=True)
+        elif isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(generic_text)
+    except Exception as send_err:
+        logger.debug(
+            "CustomerBot failed to deliver generic error notice (agent=%s): %s: %s",
+            agent_id, type(send_err).__name__, send_err,
+        )
+
+
 async def run_single_bot(token: str, agent_id: int):
     app = (
         ApplicationBuilder()
@@ -136,6 +195,7 @@ async def run_single_bot(token: str, agent_id: int):
     )
 
     app.bot_data["agent_id"] = agent_id
+    app.add_error_handler(_customer_error_handler)
 
     app.add_handler(MessageHandler(filters.ALL, force_join_middleware), group=-1)
     app.add_handler(CallbackQueryHandler(force_join_middleware), group=-1)
@@ -178,6 +238,16 @@ async def run_single_bot(token: str, agent_id: int):
             await asyncio.sleep(60)
 
 
+async def _run_single_bot_guarded(token: str, agent_id: int) -> None:
+    """خرابی یک ربات مشتری را ایزوله میکند تا بقیهٔ رباتهای همان پروسه بالا بمانند."""
+    try:
+        await run_single_bot(token, agent_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Customer bot task crashed (agent=%d)", agent_id)
+
+
 async def main():
     init_customer_db()
     bots = get_all_active_customer_bots()
@@ -190,10 +260,16 @@ async def main():
             return
 
     logger.info("Starting %d customer bot(s)", len(bots))
-    tasks = [run_single_bot(b["bot_token"], b["agent_id"]) for b in bots if b.get("bot_token")]
+    tasks = [
+        asyncio.create_task(_run_single_bot_guarded(b["bot_token"], b["agent_id"]))
+        for b in bots if b.get("bot_token")
+    ]
     if not tasks:
         logger.warning("No bots with valid tokens found.")
         return
+    # Wrapper هر exception غیر-cancel را میبلعد؛ پس خرابی یک ربات
+    # باعث لغو task سایر رباتها نمیشود. CancelledError به بیرون
+    # پرتاب میشود تا لغو طبیعی کل پروسه ممکن باشد.
     await asyncio.gather(*tasks)
 
 

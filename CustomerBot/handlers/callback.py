@@ -534,7 +534,10 @@ async def _handle_support(query, context, agent_id, user, data):
                 try:
                     update_ticket_status(agent_id, code, "open")
                 except Exception:
-                    pass
+                    logger.warning(
+                        "customer ticket status update failed (agent=%s ticket=%s)",
+                        agent_id, code, exc_info=True,
+                    )
                 try:
                     fresh = get_ticket(agent_id, code)
                     if fresh:

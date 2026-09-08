@@ -415,7 +415,10 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 receipt_image=meta_after_agent,
             )
         except Exception:
-            pass
+            logger.warning(
+                "customer receipt meta update after agent notify failed (agent=%s payment=%s)",
+                agent_id, pay.get("id"), exc_info=True,
+            )
     else:
         agent_msg_id = None
     pending_msg = await update.message.reply_text(
@@ -443,7 +446,10 @@ async def _finalize_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 receipt_image=pending_meta,
             )
         except Exception:
-            pass
+            logger.warning(
+                "customer receipt meta update for pending message failed (agent=%s payment=%s)",
+                agent_id, pay.get("id"), exc_info=True,
+            )
     context.user_data.pop(UD_STATE, None)
     context.user_data.pop("card_last4", None)
     context.user_data.pop("pending_receipt_meta", None)
@@ -760,7 +766,10 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from Shared import hiddify_api
             await hiddify_api.patch_user(found_server, parsed_uuid, {"comment": note})
         except Exception:
-            pass
+            logger.warning(
+                "customer connect: panel comment patch failed (agent=%s server=%s)",
+                agent_id, found_server.get("id"), exc_info=True,
+            )
         svc = create_service(
             agent_id=agent_id,
             customer_id=cust_id,
