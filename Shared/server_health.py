@@ -15,17 +15,17 @@ Shared/server_health.py
 
 import asyncio
 import logging
-import os
 from typing import Any, Dict
 
 from Shared import database, hiddify_api
 from Shared.admin_notify import notify_admin
+from Shared.env_utils import env_int, env_float
 
 logger = logging.getLogger(__name__)
 
-SERVER_HEALTH_DOWN_THRESHOLD = int(os.getenv("SERVER_HEALTH_DOWN_THRESHOLD", "2") or "2")
-SERVER_HEALTH_TIMEOUT = float(os.getenv("SERVER_HEALTH_TIMEOUT", "10") or "10")
-SERVER_HEALTH_CONCURRENCY = int(os.getenv("SERVER_HEALTH_CONCURRENCY", "4") or "4")
+SERVER_HEALTH_DOWN_THRESHOLD = env_int("SERVER_HEALTH_DOWN_THRESHOLD", 2, minimum=1)
+SERVER_HEALTH_TIMEOUT = env_float("SERVER_HEALTH_TIMEOUT", 10.0, minimum=0)
+SERVER_HEALTH_CONCURRENCY = env_int("SERVER_HEALTH_CONCURRENCY", 4, minimum=1)
 
 # وضعیت درون‌ریز: server_id -> {"status": "up"|"down", "fails": int}
 _state: Dict[int, Dict[str, Any]] = {}

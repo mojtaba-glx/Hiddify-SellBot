@@ -70,6 +70,7 @@ def _check_package_version(package_name: str, min_version: str) -> bool:
 def _safe_import_with_validation():
     """Safely import external packages with validation."""
     global load_dotenv, Update, InlineKeyboardMarkup, InlineKeyboardButton, Bot, ApplicationBuilder, CommandHandler, MessageHandler
+    global env_int, env_float
     global CallbackQueryHandler, ContextTypes, filters, TelegramError, BadRequest, NetworkError, Conflict, BotCommand, MenuButtonCommands, HTTPXRequest, ApplicationHandlerStop
     
     try:
@@ -81,6 +82,7 @@ def _safe_import_with_validation():
         from dotenv import load_dotenv
         from telegram import Update, InlineKeyboardMarkup, Bot, BotCommand, MenuButtonCommands
         from Shared.tg_button_styles import inline_button as InlineKeyboardButton
+        from Shared.env_utils import env_int, env_float
         from telegram.ext import (
             ApplicationBuilder, CommandHandler, MessageHandler,
             CallbackQueryHandler, ContextTypes, filters, ApplicationHandlerStop
@@ -235,7 +237,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 try:
     load_dotenv()
     TOKEN = os.getenv("USER_BOT_TOKEN")
-    ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
+    ADMIN_ID = env_int("ADMIN_ID", 0, minimum=0)
     ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN")
     
     if not TOKEN:
@@ -259,11 +261,7 @@ def get_user_step(context, user_id):
     if not step:
         return None
 
-    ttl_seconds = 10 * 60
-    try:
-        ttl_seconds = int(os.getenv("USERBOT_STATE_TTL_SECONDS", "600") or "600")
-    except (TypeError, ValueError):
-        ttl_seconds = 10 * 60
+    ttl_seconds = env_int("USERBOT_STATE_TTL_SECONDS", 600, minimum=0)
     if ttl_seconds <= 0:
         return step
 
@@ -318,28 +316,26 @@ DEFAULT_SUBS_SETTINGS = {
 SUB_SERVICE_BASE_URL = (os.getenv("SUB_SERVICE_BASE_URL", "") or "").strip().rstrip("/")
 SUB_SERVER_ENABLED = (os.getenv("SUB_SERVER_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 SUB_SERVER_HOST = (os.getenv("SUB_SERVER_HOST", "127.0.0.1") or "127.0.0.1").strip()
-SUB_SERVER_PORT = int(os.getenv("SUB_SERVER_PORT", "8787") or "8787")
+SUB_SERVER_PORT = env_int("SUB_SERVER_PORT", 8787, minimum=1, maximum=65535)
 SUB_SERVER_PUBLIC_SCHEME = (os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower()
-SUB_SERVER_PUBLIC_PORT = int(os.getenv("SUB_SERVER_PUBLIC_PORT", str(SUB_SERVER_PORT)) or str(SUB_SERVER_PORT))
+SUB_SERVER_PUBLIC_PORT = env_int("SUB_SERVER_PUBLIC_PORT", SUB_SERVER_PORT, minimum=1, maximum=65535)
 SUB_SERVER_PUBLIC_HOST = (os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
-USERBOT_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_ACTION_COOLDOWN_SECONDS", "0.5") or "0.5")
+USERBOT_ACTION_COOLDOWN_SECONDS = env_float("USERBOT_ACTION_COOLDOWN_SECONDS", 0.5, minimum=0)
 USERBOT_ANTI_SPAM_ENABLED = (os.getenv("USERBOT_ANTI_SPAM_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
-USERBOT_RATE_LIMIT_NOTICE_SECONDS = float(os.getenv("USERBOT_RATE_LIMIT_NOTICE_SECONDS", "5.0") or "5.0")
-BUY_MENU_ACTION_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_MENU_ACTION_COOLDOWN_SECONDS", "0") or "0")
-BUY_CALLBACK_COOLDOWN_SECONDS = float(os.getenv("USERBOT_BUY_CALLBACK_COOLDOWN_SECONDS", "0.2") or "0.2")
-BUY_MENU_HOLD_SECONDS = float(os.getenv("USERBOT_BUY_MENU_HOLD_SECONDS", "1.0") or "1.0")
-USERBOT_STATUS_PROBE_CONCURRENCY = int(os.getenv("USERBOT_STATUS_PROBE_CONCURRENCY", "3") or "3")
-USERBOT_STATUS_SYNC_CONCURRENCY = int(os.getenv("USERBOT_STATUS_SYNC_CONCURRENCY", "2") or "2")
-USERBOT_MISSING_SERVICE_DELETE_DAYS = int(
-    os.getenv("USERBOT_MISSING_SERVICE_DELETE_DAYS", "7") or "7"
-)
+USERBOT_RATE_LIMIT_NOTICE_SECONDS = env_float("USERBOT_RATE_LIMIT_NOTICE_SECONDS", 5.0, minimum=0)
+BUY_MENU_ACTION_COOLDOWN_SECONDS = env_float("USERBOT_BUY_MENU_ACTION_COOLDOWN_SECONDS", 0, minimum=0)
+BUY_CALLBACK_COOLDOWN_SECONDS = env_float("USERBOT_BUY_CALLBACK_COOLDOWN_SECONDS", 0.2, minimum=0)
+BUY_MENU_HOLD_SECONDS = env_float("USERBOT_BUY_MENU_HOLD_SECONDS", 1.0, minimum=0)
+USERBOT_STATUS_PROBE_CONCURRENCY = env_int("USERBOT_STATUS_PROBE_CONCURRENCY", 3, minimum=1)
+USERBOT_STATUS_SYNC_CONCURRENCY = env_int("USERBOT_STATUS_SYNC_CONCURRENCY", 2, minimum=1)
+USERBOT_MISSING_SERVICE_DELETE_DAYS = env_int("USERBOT_MISSING_SERVICE_DELETE_DAYS", 7, minimum=1)
 USERBOT_TICKET_AUTOCLOSE_ENABLED = (os.getenv("USERBOT_TICKET_AUTOCLOSE_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-USERBOT_TICKET_AUTOCLOSE_HOURS = int(os.getenv("USERBOT_TICKET_AUTOCLOSE_HOURS", "24") or "24")
-USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS = int(os.getenv("USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS", "600") or "600")
+USERBOT_TICKET_AUTOCLOSE_HOURS = env_int("USERBOT_TICKET_AUTOCLOSE_HOURS", 24, minimum=1)
+USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS = env_int("USERBOT_TICKET_AUTOCLOSE_INTERVAL_SECONDS", 600, minimum=1)
 
 # Direct-buy delivery retry on transient Hiddify API errors.
-DIRECT_DELIVERY_MAX_RETRIES = int(os.getenv("USERBOT_DIRECT_DELIVERY_MAX_RETRIES", "5") or "5")
-DIRECT_DELIVERY_RETRY_DELAY_SECONDS = float(os.getenv("USERBOT_DIRECT_DELIVERY_RETRY_DELAY_SECONDS", "60") or "60")
+DIRECT_DELIVERY_MAX_RETRIES = env_int("USERBOT_DIRECT_DELIVERY_MAX_RETRIES", 5, minimum=1)
+DIRECT_DELIVERY_RETRY_DELAY_SECONDS = env_float("USERBOT_DIRECT_DELIVERY_RETRY_DELAY_SECONDS", 60, minimum=0)
 
 
 def _normalize_action_text(text: str) -> str:

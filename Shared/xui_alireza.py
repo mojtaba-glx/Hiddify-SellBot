@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import os
 import threading
 import time
 import json
@@ -44,6 +43,7 @@ from urllib.parse import quote, urlparse, parse_qsl, unquote
 import httpx
 
 from Shared import hiddify_api
+from Shared.env_utils import env_float
 from Shared.xui_common import default_cert_domain, get_loop_lock, sync_run
 
 logger = logging.getLogger(__name__)
@@ -747,7 +747,7 @@ _ALIREZA_LAST_SEEN_LOCK = threading.Lock()
 # NOTE: httpx.AsyncClient is bound to the event loop that created it; reuse
 # across ThreadingHTTPServer threads (sub_http_server) causes "Event loop is closed".
 _XUI_SESSION_CACHE: Dict[Any, Tuple[float, "httpx.AsyncClient", Any, int]] = {}
-_XUI_SESSION_TTL_SECONDS = float(os.getenv("XUI_SESSION_TTL_SECONDS", "60") or "60")
+_XUI_SESSION_TTL_SECONDS = env_float("XUI_SESSION_TTL_SECONDS", 60.0, minimum=0)
 _xui_cache_lock = threading.Lock()
 _xui_client_async_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 
@@ -929,8 +929,8 @@ async def _refresh_xui_client(server: Dict[str, Any], *, insecure: bool = False)
 # HTTP GETs into ~1 GET per server per cycle.
 _XUI_INBOUNDS_CACHE: Dict[Any, Tuple[float, List[Dict[str, Any]]]] = {}
 _XUI_ONLINES_CACHE: Dict[Any, Tuple[float, set]] = {}
-_XUI_INBOUNDS_TTL = float(os.getenv("XUI_INBOUNDS_CACHE_SECONDS", "15") or "15")
-_XUI_ONLINES_TTL = float(os.getenv("XUI_ONLINES_CACHE_SECONDS", "15") or "15")
+_XUI_INBOUNDS_TTL = env_float("XUI_INBOUNDS_CACHE_SECONDS", 15.0, minimum=0)
+_XUI_ONLINES_TTL = env_float("XUI_ONLINES_CACHE_SECONDS", 15.0, minimum=0)
 _xui_inbounds_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 _xui_onlines_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import signal
 import sys
 from pathlib import Path
@@ -25,6 +24,7 @@ from telegram.ext import (
 from Shared.agent_db import get_all_active_customer_bots
 from CustomerBot.database import init_db as init_customer_db, get_force_join_settings, get_user
 from Shared import agent_reminder
+from Shared.env_utils import env_int
 from CustomerBot.handlers.start import start_command
 from CustomerBot.handlers.menu import menu_handler
 from CustomerBot.handlers.callback import callback_handler
@@ -37,7 +37,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
 
-AGENT_REMINDER_INTERVAL = max(600, int(os.getenv("AGENT_REMINDER_INTERVAL_SECONDS", "1800") or "1800"))
+AGENT_REMINDER_INTERVAL = env_int("AGENT_REMINDER_INTERVAL_SECONDS", 1800, minimum=600)
 
 
 def _is_user_banned(agent_id: int, telegram_id: int) -> bool:

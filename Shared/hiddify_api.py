@@ -10,6 +10,8 @@ from datetime import datetime
 from urllib.parse import urlparse, urljoin, quote
 import httpx
 
+from Shared.env_utils import env_float
+
 logger = logging.getLogger(__name__)
 
 
@@ -208,7 +210,7 @@ def _build_insecure_ssl_context() -> ssl.SSLContext:
 # httpx/_config.py:load_ssl_context_verify).
 # NOTE: AsyncClient is loop-bound; cache stores loop/thread to avoid "Event loop is closed" when reused across asyncio.run calls.
 _HIDDIFY_CLIENT_CACHE: Dict[Any, Tuple[float, httpx.AsyncClient, Any, int]] = {}
-_HIDDIFY_CLIENT_TTL = float(os.getenv("HIDDIFY_CLIENT_CACHE_SECONDS", "60") or "60")
+_HIDDIFY_CLIENT_TTL = env_float("HIDDIFY_CLIENT_CACHE_SECONDS", 60.0, minimum=0)
 _hiddify_cache_lock = threading.Lock()
 
 

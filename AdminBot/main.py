@@ -51,6 +51,7 @@ from Shared import server_health  # noqa: E402
 from Shared import userbot_db  # noqa: E402
 from Shared import database  # noqa: E402
 from Shared import agent_enforcer  # noqa: E402
+from Shared.env_utils import env_int  # noqa: E402
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton  # noqa: E402
 
 # ===============================
@@ -59,16 +60,16 @@ from Shared.tg_button_styles import inline_button as InlineKeyboardButton  # noq
 load_dotenv()
 ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN")
 USER_BOT_TOKEN = os.getenv("USER_BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or "0")
+ADMIN_ID = env_int("ADMIN_ID", 0, minimum=0)
 GLOBAL_ENFORCER_ENABLED = (os.getenv("GLOBAL_ENFORCER_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-GLOBAL_ENFORCER_INTERVAL = max(10, int(os.getenv("GLOBAL_ENFORCER_INTERVAL_SECONDS", "20") or "20"))
+GLOBAL_ENFORCER_INTERVAL = env_int("GLOBAL_ENFORCER_INTERVAL_SECONDS", 20, minimum=10)
 NODE_MONITOR_ENABLED = (os.getenv("NODE_MONITOR_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-NODE_MONITOR_INTERVAL = int(os.getenv("NODE_MONITOR_INTERVAL_SECONDS", "180") or "180")
+NODE_MONITOR_INTERVAL = env_int("NODE_MONITOR_INTERVAL_SECONDS", 180, minimum=1)
 SERVER_HEALTH_ENABLED = (os.getenv("SERVER_HEALTH_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-SERVER_HEALTH_INTERVAL = max(60, int(os.getenv("SERVER_HEALTH_INTERVAL_SECONDS", "300") or "300"))
-SUB_REMINDER_INTERVAL = max(60, int(os.getenv("SUB_REMINDER_INTERVAL_SECONDS", "300") or "300"))
+SERVER_HEALTH_INTERVAL = env_int("SERVER_HEALTH_INTERVAL_SECONDS", 300, minimum=60)
+SUB_REMINDER_INTERVAL = env_int("SUB_REMINDER_INTERVAL_SECONDS", 300, minimum=60)
 AGENT_ENFORCER_ENABLED = (os.getenv("AGENT_ENFORCER_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-AGENT_ENFORCER_INTERVAL = max(60, int(os.getenv("AGENT_ENFORCER_INTERVAL_SECONDS", "180") or "180"))
+AGENT_ENFORCER_INTERVAL = env_int("AGENT_ENFORCER_INTERVAL_SECONDS", 180, minimum=60)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

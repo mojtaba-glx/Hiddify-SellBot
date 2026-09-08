@@ -15,7 +15,6 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -27,6 +26,7 @@ from urllib.parse import quote, urlparse
 import httpx
 
 from Shared import hiddify_api
+from Shared.env_utils import env_float
 from Shared.xui_common import (
     _bytes_to_gb,
     _compute_expiry_ms,
@@ -59,7 +59,7 @@ class XuiApiError(Exception):
 # Session cache (Bearer token - no expiry, but keep loop-bound cache)
 # ---------------------------------------------------------------------------
 _XUI_SESSION_CACHE: Dict[Any, Tuple[float, "httpx.AsyncClient", Any, int]] = {}
-_XUI_SESSION_TTL_SECONDS = float(os.getenv("XUI_SESSION_TTL_SECONDS", "60") or "60")
+_XUI_SESSION_TTL_SECONDS = env_float("XUI_SESSION_TTL_SECONDS", 60.0, minimum=0)
 _xui_cache_lock = threading.Lock()
 _xui_client_async_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 
@@ -228,10 +228,10 @@ _XUI_INBOUNDS_CACHE: Dict[Any, Tuple[float, List[Dict[str, Any]]]] = {}
 _XUI_CLIENTS_CACHE: Dict[Any, Tuple[float, List[Dict[str, Any]]]] = {}
 _XUI_ONLINES_CACHE: Dict[Any, Tuple[float, set]] = {}
 _XUI_LASTONLINE_CACHE: Dict[Any, Tuple[float, Dict[str, str]]] = {}
-_XUI_INBOUNDS_TTL = float(os.getenv("XUI_INBOUNDS_CACHE_SECONDS", "15") or "15")
-_XUI_CLIENTS_TTL = float(os.getenv("XUI_CLIENTS_CACHE_SECONDS", "15") or "15")
-_XUI_ONLINES_TTL = float(os.getenv("XUI_ONLINES_CACHE_SECONDS", "15") or "15")
-_XUI_LASTONLINE_TTL = float(os.getenv("XUI_LASTONLINE_CACHE_SECONDS", "30") or "30")
+_XUI_INBOUNDS_TTL = env_float("XUI_INBOUNDS_CACHE_SECONDS", 15.0, minimum=0)
+_XUI_CLIENTS_TTL = env_float("XUI_CLIENTS_CACHE_SECONDS", 15.0, minimum=0)
+_XUI_ONLINES_TTL = env_float("XUI_ONLINES_CACHE_SECONDS", 15.0, minimum=0)
+_XUI_LASTONLINE_TTL = env_float("XUI_LASTONLINE_CACHE_SECONDS", 30.0, minimum=0)
 _xui_inbounds_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 _xui_clients_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 _xui_onlines_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
