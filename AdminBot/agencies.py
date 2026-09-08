@@ -869,22 +869,47 @@ async def approve_agent_payment(update: Update, context: ContextTypes.DEFAULT_TY
     if not payment:
         await query.answer("پرداخت پیدا نشد.", show_alert=True)
         return
-    if str(payment.get("status") or "") != "pending":
+    operation_key = f"agent-wallet-payment:{int(payment_id)}"
+    status = str(payment.get("status") or "")
+    if status not in {"pending", "processing"}:
         await query.answer("این پرداخت قبلاً بررسی شده است.", show_alert=True)
+        return
+    if status == "processing" and str(payment.get("processing_key") or "") != operation_key:
+        await query.answer("این پرداخت در انتظار بررسی خودکار است.", show_alert=True)
         return
     agent_id = int(payment.get("agent_id") or 0)
     amount = int(payment.get("amount") or 0)
     # Claim the payment atomically before crediting the separate wallet DB.
     # A second callback can no longer approve/credit the same pending payment.
-    if not agentbot_db.set_payment_status(payment_id, agent_id, "processing", expected_status="pending"):
+    if not agentbot_db.claim_payment_processing(payment_id, agent_id, operation_key):
         await query.answer("این پرداخت قبلاً در حال بررسی یا بررسی شده است.", show_alert=True)
         return
     try:
-        wallet = agent_db.charge_wallet(agent_id, amount, description=f"شارژ کارت به کارت نماینده - تراکنش {payment.get('ref_id')}")
-        if not agentbot_db.set_payment_status(payment_id, agent_id, "approved", expected_status="processing"):
+        wallet = agent_db.charge_wallet_once(
+            agent_id,
+            amount,
+            operation_key,
+            description=f"شارژ کارت به کارت نماینده - تراکنش {payment.get('ref_id')}",
+        )
+        if not agentbot_db.finish_payment_processing(
+            payment_id, agent_id, operation_key, "approved"
+        ):
             logger.error("Wallet credited but payment status could not be finalized (payment=%s)", payment_id)
+            recover_processing_agent_wallet_payments()
+            recovered = agentbot_db.get_payment_by_id(payment_id) or {}
+            if str(recovered.get("status") or "") != "approved":
+                await query.answer(
+                    "کیف پول شارژ شد اما ثبت نهایی پرداخت به بازیابی خودکار سپرده شد.",
+                    show_alert=True,
+                )
+                return
     except Exception:
-        agentbot_db.set_payment_status(payment_id, agent_id, "pending", expected_status="processing")
+        # If the wallet transaction exists, leave the payment in processing so
+        # startup recovery can finalize it without a second credit.
+        if not agent_db.get_wallet_transaction_by_key(operation_key):
+            agentbot_db.finish_payment_processing(
+                payment_id, agent_id, operation_key, "pending"
+            )
         raise
     agent = agent_db.get_agent_by_id(agent_id) or {}
     try:
@@ -907,6 +932,38 @@ async def approve_agent_payment(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(f"✅ پرداخت تایید شد.\nموجودی جدید: {_fmt_toman(wallet['balance'])} تومان", parse_mode="HTML")
         except BadRequest:
             pass
+
+
+def recover_processing_agent_wallet_payments() -> Dict[str, int]:
+    """Recover interrupted admin approvals without crediting a wallet twice."""
+    result = {"approved": 0, "released": 0, "review": 0, "legacy": 0}
+    for payment in agentbot_db.get_processing_wallet_charge_payments():
+        payment_id = int(payment.get("id") or 0)
+        agent_id = int(payment.get("agent_id") or 0)
+        amount = int(payment.get("amount") or 0)
+        key = str(payment.get("processing_key") or "").strip()
+        if not key:
+            result["legacy"] += 1
+            continue
+        tx = agent_db.get_wallet_transaction_by_key(key)
+        if not tx:
+            if agentbot_db.finish_payment_processing(payment_id, agent_id, key, "pending"):
+                result["released"] += 1
+            else:
+                result["review"] += 1
+            continue
+        matches = (
+            int(tx.get("agent_id") or 0) == agent_id
+            and int(tx.get("amount") or 0) == amount
+            and str(tx.get("tx_type") or "") == "charge"
+        )
+        if matches and agentbot_db.finish_payment_processing(
+            payment_id, agent_id, key, "approved"
+        ):
+            result["approved"] += 1
+        else:
+            result["review"] += 1
+    return result
 
 
 async def reject_agent_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: int) -> None:

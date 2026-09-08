@@ -137,7 +137,7 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         panel_result, created_nodes = await _create_user_on_cluster(targets, payload)
     except Exception as e:
         logger.error("Cluster create failed for %s: %s", name, e)
-        agent_db.charge_wallet(agent_id, wholesale, description=f"\u0628\u0627\u0632\u06af\u0631\u062f\u0627\u0646\u062a \u0645\u0648\u062c\u0648\u062f\u06cc \u0628\u0647 \u062f\u0644\u06cc\u0644 \u062e\u0637\u0627\u06cc \u0633\u0627\u062e\u062a \u06a9\u0627\u0631\u0628\u0631: {name}")
+        agent_db.refund_wallet(agent_id, wholesale, description=f"\u0628\u0627\u0632\u06af\u0631\u062f\u0627\u0646\u062a \u0645\u0648\u062c\u0648\u062f\u06cc \u0628\u0647 \u062f\u0644\u06cc\u0644 \u062e\u0637\u0627\u06cc \u0633\u0627\u062e\u062a \u06a9\u0627\u0631\u0628\u0631: {name}")
         try:
             from Shared.admin_reports import notify_admin_delivery_report
             await notify_admin_delivery_report(
@@ -181,7 +181,7 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
                 )
             except Exception as rollback_error:
                 logger.error("Failed rolling back orphan panel user: %s", rollback_error)
-        agent_db.charge_wallet(agent_id, wholesale, description=f"بازگشت وجه ساخت ناموفق سرویس: {name}")
+        agent_db.refund_wallet(agent_id, wholesale, description=f"بازگشت وجه ساخت ناموفق سرویس: {name}")
         return None
     if svc and panel_uuid:
         for item in created_nodes:
@@ -288,7 +288,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     }
     if not agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, volume_mode, time_mode):
         if cost > 0:
-            agent_db.charge_wallet(agent_id, cost, description=f"بازگشت وجه تمدید ناموفق سرویس #{service_id}")
+            agent_db.refund_wallet(agent_id, cost, description=f"بازگشت وجه تمدید ناموفق سرویس #{service_id}", service_id=service_id)
         return None
     updated = agent_db.get_service_by_id(service_id)
 
@@ -331,7 +331,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             # Do not touch secondary nodes after the authoritative node fails.
             agent_db.update_service(service_id, old_state)
             if cost > 0:
-                agent_db.charge_wallet(agent_id, cost, description=f"بازگشت وجه تمدید ناموفق سرویس #{service_id}")
+                agent_db.refund_wallet(agent_id, cost, description=f"بازگشت وجه تمدید ناموفق سرویس #{service_id}", service_id=service_id)
             logger.error("Primary panel renewal failed; local state and wallet restored (service=%s)", service_id)
             return None
 

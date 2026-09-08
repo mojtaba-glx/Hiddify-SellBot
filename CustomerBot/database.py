@@ -208,10 +208,12 @@ def init_db() -> None:
             status TEXT,
             receipt_image TEXT,
             idempotency_key TEXT,
+            processing_key TEXT DEFAULT '',
             created_at TEXT,
             updated_at TEXT
         )
     """)
+    _ensure_column(cur, "customer_payments", "processing_key", "TEXT DEFAULT ''")
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_cust_pay_idem
         ON customer_payments(agent_id, idempotency_key)

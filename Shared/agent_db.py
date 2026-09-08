@@ -111,6 +111,8 @@ def init_db() -> None:
             created_at TEXT DEFAULT '',
             updated_at TEXT DEFAULT '',
             deleted_at TEXT DEFAULT '',
+            payment_operation_key TEXT DEFAULT '',
+            last_payment_operation_key TEXT DEFAULT '',
             FOREIGN KEY (agent_id) REFERENCES agent_users(id),
             FOREIGN KEY (customer_id) REFERENCES agent_customers(id)
         )
@@ -218,12 +220,17 @@ def init_db() -> None:
             tx_type TEXT DEFAULT '',
             description TEXT DEFAULT '',
             service_id INTEGER DEFAULT 0,
+            idempotency_key TEXT DEFAULT '',
             created_at TEXT DEFAULT '',
             FOREIGN KEY (agent_id) REFERENCES agent_users(id)
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_tx_agent ON agent_transactions(agent_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_tx_type ON agent_transactions(tx_type)")
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tx_idempotency "
+        "ON agent_transactions(idempotency_key) WHERE idempotency_key != ''"
+    )
 
     # 10. تنظیمات نماینده (key-value)
     cur.execute("""
@@ -283,6 +290,25 @@ def _migrate_db():
             cur.execute("ALTER TABLE agent_services ADD COLUMN deleted_at TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+
+    for column in ("payment_operation_key", "last_payment_operation_key"):
+        try:
+            cur.execute(f"SELECT {column} FROM agent_services LIMIT 1")
+        except sqlite3.OperationalError:
+            cur.execute(f"ALTER TABLE agent_services ADD COLUMN {column} TEXT DEFAULT ''")
+
+    try:
+        cur.execute("SELECT idempotency_key FROM agent_transactions LIMIT 1")
+    except sqlite3.OperationalError:
+        cur.execute("ALTER TABLE agent_transactions ADD COLUMN idempotency_key TEXT DEFAULT ''")
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tx_idempotency "
+        "ON agent_transactions(idempotency_key) WHERE idempotency_key != ''"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_service_payment_operation "
+        "ON agent_services(payment_operation_key) WHERE payment_operation_key != ''"
+    )
 
     # expired_sent ستون برای agent_service_reminder_state (پیام انقضا)
     try:
@@ -614,6 +640,154 @@ def refund_wallet(agent_id: int, amount: int, description: str = "", service_id:
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else get_wallet(agent_id)
+
+
+def _wallet_transaction_once(
+    agent_id: int,
+    amount: int,
+    tx_type: str,
+    idempotency_key: str,
+    description: str = "",
+    service_id: int = 0,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Apply one wallet mutation exactly once inside the agency database.
+
+    The idempotency key is deliberately stored in the same SQLite transaction
+    as the balance change.  A caller may therefore retry after a process crash
+    without charging, deducting, or refunding the wallet twice.
+    """
+    key = str(idempotency_key or "").strip()
+    kind = str(tx_type or "").strip().lower()
+    value = int(amount or 0)
+    if not key:
+        raise ValueError("idempotency_key is required")
+    if kind not in {"charge", "purchase", "refund"}:
+        raise ValueError("invalid wallet transaction type")
+    if value < 0:
+        raise ValueError("wallet transaction amount cannot be negative")
+    if value == 0:
+        return True, get_wallet(agent_id)
+
+    init_db()
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute(
+            "SELECT agent_id, amount, tx_type, service_id FROM agent_transactions WHERE idempotency_key = ?",
+            (key,),
+        )
+        existing = cur.fetchone()
+        if existing:
+            if (
+                int(existing["agent_id"] or 0) != int(agent_id)
+                or int(existing["amount"] or 0) != value
+                or str(existing["tx_type"] or "") != kind
+                or int(existing["service_id"] or 0) != int(service_id or 0)
+            ):
+                raise ValueError("idempotency key already belongs to another wallet operation")
+            cur.execute("SELECT * FROM agent_wallets WHERE agent_id = ?", (agent_id,))
+            wallet_row = cur.fetchone()
+            conn.rollback()
+            return True, dict(wallet_row) if wallet_row else {"agent_id": agent_id, "balance": 0}
+
+        now = _now()
+        cur.execute(
+            "INSERT OR IGNORE INTO agent_wallets (agent_id, balance, updated_at) VALUES (?, 0, ?)",
+            (agent_id, now),
+        )
+        if kind == "purchase":
+            cur.execute(
+                "UPDATE agent_wallets SET balance = balance - ?, updated_at = ? "
+                "WHERE agent_id = ? AND balance >= ?",
+                (value, now, agent_id, value),
+            )
+            if cur.rowcount <= 0:
+                cur.execute("SELECT * FROM agent_wallets WHERE agent_id = ?", (agent_id,))
+                wallet_row = cur.fetchone()
+                wallet = dict(wallet_row) if wallet_row else {"agent_id": agent_id, "balance": 0}
+                conn.rollback()
+                return False, wallet
+        else:
+            cur.execute(
+                "UPDATE agent_wallets SET balance = balance + ?, updated_at = ? WHERE agent_id = ?",
+                (value, now, agent_id),
+            )
+
+        cur.execute(
+            """
+            INSERT INTO agent_transactions
+                (agent_id, amount, tx_type, description, service_id, idempotency_key, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (agent_id, value, kind, description, int(service_id or 0), key, now),
+        )
+        cur.execute("SELECT * FROM agent_wallets WHERE agent_id = ?", (agent_id,))
+        wallet_row = cur.fetchone()
+        wallet = dict(wallet_row) if wallet_row else {"agent_id": agent_id, "balance": 0}
+        conn.commit()
+        return True, wallet
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def charge_wallet_once(
+    agent_id: int,
+    amount: int,
+    idempotency_key: str,
+    description: str = "",
+) -> Dict[str, Any]:
+    ok, wallet = _wallet_transaction_once(
+        agent_id, amount, "charge", idempotency_key, description or "شارژ توسط ادمین"
+    )
+    if not ok:
+        raise RuntimeError("wallet charge failed")
+    return wallet
+
+
+def deduct_wallet_once(
+    agent_id: int,
+    amount: int,
+    idempotency_key: str,
+    description: str = "",
+    service_id: int = 0,
+) -> Tuple[bool, Dict[str, Any]]:
+    return _wallet_transaction_once(
+        agent_id, amount, "purchase", idempotency_key, description or "خرید سرویس", service_id
+    )
+
+
+def refund_wallet_once(
+    agent_id: int,
+    amount: int,
+    idempotency_key: str,
+    description: str = "",
+    service_id: int = 0,
+) -> Dict[str, Any]:
+    ok, wallet = _wallet_transaction_once(
+        agent_id, amount, "refund", idempotency_key, description or "بازگشت وجه", service_id
+    )
+    if not ok:
+        raise RuntimeError("wallet refund failed")
+    return wallet
+
+
+def get_wallet_transaction_by_key(idempotency_key: str) -> Optional[Dict[str, Any]]:
+    key = str(idempotency_key or "").strip()
+    if not key:
+        return None
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_transactions WHERE idempotency_key = ? LIMIT 1", (key,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def get_wallet_balance(agent_id: int) -> int:
@@ -1072,6 +1246,7 @@ def create_service(
     is_trial: int = 0,
     comment: str = "",
     note: str = "",
+    payment_operation_key: str = "",
 ) -> Dict[str, Any]:
     """
     ساخت سرویس جدید برای مشتری.
@@ -1080,6 +1255,17 @@ def create_service(
     conn = _get_conn()
     cur = conn.cursor()
     now = _now()
+    operation_key = str(payment_operation_key or "").strip()
+
+    if operation_key:
+        cur.execute(
+            "SELECT * FROM agent_services WHERE payment_operation_key = ? LIMIT 1",
+            (operation_key,),
+        )
+        existing = cur.fetchone()
+        if existing:
+            conn.close()
+            return dict(existing)
 
     end_date = ""
     if days > 0:
@@ -1093,11 +1279,13 @@ def create_service(
         INSERT INTO agent_services (
             agent_id, customer_id, server_id, server_title, name, panel_user_uuid,
             usage_limit, days_left, start_date, end_date, is_active,
-            wholesale_price, sale_price, is_trial, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+            wholesale_price, sale_price, is_trial, created_at, updated_at,
+            payment_operation_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
         """,
         (agent_id, customer_id, server_id, server_title, name, panel_user_uuid,
-         usage_limit, days, now, end_date, wholesale_price, sale_price, is_trial, now, now),
+         usage_limit, days, now, end_date, wholesale_price, sale_price, is_trial, now, now,
+         operation_key),
     )
     svc_id = cur.lastrowid
 
@@ -1143,6 +1331,22 @@ def get_service_by_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def get_service_by_payment_operation(payment_operation_key: str) -> Optional[Dict[str, Any]]:
+    key = str(payment_operation_key or "").strip()
+    if not key:
+        return None
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM agent_services WHERE payment_operation_key = ? LIMIT 1",
+            (key,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def get_services_by_agent(agent_id: int, page: int = 1, page_size: int = 20) -> Tuple[List[Dict[str, Any]], int]:
@@ -1539,7 +1743,8 @@ def renew_service(service_id: int, extra_days: int, extra_gb: float = 0) -> bool
 
 
 def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float = 0,
-                              volume_mode: str = "add", time_mode: str = "add") -> bool:
+                              volume_mode: str = "add", time_mode: str = "add",
+                              payment_operation_key: str = "") -> bool:
     """
     تمدید سرویس با رعایت الگوی تعریف‌شده در ربات ادمین:
       volume_mode: "add" → حجم باقی‌مانده + پلن جدید | "reset" → فقط پلن جدید (ریست مصرف)
@@ -1548,11 +1753,23 @@ def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float 
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT days_left, end_date, usage_limit, usage_current FROM agent_services WHERE id = ?", (service_id,))
+    cur.execute("BEGIN IMMEDIATE")
+    cur.execute(
+        "SELECT days_left, end_date, usage_limit, usage_current, last_payment_operation_key "
+        "FROM agent_services WHERE id = ?",
+        (service_id,),
+    )
     row = cur.fetchone()
     if not row:
+        conn.rollback()
         conn.close()
         return False
+
+    operation_key = str(payment_operation_key or "").strip()
+    if operation_key and str(row["last_payment_operation_key"] or "") == operation_key:
+        conn.rollback()
+        conn.close()
+        return True
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -1582,14 +1799,16 @@ def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float 
     new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
     if str(volume_mode).strip().lower() == "add":
         cur.execute(
-            "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, updated_at = ? WHERE id = ?",
-            (new_days_left, new_usage_limit, new_end_str, _now(), service_id),
+            "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, "
+            "last_payment_operation_key = ?, updated_at = ? WHERE id = ?",
+            (new_days_left, new_usage_limit, new_end_str, operation_key, _now(), service_id),
         )
     else:
         cur.execute(
             "UPDATE agent_services SET days_left = ?, usage_limit = ?, usage_current = 0, "
-            "start_date = ?, end_date = ?, updated_at = ? WHERE id = ?",
-            (new_days_left, new_usage_limit, now.strftime("%Y-%m-%d %H:%M:%S"), new_end_str, _now(), service_id),
+            "start_date = ?, end_date = ?, last_payment_operation_key = ?, updated_at = ? WHERE id = ?",
+            (new_days_left, new_usage_limit, now.strftime("%Y-%m-%d %H:%M:%S"),
+             new_end_str, operation_key, _now(), service_id),
         )
     conn.commit()
     conn.close()

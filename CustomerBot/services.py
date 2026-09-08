@@ -192,7 +192,7 @@ async def buy_service(
         marzban_username = primary_marzban
     except Exception as e:
         logger.error("buy_service create_user failed agent=%s: %s", agent_id, e)
-        agent_db.charge_wallet(agent_id, wholesale, description=f"Refund: API error")
+        agent_db.refund_wallet(agent_id, wholesale, description="Refund: API error")
         return {"ok": False, "error": f"api_error: {str(e)[:100]}"}
 
     # Save in DB
@@ -225,7 +225,7 @@ async def buy_service(
                     )
             except Exception as rollback_error:
                 logger.error("Failed rolling back orphan customer panel user: %s", rollback_error)
-        agent_db.charge_wallet(agent_id, wholesale, description="Refund: local service persistence failed")
+        agent_db.refund_wallet(agent_id, wholesale, description="Refund: local service persistence failed")
         return {"ok": False, "error": "local_persistence_failed"}
 
     if svc:
@@ -297,7 +297,7 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
                     )
                 except Exception as e:
                     logger.warning("renew primary patch failed svc=%s: %s", service_id, e)
-                    agent_db.charge_wallet(agent_id, cost, description=f"Refund: renew svc #{service_id}")
+                    agent_db.refund_wallet(agent_id, cost, description=f"Refund: renew svc #{service_id}", service_id=service_id)
                     return {"ok": False, "error": f"api_error: {str(e)[:100]}"}
 
                 # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.

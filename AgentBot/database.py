@@ -130,6 +130,7 @@ def init_db() -> None:
             _ensure_column(cur, "agent_payments", "receipt_image", "TEXT DEFAULT ''")
             _ensure_column(cur, "agent_payments", "base_amount", "INTEGER DEFAULT 0")
             _ensure_column(cur, "agent_payments", "marker_amount", "INTEGER DEFAULT 0")
+            _ensure_column(cur, "agent_payments", "processing_key", "TEXT DEFAULT ''")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ap_agent ON agent_payments(agent_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ap_status ON agent_payments(status)")
 
@@ -771,6 +772,68 @@ def set_payment_status(
     return ok
 
 
+def claim_payment_processing(payment_id: int, agent_id: int, operation_key: str) -> bool:
+    """Claim a pending agent wallet payment for one exclusive processor."""
+    key = str(operation_key or "").strip()
+    if not key:
+        return False
+    init_db()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute(
+            "UPDATE agent_payments SET status='processing', processing_key=?, updated_at=? "
+            "WHERE id=? AND agent_id=? AND status='pending'",
+            (key, _now(), int(payment_id), int(agent_id)),
+        )
+        if cur.rowcount > 0:
+            conn.commit()
+            return True
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def finish_payment_processing(
+    payment_id: int,
+    agent_id: int,
+    operation_key: str,
+    final_status: str,
+) -> bool:
+    target = str(final_status or "").strip().lower()
+    if target not in {"pending", "approved", "rejected"}:
+        return False
+    init_db()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE agent_payments SET status=?, processing_key='', updated_at=? "
+            "WHERE id=? AND agent_id=? AND status='processing' AND processing_key=?",
+            (target, _now(), int(payment_id), int(agent_id), str(operation_key or "").strip()),
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    finally:
+        conn.close()
+
+
+def get_processing_wallet_charge_payments() -> List[Dict[str, Any]]:
+    init_db()
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM agent_payments WHERE status='processing' "
+            "AND description='شارژ کیف پول نماینده' ORDER BY id"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def add_gift(agent_id: int, customer_id: int, customer_name: str, gift_type: str, amount: int = 0, description: str = "") -> Dict[str, Any]:
     init_db()
     conn = _conn()
@@ -810,9 +873,15 @@ def _customer_conn() -> Optional[sqlite3.Connection]:
     db_path = Path(__file__).resolve().parents[1] / "customer_bot.db"
     if not db_path.exists():
         return None
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=20)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=20000")
+    try:
+        conn.execute("SELECT processing_key FROM customer_payments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE customer_payments ADD COLUMN processing_key TEXT DEFAULT ''")
+        conn.commit()
     return conn
 
 
@@ -880,7 +949,7 @@ def get_customer_pending_card_payments(agent_id: int) -> List[Dict[str, Any]]:
         cur.execute(
             "SELECT cp.*, cu.full_name, cu.username FROM customer_payments cp "
             "LEFT JOIN customer_users cu ON cu.agent_id=cp.agent_id AND cu.telegram_id=cp.user_id "
-            "WHERE cp.agent_id=? AND cp.status='pending' AND cp.method='card' "
+            "WHERE cp.agent_id=? AND cp.status IN ('pending','processing') AND cp.method='card' "
             "ORDER BY cp.created_at DESC LIMIT 50",
             (agent_id,),
         )
@@ -952,6 +1021,76 @@ def update_customer_payment_status(
         ok = cur.rowcount > 0
         conn.commit()
         return ok
+    finally:
+        conn.close()
+
+
+def claim_customer_payment_processing(agent_id: int, payment_id: int, operation_key: str) -> bool:
+    """Claim a pending customer payment for one exclusive processor."""
+    key = str(operation_key or "").strip()
+    if not key:
+        return False
+    conn = _customer_conn()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute(
+            "UPDATE customer_payments SET status='processing', processing_key=?, updated_at=? "
+            "WHERE agent_id=? AND id=? AND status='pending'",
+            (key, _now(), int(agent_id), int(payment_id)),
+        )
+        if cur.rowcount > 0:
+            conn.commit()
+            return True
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def finish_customer_payment_processing(
+    agent_id: int,
+    payment_id: int,
+    operation_key: str,
+    final_status: str,
+) -> bool:
+    target = str(final_status or "").strip().lower()
+    if target not in {"pending", "approved", "rejected"}:
+        return False
+    conn = _customer_conn()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE customer_payments SET status=?, processing_key='', updated_at=? "
+            "WHERE agent_id=? AND id=? AND status='processing' AND processing_key=?",
+            (target, _now(), int(agent_id), int(payment_id), str(operation_key or "").strip()),
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    finally:
+        conn.close()
+
+
+def get_processing_customer_payments() -> List[Dict[str, Any]]:
+    conn = _customer_conn()
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT cp.*, cu.full_name, cu.username FROM customer_payments cp "
+            "LEFT JOIN customer_users cu ON cu.agent_id=cp.agent_id AND cu.telegram_id=cp.user_id "
+            "WHERE cp.status='processing' ORDER BY cp.updated_at, cp.id"
+        ).fetchall()
+        result = [dict(row) for row in rows]
+        for payment in result:
+            _enrich_payment_row(cur, payment)
+        return result
     finally:
         conn.close()
 

@@ -46,6 +46,14 @@ async def _sms_webhook_queue_worker(application) -> None:
 
 
 async def _post_init(application) -> None:
+    try:
+        from AgentBot.handlers.settings_customer_payments import recover_customer_payment_operations
+        recovery = recover_customer_payment_operations()
+        if any(recovery.values()):
+            logger.warning("Customer payment recovery: %s", recovery)
+    except Exception as e:
+        logger.exception("Customer payment recovery failed: %s", e)
+
     commands = [
         BotCommand("start", "Agent panel"),
         BotCommand("cancel", "Cancel current operation"),

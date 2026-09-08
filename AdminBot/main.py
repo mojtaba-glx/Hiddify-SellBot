@@ -939,6 +939,14 @@ def main() -> None:
     except Exception as e:
         logger.warning("⚠️ Migration fix_admin_services failed: %s", e)
 
+    try:
+        from AdminBot.agencies import recover_processing_agent_wallet_payments
+        recovery = recover_processing_agent_wallet_payments()
+        if any(recovery.values()):
+            logger.warning("Agent wallet payment recovery: %s", recovery)
+    except Exception as e:
+        logger.exception("Agent wallet payment recovery failed: %s", e)
+
     application = (
         ApplicationBuilder()
         .token(ADMIN_BOT_TOKEN)
