@@ -1,5 +1,6 @@
 import base64
 import asyncio
+from collections import defaultdict, deque
 import json
 import logging
 import os
@@ -22,6 +23,9 @@ SMS_WEBHOOK_SECRET_ENV = "SMS_WEBHOOK_SECRET"
 SMS_WEBHOOK_ENABLED_ENV = "SMS_WEBHOOK_ENABLED"
 SMS_WEBHOOK_MAX_PENDING_AGE_ENV = "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES"
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+_RATE_LIMIT_LOCK = threading.Lock()
+_RATE_LIMIT_BUCKETS: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+_RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 def _dotenv_get(name: str, default: str = "") -> str:
@@ -58,6 +62,33 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw in {"0", "false", "no", "off", "disable", "disabled", "n"}:
         return False
     return bool(default)
+
+
+def _request_rate_limit(kind: str) -> int:
+    """Per-IP request ceiling for the public subscription/SMS endpoint."""
+    env_name = "SUB_HTTP_GET_RATE_LIMIT" if kind == "get" else "SMS_WEBHOOK_RATE_LIMIT"
+    default = 120 if kind == "get" else 20
+    return max(1, min(1000, _to_int(_dotenv_get(env_name, str(default)), default)))
+
+
+def _allow_request(client_ip: str, kind: str) -> bool:
+    now = time.monotonic()
+    key = (str(client_ip or "unknown")[:80], str(kind or "get"))
+    limit = _request_rate_limit(kind)
+    with _RATE_LIMIT_LOCK:
+        bucket = _RATE_LIMIT_BUCKETS[key]
+        cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            return False
+        bucket.append(now)
+        # Bound memory if a scanner rotates source addresses continuously.
+        if len(_RATE_LIMIT_BUCKETS) > 10000:
+            for old_key, old_bucket in list(_RATE_LIMIT_BUCKETS.items())[:2000]:
+                if not old_bucket or old_bucket[-1] <= cutoff:
+                    _RATE_LIMIT_BUCKETS.pop(old_key, None)
+        return True
 
 
 _FR_TOKEN_RE = re.compile(r"(?:^|[^a-z])fr(?:[^a-z]|$)")
@@ -691,6 +722,8 @@ class _SubHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(encoded)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         for key, value in (headers or {}).items():
             if key and value is not None:
                 self.send_header(str(key), str(value))
@@ -738,6 +771,10 @@ class _SubHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         try:
+            client_ip = self.client_address[0] if self.client_address else "unknown"
+            if not _allow_request(client_ip, "get"):
+                self._write(429, "too many requests", headers={"Retry-After": "60"})
+                return
             parsed = urlparse(self.path)
             p = parsed.path.strip("/")
             query = parsed.query
@@ -863,6 +900,10 @@ class _SubHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         try:
+            client_ip = self.client_address[0] if self.client_address else "unknown"
+            if not _allow_request(client_ip, "post"):
+                self._write_json(429, {"ok": False, "error": "rate_limited"})
+                return
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
             if path not in {"/payment/sms-webhook", "/sms-webhook"}:
@@ -889,15 +930,18 @@ class _SubHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            length = min(int(self.headers.get("Content-Length", "0") or "0"), 64 * 1024)
+            declared_length = int(self.headers.get("Content-Length", "0") or "0")
         except Exception:
-            length = 0
-        if length <= 0:
+            declared_length = 0
+        if declared_length <= 0:
             self._write_json(400, {"ok": False, "error": "empty_body"})
+            return
+        if declared_length > 64 * 1024:
+            self._write_json(413, {"ok": False, "error": "payload_too_large"})
             return
 
         try:
-            payload = json.loads(self.rfile.read(length).decode("utf-8", errors="ignore"))
+            payload = json.loads(self.rfile.read(declared_length).decode("utf-8", errors="ignore"))
         except Exception:
             self._write_json(400, {"ok": False, "error": "invalid_json"})
             return
@@ -918,6 +962,9 @@ class _SubHandler(BaseHTTPRequestHandler):
 
         if not event_id:
             self._write_json(400, {"ok": False, "error": "event_id_required"})
+            return
+        if len(event_id) > 128 or any(ord(ch) < 32 or ord(ch) == 127 for ch in event_id):
+            self._write_json(400, {"ok": False, "error": "invalid_event_id"})
             return
 
         if is_test:
