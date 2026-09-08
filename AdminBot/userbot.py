@@ -31,6 +31,7 @@ from telegram.error import BadRequest
 from dotenv import load_dotenv
 
 from AdminBot.keyboards import admin_main_keyboard
+from AdminBot.utils.helpers import is_cancel_text
 from Shared.tg_button_styles import BUTTON_STYLE_THEMES, normalize_button_theme
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
@@ -140,10 +141,6 @@ TICKET_REPLY_STATE = "userbot_ticket_reply"
 BROADCAST_SEND_STATE = "userbot_broadcast_send"
 TICKETS_PAGE_SIZE = 21
 TICKET_SHOT_START_PREFIX = "tshot"
-
-# کلمات لغو
-CANCEL_WORDS = {"❌لغو", "لغو❌", "لغو", "/cancel"}
-
 
 # ===============================
 #   Helper Functions
@@ -5140,7 +5137,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(SUB_TRACKING_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(SUB_TRACKING_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -5172,7 +5169,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(BACKUP_RESTORE_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(BACKUP_RESTORE_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -5251,7 +5248,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(BACKUP_CHANNEL_EDIT_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(BACKUP_CHANNEL_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_backup_restore_settings_menu(msg.chat_id, context)
@@ -5303,7 +5300,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         segment = str(st.get("segment") or "all").strip().lower()
         step = str(st.get("step") or "wait_text").strip().lower()
 
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(BROADCAST_SEND_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -5379,7 +5376,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         from_user_id = int(st.get("from_user_id") or 0)
         step = str(st.get("step") or "wait_text").strip().lower()
 
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(TICKET_REPLY_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_ticket_detail(
@@ -5460,7 +5457,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(PAYMENT_CARD_ADD_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(PAYMENT_CARD_ADD_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_payment_cards_list_menu(msg.chat_id, context)
@@ -5540,7 +5537,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         target_number = re.sub(r"\D", "", str(edit_state.get("number") or ""))
         mode = str(edit_state.get("mode") or "").strip().lower()
 
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(PAYMENT_CARD_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if target_number:
@@ -5590,7 +5587,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(PAYMENT_CARD_DELETE_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(PAYMENT_CARD_DELETE_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_payment_cards_list_menu(msg.chat_id, context)
@@ -5612,7 +5609,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(ZARIN_COUPON_BULK_STATE):
         bulk_state = context.user_data.get(ZARIN_COUPON_BULK_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(ZARIN_COUPON_BULK_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_e20a14ad242e'), reply_markup=admin_main_keyboard())
             await send_gifts_menu(msg.chat_id, context)
@@ -5716,7 +5713,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(ZARIN_COUPON_ADD_STATE):
         add_state = context.user_data.get(ZARIN_COUPON_ADD_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(ZARIN_COUPON_ADD_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
@@ -5762,7 +5759,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             return
 
     if context.user_data.get(ZARIN_COUPON_DELETE_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(ZARIN_COUPON_DELETE_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_zarin_coupons_menu(msg.chat_id, context)
@@ -5776,7 +5773,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(ZARIN_COUPON_LINK_STATE):
         st = context.user_data.get(ZARIN_COUPON_LINK_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_LINK_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
@@ -5807,7 +5804,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(ZARIN_COUPON_AMOUNT_STATE):
         st = context.user_data.get(ZARIN_COUPON_AMOUNT_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_AMOUNT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
@@ -5841,7 +5838,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(ZARIN_COUPON_CODE_STATE):
         st = context.user_data.get(ZARIN_COUPON_CODE_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_CODE_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
@@ -5875,7 +5872,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(ZARIN_COUPON_LIMIT_STATE):
         st = context.user_data.get(ZARIN_COUPON_LIMIT_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_LIMIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
@@ -5909,7 +5906,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(ZARIN_COUPON_EXP_STATE):
         st = context.user_data.get(ZARIN_COUPON_EXP_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             code = str((st or {}).get("code") or "").strip() if isinstance(st, dict) else ""
             context.user_data.pop(ZARIN_COUPON_EXP_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
@@ -5942,7 +5939,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(PAYMENT_CHANNEL_EDIT_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(PAYMENT_CHANNEL_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_payment_settings_menu(msg.chat_id, context)
@@ -5985,7 +5982,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(FORCE_JOIN_EDIT_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(FORCE_JOIN_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_force_join_settings_menu(msg.chat_id, context)
@@ -6034,7 +6031,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(MARKETING_EDIT_STATE):
         edit_type = str(context.user_data.get(MARKETING_EDIT_STATE) or "").strip()
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(MARKETING_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_marketing_settings_menu(msg.chat_id, context)
@@ -6068,7 +6065,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         edit_state = context.user_data.get(REFERRAL_VALUE_EDIT_STATE) or {}
         edit_name = str(edit_state.get("name") or "").strip()
         raw_text = (text or "").strip()
-        if raw_text in CANCEL_WORDS:
+        if is_cancel_text(raw_text):
             context.user_data.pop(REFERRAL_VALUE_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_referral_admin_settings(msg.chat_id, context)
@@ -6103,7 +6100,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     if context.user_data.get(REFERRAL_MANUAL_REWARD_STATE):
         raw_text = (text or "").strip()
-        if raw_text in CANCEL_WORDS:
+        if is_cancel_text(raw_text):
             context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_referral_admin_menu(msg.chat_id, context)
@@ -6137,7 +6134,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(INVITE_BANNER_PHOTO_EDIT_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(INVITE_BANNER_PHOTO_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             await send_invite_text_settings_menu(msg.chat_id, context)
@@ -6165,7 +6162,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     # بررسی ویزارد تنظیم کانال رویداد
     if context.user_data.get(EVENT_CHANNEL_EDIT_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(EVENT_CHANNEL_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -6229,7 +6226,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     # بررسی ویزارد یادآور وضعیت اشتراک
     if context.user_data.get(SUB_REMINDER_EDIT_STATE):
         edit_type = context.user_data.get(SUB_REMINDER_EDIT_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(SUB_REMINDER_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -6267,7 +6264,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     # بررسی ویزارد تنظیم دامنه Multi Server
     if context.user_data.get(SUB_BASE_URL_EDIT_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -6310,7 +6307,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     # بررسی ویزارد مشخصات اشتراک تستی
     if context.user_data.get(TRIAL_SPEC_EDIT_STATE):
         edit_type = context.user_data.get(TRIAL_SPEC_EDIT_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(TRIAL_SPEC_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -6358,7 +6355,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     # بررسی ویزارد کیف پول
     if context.user_data.get(RENEW_POLICY_EDIT_STATE):
         edit_type = context.user_data.get(RENEW_POLICY_EDIT_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(RENEW_POLICY_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -6409,7 +6406,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     # بررسی ویزارد تنظیمات تراکنش/پلن
     if context.user_data.get(TX_PLANS_EDIT_STATE):
         edit_type = context.user_data.get(TX_PLANS_EDIT_STATE)
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(TX_PLANS_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -6453,7 +6450,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         }
         invite_fields = {"invite_info_text", "invite_banner_text", "invite_text"}
         payment_text_fields = {"card_to_card_text"}
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(TEXT_SETTINGS_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             if field_name in guide_fields:
@@ -6489,7 +6486,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     # بررسی ویزارد کیف پول
     if context.user_data.get(WALLET_EDIT_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(WALLET_EDIT_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -6524,7 +6521,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
     # بررسی ویزارد ارسال پیام
     if context.user_data.get(MESSAGE_SEND_STATE):
-        if text in CANCEL_WORDS:
+        if is_cancel_text(text):
             context.user_data.pop(MESSAGE_SEND_STATE, None)
             await msg.reply_text(_adm_t('ub_lit_3b3429cb5a61'), reply_markup=admin_main_keyboard())
             return
@@ -8191,7 +8188,7 @@ async def handle_user_search_message(update: Update, context: ContextTypes.DEFAU
     text = (message.text or "").strip()
     state = context.user_data.get(USER_SEARCH_STATE_KEY)
 
-    if text in CANCEL_WORDS:
+    if is_cancel_text(text):
         context.user_data.pop(USER_SEARCH_STATE_KEY, None)
         await message.reply_text(_adm_t("admin_search_cancelled"), reply_markup=admin_main_keyboard())
         return
@@ -8236,7 +8233,7 @@ async def handle_payment_search_input(update: Update, context: ContextTypes.DEFA
     message = update.message
     text = (message.text or "").strip()
 
-    if text in CANCEL_WORDS:
+    if is_cancel_text(text):
         context.user_data.pop(PAYMENT_SEARCH_STATE, None)
         await message.reply_text(_adm_t("admin_search_cancelled"), reply_markup=admin_main_keyboard())
         return
@@ -8262,7 +8259,7 @@ async def handle_orders_search_input(update: Update, context: ContextTypes.DEFAU
     message = update.message
     text = (message.text or "").strip()
 
-    if text in CANCEL_WORDS:
+    if is_cancel_text(text):
         context.user_data.pop(ORDERS_SEARCH_STATE_KEY, None)
         await message.reply_text(_adm_t("admin_search_cancelled"), reply_markup=admin_main_keyboard())
         return

@@ -13,6 +13,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from AdminBot.keyboards import admin_main_keyboard
+from AdminBot.utils.helpers import is_cancel_text
 from Shared import database, plans_storage, userbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
@@ -50,8 +51,6 @@ PLANS_STATE_ADD_PLAN_DAYS = "plans:add_plan_days"
 PLANS_STATE_ADD_PLAN_GB = "plans:add_plan_gb"
 
 PLANS_STATE_EDIT_DYNAMIC_FIELD = "plans:edit_dynamic_field"
-
-CANCEL_WORDS = {"لغو❌", "لغو", "/cancel"}
 
 _PERSIAN_DIGITS_TRANS = str.maketrans(
     "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
@@ -1208,7 +1207,7 @@ async def handle_plans_message(
     text = (message.text or "").strip()
 
     # لغو
-    if text in CANCEL_WORDS or text == (_t("btn_cancel") + "❌") or text == _t("btn_cancel"):
+    if is_cancel_text(text):
         cancel_server_id = context.user_data.get("plans_server_id")
         return_to_dynamic_menu = state == PLANS_STATE_EDIT_DYNAMIC_FIELD and cancel_server_id
         for key in (

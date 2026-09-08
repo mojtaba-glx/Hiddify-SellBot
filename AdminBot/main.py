@@ -981,6 +981,7 @@ def main() -> None:
 
     # /start — همین فایل
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancel", handle_admin_menu))
     application.add_handler(CommandHandler("language", language_command))
     application.add_handler(CommandHandler("debug", debug))
     application.add_handler(CommandHandler("enforce_now", enforce_now))

@@ -24,6 +24,7 @@ from AgentBot import database as agentbot_db
 from CustomerBot import database as customerbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import admin_main_keyboard
+from AdminBot.utils.helpers import is_cancel_text
 
 logger = logging.getLogger(__name__)
 
@@ -1929,7 +1930,7 @@ async def handle_agencies_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # لغو
     text = (update.message.text or "").strip()
-    if text in {"/cancel", "لغو", "لغو❌", "❌لغو"}:
+    if is_cancel_text(text):
         context.user_data.pop("state", None)
         await update.message.reply_text(_adm_t("operation_cancelled"), reply_markup=admin_main_keyboard())
         return True

@@ -22,6 +22,7 @@ if str(ROOT_DIR) not in sys.path:
 from Shared import database, hiddify_api, node_ops, plans_storage, userbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import admin_main_keyboard, cancel_keyboard
+from AdminBot.utils.helpers import is_cancel_text
 
 logger = logging.getLogger(__name__)
 
@@ -73,16 +74,8 @@ NODES_STATE_EDIT_ADMIN_UUID = "nodes_edit_admin_uuid"
 NODES_STATE_EDIT_PANEL_URL = "nodes_edit_panel_url"
 NODES_STATE_EDIT_USERS_LIMIT = "nodes_edit_users_limit"
 
-# کلمات لغو
-CANCEL_WORDS = {"لغو❌", "❌لغو", "لغو", "/cancel"}
-
-
 def _is_cancel(text: str) -> bool:
-    t = (text or "").strip()
-    for ch in ("\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u2066", "\u2067", "\u2068", "\u2069"):
-        t = t.replace(ch, "")
-    t = t.replace(" ", "")
-    return t in CANCEL_WORDS
+    return is_cancel_text(text)
 
 
 def _short_error(exc: Exception, max_len: int = 320) -> str:

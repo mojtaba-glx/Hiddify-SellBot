@@ -19,6 +19,7 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest, NetworkError
 from pathlib import Path
 from AdminBot.nodes import _short_error
+from AdminBot.utils.helpers import is_cancel_text
 import sys
 from urllib.parse import urlparse
 
@@ -167,9 +168,6 @@ def _T(lang: str, key: str, **kw) -> str:
 #   ثابت‌ها و کمک‌کننده‌ها
 # ===============================
 
-CANCEL_WORDS = {"لغو❌", "لغو", "/cancel"}
-
-
 def _menu_key(text: str) -> str:
     """
     Normalize menu text from Telegram clients (remove hidden marks/emojis/spaces)
@@ -183,13 +181,7 @@ def _menu_key(text: str) -> str:
 
 
 def _is_cancel_text(text: str) -> bool:
-    raw = (text or "").strip()
-    if not raw:
-        return False
-    if raw.lower() == "/cancel":
-        return True
-    key = _menu_key(raw).lower()
-    return key in {"لغو", "cancel"}
+    return is_cancel_text(text)
 
 
 def _is_confirm_text(text: str) -> bool:
@@ -7481,6 +7473,11 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_servers_list(chat_id, context)
     elif _is_search_button(text, text_key):
         await send_search_menu(chat_id, context)
+    elif _is_cancel_text(text):
+        await message.reply_text(
+            _T(_admin_bot_lang(), "operation_cancelled"),
+            reply_markup=admin_main_keyboard(),
+        )
     else:
         await message.reply_text(
             _T(_admin_bot_lang(), "admin_invalid_option"),
