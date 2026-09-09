@@ -34,6 +34,7 @@ from AdminBot.keyboards import admin_main_keyboard
 from Shared.tg_button_styles import BUTTON_STYLE_THEMES, normalize_button_theme
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
+from Shared import backup_integrity
 from Shared import userbot_db, database, hiddify_api
 
 load_dotenv()
@@ -2868,9 +2869,11 @@ def _normalize_servers_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _restore_sqlite_db_from_file(src_db: Path, dst_db: Path) -> None:
+    # Preflight: the source must be a healthy SQLite database before the
+    # destination is touched at all.
+    backup_integrity.verify_sqlite_file(Path(src_db))
     dst_db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(src_db)) as src_conn:
-        src_conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
         with sqlite3.connect(str(dst_db), timeout=30) as dst_conn:
             src_conn.backup(dst_conn)
             dst_conn.commit()
@@ -4084,7 +4087,7 @@ def _extract_legacy_payload_from_zip(
     json_members = sorted([n for n in members.keys() if n.lower().endswith(".json")])
     for name in json_members:
         try:
-            payload = zf.read(members[name])
+            payload = backup_integrity.read_zip_member_bytes(zf, members[name])
             data = json.loads(payload.decode("utf-8"))
         except Exception:
             continue
@@ -4109,8 +4112,9 @@ def _extract_legacy_payload_from_zip(
 
     tmp_db = Path(tempfile.gettempdir()) / f"legacy_restore_src_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
     try:
-        with zf.open(members[db_member_name], "r") as src, tmp_db.open("wb") as dst:
-            shutil.copyfileobj(src, dst)
+        # ساختار ZIP، CRC و سقفها در preflight بررسی شدهاند؛ اینجا فقط
+        # کپی chunk-based با سقف واقعی انجام میشود (ضد ZIP bomb).
+        backup_integrity.copy_zip_member_to_file(zf, members[db_member_name], tmp_db)
         data = _legacy_collect_payload_from_sqlite(tmp_db)
         if _legacy_is_payload(data):
             return data
@@ -4133,137 +4137,104 @@ def _restore_from_zip_backup(backup_file: Path) -> Dict[str, Any]:
     legacy_stats: Dict[str, Any] = {}
 
     with zipfile.ZipFile(backup_file, mode="r") as zf:
-        members: Dict[str, zipfile.ZipInfo] = {}
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            normalized = _normalize_backup_member_name(info.filename)
-            if normalized:
-                members[normalized] = info
+        # ---------- مرحله A: Preflight (هیچ فایل واقعی پروژه تغییر نمیکند) ----------
+        index = backup_integrity.build_safe_zip_index(zf)
+        backup_integrity.verify_zip_crc(zf)
+
+        # Manifest: بکاپهای جدید sha256 دارند؛ قدیمیها بدون manifest هم پذیرفته میشوند.
+        manifest_member = backup_integrity.find_bot_manifest_member(index)
+        if manifest_member:
+            manifest_raw = backup_integrity.read_zip_member_bytes(zf, index[manifest_member])
+            try:
+                manifest_data = json.loads(manifest_raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise ValueError(f"Manifest بکاپ («{manifest_member}») قابل خواندن نیست: {e}") from e
+            backup_integrity.validate_backup_manifest(manifest_data, zf, index)
 
         def _find_member(candidates: List[str]) -> str:
             for name in candidates:
-                if name in members:
+                if name in index:
                     return name
             return ""
 
-        db_member = _find_member([
-            "Shared/hiddify_sellbot.db",
-            "Shared/userbot.db",
-            "hiddify_sellbot.db",
-            "userbot.db",
-        ])
-        if db_member:
-            tmp_db = Path(tempfile.gettempdir()) / f"restore_db_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
-            try:
-                with zf.open(members[db_member], "r") as src, tmp_db.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                _restore_sqlite_db_from_file(tmp_db, shared_dir / "hiddify_sellbot.db")
-                restored_files.append("Shared/hiddify_sellbot.db")
-            finally:
-                try:
-                    tmp_db.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        # نگاشت اعضای شناخته‌شده به مقصدهای واقعی
+        db_targets: List[Tuple[str, Path, str]] = []
+        if (name := _find_member(["Shared/hiddify_sellbot.db", "Shared/userbot.db", "hiddify_sellbot.db", "userbot.db"])):
+            db_targets.append((name, shared_dir / "hiddify_sellbot.db", "Shared/hiddify_sellbot.db"))
+        if (name := _find_member(["Shared/agency.db", "agency.db"])):
+            db_targets.append((name, shared_dir / "agency.db", "Shared/agency.db"))
+        if (name := _find_member(["CustomerBot/customer_bot.db", "customer_bot.db"])):
+            db_targets.append((name, root_dir / "customer_bot.db", "customer_bot.db"))
+        if (name := _find_member(["AgentBot/agent_bot.db", "agent_bot.db"])):
+            db_targets.append((name, root_dir / "AgentBot" / "agent_bot.db", "AgentBot/agent_bot.db"))
 
-        servers_member = _find_member(["Shared/servers.json", "servers.json"])
-        if servers_member:
-            payload = zf.read(members[servers_member])
-            servers_obj = _normalize_servers_payload(json.loads(payload.decode("utf-8")))
-            _atomic_write_bytes(
-                shared_dir / "servers.json",
-                json.dumps(servers_obj, ensure_ascii=False, indent=2).encode("utf-8"),
-            )
-            restored_files.append("Shared/servers.json")
-
-        plans_member = _find_member(["Shared/plans.json", "plans.json"])
-        if plans_member:
-            payload = zf.read(members[plans_member])
-            plans_obj = _normalize_plans_payload(json.loads(payload.decode("utf-8")))
-            _atomic_write_bytes(
-                shared_dir / "plans.json",
-                json.dumps(plans_obj, ensure_ascii=False, indent=2).encode("utf-8"),
-            )
-            restored_files.append("Shared/plans.json")
-
-        # v4.0.0: Restore agency database
-        agency_db_member = _find_member(["Shared/agency.db", "agency.db"])
-        if agency_db_member:
-            tmp_db = Path(tempfile.gettempdir()) / f"restore_agency_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
-            try:
-                with zf.open(members[agency_db_member], "r") as src, tmp_db.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                _restore_sqlite_db_from_file(tmp_db, shared_dir / "agency.db")
-                restored_files.append("Shared/agency.db")
-            finally:
-                try:
-                    tmp_db.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        # v4.0.0: Restore customer bot database
-        customer_db_member = _find_member(["CustomerBot/customer_bot.db", "customer_bot.db"])
-        if customer_db_member:
-            customer_dir = root_dir / "CustomerBot"
-            customer_dir.mkdir(parents=True, exist_ok=True)
-            tmp_db = Path(tempfile.gettempdir()) / f"restore_customer_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
-            try:
-                with zf.open(members[customer_db_member], "r") as src, tmp_db.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                _restore_sqlite_db_from_file(tmp_db, root_dir / "customer_bot.db")
-                restored_files.append("customer_bot.db")
-            finally:
-                try:
-                    tmp_db.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        # v4.0.0: Restore agent bot database
-        agent_db_member = _find_member(["AgentBot/agent_bot.db", "agent_bot.db"])
-        if agent_db_member:
-            agent_dir = root_dir / "AgentBot"
-            agent_dir.mkdir(parents=True, exist_ok=True)
-            tmp_db = Path(tempfile.gettempdir()) / f"restore_agent_{os.getpid()}_{int(datetime.now(timezone.utc).timestamp())}.db"
-            try:
-                with zf.open(members[agent_db_member], "r") as src, tmp_db.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                _restore_sqlite_db_from_file(tmp_db, agent_dir / "agent_bot.db")
-                restored_files.append("AgentBot/agent_bot.db")
-            finally:
-                try:
-                    tmp_db.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        json_targets: List[Tuple[str, Path, Any, str]] = []
+        if (name := _find_member(["Shared/servers.json", "servers.json"])):
+            json_targets.append((name, shared_dir / "servers.json", _normalize_servers_payload, "Shared/servers.json"))
+        if (name := _find_member(["Shared/plans.json", "plans.json"])):
+            json_targets.append((name, shared_dir / "plans.json", _normalize_plans_payload, "Shared/plans.json"))
 
         receipts_members = [
-            name for name in members.keys()
+            name for name in index.keys()
             if name.startswith("Receiptions/") and len(name) > len("Receiptions/")
         ]
-        if receipts_members:
-            temp_root = Path(tempfile.mkdtemp(prefix="restore_receipts_"))
-            try:
-                extracted_root = temp_root / "Receiptions"
-                for name in receipts_members:
-                    rel = Path(name).relative_to("Receiptions")
-                    dst_path = extracted_root / rel
-                    dst_path.parent.mkdir(parents=True, exist_ok=True)
-                    with zf.open(members[name], "r") as src, dst_path.open("wb") as dst:
-                        shutil.copyfileobj(src, dst)
-                    receipts_count += 1
 
+        with tempfile.TemporaryDirectory(prefix="restore_preflight_") as tmp:
+            stage_dir = Path(tmp)
+
+            # --- استخراج دیتابیسها به پوشه موقت + quick_check ---
+            staged_dbs: List[Tuple[Path, Path, str]] = []
+            for i, (member_name, dst_path, label) in enumerate(db_targets):
+                staged = stage_dir / "dbs" / f"db_{i}.sqlite"
+                backup_integrity.copy_zip_member_to_file(zf, index[member_name], staged)
+                backup_integrity.verify_sqlite_file(staged)
+                staged_dbs.append((staged, dst_path, label))
+
+            # --- خواندن و parse تمام JSONهای شناخته‌شده (بدون نوشتن) ---
+            prepared_json: List[Tuple[Path, bytes, str]] = []
+            for member_name, dst_path, normalizer, label in json_targets:
+                payload = backup_integrity.read_zip_member_bytes(zf, index[member_name])
+                try:
+                    obj = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                    raise ValueError(f"فایل «{member_name}» داخل بکاپ JSON معتبری نیست: {e}") from e
+                obj = normalizer(obj)
+                prepared_json.append((
+                    dst_path,
+                    json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8"),
+                    label,
+                ))
+
+            # --- استخراج Receiptions فقط داخل پوشه موقت (مستقل از db/json) ---
+            staged_receipts_root = stage_dir / "Receiptions"
+            for name in receipts_members:
+                rel = Path(name).relative_to("Receiptions")
+                dst_path = staged_receipts_root / rel
+                backup_integrity.copy_zip_member_to_file(zf, index[name], dst_path)
+                receipts_count += 1
+
+            # --- payload بکاپهای قدیمی (فقط وقتی db/json شناختهشده وجود ندارد) ---
+            legacy_payload = None
+            if not db_targets and not json_targets:
+                # ساختار ZIP، CRC و سقفها قبلاً بررسی شدهاند.
+                legacy_payload = _extract_legacy_payload_from_zip(zf, index)
+
+            # ---------- مرحله B: Apply (فقط پس از موفقیت کامل مرحله A) ----------
+            for staged, dst_path, label in staged_dbs:
+                _restore_sqlite_db_from_file(staged, dst_path)
+                restored_files.append(label)
+
+            for dst_path, encoded, label in prepared_json:
+                _atomic_write_bytes(dst_path, encoded)
+                restored_files.append(label)
+
+            if receipts_members:
                 final_receipts_dir = root_dir / "Receiptions"
                 if final_receipts_dir.exists():
                     shutil.rmtree(final_receipts_dir, ignore_errors=True)
-                shutil.copytree(extracted_root, final_receipts_dir)
+                shutil.copytree(staged_receipts_root, final_receipts_dir)
                 restored_files.append("Receiptions/*")
-            finally:
-                shutil.rmtree(temp_root, ignore_errors=True)
 
-        if not any(
-            item in restored_files
-            for item in {"Shared/hiddify_sellbot.db", "Shared/servers.json", "Shared/plans.json", "Shared/agency.db", "customer_bot.db", "CustomerBot/customer_bot.db", "AgentBot/agent_bot.db"}
-        ):
-            legacy_payload = _extract_legacy_payload_from_zip(zf, members)
             if legacy_payload:
                 legacy_result = _restore_legacy_payload(legacy_payload)
                 for item in legacy_result.get("restored_files") or []:
@@ -4448,37 +4419,60 @@ def _make_bot_backup_zip() -> Path:
     ]
 
     added: List[Dict[str, Any]] = []
-    with zipfile.ZipFile(out_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for src, arcname in files_to_add:
-            if not src.exists() or not src.is_file():
-                continue
-            zf.write(src, arcname=arcname)
-            try:
-                fsize = int(src.stat().st_size)
-            except Exception:
-                fsize = 0
-            added.append({"path": arcname, "size": fsize})
-
-        receipts_dir = root_dir / "Receiptions"
-        if receipts_dir.exists() and receipts_dir.is_dir():
-            for item in receipts_dir.rglob("*"):
-                if not item.is_file():
+    try:
+        # مرحله ۱: ساخت ZIP بدون manifest
+        with zipfile.ZipFile(out_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for src, arcname in files_to_add:
+                if not src.exists() or not src.is_file():
                     continue
-                arc = str(item.relative_to(root_dir))
-                zf.write(item, arcname=arc)
+                zf.write(src, arcname=arcname)
                 try:
-                    fsize = int(item.stat().st_size)
+                    fsize = int(src.stat().st_size)
                 except Exception:
                     fsize = 0
-                added.append({"path": arc, "size": fsize})
+                added.append({"path": arcname, "size": fsize})
 
-        manifest = {
-            "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "backup_type": "bot",
-            "files_count": len(added),
-            "files": added,
-        }
-        zf.writestr(manifest_name, json.dumps(manifest, ensure_ascii=False, indent=2))
+            receipts_dir = root_dir / "Receiptions"
+            if receipts_dir.exists() and receipts_dir.is_dir():
+                for item in receipts_dir.rglob("*"):
+                    if not item.is_file():
+                        continue
+                    arc = str(item.relative_to(root_dir))
+                    zf.write(item, arcname=arc)
+                    try:
+                        fsize = int(item.stat().st_size)
+                    except Exception:
+                        fsize = 0
+                    added.append({"path": arc, "size": fsize})
+
+        # مرحله ۲: محاسبه SHA-256 از بایتهای ذخیرهشده داخل ZIP (chunk-based) و
+        # افزودن manifest نهایی در حالت append — هش دقیقاً متعلق به محتوای ZIP است.
+        # هر خطا در این مرحله کل بکاپ را نامعتبر میکند (Exception + حذف فایل ناقص).
+        with zipfile.ZipFile(out_path, mode="a", compression=zipfile.ZIP_DEFLATED) as zf:
+            infos = {backup_integrity.normalize_member_name(info.filename): info for info in zf.infolist() if not info.is_dir()}
+            for entry in added:
+                info = infos.get(entry["path"])
+                if info is None:
+                    raise ValueError(
+                        f"ساخت بکاپ متوقف شد: عضو «{entry['path']}» در آرشیو پیدا نشد."
+                    )
+                entry["size"] = int(info.file_size)
+                entry["sha256"] = backup_integrity.sha256_zip_member(zf, info)
+
+            manifest = {
+                "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "backup_type": "bot",
+                "files_count": len(added),
+                "files": added,
+            }
+            zf.writestr(manifest_name, json.dumps(manifest, ensure_ascii=False, indent=2))
+    except Exception:
+        # بکاپ ناقص نباید روی دیسک باقی بماند.
+        try:
+            out_path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Backup cleanup: failed to remove incomplete zip %s", out_path)
+        raise
 
     return out_path
 
