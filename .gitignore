@@ -1,5 +1,9 @@
 # Secrets and runtime artifacts
 .env
+.env.lock
+.env.*.tmp
+..env.*.tmp
+!.env.example
 logs/
 backups/
 Receiptions/

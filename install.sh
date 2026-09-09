@@ -140,13 +140,19 @@ set_env_var() {
   local key="$1"
   local value="$2"
   local file="$3"
-  local escaped
-  escaped="$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')"
-  if grep -qE "^${key}=" "$file"; then
-    sed -i "s/^${key}=.*/${key}=${escaped}/" "$file"
-  else
-    printf "%s=%s\n" "$key" "$value" >> "$file"
-  fi
+
+  # مقدار (ممکن است secret باشد) هرگز در argv یا environment فرایند Python
+  # قرار نمیگیرد؛ فقط از طریق pipe و stdin منتقل میشود (printf یک builtin
+  # شل است و در ps دیده نمیشود). نوشتن اتمیک با Shared.secure_io انجام
+  # میشود: فایل موقت هممسیر، fsync، os.replace و mode نهایی 0600 برای
+  # .env و .env.lock. کد خروجی Python بدون تغییر برگردانده میشود، بنابراین
+  # خطای نویسنده بدون چاپ secret باعث شکست این تابع میشود.
+  printf '%s' "$value" |
+    ROOT_DIR="$ROOT_DIR" ENV_FILE="$file" ENV_KEY="$key" \
+    python3 -c 'import os, sys
+sys.path.insert(0, os.environ["ROOT_DIR"])
+from Shared.secure_io import atomic_update_env
+atomic_update_env(os.environ["ENV_FILE"], {os.environ["ENV_KEY"]: sys.stdin.read()})'
 }
 
 prompt_required() {
@@ -166,7 +172,38 @@ prompt_required() {
       printf "%s" "$value"
       return 0
     fi
-    _yellow "WARN: $key cannot be empty."
+    _yellow "WARN: $key cannot be empty." >&2
+  done
+}
+
+prompt_secret_required() {
+  # ورود امن مقدارهای حساس (توکن) با pass-by-reference:
+  #   prompt_secret_required RESULT_VARIABLE KEY PROMPT CURRENT_VALUE
+  # خواندن با read -r -s انجام میشود تا تایپ‌شدن روی ترمینال دیده نشود؛
+  # هیچ مقدار یا بخشی از آن روی stdout/stderr نوشته نمیشود. اگر مقدار فعلی
+  # موجود باشد فقط [configured] نمایش داده میشود و Enter آن را نگه میدارد.
+  # newline بعد از ورود و پیام خالی‌بودن ورودی روی stderr نوشته میشوند تا
+  # stdout تابع برای انتقال نتیجه تمیز بماند.
+  local result_var="$1"
+  local key="$2"
+  local prompt="$3"
+  local current="${4:-}"
+  local value=""
+
+  while true; do
+    if [ -n "$current" ]; then
+      read -r -s -p "$prompt [configured]: " value
+      printf '\n' >&2
+      value="${value:-$current}"
+    else
+      read -r -s -p "$prompt: " value
+      printf '\n' >&2
+    fi
+    if [ -n "$value" ]; then
+      printf -v "$result_var" '%s' "$value"
+      return 0
+    fi
+    _yellow "WARN: $key cannot be empty." >&2
   done
 }
 
@@ -184,13 +221,13 @@ configure_env() {
 
   _blue "Configuring required .env values"
   ADMIN_ID="$(prompt_required "ADMIN_ID" "Admin numeric ID" "${ADMIN_ID:-}")"
-  ADMIN_BOT_TOKEN="$(prompt_required "ADMIN_BOT_TOKEN" "Admin bot token" "${ADMIN_BOT_TOKEN:-}")"
-  USER_BOT_TOKEN="$(prompt_required "USER_BOT_TOKEN" "User bot token" "${USER_BOT_TOKEN:-}")"
-  AGENT_BOT_TOKEN="$(prompt_required "AGENT_BOT_TOKEN" "Agent bot token" "${AGENT_BOT_TOKEN:-}")"
-  set_env_var "ADMIN_ID" "$ADMIN_ID" "$ENV_FILE"
-  set_env_var "ADMIN_BOT_TOKEN" "$ADMIN_BOT_TOKEN" "$ENV_FILE"
-  set_env_var "USER_BOT_TOKEN" "$USER_BOT_TOKEN" "$ENV_FILE"
-  set_env_var "AGENT_BOT_TOKEN" "$AGENT_BOT_TOKEN" "$ENV_FILE"
+  prompt_secret_required ADMIN_BOT_TOKEN "ADMIN_BOT_TOKEN" "Admin bot token" "${ADMIN_BOT_TOKEN:-}"
+  prompt_secret_required USER_BOT_TOKEN "USER_BOT_TOKEN" "User bot token" "${USER_BOT_TOKEN:-}"
+  prompt_secret_required AGENT_BOT_TOKEN "AGENT_BOT_TOKEN" "Agent bot token" "${AGENT_BOT_TOKEN:-}"
+  set_env_var "ADMIN_ID" "$ADMIN_ID" "$ENV_FILE" || { _red "ERROR: failed to update .env."; return 1; }
+  set_env_var "ADMIN_BOT_TOKEN" "$ADMIN_BOT_TOKEN" "$ENV_FILE" || { _red "ERROR: failed to update .env."; return 1; }
+  set_env_var "USER_BOT_TOKEN" "$USER_BOT_TOKEN" "$ENV_FILE" || { _red "ERROR: failed to update .env."; return 1; }
+  set_env_var "AGENT_BOT_TOKEN" "$AGENT_BOT_TOKEN" "$ENV_FILE" || { _red "ERROR: failed to update .env."; return 1; }
 
   ENV_CONFIGURED_IN_RUN=1
   _green "OK: .env updated."
@@ -367,23 +404,36 @@ create_snapshot_backup() {
   ts="$(date '+%d-%m-%Y_%H-%M-%S')"
   backup_file="$BACKUP_DIR/${prefix}_${ts}.tar.gz"
 
-  tar -czf "$backup_file" \
-    --ignore-failed-read \
-    .env \
-    Shared/hiddify_sellbot.db \
-    Shared/servers.json \
-    Shared/plans.json \
-    Shared/agency.db \
-    customer_bot.db \
-    AgentBot/agent_bot.db \
-    Receiptions \
-    2>/dev/null || true
+  # snapshot حاوی .env است؛ پوشهٔ backups با ensure_dirs روی 0700 نگه داشته
+  # میشود. tar داخل umask 077 اجرا میشود و فایل نهایی باید chmod 600 موفق
+  # بگیرد؛ در شکست tar یا chmod فایل ناقص حذف و تابع با return 1 خارج میشود.
+  # فقط نام فایل نمایش داده میشود؛ محتوای آن هرگز چاپ نمیشود.
+  (
+    umask 077
+    if ! tar -czf "$backup_file" \
+      --ignore-failed-read \
+      .env \
+      Shared/hiddify_sellbot.db \
+      Shared/servers.json \
+      Shared/plans.json \
+      Shared/agency.db \
+      customer_bot.db \
+      AgentBot/agent_bot.db \
+      Receiptions \
+      2>/dev/null; then
+      rm -f "$backup_file" 2>/dev/null || true
+      _yellow "WARN: backup was not created."
+      exit 1
+    fi
+  ) || return 1
 
-  if [ -f "$backup_file" ]; then
-    _green "OK: backup created: $backup_file"
-  else
+  if ! chmod 600 "$backup_file" 2>/dev/null; then
+    rm -f "$backup_file" 2>/dev/null || true
     _yellow "WARN: backup was not created."
+    return 1
   fi
+  _green "OK: backup created: $backup_file"
+  return 0
 }
 
 list_local_change_paths() {
