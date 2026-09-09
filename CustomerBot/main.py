@@ -221,7 +221,9 @@ async def run_single_bot(token: str, agent_id: int):
         await _post_init(app)
         logger.info("Agent #%d bot @%s started", agent_id, bot_user.username or "?")
     except Exception as e:
-        logger.error("Agent #%d invalid token: %s", agent_id, e)
+        # فقط agent_id و نام نوع Exception — پیام Exception میتواند خود
+        # توکن را داشته باشد، پس متن و traceback اینجا Log نمیشود.
+        logger.error("Agent #%d invalid token: %s", agent_id, type(e).__name__)
         return
 
     async with app:

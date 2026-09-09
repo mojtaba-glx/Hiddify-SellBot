@@ -16,6 +16,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from AgentBot.handlers.main_menu import handle_start, handle_main_menu_callback, handle_agent_text
 from AgentBot.database import init_db as init_agent_db
+from Shared import secure_io
 
 load_dotenv()
 AGENT_BOT_TOKEN = os.getenv("AGENT_BOT_TOKEN")
@@ -119,9 +120,13 @@ def main() -> None:
             )
             logger.warning("AgentBot polling stopped unexpectedly; restarting in %s seconds.", backoff_seconds)
         except (TimedOut, NetworkError) as e:
-            logger.warning("AgentBot polling network error: %s. Restarting in %s seconds.", e, backoff_seconds)
+            logger.warning("AgentBot polling network error: %s. Restarting in %s seconds.",
+                           secure_io.redact_sensitive_text(str(e)), backoff_seconds)
         except Exception as e:
-            logger.exception("AgentBot fatal polling error: %s. Restarting in %s seconds.", e, backoff_seconds)
+            # بدون logger.exception: traceback خام میتواند متن Exception
+            # حاوی توکن را ثبت کند. فقط نام کلاس و متن پاکسازی‌شده.
+            logger.error("AgentBot fatal polling error (%s): %s. Restarting in %s seconds.",
+                         type(e).__name__, secure_io.redact_sensitive_text(str(e)), backoff_seconds)
 
         time.sleep(backoff_seconds)
         backoff_seconds = min(backoff_seconds * 2, max_backoff_seconds)

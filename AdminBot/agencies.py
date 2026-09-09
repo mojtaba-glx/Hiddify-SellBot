@@ -18,7 +18,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 
-from Shared import agent_db, database, userbot_db
+from Shared import agent_db, database, userbot_db, secure_io
 from AgentBot import database as agentbot_db
 from CustomerBot import database as customerbot_db
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
@@ -1514,6 +1514,7 @@ def _update_env_file(token: str) -> bool:
     """
     بروزرسانی فایل .env با توکن جدید ربات نماینده.
     خروجی: True اگر موفق باشد.
+    نوشتن با Utility مشترک و اتمیک انجام میشود (Shared/secure_io).
     """
     try:
         from pathlib import Path
@@ -1522,28 +1523,20 @@ def _update_env_file(token: str) -> bool:
             # اگر فایل .env وجود نداشت، از .env.example بساز
             example_path = Path(__file__).resolve().parents[1] / ".env.example"
             if example_path.exists():
-                env_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+                env_path.write_bytes(example_path.read_bytes())
             else:
                 env_path.write_text("", encoding="utf-8")
+            secure_io.ensure_private_file(env_path)
 
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-        found = False
-        new_lines = []
-        for line in lines:
-            if line.strip().startswith("AGENT_BOT_TOKEN="):
-                new_lines.append(f"AGENT_BOT_TOKEN={token}")
-                found = True
-            else:
-                new_lines.append(line)
-
-        if not found:
-            new_lines.append(f"AGENT_BOT_TOKEN={token}")
-
-        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        ok = secure_io.atomic_update_env(env_path, {"AGENT_BOT_TOKEN": str(token or "")})
         logger.info("Agent bot token updated in .env")
         return True
     except Exception as e:
-        logger.error("Failed to update .env file: %s", e)
+        logger.error(
+            "Failed to update .env file: %s: %s",
+            secure_io.safe_exception_name(e),
+            secure_io.redact_sensitive_text(str(e)),
+        )
         return False
 
 

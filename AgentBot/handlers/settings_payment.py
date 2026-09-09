@@ -1,7 +1,6 @@
 import logging
 import os
 import secrets
-import fcntl
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,6 +23,7 @@ from AgentBot.keyboards import (
     _ikb,
 )
 from Shared.tg_button_styles import inline_button as IButton
+from Shared import secure_io
 from AgentBot.utils.helpers import _escape
 from AgentBot.database import (
     get_setting, set_setting,
@@ -50,33 +50,21 @@ def _read_env_values() -> dict[str, str]:
 
 
 def _write_env_values(updates: dict[str, str]) -> None:
-    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(ENV_FILE, "a+") as lock_f:
-        fcntl.flock(lock_f, fcntl.LOCK_EX)
-        lock_f.seek(0)
-        existing_raw = lock_f.read().splitlines()
-        lines = []
-        seen: set[str] = set()
-        for raw_line in existing_raw:
-            stripped = raw_line.lstrip()
-            if not stripped or stripped.startswith("#") or "=" not in raw_line:
-                lines.append(raw_line)
-                continue
-            key, _value = raw_line.split("=", 1)
-            clean_key = key.strip()
-            if clean_key in updates:
-                lines.append(f"{clean_key}={updates[clean_key]}")
-                seen.add(clean_key)
-            else:
-                lines.append(raw_line)
-        for key, value in updates.items():
-            if key not in seen:
-                lines.append(f"{key}={value}")
-        lock_f.seek(0)
-        lock_f.truncate()
-        lock_f.write("\n".join(lines).rstrip() + "\n")
-        fcntl.flock(lock_f, fcntl.LOCK_UN)
-    for key, value in updates.items():
+    """Shared atomic .env writer (see Shared/secure_io.atomic_update_env).
+
+    Comments, blank lines, ordering and unrelated keys are preserved; the
+    file is written atomically under a lock with mode 0600. os.environ and
+    load_dotenv are refreshed only after a successful write.
+    """
+    clean_updates = {
+        str(k).strip(): str(v)
+        for k, v in (updates or {}).items()
+        if str(k or "").strip()
+    }
+    if not clean_updates:
+        return
+    secure_io.atomic_update_env(ENV_FILE, clean_updates)
+    for key, value in clean_updates.items():
         os.environ[key] = value
     load_dotenv(dotenv_path=ENV_FILE, override=True)
 

@@ -11,6 +11,8 @@ DB_FILE_NAME = "customer_bot.db"
 DB_PATH = Path(__file__).resolve().parent.parent / DB_FILE_NAME
 _AGENCY_DB_PATH = Path(__file__).resolve().parent.parent / "Shared" / "agency.db"
 
+from Shared.secure_io import ensure_private_file  # noqa: E402
+
 _db_initialized = False
 _init_db_path = ""
 
@@ -136,6 +138,10 @@ def _get_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous=NORMAL")
     except Exception:
         pass
+    # دیتابیس مشتریان حاوی داده‌های شخصی و رسیدهاست — همیشه 0600.
+    ensure_private_file(DB_PATH)
+    ensure_private_file(Path(str(DB_PATH) + "-wal"))
+    ensure_private_file(Path(str(DB_PATH) + "-shm"))
     return conn
 
 

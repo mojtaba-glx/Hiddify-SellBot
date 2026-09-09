@@ -3,6 +3,7 @@ import logging
 from telegram import Bot, Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from Shared.tg_button_styles import inline_button as IButton
+from Shared import secure_io
 
 from AgentBot.constants import (
     TICKET_PENDING, TICKET_OPEN, TICKET_CLOSED,
@@ -137,7 +138,7 @@ async def handle_ticket_shot_start(update, context, payload: str) -> bool:
         await update.message.reply_photo(photo=fid, caption=caption, reply_markup=kb)
         sent = True
     except Exception as e:
-        logger.warning("ticket shot direct send failed code=%s msg=%s: %s", code, msg_id, e)
+        logger.warning("ticket shot direct send failed code=%s msg=%s: %s", code, msg_id, secure_io.redact_sensitive_text(str(e)))
         sent = False
     # ۲) درغیراین‌صورت فایل را از ربات مشتری (که عکس را آپلود کرده) دانلود و دوباره ارسال کن
     if not sent:
@@ -151,6 +152,7 @@ async def handle_ticket_shot_start(update, context, payload: str) -> bool:
                 token = str(bot_row.get("bot_token") or "").strip()
                 if not token:
                     continue
+                bot_agent_id = int(bot_row.get("agent_id") or 0)
                 try:
                     cust_bot = Bot(token=token, request=request)
                     f = await cust_bot.get_file(fid)
@@ -162,9 +164,14 @@ async def handle_ticket_shot_start(update, context, payload: str) -> bool:
                     sent = True
                     break
                 except Exception as e:
-                    logger.warning("ticket shot download token attempt failed code=%s msg=%s token=%s...: %s", code, msg_id, token[:12], e)
+                    # فقط agent_id/ticket code/message id/نوع خطا — پیام
+                    # Exception میتواند URL با توکن داشته باشد.
+                    logger.warning(
+                        "ticket shot download token attempt failed code=%s msg=%s agent=%d err=%s",
+                        code, msg_id, bot_agent_id, type(e).__name__,
+                    )
         except Exception as e:
-            logger.warning("ticket shot download-from-customer-bot failed code=%s msg=%s: %s", code, msg_id, e)
+            logger.warning("ticket shot download-from-customer-bot failed code=%s msg=%s: %s", code, msg_id, secure_io.redact_sensitive_text(str(e)))
             sent = False
     if not sent:
         try:
@@ -407,12 +414,13 @@ async def _do_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, tic
                     bio.name = f"ticket_reply_{ticket_code}.jpg"
                     await notify_bot.send_photo(chat_id=ticket["telegram_id"], photo=bio, caption=notify_text[:1024], reply_markup=kb)
                 except Exception as e:
-                    logger.warning("agent reply photo foreign-send failed code=%s: %s", ticket_code, e)
+                    logger.warning("agent reply photo foreign-send failed code=%s err=%s",
+                                   ticket_code, type(e).__name__)
                     await notify_bot.send_message(chat_id=ticket["telegram_id"], text=notify_text, reply_markup=kb)
             else:
                 await notify_bot.send_message(chat_id=ticket["telegram_id"], text=notify_text, reply_markup=kb)
         except Exception as e:
-            logger.warning(f"Failed to notify customer: {e}")
+            logger.warning("Failed to notify customer: %s", secure_io.redact_sensitive_text(str(e)))
     context.user_data.pop(UD_STATE, None)
     context.user_data.pop(UD_SELECTED_TICKET, None)
     context.user_data.pop("pending_reply", None)

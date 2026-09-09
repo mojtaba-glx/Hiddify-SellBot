@@ -91,10 +91,26 @@ ensure_dirs() {
   mkdir -p "$LOG_DIR" "$BACKUP_DIR" "$RECEIPT_DIR"
   touch "$ADMIN_LOG_FILE" "$USER_LOG_FILE" "$AGENT_LOG_FILE" "$CUSTOMER_LOG_FILE"
   # دسترسی سخت‌گیرانه روی داده‌های حساس (توکن‌ها، دیتابیس، بکاپ‌ها)
+  # نبودن فایل نباید خطا بدهد؛ همه با || true ایمن شده‌اند.
   chmod 600 "$ENV_FILE" 2>/dev/null || true
+
+  # دیتابیس‌های اصلی + WAL/SHM
   chmod 600 "$ROOT_DIR"/Shared/*.db "$ROOT_DIR"/Shared/*.db-wal "$ROOT_DIR"/Shared/*.db-shm 2>/dev/null || true
-  chmod 700 "$ROOT_DIR/backups" 2>/dev/null || true
-  chmod 600 "$ROOT_DIR"/backups/* 2>/dev/null || true
+  chmod 600 "$ROOT_DIR"/customer_bot.db "$ROOT_DIR"/customer_bot.db-wal "$ROOT_DIR"/customer_bot.db-shm 2>/dev/null || true
+  chmod 600 "$ROOT_DIR"/AgentBot/agent_bot.db "$ROOT_DIR"/AgentBot/agent_bot.db-wal "$ROOT_DIR"/AgentBot/agent_bot.db-shm 2>/dev/null || true
+  chmod 600 "$ROOT_DIR"/CustomerBot/customer_bot.db "$ROOT_DIR"/CustomerBot/customer_bot.db-wal "$ROOT_DIR"/CustomerBot/customer_bot.db-shm 2>/dev/null || true
+
+  # لاگ‌ها: همهٔ directoryها 700، همهٔ fileها 600
+  find "$LOG_DIR" -type d -exec chmod 700 {} + 2>/dev/null || true
+  find "$LOG_DIR" -type f -exec chmod 600 {} + 2>/dev/null || true
+
+  # بکاپ‌ها: همهٔ directoryها 700، همهٔ fileها 600
+  find "$BACKUP_DIR" -type d -exec chmod 700 {} + 2>/dev/null || true
+  find "$BACKUP_DIR" -type f -exec chmod 600 {} + 2>/dev/null || true
+
+  # رسیدها: همهٔ directoryها 700، همهٔ fileها 600
+  find "$RECEIPT_DIR" -type d -exec chmod 700 {} + 2>/dev/null || true
+  find "$RECEIPT_DIR" -type f -exec chmod 600 {} + 2>/dev/null || true
 }
 
 load_env_file() {

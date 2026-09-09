@@ -8,12 +8,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 DB_FILE = Path(__file__).with_name("agent_bot.db")
 
+from Shared.secure_io import ensure_private_file  # noqa: E402
+
 
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_FILE))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # دیتابیس ربات نماینده حاوی تنظیمات پرداخت و کارت‌هاست — همیشه 0600.
+    ensure_private_file(DB_FILE)
+    ensure_private_file(Path(str(DB_FILE) + "-wal"))
+    ensure_private_file(Path(str(DB_FILE) + "-shm"))
     return conn
 
 
@@ -877,6 +883,7 @@ def _customer_conn() -> Optional[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=20000")
+    ensure_private_file(db_path)
     try:
         conn.execute("SELECT processing_key FROM customer_payments LIMIT 1")
     except sqlite3.OperationalError:

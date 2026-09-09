@@ -19,6 +19,8 @@ DB_FILE_NAME = "hiddify_sellbot.db"
 LEGACY_DB_FILE_NAMES = ("userbot.db",)
 DB_PATH = Path(__file__).with_name(DB_FILE_NAME)
 
+from Shared.secure_io import ensure_private_file  # noqa: E402
+
 
 def _migrate_legacy_db_name() -> None:
     if DB_PATH.exists():
@@ -247,6 +249,10 @@ def _get_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous=NORMAL")
     except Exception:
         pass
+    # دیتابیس اصلی حاوی داده‌های مالی و کاربران است — همیشه 0600.
+    ensure_private_file(DB_PATH)
+    ensure_private_file(Path(str(DB_PATH) + "-wal"))
+    ensure_private_file(Path(str(DB_PATH) + "-shm"))
     return conn
 
 def init_db() -> None:

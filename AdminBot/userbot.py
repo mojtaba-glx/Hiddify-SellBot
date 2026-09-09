@@ -35,6 +35,7 @@ from Shared.tg_button_styles import BUTTON_STYLE_THEMES, normalize_button_theme
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from Shared.tg_button_styles import keyboard_button as KeyboardButton
 from Shared import backup_integrity
+from Shared import secure_io
 from Shared import userbot_db, database, hiddify_api
 
 load_dotenv()
@@ -245,31 +246,16 @@ def _read_env_values() -> Dict[str, str]:
 
 
 def _write_env_values(updates: Dict[str, Any]) -> None:
+    """Shared atomic .env writer (see Shared/secure_io.atomic_update_env).
+
+    Comments, blank lines, ordering and unrelated keys are preserved; the
+    file is written atomically under a lock with mode 0600. os.environ and
+    load_dotenv are refreshed only after a successful write.
+    """
     clean_updates = {str(k): str(v) for k, v in (updates or {}).items() if str(k or "").strip()}
     if not clean_updates:
         return
-
-    lines: List[str] = []
-    seen: Set[str] = set()
-    if ENV_FILE.exists():
-        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
-
-    out: List[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in clean_updates:
-                out.append(f"{key}={clean_updates[key]}")
-                seen.add(key)
-                continue
-        out.append(line)
-
-    for key, value in clean_updates.items():
-        if key not in seen:
-            out.append(f"{key}={value}")
-    ENV_FILE.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
-
+    secure_io.atomic_update_env(ENV_FILE, clean_updates)
     for key, value in clean_updates.items():
         os.environ[key] = value
     load_dotenv(dotenv_path=ENV_FILE, override=True)

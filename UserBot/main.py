@@ -70,7 +70,7 @@ def _check_package_version(package_name: str, min_version: str) -> bool:
 def _safe_import_with_validation():
     """Safely import external packages with validation."""
     global load_dotenv, Update, InlineKeyboardMarkup, InlineKeyboardButton, Bot, ApplicationBuilder, CommandHandler, MessageHandler
-    global env_int, env_float
+    global env_int, env_float, secure_io
     global CallbackQueryHandler, ContextTypes, filters, TelegramError, BadRequest, NetworkError, Conflict, BotCommand, MenuButtonCommands, HTTPXRequest, ApplicationHandlerStop
     
     try:
@@ -83,6 +83,7 @@ def _safe_import_with_validation():
         from telegram import Update, InlineKeyboardMarkup, Bot, BotCommand, MenuButtonCommands
         from Shared.tg_button_styles import inline_button as InlineKeyboardButton
         from Shared.env_utils import env_int, env_float
+        from Shared import secure_io
         from telegram.ext import (
             ApplicationBuilder, CommandHandler, MessageHandler,
             CallbackQueryHandler, ContextTypes, filters, ApplicationHandlerStop
@@ -9411,13 +9412,17 @@ def main():
             )
             break
         except NetworkError as e:
-            logger.warning("Polling stopped by transient network error: %s | retry in 5s", e)
+            logger.warning("Polling stopped by transient network error: %s | retry in 5s", secure_io.redact_sensitive_text(str(e)))
             time.sleep(5)
         except Conflict as e:
-            logger.error("Polling conflict — another bot instance is running with the same token: %s | retry in 30s", e)
+            logger.error("Polling conflict — another bot instance is probably running with the same token | retry in 30s (%s: %s)",
+                         type(e).__name__, secure_io.redact_sensitive_text(str(e)))
             time.sleep(30)
         except Exception as e:
-            logger.error("Polling crashed: %s | retry in 5s", e, exc_info=True)
+            # بدون exc_info: traceback خام میتواند متن Exception حاوی توکن
+            # را ثبت کند. فقط نام کلاس و متن پاکسازی‌شده.
+            logger.error("Polling crashed (%s): %s | retry in 5s",
+                         type(e).__name__, secure_io.redact_sensitive_text(str(e)))
             time.sleep(5)
 
 if __name__ == '__main__':

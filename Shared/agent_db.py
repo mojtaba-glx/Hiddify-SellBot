@@ -12,6 +12,8 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from Shared.secure_io import ensure_private_file
+
 DB_FILE_NAME = "agency.db"
 DB_PATH = Path(__file__).with_name(DB_FILE_NAME)
 
@@ -35,6 +37,10 @@ def _get_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous=NORMAL")
     except Exception:
         pass
+    # agency.db حاوی توکن ربات نماینده و مشتریان است — همیشه 0600.
+    ensure_private_file(DB_PATH)
+    ensure_private_file(Path(str(DB_PATH) + "-wal"))
+    ensure_private_file(Path(str(DB_PATH) + "-shm"))
     return conn
 
 
@@ -2687,6 +2693,7 @@ def sync_customer_bot_text_setting(agent_id: int, key: str, value: str) -> bool:
         settings_bucket = "payment_settings" if key == "card_to_card_text" else "text_settings"
         conn = sqlite3.connect(str(_CUSTOMER_BOT_DB_PATH))
         conn.row_factory = sqlite3.Row
+        ensure_private_file(_CUSTOMER_BOT_DB_PATH)
         cur = conn.cursor()
         cur.execute(
             "SELECT value FROM customer_settings WHERE agent_id = ? AND key = ?",
