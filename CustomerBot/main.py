@@ -53,18 +53,27 @@ def _is_user_banned(agent_id: int, telegram_id: int) -> bool:
 
 
 async def force_join_middleware(update: Update, context) -> None:
-    """قبل از هر handler چک میکند کاربر مسدود نیست و عضو کانال هست."""
+    """قبل از هر handler چک میکند کاربر مسدود نیست و عضو کانال هست.
+
+    ترتیب کنترل (سخت‌گیری امنیتی):
+    ۱) اعتبار agent_id (خطای پیکربندی → توقف + لاگ امن)
+    ۲) وجود effective_user
+    ۳) وضعیت ban کاربر در هر Update (خطای دیتابیس → Fail Closed)
+    ۴) فقط پس از عبور از کنترل ban، callback نوع forcejoin:* آزاد میشود.
+    """
     agent_id = context.bot_data.get("agent_id", 0)
     if not agent_id:
-        return
+        # خطای پیکربندی — هیچ handler تجاری نباید اجرا شود.
+        logger.error("CustomerBot misconfigured: agent_id is missing; update blocked.")
+        raise ApplicationHandlerStop
 
-    # callback دکمه بررسی عضویت رو رد کن — خودش چک میکنه
-    if update.callback_query and (update.callback_query.data or "").startswith("forcejoin:"):
-        return
-
-    # اگر کاربر مسدود شده باشد، از همه فعالیتها جلوگیری کن.
     user = update.effective_user
-    if user and _is_user_banned(agent_id, user.id):
+    if not user:
+        logger.warning("CustomerBot: update without effective_user blocked (agent=%s).", agent_id)
+        raise ApplicationHandlerStop
+
+    # اگر کاربر مسدود شده باشد، از همه فعالیتها جلوگیری کن — شامل forcejoin:*.
+    if _is_user_banned(agent_id, user.id):
         if update.callback_query:
             try:
                 await update.callback_query.answer(
@@ -80,11 +89,13 @@ async def force_join_middleware(update: Update, context) -> None:
                 pass
         raise ApplicationHandlerStop
 
-    fjs = get_force_join_settings(agent_id)
-    if not fjs.get("enabled") or not fjs.get("channel_username"):
+    # callback دکمه بررسی عضویت رو رد کن — خودش چک میکنه.
+    # این آزادسازی فقط پس از عبور از کنترل ban انجام میشود.
+    if update.callback_query and (update.callback_query.data or "").startswith("forcejoin:"):
         return
 
-    if not user:
+    fjs = get_force_join_settings(agent_id)
+    if not fjs.get("enabled") or not fjs.get("channel_username"):
         return
 
     ch = str(fjs["channel_username"])
