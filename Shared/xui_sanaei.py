@@ -238,6 +238,32 @@ _xui_clients_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 _xui_onlines_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 _xui_lastonline_locks: Dict[Tuple[Any, int], asyncio.Lock] = {}
 
+_BULK_SYNC_MODE = False
+
+
+class bulk_sync_mode:
+    """Light post-update path for bulk node sync.
+
+    A normal patch_user() finishes with a full clients/list refetch plus
+    onlines/lastOnline fetches — ~3 heavy panel calls PER USER. At bulk scale
+    (100+ users × parallel) that melts a slow panel into cascading
+    ReadTimeouts (observed on a 6s-list France node). Inside this context,
+    patch/get use a single-client GET (or nothing cosmetic) instead.
+    Single-user flows never enable it, so their behavior is unchanged.
+    Concurrent unrelated flows during a sync only lose cosmetic online flags.
+    """
+
+    def __enter__(self):
+        global _BULK_SYNC_MODE
+        self._prev = _BULK_SYNC_MODE
+        _BULK_SYNC_MODE = True
+        return self
+
+    def __exit__(self, *args):
+        global _BULK_SYNC_MODE
+        _BULK_SYNC_MODE = self._prev
+        return False
+
 
 def _invalidate_caches(server: Dict[str, Any]) -> None:
     key = _server_cache_key(server)
@@ -800,6 +826,9 @@ async def get_user_by_uuid(server: Dict[str, Any], user_uuid: str) -> Dict[str, 
     if clients:
         found = _sanaei_find_client(clients, user_uuid)
         if found:
+            if _BULK_SYNC_MODE:
+                # Sync verify path only needs addressability, not live flags.
+                return _sanaei_normalize(found, server)
             try:
                 onlines = await _online_emails(server)
             except Exception:
@@ -1112,6 +1141,22 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
                 pass
 
     _invalidate_caches(server)
+    if _BULK_SYNC_MODE:
+        # Light verify for bulk runs: single-client GET instead of a full
+        # clients/list refetch + onlines/lastOnline (too heavy per user on
+        # slow panels at bulk scale with parallelism).
+        try:
+            async with _XuiContext(server) as ctx2:
+                data = await ctx2.request("GET", f"clients/get/{quote(new_email, safe='')}")
+            cand = None
+            if isinstance(data, dict):
+                inner = data.get("client")
+                cand = inner if isinstance(inner, dict) else data
+            if isinstance(cand, dict) and str(cand.get("email") or "").strip():
+                return _sanaei_normalize(cand, server)
+        except Exception:
+            pass
+        return _sanaei_normalize(updated, server)
     # Fetch updated
     clients = await _list_clients(server, _force_refresh=True)
     found = _sanaei_find_client(clients, new_email) or _sanaei_find_client(clients, user_uuid)

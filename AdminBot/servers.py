@@ -1748,7 +1748,7 @@ async def _node_target_verify_uuid(target: Dict[str, Any], uuid: str) -> Optiona
 # Node-sync runtime guards: bounded parallelism + per-user timeout so one slow/hung
 # panel cannot stall the whole run (and jam the bot / block shutdown), plus a
 # registry of running syncs so double-tapping the button cannot stack runs.
-_NODE_SYNC_MAX_PARALLEL = 6
+_NODE_SYNC_MAX_PARALLEL = 4
 _NODE_SYNC_USER_TIMEOUT = 90.0
 _NODE_SYNC_PROGRESS_EVERY = 10
 _NODE_SYNC_PROGRESS_MIN_INTERVAL = 12.0
@@ -2054,11 +2054,19 @@ async def _run_node_sync(
             if uuids:
                 await asyncio.gather(*(_one(uuid) for uuid in uuids))
 
-        if create_missing:
-            await _run_bounded(missing_uuids, _create_one)
+        # Bulk mode (Sanaei light post-update path) around the mutation phases:
+        # without it, every patch ends with a full clients/list refetch plus
+        # onlines/lastOnline — at 100+ users × parallel that melts a slow
+        # panel into cascading ReadTimeouts. Restored automatically by the
+        # context manager, even on error.
+        if create_missing or patch_existing:
+            from Shared import xui_sanaei as _sanaei_mod
+            with _sanaei_mod.bulk_sync_mode():
+                if create_missing:
+                    await _run_bounded(missing_uuids, _create_one)
 
-        if patch_existing:
-            await _run_bounded(existing_uuids, _patch_one)
+                if patch_existing:
+                    await _run_bounded(existing_uuids, _patch_one)
 
         if progress_cb is not None and work_total:
             work_state["done"] = work_total
