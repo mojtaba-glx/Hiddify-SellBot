@@ -233,10 +233,15 @@ def init_db() -> None:
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_tx_agent ON agent_transactions(agent_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_tx_type ON agent_transactions(tx_type)")
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tx_idempotency "
-        "ON agent_transactions(idempotency_key) WHERE idempotency_key != ''"
-    )
+    try:
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tx_idempotency "
+            "ON agent_transactions(idempotency_key) WHERE idempotency_key != ''"
+        )
+    except sqlite3.OperationalError:
+        # DB قدیمی بدون ستون idempotency_key: _migrate_db() پایین ستون را
+        # اضافه و ایندکس را می‌سازد. اینجا نباید init_db کرش کند.
+        pass
 
     # 10. تنظیمات نماینده (key-value)
     cur.execute("""
