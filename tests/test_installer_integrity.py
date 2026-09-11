@@ -224,7 +224,7 @@ class PromptSecretTests(_InstallerHarness):
         match = re.search(r"prompt_secret_required\(\) \{.*?\n\}", src, re.S)
         self.assertIsNotNone(match, "prompt_secret_required not found")
         body = match.group(0)
-        self.assertIn("read -r -s -p", body)
+        self.assertIn("read -r -s -n 1", body)
         self.assertNotIn("read -rp", body)
         # pass-by-reference contract
         self.assertIn("printf -v", body)
@@ -262,6 +262,16 @@ class PromptSecretTests(_InstallerHarness):
         self.assertNotIn("brand-new-token", proc.stderr)
         self.assertEqual(result_file.read_text(encoding="utf-8"), "brand-new-token")
 
+    def test_prompt_explains_hidden_input_and_confirms_receipt(self):
+        result_file = self.sandbox / "result_guidance"
+        proc = self.run_prompt_secret("", "brand-new-token\n", result_file)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("token input is masked", proc.stderr)
+        self.assertIn("press Enter", proc.stderr)
+        self.assertIn("*", proc.stderr)
+        self.assertIn("received securely", proc.stderr)
+        self.assertNotIn("brand-new-token", proc.stdout + proc.stderr)
+
     def test_warning_for_empty_input_goes_to_stderr(self):
         # empty entry with no previous value: the loop re-prompts; feed an
         # empty line then a real value; the warning must appear on stderr.
@@ -270,6 +280,38 @@ class PromptSecretTests(_InstallerHarness):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("cannot be empty", proc.stderr)
         self.assertEqual(result_file.read_text(encoding="utf-8"), "second-try")
+
+    def test_interactive_menu_exposes_config_command(self):
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn('echo "12) change bot tokens / admin ID"', src)
+        self.assertRegex(src, r"(?m)^\s*12\) _run_menu_cmd config ;;")
+
+    def test_core_bot_tokens_must_be_valid_and_distinct(self):
+        script = f'''
+set -Eeuo pipefail
+source "{self.installer}"
+ADMIN_BOT_TOKEN="123456789:AA_VALID_ADMIN_TOKEN_1234567890"
+USER_BOT_TOKEN="123456789:AA_VALID_USER_TOKEN_12345678901"
+AGENT_BOT_TOKEN="123456789:AA_VALID_AGENT_TOKEN_123456789"
+validate_core_bot_tokens
+USER_BOT_TOKEN="$ADMIN_BOT_TOKEN"
+if validate_core_bot_tokens; then exit 91; fi
+USER_BOT_TOKEN="invalid"
+if validate_core_bot_tokens; then exit 92; fi
+'''
+        proc = _bash(script, cwd=PROJECT_ROOT)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        for token_fragment in ("AA_VALID_ADMIN", "AA_VALID_USER", "AA_VALID_AGENT"):
+            self.assertNotIn(token_fragment, proc.stdout + proc.stderr)
+
+    def test_config_reports_locked_env_with_sudo_guidance(self):
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(r"configure_env\(\) \{.*?\n\}", src, re.S)
+        self.assertIsNotNone(match, "configure_env function not found")
+        body = match.group(0)
+        self.assertIn('[ ! -w "$ENV_FILE" ]', body)
+        self.assertIn("not writable", body)
+        self.assertIn("sudo", body)
 
 
 class SnapshotTests(_InstallerHarness):

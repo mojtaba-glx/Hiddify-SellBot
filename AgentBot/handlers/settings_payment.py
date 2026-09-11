@@ -1,9 +1,6 @@
 import logging
 import os
-import secrets
 from pathlib import Path
-
-from dotenv import load_dotenv
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -23,7 +20,7 @@ from AgentBot.keyboards import (
     _ikb,
 )
 from Shared.tg_button_styles import inline_button as IButton
-from Shared import secure_io
+from Shared import agent_sms_webhook
 from AgentBot.utils.helpers import _escape
 from AgentBot.database import (
     get_setting, set_setting,
@@ -32,41 +29,7 @@ from AgentBot.database import (
 
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_FILE = PROJECT_ROOT / ".env"
 UD_NEW_CARD = "new_card_draft"
-
-
-def _read_env_values() -> dict[str, str]:
-    if not ENV_FILE.exists():
-        return {}
-    data: dict[str, str] = {}
-    for raw_line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        data[key.strip()] = value.strip()
-    return data
-
-
-def _write_env_values(updates: dict[str, str]) -> None:
-    """Shared atomic .env writer (see Shared/secure_io.atomic_update_env).
-
-    Comments, blank lines, ordering and unrelated keys are preserved; the
-    file is written atomically under a lock with mode 0600. os.environ and
-    load_dotenv are refreshed only after a successful write.
-    """
-    clean_updates = {
-        str(k).strip(): str(v)
-        for k, v in (updates or {}).items()
-        if str(k or "").strip()
-    }
-    if not clean_updates:
-        return
-    secure_io.atomic_update_env(ENV_FILE, clean_updates)
-    for key, value in clean_updates.items():
-        os.environ[key] = value
-    load_dotenv(dotenv_path=ENV_FILE, override=True)
 
 
 def _mask_secret(secret: str) -> str:
@@ -138,39 +101,76 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_payment_menu(update.message, agent_id)
 
 
-def _sms_webhook_status() -> dict[str, str | bool]:
-    env = _read_env_values()
-    enabled_raw = str(env.get("SMS_WEBHOOK_ENABLED", os.getenv("SMS_WEBHOOK_ENABLED", "false")) or "false").strip().lower()
-    secret = str(env.get("SMS_WEBHOOK_SECRET", os.getenv("SMS_WEBHOOK_SECRET", "")) or "").strip()
-    age = str(env.get("SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES", os.getenv("SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES", "360")) or "360").strip() or "360"
-    host = str(env.get("SUB_SERVER_PUBLIC_HOST", os.getenv("SUB_SERVER_PUBLIC_HOST", "")) or "").strip()
-    scheme = str(env.get("SUB_SERVER_PUBLIC_SCHEME", os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https")) or "https").strip() or "https"
-    port = str(env.get("SUB_SERVER_PUBLIC_PORT", os.getenv("SUB_SERVER_PUBLIC_PORT", "443")) or "443").strip() or "443"
-    if host:
-        default_port = (scheme == "https" and port == "443") or (scheme == "http" and port == "80")
-        base_url = f"{scheme}://{host}" if default_port else f"{scheme}://{host}:{port}"
+def _agent_sms_webhook_status(agent_id: int) -> dict[str, str | bool]:
+    """تنظیمات اختصاصی SMS همین نماینده — هرگز SMS_WEBHOOK_* مرکزی ادمین را
+    نمی‌خواند، نشان نمی‌دهد یا تغییر نمی‌دهد. آدرس از دامنهٔ مدیریت‌شده یا
+    در نبود آن از تنظیمات عمومی SUB_SERVER_PUBLIC_HOST/SCHEME/PORT ساخته
+    میشود (فقط آدرس — بدون دسترسی به Secret مرکزی)."""
+    from Shared import agent_sms_webhook
+    settings = agent_sms_webhook.ensure_agent_sms_settings(agent_id)
+    base_url = _resolve_public_base_url()
+    if base_url:
+        endpoint = agent_sms_webhook.agent_webhook_url(agent_id, base_url)
     else:
-        base_url = ""
-    endpoint = f"{base_url}/payment/sms-webhook" if base_url else "https://YOUR_SUB_DOMAIN/payment/sms-webhook"
+        # هیچ دامنه‌ای تنظیم نشده: مسیر نسبی به‌عنوان آدرس آمادهٔ اپ
+        # معرفی نمیشود؛ فقط برای اطلاعات نمایش داده میشود.
+        endpoint = ""
     return {
-        "enabled": enabled_raw in {"1", "true", "yes", "on"},
-        "secret": secret,
-        "age": age,
+        "agent_id": agent_id,
+        "enabled": bool(settings.get("enabled")),
+        "secret": str(settings.get("secret") or ""),
         "endpoint": endpoint,
+        "base_url_configured": bool(base_url),
+        "webhook_path": agent_sms_webhook.agent_webhook_path(agent_id),
     }
 
 
-async def _show_sms_settings(query) -> None:
-    status = _sms_webhook_status()
+def _rotate_agent_sms_secret(agent_id: int) -> dict:
+    """Rotate only this agent's secret and preserve its current on/off state."""
+    from Shared import agent_sms_webhook
+
+    rotated = agent_sms_webhook.regenerate_agent_secret(agent_id)
+    set_setting(agent_id, "sms_auto_confirm", bool(rotated.get("enabled")))
+    return rotated
+
+
+def _resolve_public_base_url() -> str:
+    """دامنهٔ مدیریت‌شده؛ در نبود آن SUB_SERVER_PUBLIC_HOST/SCHEME/PORT."""
+    from Shared import userbot_db
+    managed = str(userbot_db.get_managed_sub_base_url() or "").strip()
+    if managed:
+        return managed.rstrip("/")
+    host = str(os.getenv("SUB_SERVER_PUBLIC_HOST", "") or "").strip()
+    if not host:
+        return ""
+    scheme = str(os.getenv("SUB_SERVER_PUBLIC_SCHEME", "https") or "https").strip().lower() or "https"
+    port = str(os.getenv("SUB_SERVER_PUBLIC_PORT", "443") or "443").strip() or "443"
+    default_port = (scheme == "https" and port == "443") or (scheme == "http" and port == "80")
+    return f"{scheme}://{host}" if default_port else f"{scheme}://{host}:{port}"
+
+
+async def _show_sms_settings(query, agent_id: int) -> None:
+    status = _agent_sms_webhook_status(agent_id)
     enabled = "✅ روشن" if status.get("enabled") else "❌ خاموش"
+    if status.get("base_url_configured"):
+        endpoint_section = (
+            "آدرس Webhook اختصاصی شما برای اپ اندروید:\n"
+            f"<code>{_escape(str(status.get('endpoint') or ''))}</code>\n\n"
+        )
+    else:
+        endpoint_section = (
+            "⚠️ هنوز دامنهٔ عمومی تنظیم نشده است.\n"
+            "برای اتصال اپ، از ادمین بخواهید دامنهٔ عمومی (Managed Domain یا "
+            "SUB_SERVER_PUBLIC_HOST) را تنظیم کند.\n"
+            f"مسیر اختصاصی شما: <code>{_escape(str(status.get('webhook_path') or ''))}</code>\n\n"
+        )
     text = (
-        "🤖 تایید خودکار SMS بانک\n\n"
+        "🤖 تایید خودکار SMS بانک (اختصاصی نمایندگی)\n\n"
         f"وضعیت: {enabled}\n"
-        f"Secret Key: {_mask_secret(str(status.get('secret') or ''))}\n"
-        f"مهلت تطبیق پرداخت: {status.get('age')} دقیقه\n\n"
-        "آدرس Webhook برای اپ اندروید:\n"
-        f"<code>{_escape(str(status.get('endpoint') or ''))}</code>\n\n"
-        "Secret و وضعیت روشن/خاموش از همین منو مدیریت می‌شود."
+        f"Secret Key اختصاصی: {_mask_secret(str(status.get('secret') or ''))}\n\n"
+        f"{endpoint_section}"
+        "این Secret و آدرس فقط متعلق به نمایندگی شماست و پرداخت مشتریان شما "
+        "را تایید می‌کند؛ کیف پول عمده شما از طریق Webhook ادمین پردازش می‌شود."
     )
     await query.edit_message_text(
         text,
@@ -260,64 +260,57 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         if p2 == "smsauto":
             if p3 == "":
-                await _show_sms_settings(query)
+                await _show_sms_settings(query, agent_id)
                 return
             if p3 == "toggle":
-                status = _sms_webhook_status()
+                status = _agent_sms_webhook_status(agent_id)
                 new_enabled = not bool(status.get("enabled"))
-                updates = {"SMS_WEBHOOK_ENABLED": "true" if new_enabled else "false"}
-                if new_enabled and not str(status.get("secret") or "").strip():
-                    updates["SMS_WEBHOOK_SECRET"] = secrets.token_hex(32)
-                if new_enabled:
-                    updates["SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES"] = "360"
-                _write_env_values(updates)
+                # فقط تنظیمات خودِ نماینده — هرگز SMS_WEBHOOK_ENABLED یا
+                # SMS_WEBHOOK_SECRET مرکزی ادمین تغییر نمیکند.
+                agent_sms_webhook.set_agent_sms_enabled(agent_id, new_enabled)
                 set_setting(agent_id, "sms_auto_confirm", new_enabled)
                 await query.answer("ذخیره شد.", show_alert=True)
-                await _show_sms_settings(query)
+                await _show_sms_settings(query, agent_id)
                 return
         if p2 == "smsauto" and p3 == "regen":
-            new_secret = secrets.token_hex(32)
-            _write_env_values(
-                {
-                    "SMS_WEBHOOK_ENABLED": "true",
-                    "SMS_WEBHOOK_SECRET": new_secret,
-                    "SMS_WEBHOOK_MAX_PENDING_AGE_MINUTES": "360",
-                }
-            )
-            set_setting(agent_id, "sms_auto_confirm", True)
+            # چرخش Secret شخصی نماینده — مسیر و Secret ادمین دست‌نخورده میماند.
+            rotated = _rotate_agent_sms_secret(agent_id)
+            new_secret = rotated.get("secret") or ""
             await query.answer("Secret جدید ساخته شد.")
-            await _show_sms_settings(query)
+            await _show_sms_settings(query, agent_id)
             await query.message.reply_text(
-                "🔐 Secret Key جدید اپ\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n"
-                f"<code>{_escape(new_secret)}</code>",
+                "🔐 Secret Key جدید اختصاصی نمایندگی\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n"
+                f"<code>{_escape(str(new_secret))}</code>",
                 parse_mode="HTML",
             )
             return
         if p2 == "smsauto" and p3 == "show":
-            status = _sms_webhook_status()
+            status = _agent_sms_webhook_status(agent_id)
             secret = str(status.get("secret") or "").strip()
             if not secret:
                 await query.answer("Secret هنوز ساخته نشده است. اول «ساخت Secret» را بزنید.", show_alert=True)
                 return
             await query.message.reply_text(
-                "🔐 Secret Key اپ\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n"
+                "🔐 Secret Key اختصاصی نمایندگی\nبرای کپی، متن داخل کادر را انتخاب کنید:\n\n"
                 f"<code>{_escape(secret)}</code>\n\n"
-                "Webhook URL:\n"
+                "Webhook URL اختصاصی:\n"
                 f"<code>{_escape(str(status.get('endpoint') or ''))}</code>",
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
             return
         if p2 == "smsauto" and p3 == "help":
-            status = _sms_webhook_status()
+            status = _agent_sms_webhook_status(agent_id)
             await query.message.reply_text(
-                "📱 راهنمای اتصال اپ SMS Verifier\n\n"
+                "📱 راهنمای اتصال اپ SMS Verifier (اختصاصی نمایندگی)\n\n"
                 "داخل اپ این مقدارها را وارد کنید:\n\n"
-                "Webhook URL:\n"
+                "Webhook URL (آدرس اختصاصی شما):\n"
                 f"<code>{_escape(str(status.get('endpoint') or ''))}</code>\n\n"
                 "Secret Key:\nاز دکمه «👁 نمایش Secret برای اپ» کپی کنید.\n\n"
                 "سرشماره بانک:\nمثلاً <code>20004861</code>\n\n"
-                "اگر بانک چهار رقم کارت را داخل SMS می‌فرستد، الزام ۴ رقم آخر را روشن کنید.",
+                "⚠️ توجه: از این پس آدرس و Secret اختصاصی خودتان (با شناسه "
+                "نمایندگی در مسیر) را وارد کنید؛ آدرس و Secret قدیمی ادمین "
+                "پرداخت مشتریان شما را تایید نمیکند.",
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )

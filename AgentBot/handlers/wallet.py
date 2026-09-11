@@ -79,7 +79,14 @@ def _agent_display(agent: dict) -> str:
     return str(agent.get("full_name") or agent.get("username") or agent.get("telegram_id") or "نماینده")
 
 
-async def _notify_admin_wallet_payment(context: ContextTypes.DEFAULT_TYPE, agent_id: int, payment: dict) -> None:
+async def _notify_admin_wallet_payment(
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    payment: dict,
+    *,
+    auto_approved: bool = False,
+    wallet_balance: int = 0,
+) -> None:
     admin_id = int(os.getenv("ADMIN_ID", "0") or 0)
     admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip()
     if not admin_id or not admin_token:
@@ -95,15 +102,22 @@ async def _notify_admin_wallet_payment(context: ContextTypes.DEFAULT_TYPE, agent
     last4 = str(payment.get("card_last4") or meta.get("card_last4") or "")
     ref_id = str(payment.get("ref_id") or payment.get("id") or "")
     agent_name = _agent_display(agent)
+    status_text = (
+        "✅ <b>پرداخت با پیامک بانک خودکار تایید شد</b>\n"
+        f"💰 موجودی جدید: <b>{_fmt_toman(wallet_balance)}</b> تومان\n"
+        if auto_approved
+        else "⏳ <b>در انتظار تایید پرداخت</b>\n"
+    )
     caption = (
-        "🕊 <b>گزارش تایید پرداخت نماینده</b> 🕊\n\n"
+        "🕊 <b>گزارش پرداخت نماینده</b> 🕊\n\n"
+        f"{status_text}\n"
         "💸 شیوه پرداخت: کارت به کارت\n"
         f"🔑 شناسه تراکنش: <code>{ref_id}</code>\n"
         f"👤 نماینده: <b>{_escape(agent_name)}</b>\n"
         f"💰 مبلغ پرداخت: <b>{_fmt_toman(amount)}</b> تومان\n"
         f"💳 4 رقم آخر کارت مبدا: <code>{_escape(last4)}</code>"
     )
-    kb = InlineKeyboardMarkup([
+    kb = None if auto_approved else InlineKeyboardMarkup([
         [
             InlineKeyboardButton("رد ❌", callback_data=f"agency:payno:{payment['id']}"),
             InlineKeyboardButton("تایید ✅", callback_data=f"agency:payok:{payment['id']}") ,
@@ -111,6 +125,7 @@ async def _notify_admin_wallet_payment(context: ContextTypes.DEFAULT_TYPE, agent
         [InlineKeyboardButton(f"{agent_name} 👤", callback_data=f"agency:view:{agent_id}")],
     ])
     bot = Bot(token=admin_token)
+    sent = None
     if receipt_file_id:
         try:
             tg_file = await context.bot.get_file(receipt_file_id)
@@ -118,11 +133,19 @@ async def _notify_admin_wallet_payment(context: ContextTypes.DEFAULT_TYPE, agent
             await tg_file.download_to_memory(out=bio)
             bio.seek(0)
             bio.name = f"agent_wallet_{payment['id']}.jpg"
-            await bot.send_photo(chat_id=admin_id, photo=bio, caption=caption[:1024], reply_markup=kb, parse_mode="HTML")
-            return
+            sent = await bot.send_photo(chat_id=admin_id, photo=bio, caption=caption[:1024], reply_markup=kb, parse_mode="HTML")
         except Exception as e:
             logger.warning("Failed sending wallet receipt photo to admin: %s", e)
-    await bot.send_message(chat_id=admin_id, text=caption, reply_markup=kb, parse_mode="HTML")
+    if sent is None:
+        sent = await bot.send_message(chat_id=admin_id, text=caption, reply_markup=kb, parse_mode="HTML")
+    if not auto_approved and sent is not None:
+        agentbot_db.patch_payment_receipt_metadata(
+            int(payment.get("id") or 0),
+            {
+                "admin_chat_id": int(getattr(sent, "chat_id", 0) or admin_id),
+                "admin_message_id": int(getattr(sent, "message_id", 0) or 0),
+            },
+        )
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -339,7 +362,38 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             receipt_file_id=receipt_id,
             card_last4=last4,
         )
-        await _notify_admin_wallet_payment(context, agent_id, payment)
+        auto_approved = False
+        wallet_balance = 0
+        try:
+            from Shared.agent_wallet_payments import try_approve_wallet_charge_from_unmatched_sms
+
+            approval, _event = try_approve_wallet_charge_from_unmatched_sms(payment["id"])
+            auto_approved, _message, approved_payment, wallet, _new = approval
+            if auto_approved:
+                payment = approved_payment or payment
+                wallet_balance = int((wallet or {}).get("balance") or 0)
+        except Exception as exc:
+            logger.exception("Failed matching earlier bank SMS to agent wallet payment: %s", exc)
+
+        # The webhook may have approved the payment in the short interval
+        # between INSERT and this retry. Never send a stale "pending" report.
+        if not auto_approved:
+            current_payment = agentbot_db.get_payment_by_id(int(payment.get("id") or 0)) or {}
+            if (
+                str(current_payment.get("status") or "") == "approved"
+                and str(current_payment.get("sms_event_id") or "").strip()
+            ):
+                auto_approved = True
+                payment = current_payment
+                wallet_balance = int(agent_db.get_wallet(agent_id).get("balance") or 0)
+
+        await _notify_admin_wallet_payment(
+            context,
+            agent_id,
+            payment,
+            auto_approved=auto_approved,
+            wallet_balance=wallet_balance,
+        )
         chat_id = update.message.chat_id
         user_msg_id = update.message.message_id
         # حذف پیام کیبورد بازگشت مرحله قبل
@@ -349,9 +403,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         await _delete_message(context, chat_id, user_msg_id)
         _clear_wallet_charge_state(context)
         from AgentBot.keyboards import main_menu_keyboard
+        final_text = (
+            "✅ پرداخت شما با پیامک بانک به‌صورت خودکار تایید شد.\n"
+            f"موجودی جدید کیف پول: <b>{_fmt_toman(wallet_balance)}</b> تومان"
+            if auto_approved
+            else "✅ تراکنش شما در انتظار تایید توسط ادمین است. لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید."
+        )
         await context.bot.send_message(
             chat_id=chat_id,
-            text="✅ تراکنش شما در انتظار تایید توسط ادمین است. لطفا صبر کنید و از ارسال رسید تکراری بپرهیزید.",
+            text=final_text,
             reply_markup=main_menu_keyboard(), parse_mode="HTML",
         )
         return True

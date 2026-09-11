@@ -1,4 +1,5 @@
 import logging
+import hmac
 import os
 import signal
 import subprocess
@@ -16,6 +17,27 @@ from AgentBot.keyboards import cbot_menu_keyboard, back_keyboard, cancel_keyboar
 from AgentBot.utils.helpers import _escape
 
 logger = logging.getLogger(__name__)
+
+
+def _customer_token_conflict(token: str, agent_id: int) -> str:
+    """Reject core-bot and cross-agent token reuse without exposing secrets."""
+    candidate = str(token or "").strip()
+    for key in ("ADMIN_BOT_TOKEN", "USER_BOT_TOKEN", "AGENT_BOT_TOKEN"):
+        configured = str(os.getenv(key, "") or "").strip()
+        if configured and hmac.compare_digest(candidate, configured):
+            return "core"
+    try:
+        for row in agent_db.get_all_active_customer_bots() or []:
+            if int(row.get("agent_id") or 0) == int(agent_id):
+                continue
+            registered = str(row.get("bot_token") or "").strip()
+            if registered and hmac.compare_digest(candidate, registered):
+                return "other_agent"
+    except Exception:
+        # Database errors are handled by the normal registration path.  Never
+        # log the candidate token from this preflight check.
+        logger.warning("Could not check customer-bot token uniqueness for agent=%s", agent_id)
+    return ""
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -86,15 +108,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "token":
         context.user_data[UD_STATE] = STATE_CBOT_TOKEN
-        try:
-            await query.edit_message_text(
-                "\U0001f511 <b>\u062b\u0628\u062a \u062a\u0648\u06a9\u0646 \u0631\u0628\u0627\u062a</b>\n\n"
-                "\u062a\u0648\u06a9\u0646 \u0631\u0628\u0627\u062a \u0631\u0627 \u0627\u0632 @BotFather \u062f\u0631\u06cc\u0627\u0641\u062a \u06a9\u0631\u062f\u0647 \u0648 \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f.\n\n"
-                "\u0641\u0631\u0645\u0627\u062a: <code>1234567890:ABCdef...</code>",
-                reply_markup=cancel_keyboard(), parse_mode="HTML",
-            )
-        except Exception:
-            pass
+        await query.answer()
+        # ReplyKeyboardMarkup cannot be attached with edit_message_text.  Send
+        # a new message so Telegram can show the large cancel button below the
+        # input field while the token state is active.
+        await query.message.reply_text(
+            "\U0001f511 <b>\u062b\u0628\u062a \u062a\u0648\u06a9\u0646 \u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc</b>\n\n"
+            "\u0644\u0637\u0641\u0627\u064b \u062a\u0648\u06a9\u0646 \u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc \u0631\u0627 \u06a9\u0647 \u0627\u0632 @BotFather \u06af\u0631\u0641\u062a\u0647\u200c\u0627\u06cc\u062f \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f.\n\n"
+            "\u0646\u0645\u0648\u0646\u0647: <code>1234567890:ABCdef...</code>\n"
+            "\u0628\u0631\u0627\u06cc \u0627\u0646\u0635\u0631\u0627\u0641\u060c \u062f\u06a9\u0645\u0647 \u00ab\u274c \u0644\u063a\u0648\u00bb \u0631\u0627 \u0628\u0632\u0646\u06cc\u062f.",
+            reply_markup=cancel_keyboard(),
+            parse_mode="HTML",
+        )
         return
 
     if action == "restart":
@@ -128,7 +153,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return False
     text = update.message.text.strip()
     if ":" not in text or len(text) < 30:
-        await update.message.reply_text("\u0641\u0631\u0645\u0627\u062a \u062a\u0648\u06a9\u0646 \u0646\u0627\u0645\u0639\u062a\u0628\u0631 \u0627\u0633\u062a.")
+        await update.message.reply_text(
+            "\u0641\u0631\u0645\u0627\u062a \u062a\u0648\u06a9\u0646 \u0646\u0627\u0645\u0639\u062a\u0628\u0631 \u0627\u0633\u062a.",
+            reply_markup=cancel_keyboard(),
+        )
+        return True
+    conflict = _customer_token_conflict(text, agent_id)
+    if conflict == "core":
+        await update.message.reply_text(
+            "\u274c \u0627\u06cc\u0646 \u062a\u0648\u06a9\u0646 \u0645\u062a\u0639\u0644\u0642 \u0628\u0647 \u06cc\u06a9\u06cc \u0627\u0632 \u0631\u0628\u0627\u062a\u200c\u0647\u0627\u06cc \u0627\u0635\u0644\u06cc \u0633\u06cc\u0633\u062a\u0645 \u0627\u0633\u062a. \u0628\u0631\u0627\u06cc \u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc \u0627\u0632 BotFather \u06cc\u06a9 \u062a\u0648\u06a9\u0646 \u062c\u062f\u0627\u06af\u0627\u0646\u0647 \u0628\u0641\u0631\u0633\u062a\u06cc\u062f.",
+            reply_markup=cancel_keyboard(),
+        )
+        return True
+    if conflict == "other_agent":
+        await update.message.reply_text(
+            "\u274c \u0627\u06cc\u0646 \u062a\u0648\u06a9\u0646 \u0642\u0628\u0644\u0627\u064b \u0628\u0631\u0627\u06cc \u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc \u0646\u0645\u0627\u06cc\u0646\u062f\u0647 \u062f\u06cc\u06af\u0631\u06cc \u062b\u0628\u062a \u0634\u062f\u0647 \u0627\u0633\u062a.",
+            reply_markup=cancel_keyboard(),
+        )
         return True
     try:
         from telegram import Bot
@@ -136,7 +177,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         me = await bot.get_me()
         username = me.username or ""
     except Exception:
-        await update.message.reply_text("\u062a\u0648\u06a9\u0646 \u0646\u0627\u0645\u0639\u062a\u0628\u0631 \u0627\u0633\u062a. \u0644\u0637\u0641\u0627 \u062a\u0648\u06a9\u0646 \u0635\u062d\u06cc\u062d \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f.")
+        await update.message.reply_text(
+            "\u062a\u0648\u06a9\u0646 \u0646\u0627\u0645\u0639\u062a\u0628\u0631 \u0627\u0633\u062a. \u0644\u0637\u0641\u0627 \u062a\u0648\u06a9\u0646 \u0635\u062d\u06cc\u062d \u0627\u0631\u0633\u0627\u0644 \u06a9\u0646\u06cc\u062f.",
+            reply_markup=cancel_keyboard(),
+        )
         return True
     agent_db.add_customer_bot(agent_id, text, username)
     context.user_data.pop(UD_STATE, None)

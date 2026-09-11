@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from telegram import Update
@@ -28,6 +28,7 @@ from AgentBot.services.subscription_service import (
     disable_subscription, enable_subscription, delete_subscription,
     change_subscription_link, get_subs_link_settings, get_sub_link_for_type,
     rename_service_on_panels,
+    format_service_expiry,
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
 from Shared.qr_utils import make_qr_image
@@ -180,7 +181,6 @@ def _service_detail_text(svc, last_online: str = "هرگز") -> str:
     name = _escape(svc.get('name') or 'سرویس')
     server = _escape(svc.get('server_title') or '—')
     gb = _fmt_gb(svc.get('usage_limit', 0))
-    days = svc.get('days_left') or svc.get('days') or 0
     used = _fmt_gb(svc.get('usage_current', 0))
     code = agent_db._service_code_from_comment(svc.get("comment") or "")
     note = agent_db._service_note_from_comment(svc.get("comment") or "") or '—'
@@ -190,7 +190,7 @@ def _service_detail_text(svc, last_online: str = "هرگز") -> str:
         f"❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
         f"⬖ سرور: {server}\n"
         f"\U0001f4ca مصرف: {used} از {gb} گیگابایت\n"
-        f"\U0001f4c6 انقضا: {days} روز دیگر\n"
+        f"\U0001f4c6 انقضا: {format_service_expiry(svc)}\n"
         f"\U0001f4f6 آخرین اتصال: {online_line}\n"
         f"\U0001f4dd یادداشت: {_escape(note)}\n"
         f"\U0001f511 شناسه: <code>{_escape(code or '—')}</code>"
@@ -215,7 +215,6 @@ def _service_detail_card_text(svc, note: str = "", last_online: str = "هرگز"
     name = _escape(svc.get('name') or 'سرویس')
     server = _escape(svc.get('server_title') or '—')
     gb = _fmt_gb(svc.get('usage_limit', 0))
-    days = svc.get('days_left') or svc.get('days') or 0
     used = _fmt_gb(svc.get('usage_current', 0))
     code = agent_db._service_code_from_comment(svc.get("comment") or "")
     wholesale = _fmt_toman(svc.get('wholesale_price') or 0)
@@ -227,7 +226,7 @@ def _service_detail_card_text(svc, note: str = "", last_online: str = "هرگز"
         f"❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
         f"⬖ سرور: {server}\n"
         f"\U0001f4ca مصرف: {used} از {gb} گیگابایت\n"
-        f"\U0001f4c6 انقضا: {days} روز دیگر\n"
+        f"\U0001f4c6 انقضا: {format_service_expiry(svc)}\n"
         f"\U0001f4f6 آخرین اتصال: {online_line}\n"
         f"\U0001f4dd یادداشت: {note_line}\n"
         f"\U0001f511 شناسه: <code>{_escape(code or '—')}</code>\n"
@@ -320,19 +319,29 @@ async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
 def _panel_dt(value) -> Optional[datetime]:
     if not value:
         return None
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(str(value), fmt)
-        except ValueError:
-            continue
-    return None
+    raw = str(value).strip()
+    try:
+        stamp = float(raw)
+        if stamp > 0:
+            if stamp > 10_000_000_000:
+                stamp /= 1000.0
+            return datetime.fromtimestamp(stamp, timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OSError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
-def _panel_days_left(u: dict) -> Optional[int]:
-    for key in ("expire_date", "end_date", "expires_at", "expiry_date", "expiration_date"):
+def _panel_expiry_dt(u: dict) -> Optional[datetime]:
+    for key in ("expire", "expire_date", "end_date", "expires_at", "expiry_date", "expiration_date"):
         dt = _panel_dt(u.get(key))
         if dt:
-            return (dt.date() - datetime.now().date()).days
+            return dt
     start = _panel_dt(u.get("start_date"))
     pkg = u.get("package_days")
     try:
@@ -340,8 +349,22 @@ def _panel_days_left(u: dict) -> Optional[int]:
     except (TypeError, ValueError):
         pkg = 0
     if start and pkg:
-        end = start + timedelta(days=pkg)
-        return (end.date() - datetime.now().date()).days
+        return start + timedelta(days=pkg)
+    return None
+
+
+def _panel_days_left(u: dict) -> Optional[int]:
+    end = _panel_expiry_dt(u)
+    if end is not None:
+        return (end.date() - datetime.now(timezone.utc).date()).days
+    for key in ("remaining_days", "remaining_day", "days_left"):
+        raw = u.get(key)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            continue
     return None
 
 
@@ -388,13 +411,23 @@ async def _panel_user_status(svc) -> Optional[str]:
             pass
     # منقضی / غیرفعال
     try:
-        is_active = u.get("is_active", True)
+        active_raw = u.get("is_active", True)
+        if isinstance(active_raw, str):
+            is_active = active_raw.strip().lower() not in {
+                "0", "false", "off", "inactive", "disabled", "no",
+            }
+        else:
+            is_active = bool(active_raw)
     except Exception:
         is_active = True
     if not is_active:
         return "expired"
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    expiry_dt = _panel_expiry_dt(u)
     days_left = _panel_days_left(u)
-    if days_left is not None and days_left <= 0:
+    if expiry_dt is not None and expiry_dt <= now_utc:
+        return "expired"
+    if expiry_dt is None and days_left is not None and days_left < 0:
         return "expired"
     try:
         limit = float(u.get("usage_limit_GB") or 0)
@@ -407,7 +440,7 @@ async def _panel_user_status(svc) -> Optional[str]:
     lo = _panel_dt(u.get("last_online"))
     if lo:
         try:
-            if abs((datetime.now() - lo).total_seconds()) <= 15 * 60:
+            if abs((now_utc - lo).total_seconds()) <= 15 * 60:
                 return "online"
         except Exception:
             pass
@@ -639,13 +672,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not svc:
             await query.answer("سرویس پیدا نشد.", show_alert=True)
             return
-        is_active = bool(int(svc.get("is_active", 0) or 0))
         last_online = "هرگز"
         try:
             from AgentBot.services.subscription_service import get_service_last_online
             last_online = await get_service_last_online(svc)
         except Exception:
             last_online = "هرگز"
+        is_active = bool(int(svc.get("is_active", 0) or 0))
         await query.edit_message_text(
             _service_detail_text(svc, last_online),
             reply_markup=service_detail_keyboard(svc_id, is_active),
@@ -1322,12 +1355,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             return True
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop("subs_back_to", None)
-        is_active = bool(int(svc.get("is_active", 0) or 0))
         try:
             from AgentBot.services.subscription_service import get_service_last_online
             _lo = await get_service_last_online(svc)
         except Exception:
             _lo = "هرگز"
+        is_active = bool(int(svc.get("is_active", 0) or 0))
         detail = f"✅ <b>اشتراک یافت شد</b>\n\n" + _service_detail_text(svc, _lo)
         await update.message.reply_text(detail, reply_markup=service_detail_keyboard(int(svc["id"]), is_active), parse_mode="HTML")
         return True
@@ -1453,6 +1486,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             last_online = await get_service_last_online(svc)
         except Exception:
             last_online = "هرگز"
+        is_active = bool(int(svc.get("is_active", 0) or 0))
 
         # پیام دوم: جزئیات اکانت + دکمه‌ها
         await update.message.reply_text(

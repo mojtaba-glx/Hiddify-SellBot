@@ -101,11 +101,10 @@ class _StubbedModuleTestCase(unittest.TestCase):
         for n, m in cls._saved.items():
             if m is not None:
                 sys.modules[n] = m
-        # Also drop any bot modules imported transitively (e.g. handlers)
-        for n in list(sys.modules.keys()):
-            if n.startswith(cls.module_name.split(".")[0] + ".") or n.startswith("telegram."):
-                if n not in _TELEGRAM_STUBS and n not in dict(cls._installed):
-                    sys.modules.pop(n, None)
+        # Transitive bot modules imported during this class must stay in
+        # sys.modules: later test files import the same modules, and deleting
+        # them here breaks those imports. They are real modules from the
+        # project — safe to keep globally.
 
 
 class _FakeUser:

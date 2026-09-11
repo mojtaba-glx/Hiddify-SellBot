@@ -453,12 +453,14 @@ class _StubHelper:
         if cls._env is not None:
             cls._env.stop()
             cls._env = None
-        sys.modules.update(cls._saved)
+        # Only restore what install() actually replaced; transitively imported
+        # real modules (e.g. AgentBot.*, Shared.agent_db) must stay so later
+        # test files keep working.
+        for n, m in cls._saved.items():
+            if m is not None:
+                sys.modules[n] = m
         for n in module_names:
             sys.modules.pop(n, None)
-        for n in cls._installed:
-            if cls._saved.get(n) is None:
-                sys.modules.pop(n, None)
 
 
 class TicketLogRedactionTests(unittest.TestCase):
@@ -766,13 +768,15 @@ class WriterCompatibilityTests(unittest.TestCase):
             sys.modules["AgentBot.handlers.settings_payment"] = mod
             spec.loader.exec_module(mod)
 
-            with patch.object(mod, "ENV_FILE", self.env_file):
-                mod._write_env_values({"OLD": "9", "EXTRA": "1"})
-            content = self.env_file.read_text(encoding="utf-8")
-            self.assertIn("OLD=9", content)
-            self.assertIn("EXTRA=1", content)
-            self.assertIn("# keep me", content)
-            self.assertEqual(stat.S_IMODE(self.env_file.stat().st_mode), 0o600)
+            # The agent payment settings module must not touch the central
+            # .env at all: SMS webhook settings live per-agent in the agent
+            # database (per-agent webhook isolation). Verify there is no env
+            # writer wired up and no dotenv loading in this module.
+            self.assertFalse(hasattr(mod, "ENV_FILE"))
+            self.assertFalse(hasattr(mod, "_write_env_values"))
+            self.assertFalse(hasattr(mod, "_read_env_values"))
+            src = (PROJECT_ROOT / "AgentBot" / "handlers" / "settings_payment.py").read_text(encoding="utf-8")
+            self.assertNotIn("load_dotenv", src)
         finally:
             sys.modules.pop("AgentBot.handlers.settings_payment", None)
             for n, m in saved.items():

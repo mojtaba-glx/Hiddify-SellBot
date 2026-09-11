@@ -3,7 +3,7 @@ import json
 import re
 import random
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 DB_FILE = Path(__file__).with_name("agent_bot.db")
@@ -137,8 +137,13 @@ def init_db() -> None:
             _ensure_column(cur, "agent_payments", "base_amount", "INTEGER DEFAULT 0")
             _ensure_column(cur, "agent_payments", "marker_amount", "INTEGER DEFAULT 0")
             _ensure_column(cur, "agent_payments", "processing_key", "TEXT DEFAULT ''")
+            _ensure_column(cur, "agent_payments", "sms_event_id", "TEXT DEFAULT ''")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ap_agent ON agent_payments(agent_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ap_status ON agent_payments(status)")
+            cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ap_sms_event "
+            "ON agent_payments(sms_event_id) WHERE sms_event_id != ''"
+            )
 
             cur.execute("""
             CREATE TABLE IF NOT EXISTS agent_gifts (
@@ -166,6 +171,19 @@ def init_db() -> None:
             PRIMARY KEY (agent_id, key)
             )
             """)
+
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS agent_sms_webhook (
+            agent_id INTEGER PRIMARY KEY,
+            secret TEXT NOT NULL,
+            enabled INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+            )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_asw_secret ON agent_sms_webhook(secret)"
+            )
 
             conn.commit()
 
@@ -733,6 +751,178 @@ def get_pending_wallet_charge_payments(page: int = 1, page_size: int = 10) -> Tu
     return [dict(r) for r in rows], total
 
 
+def _parse_payment_datetime(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw[:19], fmt)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _parse_sms_datetime(value: Any) -> Optional[datetime]:
+    try:
+        stamp = float(str(value or "").strip())
+        if stamp <= 0:
+            return None
+        if stamp > 10_000_000_000:
+            stamp /= 1000.0
+        return datetime.fromtimestamp(stamp, timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _wallet_charge_meta(payment: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        value = json.loads(str((payment or {}).get("receipt_image") or "{}"))
+        return value if isinstance(value, dict) else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def patch_payment_receipt_metadata(payment_id: int, patch: Dict[str, Any]) -> bool:
+    """Merge trusted processing metadata into an agent payment receipt JSON."""
+    pid = int(payment_id or 0)
+    if pid <= 0 or not isinstance(patch, dict):
+        return False
+    init_db()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("SELECT receipt_image FROM agent_payments WHERE id=? LIMIT 1", (pid,))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        try:
+            meta = json.loads(str(row["receipt_image"] or "{}"))
+            if not isinstance(meta, dict):
+                meta = {}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            meta = {}
+        for key, value in patch.items():
+            safe_key = str(key or "").strip()
+            if not safe_key:
+                continue
+            if value is None or value == "":
+                meta.pop(safe_key, None)
+            else:
+                meta[safe_key] = value
+        cur.execute(
+            "UPDATE agent_payments SET receipt_image=?, updated_at=? WHERE id=?",
+            (json.dumps(meta, ensure_ascii=False), _now(), pid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def find_pending_wallet_charge_payments_by_amount(
+    amount_toman: int,
+    *,
+    card_last4: str = "",
+    max_age_minutes: int = 360,
+    sms_time_ms: int = 0,
+    receipt_lookback_minutes: int = 30,
+) -> List[Dict[str, Any]]:
+    """Find only representative wallet top-ups eligible for SMS approval."""
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        return []
+    age = max(5, min(1440, int(max_age_minutes or 360)))
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=age)
+    init_db()
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM agent_payments "
+            "WHERE status IN ('pending','processing') "
+            "AND method='card_to_card' AND description='شارژ کیف پول نماینده' "
+            "AND amount=? AND COALESCE(created_at, '')>=? "
+            "ORDER BY id DESC LIMIT 10",
+            (amount, cutoff.strftime("%Y-%m-%d %H:%M:%S")),
+        ).fetchall()
+        payments = [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+    sms_last4 = str(card_last4 or "").strip()
+    sms_dt = _parse_sms_datetime(sms_time_ms)
+    lookback = max(1, min(120, int(receipt_lookback_minutes or 30)))
+    matched: List[Dict[str, Any]] = []
+    for payment in payments:
+        operation_key = f"agent-wallet-payment:{int(payment.get('id') or 0)}"
+        if (
+            str(payment.get("status") or "") == "processing"
+            and str(payment.get("processing_key") or "") != operation_key
+        ):
+            continue
+        meta = _wallet_charge_meta(payment)
+        payer_last4 = str(payment.get("card_last4") or meta.get("card_last4") or "").strip()
+        marker = int(payment.get("marker_amount") or meta.get("marker_amount") or 0)
+        if sms_last4:
+            if payer_last4 != sms_last4:
+                continue
+        elif not (100 <= marker <= 999):
+            # Without payer-card digits, the random amount marker is mandatory.
+            continue
+        payment_dt = _parse_payment_datetime(payment.get("created_at"))
+        if sms_dt is not None and payment_dt is not None:
+            if sms_dt < payment_dt - timedelta(minutes=lookback):
+                continue
+        matched.append(payment)
+    return matched
+
+
+def find_recently_approved_wallet_charge_payments(
+    amount_toman: int,
+    *,
+    max_age_minutes: int = 120,
+    sms_time_ms: int = 0,
+) -> List[Dict[str, Any]]:
+    """Return recent manual wallet approvals that do not have an SMS attached."""
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        return []
+    window = max(5, min(1440, int(max_age_minutes or 120)))
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    init_db()
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM agent_payments "
+            "WHERE status='approved' AND method='card_to_card' "
+            "AND description='شارژ کیف پول نماینده' AND amount=? "
+            "AND COALESCE(sms_event_id, '')='' "
+            "AND COALESCE(updated_at, '')>=? AND COALESCE(updated_at, '')<=? "
+            "ORDER BY updated_at DESC LIMIT 10",
+            (
+                amount,
+                (now - timedelta(minutes=window)).strftime("%Y-%m-%d %H:%M:%S"),
+                (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        ).fetchall()
+        payments = [dict(row) for row in rows]
+    finally:
+        conn.close()
+    sms_dt = _parse_sms_datetime(sms_time_ms)
+    result: List[Dict[str, Any]] = []
+    for payment in payments:
+        if str(_wallet_charge_meta(payment).get("sms_event_id") or "").strip():
+            continue
+        approved_dt = _parse_payment_datetime(payment.get("updated_at"))
+        if sms_dt is not None and approved_dt is not None:
+            if sms_dt < approved_dt - timedelta(minutes=window):
+                continue
+        result.append(payment)
+    return result
+
+
 def search_payments(agent_id: int, query: str, limit: int = 20) -> List[Dict[str, Any]]:
     init_db()
     conn = _conn()
@@ -778,7 +968,13 @@ def set_payment_status(
     return ok
 
 
-def claim_payment_processing(payment_id: int, agent_id: int, operation_key: str) -> bool:
+def claim_payment_processing(
+    payment_id: int,
+    agent_id: int,
+    operation_key: str,
+    *,
+    sms_event_id: str = "",
+) -> bool:
     """Claim a pending agent wallet payment for one exclusive processor."""
     key = str(operation_key or "").strip()
     if not key:
@@ -788,16 +984,66 @@ def claim_payment_processing(payment_id: int, agent_id: int, operation_key: str)
     try:
         cur = conn.cursor()
         cur.execute("BEGIN IMMEDIATE")
-        cur.execute(
-            "UPDATE agent_payments SET status='processing', processing_key=?, updated_at=? "
-            "WHERE id=? AND agent_id=? AND status='pending'",
-            (key, _now(), int(payment_id), int(agent_id)),
-        )
+        event_id = str(sms_event_id or "").strip()[:160]
+        try:
+            if event_id:
+                cur.execute(
+                    "UPDATE agent_payments SET status='processing', processing_key=?, "
+                    "sms_event_id=?, updated_at=? "
+                    "WHERE id=? AND agent_id=? AND status='pending' "
+                    "AND COALESCE(sms_event_id, '') IN ('', ?)",
+                    (key, event_id, _now(), int(payment_id), int(agent_id), event_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE agent_payments SET status='processing', processing_key=?, updated_at=? "
+                    "WHERE id=? AND agent_id=? AND status='pending'",
+                    (key, _now(), int(payment_id), int(agent_id)),
+                )
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return False
         if cur.rowcount > 0:
             conn.commit()
             return True
         conn.rollback()
         return False
+    finally:
+        conn.close()
+
+
+def attach_payment_sms_event(payment_id: int, event_id: str) -> bool:
+    """Reserve one bank event for one approved payment, atomically."""
+    pid = int(payment_id or 0)
+    eid = str(event_id or "").strip()[:160]
+    if pid <= 0 or not eid:
+        return False
+    init_db()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        row = cur.execute(
+            "SELECT sms_event_id FROM agent_payments WHERE id=? LIMIT 1", (pid,)
+        ).fetchone()
+        current = str((row["sms_event_id"] if row else "") or "").strip()
+        if current:
+            conn.rollback()
+            return current == eid
+        try:
+            cur.execute(
+                "UPDATE agent_payments SET sms_event_id=?, updated_at=? "
+                "WHERE id=? AND status='approved' AND COALESCE(sms_event_id, '')=''",
+                (eid, _now(), pid),
+            )
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return False
+        if cur.rowcount <= 0:
+            conn.rollback()
+            return False
+        conn.commit()
+        return True
     finally:
         conn.close()
 
@@ -1536,3 +1782,123 @@ def set_customer_ticket_status(agent_id: int, ticket_code: int, status: str) -> 
         return ok
     finally:
         conn.close()
+
+
+# ---- Per-agent SMS webhook settings (isolated from the central admin webhook) ----
+
+def _now_str() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_sms_webhook_settings(agent_id: int) -> dict:
+    """Return one agent's own SMS webhook settings:
+    {enabled: bool, secret: str, webhook_path: str}."""
+    from Shared.agent_sms_webhook import agent_webhook_path
+    init_db()
+    aid = int(agent_id or 0)
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT secret, enabled FROM agent_sms_webhook WHERE agent_id=? LIMIT 1", (aid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    row = dict(row) if row else {}
+    return {
+        "agent_id": aid,
+        "enabled": bool(row.get("enabled") and int(row.get("enabled") or 0) == 1),
+        "secret": str(row.get("secret") or ""),
+        "webhook_path": agent_webhook_path(aid),
+    }
+
+
+def ensure_sms_webhook_settings(agent_id: int) -> dict:
+    """Return the agent's settings, creating their personal secret on first
+    use (migration-compatible: existing agents get a secret lazily)."""
+    init_db()
+    aid = int(agent_id or 0)
+    if aid <= 0:
+        return get_sms_webhook_settings(aid)
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT secret, enabled FROM agent_sms_webhook WHERE agent_id=? LIMIT 1", (aid,)
+        ).fetchone()
+        if not row or not str(row["secret"] or "").strip():
+            import secrets as _secrets
+            secret = _secrets.token_hex(32)
+            now = _now_str()
+            conn.execute(
+                "INSERT INTO agent_sms_webhook (agent_id, secret, enabled, created_at, updated_at) "
+                "VALUES (?, ?, 0, ?, ?) "
+                "ON CONFLICT(agent_id) DO UPDATE SET secret=excluded.secret, updated_at=excluded.updated_at",
+                (aid, secret, now, now),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return get_sms_webhook_settings(aid)
+
+
+def set_sms_webhook_enabled(agent_id: int, enabled: bool) -> dict:
+    """Toggle one agent's SMS webhook. Enabling provisions their personal
+    secret on first use — the central admin secret is never touched."""
+    settings = ensure_sms_webhook_settings(agent_id)
+    aid = int(agent_id or 0)
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE agent_sms_webhook SET enabled=?, updated_at=? WHERE agent_id=?",
+            (1 if bool(enabled) else 0, _now_str(), aid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_sms_webhook_settings(aid)
+
+
+def rotate_sms_webhook_secret(agent_id: int) -> dict:
+    """Rotate one agent's personal secret (old secret stops working)."""
+    import secrets as _secrets
+    ensure_sms_webhook_settings(agent_id)
+    aid = int(agent_id or 0)
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE agent_sms_webhook SET secret=?, updated_at=? WHERE agent_id=?",
+            (_secrets.token_hex(32), _now_str(), aid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_sms_webhook_settings(aid)
+
+
+def agent_sms_secret_matches(agent_id: int, provided_secret: str) -> bool:
+    """Constant-time check that the secret belongs to this exact agent AND
+    the agent exists and is active."""
+    import hmac
+    from Shared import agent_db as _shared_agent_db
+    aid = int(agent_id or 0)
+    if aid <= 0:
+        return False
+    agent = _shared_agent_db.get_agent_by_id(aid)
+    if not agent or not int(agent.get("is_active", 0)):
+        return False
+    settings = get_sms_webhook_settings(aid)
+    secret = str(settings.get("secret") or "")
+    if not secret or not settings.get("enabled"):
+        return False
+    return hmac.compare_digest(str(provided_secret or ""), secret)
+
+
+def agent_sms_enabled(agent_id: int) -> bool:
+    settings = get_sms_webhook_settings(agent_id)
+    return bool(settings.get("enabled"))
+
+
+def agent_exists_and_active(agent_id: int) -> bool:
+    from Shared import agent_db as _shared_agent_db
+    agent = _shared_agent_db.get_agent_by_id(int(agent_id or 0))
+    return bool(agent and int(agent.get("is_active", 0)))

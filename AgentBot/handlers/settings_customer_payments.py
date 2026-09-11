@@ -701,7 +701,60 @@ async def process_sms_webhook_queue(context: ContextTypes.DEFAULT_TYPE, limit: i
         qid = int(row.get("id") or 0)
         agent_id = int(row.get("agent_id") or 0)
         pay_id = int(row.get("pay_id") or 0)
+        event_id = str(row.get("event_id") or "").strip()
         try:
+            # کنترل مالکیت و وضعیت پیش از اجرای پرداخت صف‌شده (پرچم‌های
+            # ثانویه — مالکیت اصلی در لحظهٔ enqueue و اینجا دوباره کنترل
+            # میشود): نماینده غیرفعال/حذف‌شده یا با SMS اختصاصی خاموش
+            # هرگز پردازش نمیشود؛ رویداد رزروشده هم فقط برای همان
+            # نماینده/پرداخت معتبر است.
+            from AgentBot.database import get_setting as agent_get_setting
+            from Shared import agent_db as _agent_db
+            from Shared import agent_sms_webhook as _asw
+            from Shared import userbot_db as _udb
+            agent_row = _agent_db.get_agent_by_id(agent_id)
+            if not agent_row or not int(agent_row.get("is_active", 0)):
+                try:
+                    mark_sms_auto_queue_processed(qid, note="agent disabled or deleted")
+                except Exception:
+                    pass
+                continue
+            # وضعیت روشن/خاموش: ترکیب وضعیت جدید enabled و تنظیم قدیمی
+            # sms_auto_confirm باید متناقض نباشد — هر دو باید روشن باشند.
+            agent_sms = _asw.get_agent_sms_settings(agent_id)
+            if not bool(agent_sms.get("enabled")) or not bool(
+                agent_get_setting(agent_id, "sms_auto_confirm", False)
+            ):
+                try:
+                    mark_sms_auto_queue_processed(
+                        qid, note="agent sms webhook disabled (enabled flag or auto-confirm)"
+                    )
+                except Exception:
+                    pass
+                continue
+            # The queue is a cross-database hand-off. Re-read the authenticated
+            # event and verify the complete reservation before any financial
+            # operation; a stale, foreign, or tampered row is never executed.
+            event = _udb.get_sms_webhook_event(
+                event_id, owner_agent_id=agent_id
+            )
+            event_status = str((event or {}).get("status") or "").strip().lower()
+            event_payment_id = int((event or {}).get("matched_payment_id") or 0)
+            event_amount = int((event or {}).get("amount_toman") or 0)
+            queue_amount = int(row.get("amount_toman") or 0)
+            if (
+                not event
+                or event_status != "agency_queued"
+                or event_payment_id != pay_id
+                or (event_amount > 0 and queue_amount > 0 and event_amount != queue_amount)
+            ):
+                try:
+                    mark_sms_auto_queue_processed(
+                        qid, note="invalid or foreign SMS event reservation"
+                    )
+                except Exception:
+                    pass
+                continue
             ok, note = await _auto_approve_from_sms_webhook(context, agent_id, pay_id, row)
         except Exception as e:
             ok, note = False, f"{type(e).__name__}: {e}"
@@ -711,6 +764,25 @@ async def process_sms_webhook_queue(context: ContextTypes.DEFAULT_TYPE, limit: i
                 mark_sms_auto_queue_processed(qid, note=note)
             except Exception as e:
                 logger.warning("sms queue mark processed failed (id=%s): %s", qid, e)
+            # پس از موفقیت پردازش صف، وضعیت رویداد از agency_queued به
+            # approved (متصل به پرداخت) تغییر میکند — وضعیت موقت باقی
+            # نمیماند و پیامک دوباره برای پرداخت دیگری قابل مصرف نیست.
+            if event_id:
+                try:
+                    from Shared import userbot_db as _udb
+                    _udb.update_sms_webhook_event(
+                        event_id,
+                        owner_agent_id=agent_id,
+                        status="approved",
+                        matched_payment_id=pay_id,
+                        message="agent customer payment approved via queued bank SMS",
+                        amount_toman=int(row.get("amount_toman") or 0),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "sms queue event finalize failed (event=%s pay=%s): %s",
+                        event_id, pay_id, e,
+                    )
             processed += 1
         else:
             # Keep transient failures pending so the worker can retry after a
@@ -914,7 +986,9 @@ async def _send_sms_auto_approval_report(
     reference = "-"
     try:
         from Shared import userbot_db
-        event = userbot_db.get_sms_webhook_event(str(queue_row.get("event_id") or ""))
+        event = userbot_db.get_sms_webhook_event(
+            str(queue_row.get("event_id") or ""), owner_agent_id=agent_id
+        )
         if event:
             sender = str(event.get("sender") or "-")
             amount_raw = int(event.get("amount_raw") or 0)

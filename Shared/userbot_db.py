@@ -352,7 +352,7 @@ def init_db() -> None:
         """
         CREATE TABLE IF NOT EXISTS userbot_sms_webhook_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id TEXT UNIQUE,
+            event_id TEXT NOT NULL,
             sender TEXT DEFAULT '',
             amount_raw INTEGER DEFAULT 0,
             currency_raw TEXT DEFAULT '',
@@ -365,7 +365,9 @@ def init_db() -> None:
             message TEXT DEFAULT '',
             received_at INTEGER DEFAULT 0,
             device_time INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT ''
+            created_at TEXT DEFAULT '',
+            owner_agent_id INTEGER DEFAULT 0,
+            UNIQUE(owner_agent_id, event_id)
         )
         """
     )
@@ -530,7 +532,7 @@ def _migrate_db():
         """
         CREATE TABLE IF NOT EXISTS userbot_sms_webhook_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id TEXT UNIQUE,
+            event_id TEXT NOT NULL,
             sender TEXT DEFAULT '',
             amount_raw INTEGER DEFAULT 0,
             currency_raw TEXT DEFAULT '',
@@ -543,7 +545,9 @@ def _migrate_db():
             message TEXT DEFAULT '',
             received_at INTEGER DEFAULT 0,
             device_time INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT ''
+            created_at TEXT DEFAULT '',
+            owner_agent_id INTEGER DEFAULT 0,
+            UNIQUE(owner_agent_id, event_id)
         )
         """
     )
@@ -557,6 +561,79 @@ def _migrate_db():
             print("Migrated: first_missing_at column added to userbot_service_probe.")
         except sqlite3.OperationalError:
             pass
+
+    # SMS webhook event ownership: 0 = admin (central webhook), >0 = agent id
+    # (per-agent webhook). Owner is recorded by the server after authentication
+    # and is never taken from request payloads.
+    try:
+        cur.execute("PRAGMA table_info(userbot_sms_webhook_events)")
+        existing_event_cols = {str(r[1]) for r in cur.fetchall()}
+        if "owner_agent_id" not in existing_event_cols:
+            cur.execute(
+                "ALTER TABLE userbot_sms_webhook_events ADD COLUMN owner_agent_id INTEGER DEFAULT 0"
+            )
+
+        # Older releases made event_id globally UNIQUE. Android SMS ids may
+        # be local to a device, so two agents are allowed to submit the same
+        # event_id. Rebuild once with uniqueness scoped to the authenticated
+        # owner while preserving every existing event and its primary key.
+        legacy_global_unique = False
+        cur.execute("PRAGMA index_list(userbot_sms_webhook_events)")
+        for index_row in cur.fetchall():
+            if not int(index_row[2] or 0):
+                continue
+            index_name = str(index_row[1] or "")
+            cur.execute(f'PRAGMA index_info("{index_name}")')
+            columns = [str(column_row[2] or "") for column_row in cur.fetchall()]
+            if columns == ["event_id"]:
+                legacy_global_unique = True
+                break
+        if legacy_global_unique:
+            cur.execute("ALTER TABLE userbot_sms_webhook_events RENAME TO userbot_sms_webhook_events_legacy")
+            cur.execute(
+                """
+                CREATE TABLE userbot_sms_webhook_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL,
+                    sender TEXT DEFAULT '',
+                    amount_raw INTEGER DEFAULT 0,
+                    currency_raw TEXT DEFAULT '',
+                    amount_toman INTEGER DEFAULT 0,
+                    reference TEXT DEFAULT '',
+                    card_last4 TEXT DEFAULT '',
+                    body TEXT DEFAULT '',
+                    status TEXT DEFAULT 'received',
+                    matched_payment_id INTEGER DEFAULT 0,
+                    message TEXT DEFAULT '',
+                    received_at INTEGER DEFAULT 0,
+                    device_time INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT '',
+                    owner_agent_id INTEGER DEFAULT 0,
+                    UNIQUE(owner_agent_id, event_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO userbot_sms_webhook_events (
+                    id, event_id, sender, amount_raw, currency_raw, amount_toman,
+                    reference, card_last4, body, status, matched_payment_id,
+                    message, received_at, device_time, created_at, owner_agent_id
+                )
+                SELECT id, event_id, sender, amount_raw, currency_raw, amount_toman,
+                       reference, card_last4, body, status, matched_payment_id,
+                       message, received_at, device_time, created_at,
+                       COALESCE(owner_agent_id, 0)
+                FROM userbot_sms_webhook_events_legacy
+                """
+            )
+            cur.execute("DROP TABLE userbot_sms_webhook_events_legacy")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sms_events_owner "
+            "ON userbot_sms_webhook_events(owner_agent_id)"
+        )
+    except sqlite3.OperationalError:
+        pass
 
     # Marzban integration: add marzban_username column to service_nodes
     try:
@@ -3879,7 +3956,7 @@ def _patch_payment_receipt_meta(payment_id: int, patch: Dict[str, Any]) -> None:
         conn.close()
 
 
-def get_sms_webhook_event(event_id: str) -> Optional[Dict[str, Any]]:
+def get_sms_webhook_event(event_id: str, *, owner_agent_id: int = 0) -> Optional[Dict[str, Any]]:
     init_db()
     eid = str(event_id or "").strip()
     if not eid:
@@ -3887,14 +3964,24 @@ def get_sms_webhook_event(event_id: str) -> Optional[Dict[str, Any]]:
     conn = _get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM userbot_sms_webhook_events WHERE event_id = ? LIMIT 1", (eid,))
+        cur.execute(
+            "SELECT * FROM userbot_sms_webhook_events "
+            "WHERE event_id = ? AND COALESCE(owner_agent_id, 0) = ? LIMIT 1",
+            (eid, int(owner_agent_id or 0)),
+        )
         row = cur.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
-def record_sms_webhook_event(event: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
+def record_sms_webhook_event(event: Dict[str, Any], *, owner_agent_id: int = 0) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """Record a bank SMS event with its authenticated owner.
+
+    owner_agent_id = 0 means the central admin webhook; a positive value is
+    the agent id whose per-agent webhook authenticated the request. The
+    owner is set by the server, never taken from the payload.
+    """
     init_db()
     event_id = str(event.get("event_id") or "").strip()
     if not event_id:
@@ -3902,17 +3989,22 @@ def record_sms_webhook_event(event: Dict[str, Any]) -> Tuple[bool, Optional[Dict
     conn = _get_conn()
     cur = conn.cursor()
     now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    owner = int(owner_agent_id or 0)
     try:
-        cur.execute("SELECT * FROM userbot_sms_webhook_events WHERE event_id = ? LIMIT 1", (event_id,))
+        cur.execute(
+            "SELECT * FROM userbot_sms_webhook_events "
+            "WHERE event_id = ? AND COALESCE(owner_agent_id, 0) = ? LIMIT 1",
+            (event_id, owner),
+        )
         existing = cur.fetchone()
         if existing:
             return False, dict(existing)
         cur.execute(
             """
-            INSERT INTO userbot_sms_webhook_events
+            INSERT OR IGNORE INTO userbot_sms_webhook_events
             (event_id, sender, amount_raw, currency_raw, amount_toman, reference, card_last4, body,
-             status, matched_payment_id, message, received_at, device_time, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             status, matched_payment_id, message, received_at, device_time, created_at, owner_agent_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
@@ -3929,12 +4021,18 @@ def record_sms_webhook_event(event: Dict[str, Any]) -> Tuple[bool, Optional[Dict
                 int(event.get("received_at") or 0),
                 int(event.get("device_time") or 0),
                 now,
+                owner,
             ),
         )
+        inserted = cur.rowcount > 0
         conn.commit()
-        cur.execute("SELECT * FROM userbot_sms_webhook_events WHERE event_id = ? LIMIT 1", (event_id,))
+        cur.execute(
+            "SELECT * FROM userbot_sms_webhook_events "
+            "WHERE event_id = ? AND COALESCE(owner_agent_id, 0) = ? LIMIT 1",
+            (event_id, owner),
+        )
         row = cur.fetchone()
-        return True, dict(row) if row else None
+        return inserted, dict(row) if row else None
     finally:
         conn.close()
 
@@ -3942,6 +4040,7 @@ def record_sms_webhook_event(event: Dict[str, Any]) -> Tuple[bool, Optional[Dict
 def update_sms_webhook_event(
     event_id: str,
     *,
+    owner_agent_id: int = 0,
     status: str,
     matched_payment_id: int = 0,
     message: str = "",
@@ -3959,16 +4058,19 @@ def update_sms_webhook_event(
                 """
                 UPDATE userbot_sms_webhook_events
                 SET status = ?, matched_payment_id = ?, message = ?
-                WHERE event_id = ?
+                WHERE event_id = ? AND COALESCE(owner_agent_id, 0) = ?
                 """,
-                (str(status or "")[:40], int(matched_payment_id or 0), str(message or "")[:500], eid),
+                (
+                    str(status or "")[:40], int(matched_payment_id or 0),
+                    str(message or "")[:500], eid, int(owner_agent_id or 0),
+                ),
             )
         else:
             cur.execute(
                 """
                 UPDATE userbot_sms_webhook_events
                 SET status = ?, matched_payment_id = ?, message = ?, amount_toman = ?
-                WHERE event_id = ?
+                WHERE event_id = ? AND COALESCE(owner_agent_id, 0) = ?
                 """,
                 (
                     str(status or "")[:40],
@@ -3976,11 +4078,53 @@ def update_sms_webhook_event(
                     str(message or "")[:500],
                     int(amount_toman or 0),
                     eid,
+                    int(owner_agent_id or 0),
                 ),
             )
         conn.commit()
     finally:
         conn.close()
+
+
+def find_recent_unmatched_sms_webhook_events(
+    amount_toman: int,
+    *,
+    max_age_minutes: int = 360,
+    owner_agent_id: int = 0,
+) -> List[Dict[str, Any]]:
+    """Return recent unmatched bank events whose normalized amount is exact.
+
+    owner_agent_id=0 restricts to admin-central events; a positive value
+    restricts to that agent's events. Old ownerless events (owner=0) are
+    never reused for agent-owned payments.
+    """
+    init_db()
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        return []
+    age = max(5, min(1440, int(max_age_minutes or 360)))
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=age)
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT * FROM userbot_sms_webhook_events "
+            "WHERE status='no_pending_match' AND COALESCE(created_at, '')>=? "
+            "AND COALESCE(owner_agent_id, 0) = ? "
+            "ORDER BY id DESC LIMIT 100",
+            (cutoff.strftime("%Y-%m-%d %H:%M:%S"), int(owner_agent_id or 0)),
+        )
+        events = [dict(row) for row in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+    return [
+        event
+        for event in events
+        if amount
+        in _sms_amount_candidates_toman(
+            int(event.get("amount_raw") or 0), str(event.get("currency_raw") or "")
+        )
+    ]
 
 
 def find_pending_card_payments_by_amount(
@@ -4052,7 +4196,13 @@ def find_prior_approved_sms_webhook_event(
     sender: str = "",
     reference: str = "",
     body: str = "",
+    owner_agent_id: int = 0,
 ) -> Optional[Dict[str, Any]]:
+    """Find a previously approved SMS event that looks like the same bank
+    message (anti-replay). The search is restricted to one owner scope:
+    owner_agent_id=0 for the central admin webhook, a positive agent id for
+    that agent's events only — an agent can never reuse an admin event and
+    vice versa."""
     init_db()
     amount = int(amount_toman or 0)
     if amount <= 0:
@@ -4078,10 +4228,11 @@ def find_prior_approved_sms_webhook_event(
             WHERE status = 'approved'
               AND amount_toman = ?
               AND event_id != ?
+              AND COALESCE(owner_agent_id, 0) = ?
             ORDER BY id DESC
             LIMIT 100
             """,
-            (amount, eid),
+            (amount, eid, int(owner_agent_id or 0)),
         )
         rows = [dict(r) for r in (cur.fetchall() or [])]
     finally:
@@ -4400,6 +4551,7 @@ def try_approve_payment_from_unmatched_sms(
             FROM userbot_sms_webhook_events
             WHERE status = 'no_pending_match'
               AND COALESCE(created_at, '') >= ?
+              AND COALESCE(owner_agent_id, 0) = 0
             ORDER BY id DESC
             LIMIT 100
             """,
@@ -4423,6 +4575,9 @@ def try_approve_payment_from_unmatched_sms(
             continue
 
         event_id = str(event.get("event_id") or "").strip()
+        # Anti-replay restricted to the central admin scope: events owned by
+        # agents were already excluded by the SQL filter above, but this check
+        # also covers the (legacy) ownerless rows consistently.
         prior_event = find_prior_approved_sms_webhook_event(
             event_id=event_id,
             amount_raw=int(event.get("amount_raw") or 0),
@@ -4431,6 +4586,7 @@ def try_approve_payment_from_unmatched_sms(
             sender=str(event.get("sender") or ""),
             reference=str(event.get("reference") or ""),
             body=str(event.get("body") or ""),
+            owner_agent_id=0,
         )
         if prior_event:
             update_sms_webhook_event(
@@ -6374,3 +6530,70 @@ def get_referral_admin_stats() -> Dict[str, Any]:
 
 # اطمینان از وجود جداول در اولین اجرا
 init_db()
+
+
+def find_prior_active_sms_webhook_event(
+    *,
+    event_id: str = "",
+    amount_toman: int = 0,
+    amount_raw: int = 0,
+    currency_raw: str = "",
+    sender: str = "",
+    reference: str = "",
+    body: str = "",
+    owner_agent_id: int = 0,
+) -> Optional[Dict[str, Any]]:
+    """Find a previous event in this owner scope carrying the SAME bank SMS
+    content (same sender/reference/body fingerprint) — regardless of whether
+    it is still queued, received, or already approved.
+
+    This blocks the well-known device behavior of re-sending the same SMS
+    with a freshly generated event_id: only the ORIGINAL event may proceed
+    to a payment; every re-send is treated as a duplicate.
+    """
+    init_db()
+    amount = int(amount_toman or 0)
+    if amount <= 0:
+        candidates = _sms_amount_candidates_toman(int(amount_raw or 0), str(currency_raw or ""))
+        amount = int(candidates[0]) if candidates else 0
+    if amount <= 0:
+        return None
+    eid = str(event_id or "").strip()
+    body_norm = str(body or "").strip()
+    ref_norm = re.sub(r"\D", "", str(reference or ""))
+    sender_norm = re.sub(r"\D", "", str(sender or ""))
+    if not (body_norm or ref_norm or sender_norm):
+        return None
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT * FROM userbot_sms_webhook_events
+            WHERE event_id != ?
+              AND amount_toman = ?
+              AND COALESCE(owner_agent_id, 0) = ?
+              AND status IN ('received', 'no_pending_match', 'ambiguous',
+                             'agency_queued', 'approved', 'approved_duplicate',
+                             'attached_manual_approved', 'agent_auto_disabled')
+            ORDER BY id DESC
+            LIMIT 100
+            """,
+            (eid, amount, int(owner_agent_id or 0)),
+        )
+        rows = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    for row in rows:
+        row_body = str(row.get("body") or "").strip()
+        row_ref = re.sub(r"\D", "", str(row.get("reference") or ""))
+        row_sender = re.sub(r"\D", "", str(row.get("sender") or ""))
+        same_body = bool(body_norm and row_body and body_norm == row_body)
+        same_ref = bool(ref_norm and row_ref and ref_norm == row_ref)
+        same_sender = bool(sender_norm and row_sender and sender_norm == row_sender)
+        if (same_body and (same_ref or (same_sender and not ref_norm and not row_ref))) \
+                or (same_ref and same_sender):
+            return row
+    return None

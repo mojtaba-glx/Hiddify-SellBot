@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from Shared import agent_db, database, hiddify_api, sub_aggregator, userbot_db
+from CustomerBot import database as customerbot_db
+from Shared import agent_db, agent_wallet_payments, agent_sms_webhook, database, hiddify_api, sub_aggregator, userbot_db
 
 logger = logging.getLogger(__name__)
 BYTES_PER_GB = 1024 ** 3
@@ -359,6 +360,87 @@ def _send_admin_sms_payment_report(payment: dict, amount_toman: int, sender: str
             )
         except Exception as fallback_error:
             logger.warning("Failed sending fallback SMS payment admin report payment_id=%s: %s", payment_id, fallback_error)
+
+
+def _send_agent_wallet_sms_payment_report(
+    payment: dict,
+    wallet: dict,
+    amount_toman: int,
+    sender: str,
+    reference: str,
+) -> None:
+    """Notify both sides after an actual automatic representative-wallet credit."""
+    payment_id = int((payment or {}).get("id") or 0)
+    agent_id = int((payment or {}).get("agent_id") or 0)
+    agent = agent_db.get_agent_by_id(agent_id) or {}
+    agent_name = str(
+        agent.get("full_name")
+        or agent.get("username")
+        or agent.get("telegram_id")
+        or f"نماینده #{agent_id}"
+    )
+    try:
+        receipt_meta = json.loads(str((payment or {}).get("receipt_image") or "{}"))
+        if not isinstance(receipt_meta, dict):
+            receipt_meta = {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        receipt_meta = {}
+
+    admin_token = str(_dotenv_get("ADMIN_BOT_TOKEN", "") or "").strip()
+    admin_id = _to_int(_dotenv_get("ADMIN_ID", "0"), 0)
+    pending_chat_id = _to_int(receipt_meta.get("admin_chat_id"), admin_id)
+    pending_message_id = _to_int(receipt_meta.get("admin_message_id"), 0)
+    if admin_token and pending_chat_id > 0 and pending_message_id > 0:
+        try:
+            _telegram_form_request(
+                admin_token,
+                "editMessageReplyMarkup",
+                {
+                    "chat_id": str(pending_chat_id),
+                    "message_id": str(pending_message_id),
+                    "reply_markup": json.dumps({"inline_keyboard": []}),
+                },
+            )
+        except Exception as exc:
+            logger.warning("Failed clearing agent wallet approval keyboard payment_id=%s: %s", payment_id, exc)
+
+    admin_text = (
+        "✅ شارژ کیف پول نماینده با پیامک بانک خودکار تایید شد.\n"
+        f"👤 نماینده: {agent_name}\n"
+        f"💰 مبلغ: {int(amount_toman or 0):,} تومان\n"
+        f"💳 موجودی جدید: {int((wallet or {}).get('balance') or 0):,} تومان\n"
+        f"🆔 شناسه پرداخت: {payment_id}\n"
+        f"📨 سرشماره: {sender or '-'}\n"
+        f"🔖 پیگیری SMS: {reference or '-'}"
+    )
+    if admin_token and admin_id > 0:
+        try:
+            _telegram_form_request(
+                admin_token,
+                "sendMessage",
+                {"chat_id": str(admin_id), "text": admin_text, "disable_web_page_preview": "true"},
+            )
+        except Exception as exc:
+            logger.warning("Failed notifying admin of agent wallet SMS approval payment_id=%s: %s", payment_id, exc)
+
+    agent_token = str(_dotenv_get("AGENT_BOT_TOKEN", "") or "").strip()
+    agent_telegram_id = _to_int(agent.get("telegram_id"), 0)
+    if agent_token and agent_telegram_id > 0:
+        try:
+            _telegram_form_request(
+                agent_token,
+                "sendMessage",
+                {
+                    "chat_id": str(agent_telegram_id),
+                    "text": (
+                        "✅ پرداخت شما با پیامک بانک به‌صورت خودکار تایید شد.\n\n"
+                        f"مبلغ {int(amount_toman or 0):,} تومان به کیف پول شما اضافه شد.\n"
+                        f"موجودی جدید: {int((wallet or {}).get('balance') or 0):,} تومان"
+                    ),
+                },
+            )
+        except Exception as exc:
+            logger.warning("Failed notifying agent of wallet SMS approval payment_id=%s: %s", payment_id, exc)
 
 
 def _clear_pending_admin_payment_keyboard(token: str, default_admin_id: int, receipt_meta: dict[str, str]) -> None:
@@ -906,13 +988,472 @@ class _SubHandler(BaseHTTPRequestHandler):
                 return
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
-            if path not in {"/payment/sms-webhook", "/sms-webhook"}:
-                self._write_json(404, {"ok": False, "error": "not_found"})
+            if path in {"/payment/sms-webhook", "/sms-webhook"}:
+                # مسیر مرکزی ادمین: پرداخت کاربران اصلی + شارژ کیف پول نماینده‌ها
+                self._handle_sms_webhook()
                 return
-            self._handle_sms_webhook()
+            agent_match = re.match(
+                r"^/payment/agent/(\d{1,12})/sms-webhook$", parsed.path
+            )
+            if agent_match:
+                # مسیر اختصاصی هر نماینده: فقط پرداخت مشتریان همان نماینده
+                self._handle_agent_sms_webhook(int(agent_match.group(1)))
+                return
+            self._write_json(404, {"ok": False, "error": "not_found"})
         except Exception as e:
             logger.exception("sms webhook request failed: %s", e)
             self._write_json(500, {"ok": False, "error": "internal_error"})
+
+    def _handle_agent_sms_webhook(self, agent_id: int) -> None:
+        """وب‌هوک اختصاصی نماینده: احراز هویت با Secret شخصی همان نماینده و
+        پردازش فقط پرداخت‌های مشتریان خودش — بدون هرگونه fallback سراسری."""
+        aid = int(agent_id or 0)
+        if aid <= 0:
+            self._write_json(404, {"ok": False, "error": "not_found"})
+            return
+
+        # نماینده باید موجود و فعال باشد؛ مسدود/حذف‌شده اجازه استفاده ندارد.
+        if not agent_sms_webhook.is_agent_usable(aid):
+            self._write_json(403, {"ok": False, "error": "agent_disabled"})
+            return
+
+        # وضعیت روشن/خاموش SMS خودِ نماینده (مستقل از ادمین).
+        if not agent_sms_webhook.is_agent_sms_enabled(aid):
+            self._write_json(403, {"ok": False, "error": "sms_webhook_disabled"})
+            return
+
+        # Secret باید متعلق به همین نماینده باشد؛ شناسه داخل URL مجوز نیست.
+        expected_secret = str(agent_sms_webhook.get_agent_sms_settings(aid).get("secret") or "")
+        if not expected_secret:
+            self._write_json(503, {"ok": False, "error": "sms_webhook_secret_not_configured"})
+            return
+        provided_secret = str(self.headers.get("X-SellBot-Sms-Secret") or "").strip()
+        if not hmac.compare_digest(provided_secret, expected_secret):
+            self._write_json(401, {"ok": False, "error": "invalid_secret"})
+            return
+
+        payload = self._read_webhook_payload()
+        if isinstance(payload, tuple):
+            status_code, body = payload
+            self._write_json(status_code, body)
+            return
+        self._process_agent_sms_event(aid, payload)
+
+    def _read_webhook_payload(self):
+        """Read/validate the JSON body; returns dict payload or (status, body)."""
+        try:
+            declared_length = int(self.headers.get("Content-Length", "0") or "0")
+        except Exception:
+            declared_length = 0
+        if declared_length <= 0:
+            return (400, {"ok": False, "error": "empty_body"})
+        if declared_length > 64 * 1024:
+            return (413, {"ok": False, "error": "payload_too_large"})
+        try:
+            payload = json.loads(self.rfile.read(declared_length).decode("utf-8", errors="ignore"))
+        except Exception:
+            return (400, {"ok": False, "error": "invalid_json"})
+        if not isinstance(payload, dict):
+            return (400, {"ok": False, "error": "invalid_payload"})
+        return payload
+
+    def _process_agent_sms_event(self, agent_id: int, payload: dict) -> None:
+        event_id = str(payload.get("event_id") or self.headers.get("X-SellBot-Event-Id") or "").strip()
+        amount_raw = _to_int(payload.get("amount"), 0)
+        currency_raw = _normalize_sms_currency(str(payload.get("currency") or ""))
+        reference = str(payload.get("reference") or "").strip()
+        sender = str(payload.get("sender") or "").strip()
+        card_last4 = re.sub(r"\D", "", str(payload.get("card_last4") or ""))[-4:]
+        body = str(payload.get("body") or "")
+        received_at_ms = _to_int(payload.get("received_at"), 0)
+        device_time_ms = _to_int(payload.get("device_time"), 0)
+        is_test = bool(payload.get("test"))
+
+        if not event_id:
+            self._write_json(400, {"ok": False, "error": "event_id_required"})
+            return
+        if len(event_id) > 128 or any(ord(ch) < 32 or ord(ch) == 127 for ch in event_id):
+            self._write_json(400, {"ok": False, "error": "invalid_event_id"})
+            return
+
+        # ثبت رویداد با مالک احرازشده (agent_id از مسیر + Secret تأییدشده)،
+        # نه از داده دلخواه درخواست. مالک‌های دیگر هرگز به این رویداد
+        # دسترسی برای تطبیق ندارند.
+        if is_test:
+            inserted, existing = userbot_db.record_sms_webhook_event(
+                {
+                    "event_id": f"agent{agent_id}:{event_id}",
+                    "sender": sender,
+                    "amount_raw": amount_raw,
+                    "currency_raw": currency_raw,
+                    "amount_toman": 0,
+                    "reference": reference,
+                    "card_last4": card_last4,
+                    "body": body,
+                    "status": "test_received",
+                    "message": "test webhook received (agent)",
+                    "received_at": received_at_ms,
+                    "device_time": device_time_ms,
+                },
+                owner_agent_id=agent_id,
+            )
+            self._write_json(200, {"ok": True, "test": True, "duplicate": not inserted})
+            return
+
+        # تایید خودکار خودِ نماینده باید روشن باشد؛ این وضعیت مستقل از ادمین
+        # و مستقل از نماینده‌های دیگر است.
+        from AgentBot.database import get_setting as agent_get_setting
+        try:
+            auto_confirm = bool(agent_get_setting(agent_id, "sms_auto_confirm", False))
+        except Exception:
+            auto_confirm = False
+
+        candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
+        if not candidates:
+            userbot_db.record_sms_webhook_event(
+                {
+                    "event_id": event_id,
+                    "sender": sender,
+                    "amount_raw": amount_raw,
+                    "currency_raw": currency_raw,
+                    "amount_toman": 0,
+                    "reference": reference,
+                    "card_last4": card_last4,
+                    "body": body,
+                    "status": "invalid_amount",
+                    "message": "amount not found or invalid",
+                    "received_at": received_at_ms,
+                    "device_time": device_time_ms,
+                },
+                owner_agent_id=agent_id,
+            )
+            self._write_json(422, {"ok": False, "error": "invalid_amount"})
+            return
+
+        inserted, existing = userbot_db.record_sms_webhook_event(
+            {
+                "event_id": event_id,
+                "sender": sender,
+                "amount_raw": amount_raw,
+                "currency_raw": currency_raw,
+                "amount_toman": candidates[0],
+                "reference": reference,
+                "card_last4": card_last4,
+                "body": body,
+                "status": "received",
+                "message": "received (agent webhook)",
+                "received_at": received_at_ms,
+                "device_time": device_time_ms,
+            },
+            owner_agent_id=agent_id,
+        )
+        if not inserted:
+            owner = int((existing or {}).get("owner_agent_id") or 0)
+            status = str((existing or {}).get("status") or "").strip().lower()
+            if owner != agent_id:
+                # رویداد متعلق به محدوده دیگری است؛ هرگز در محدوده این
+                # نماینده تطبیق داده نمیشود (ضد cross-scope replay).
+                self._write_json(200, {
+                    "ok": True, "duplicate": True,
+                    "status": (existing or {}).get("status"),
+                    "matched_payment_id": 0,
+                })
+                return
+            # مشخصات معتبر پیامک برای retry و تشخیص تکرار حفظ میشوند —
+            # currency واقعی لازم است تا ریال ده‌برابر تومان حساب نشود.
+            retry_raw = int((existing or {}).get("amount_raw") or 0) or amount_raw
+            retry_currency = str((existing or {}).get("currency_raw") or currency_raw)
+            retry_last4 = re.sub(r"\D", "", str((existing or {}).get("card_last4") or card_last4))[-4:]
+            retry_sender = str((existing or {}).get("sender") or sender)
+            retry_reference = str((existing or {}).get("reference") or reference)
+            retry_body = str((existing or {}).get("body") or body)
+            # خطای موقت صف (approve_failed/agency_queue_failed) نیز قابل
+            # retry است تا صف با ارسال مجدد همان رویداد بازیابی شود.
+            retryable_statuses = {
+                "received", "no_pending_match", "ambiguous",
+                "agent_auto_disabled", "approve_failed", "agency_queue_failed",
+            }
+            if status in retryable_statuses:
+                code, response = self._agent_try_match_and_queue(
+                    agent_id,
+                    event_id=event_id,
+                    amount_raw=retry_raw,
+                    currency_raw=retry_currency,
+                    card_last4=retry_last4,
+                    sms_time_ms=int((existing or {}).get("received_at") or received_at_ms),
+                    auto_confirm=auto_confirm,
+                    reference=retry_reference,
+                    sender=retry_sender,
+                    body=retry_body,
+                )
+                response["duplicate"] = True
+                response["retry"] = True
+                response["previous_status"] = status
+                self._write_json(code, response)
+                return
+            self._write_json(200, {
+                "ok": True, "duplicate": True,
+                "status": (existing or {}).get("status"),
+                "matched_payment_id": (existing or {}).get("matched_payment_id"),
+            })
+            return
+
+        code, response = self._agent_try_match_and_queue(
+            agent_id,
+            event_id=event_id,
+            amount_raw=amount_raw,
+            currency_raw=currency_raw,
+            card_last4=card_last4,
+            sms_time_ms=int(received_at_ms or device_time_ms or 0),
+            auto_confirm=auto_confirm,
+            reference=reference,
+            sender=sender,
+            body=body,
+        )
+        self._write_json(code, response)
+
+    def _agent_try_match_and_queue(
+        self,
+        agent_id: int,
+        *,
+        event_id: str,
+        amount_raw: int,
+        currency_raw: str,
+        card_last4: str,
+        sms_time_ms: int,
+        auto_confirm: bool,
+        reference: str = "",
+        sender: str = "",
+        body: str = "",
+    ) -> tuple[int, dict]:
+        def update_agent_event(**fields) -> None:
+            userbot_db.update_sms_webhook_event(
+                event_id, owner_agent_id=agent_id, **fields
+            )
+
+        # تبدیل مبلغ بر اساس واحد واقعی پیامک — currency خالی هرگز
+        # به‌عنوان تومان تفسیر نمیشود (ضد تأیید مبلغ ده‌برابری).
+        candidates = _sms_amount_candidates_toman(amount_raw, currency_raw)
+        if not candidates:
+            update_agent_event(
+                status="invalid_amount",
+                message="amount not found or invalid", amount_toman=0,
+            )
+            return 422, {"ok": False, "error": "invalid_amount"}
+
+        # همان SMS قبلاً برای پرداختی از همین محدوده تأیید شده؟ (ضد تکرار —
+        # فقط event_id کافی نیست؛ sender/reference/body هم مقایسه میشوند)
+        prior = userbot_db.find_prior_approved_sms_webhook_event(
+            event_id=event_id,
+            amount_raw=amount_raw,
+            currency_raw=currency_raw,
+            amount_toman=candidates[0],
+            sender=sender,
+            reference=reference,
+            body=body,
+            owner_agent_id=agent_id,
+        )
+        if prior:
+            update_agent_event(
+                status="approved_duplicate",
+                matched_payment_id=int((prior or {}).get("matched_payment_id") or 0),
+                message="same bank SMS was already approved before (agent scope)",
+                amount_toman=candidates[0],
+            )
+            return 200, {
+                "ok": True, "matched": True, "duplicate": True,
+                "status": "approved_duplicate",
+                "message": "bank_sms_already_approved",
+                "amount_toman": candidates[0],
+                "matched_payment_id": int((prior or {}).get("matched_payment_id") or 0),
+                "agent_id": agent_id,
+            }
+
+        # ضد تکرار قوی‌تر: همان SMS (sender/reference/body یکسان) با event_id
+        # جدید (ری‌سند دستگاه) که قبلاً در همین محدوده ثبت/رزرو/تأیید شده
+        # است — هرگز برای پرداخت دیگری وارد صف نمیشود.
+        prior_active = userbot_db.find_prior_active_sms_webhook_event(
+            event_id=event_id,
+            amount_toman=candidates[0],
+            amount_raw=amount_raw,
+            currency_raw=currency_raw,
+            sender=sender,
+            reference=reference,
+            body=body,
+            owner_agent_id=agent_id,
+        )
+        if prior_active:
+            update_agent_event(
+                status="approved_duplicate",
+                matched_payment_id=int((prior_active or {}).get("matched_payment_id") or 0),
+                message="same bank SMS already recorded under another event id (agent scope)",
+                amount_toman=candidates[0],
+            )
+            return 200, {
+                "ok": True, "matched": True, "duplicate": True,
+                "status": "approved_duplicate",
+                "message": "bank_sms_already_recorded",
+                "amount_toman": candidates[0],
+                "original_event_id": str((prior_active or {}).get("event_id") or ""),
+                "agent_id": agent_id,
+            }
+
+        # تأیید دستی اخیر ادمینِ همین نماینده (CustomerBot) → پیامک دیرهنگام
+        # باید به همان پرداخت بچسبد، نه اینکه پرداخت دیگری را تأیید کند.
+        for amount_toman in candidates:
+            manual = customerbot_db.find_recently_agent_approved_card_payments(
+                agent_id,
+                int(amount_toman),
+                max_age_minutes=_sms_webhook_manual_window_minutes(),
+                sms_time_ms=sms_time_ms,
+            )
+            if len(manual) > 1:
+                update_agent_event(
+                    status="ambiguous",
+                    message="multiple manually approved agent customer payments matched",
+                    amount_toman=int(amount_toman),
+                )
+                return 409, {
+                    "ok": False, "matched": False,
+                    "error": "ambiguous_manual_payments", "scope": "agent",
+                    "agent_id": agent_id, "amount_toman": int(amount_toman),
+                    "count": len(manual),
+                }
+            if manual:
+                payment = manual[0]
+                payment_id = int(payment.get("id") or 0)
+                customerbot_db.attach_sms_event_to_customer_payment(
+                    agent_id, payment_id,
+                    event_id=event_id, reference=reference,
+                    sender=sender, amount_raw=amount_raw, currency_raw=currency_raw,
+                )
+                update_agent_event(
+                    status="approved",
+                    matched_payment_id=payment_id,
+                    message="bank SMS attached to agent-approved customer payment",
+                    amount_toman=int(amount_toman),
+                )
+                return 200, {
+                    "ok": True, "matched": True,
+                    "status": "attached_manual_agent_customer",
+                    "payment_id": payment_id, "agent_id": agent_id,
+                    "amount_toman": int(amount_toman),
+                    "message": "bank SMS attached to manually approved customer payment",
+                }
+
+        if not auto_confirm:
+            # تایید خودکار این نماینده خاموش است: هیچ پردازش مالی انجام نمیشود.
+            update_agent_event(
+                status="agent_auto_disabled",
+                message="agent sms auto-confirm is disabled; payment left for manual review",
+                amount_toman=candidates[0],
+            )
+            return 202, {
+                "ok": True, "matched": False,
+                "status": "agent_auto_disabled",
+                "agent_id": agent_id,
+                "message": "sms auto-confirm disabled for this agent",
+            }
+
+        # فقط پرداخت‌های مشتریان همین نماینده — فیلتر agent_id داخل SQL و
+        # پیش از LIMIT اعمال میشود (پرداخت دیگر نماینده‌ها سهمیه را نمی‌برد).
+        matches: list = []
+        matched_amount = 0
+        for amount_toman in candidates:
+            matches = customerbot_db.find_pending_card_payments_by_amount(
+                int(amount_toman),
+                max_age_minutes=_sms_webhook_max_pending_age_minutes(),
+                sms_time_ms=sms_time_ms,
+                agent_id=agent_id,
+            )
+            if matches:
+                matched_amount = int(amount_toman)
+                break
+
+        if not matches:
+            update_agent_event(
+                status="no_pending_match",
+                message=f"no pending card payment for this agent (candidates={candidates})",
+                amount_toman=candidates[0],
+            )
+            return 202, {
+                "ok": True, "matched": False, "status": "no_pending_match",
+                "agent_id": agent_id,
+                "amount_candidates_toman": candidates,
+            }
+
+        if len(matches) > 1:
+            update_agent_event(
+                status="ambiguous",
+                message=f"multiple pending customer payments matched for agent={agent_id}",
+                amount_toman=matched_amount,
+            )
+            return 409, {
+                "ok": False, "matched": False,
+                "error": "ambiguous_pending_payments", "scope": "agent",
+                "agent_id": agent_id,
+                "amount_toman": matched_amount, "count": len(matches),
+            }
+
+        agency_pay = matches[0]
+        agency_pay_id = int(agency_pay.get("id") or 0)
+        try:
+            queued = customerbot_db.enqueue_sms_auto_approval(
+                agent_id, agency_pay_id, event_id, matched_amount,
+                card_last4=card_last4,
+            )
+        except Exception as exc:
+            queued = False
+            logger.warning("agent sms enqueue failed (agent=%s): %s", agent_id, exc)
+        reservation = None
+        if not queued:
+            try:
+                reservation = customerbot_db.get_pending_sms_auto_queue_for_payment(
+                    agent_id, agency_pay_id
+                )
+            except Exception:
+                reservation = None
+        reserved_by_other_event = bool(
+            reservation
+            and str(reservation.get("event_id") or "") != str(event_id or "")
+        )
+        update_agent_event(
+            status=(
+                "agency_queued" if queued
+                else "payment_reserved" if reserved_by_other_event
+                else "approve_failed"
+            ),
+            matched_payment_id=agency_pay_id if queued else 0,
+            message=(
+                f"agent customer payment queued for auto approval (agent_id={agent_id})"
+                if queued
+                else "customer payment is already reserved by another bank SMS"
+                if reserved_by_other_event
+                else "agent match found but enqueue failed"
+            ),
+            amount_toman=matched_amount,
+        )
+        if queued:
+            return 200, {
+                "ok": True, "matched": True, "status": "agency_queued",
+                "payment_id": agency_pay_id, "agent_id": agent_id,
+                "amount_toman": matched_amount,
+                "message": "agent customer payment queued for automatic approval",
+            }
+        if reserved_by_other_event:
+            return 409, {
+                "ok": False,
+                "matched": False,
+                "status": "payment_reserved",
+                "error": "payment_already_reserved",
+                "payment_id": agency_pay_id,
+                "agent_id": agent_id,
+            }
+        # خطای موقت صف: موفقیت قطعی نیست؛ اپ باید دوباره تلاش کند.
+        return 500, {
+            "ok": False, "matched": True, "status": "agency_queue_failed",
+            "payment_id": agency_pay_id, "agent_id": agent_id,
+        }
 
     def _handle_sms_webhook(self) -> None:
         if not _env_bool(SMS_WEBHOOK_ENABLED_ENV, False):
@@ -1196,6 +1737,71 @@ class _SubHandler(BaseHTTPRequestHandler):
                     "message": "bank SMS attached to admin-approved payment",
                 }
 
+        # The representative's own wallet top-up lives in AgentBot/agent_bot.db,
+        # separate from both UserBot payments and reseller-customer payments.
+        # Attach late bank SMS messages to a recent manual approval first so the
+        # same deposit can never approve another pending wallet top-up.
+        try:
+            _agentbot_db = agent_wallet_payments.agentbot_db
+
+            for amount_toman in candidates:
+                manual_wallet_matches = _agentbot_db.find_recently_approved_wallet_charge_payments(
+                    int(amount_toman),
+                    max_age_minutes=manual_window,
+                    sms_time_ms=sms_time_ms,
+                )
+                if card_last4:
+                    manual_wallet_matches = [
+                        item
+                        for item in manual_wallet_matches
+                        if str((item or {}).get("card_last4") or "").strip() == card_last4
+                    ]
+                if len(manual_wallet_matches) > 1:
+                    userbot_db.update_sms_webhook_event(
+                        event_id,
+                        status="ambiguous",
+                        message="multiple manually approved representative wallet payments matched",
+                        amount_toman=int(amount_toman),
+                    )
+                    return 409, {
+                        "ok": False,
+                        "matched": False,
+                        "error": "ambiguous_manual_wallet_payments",
+                        "scope": "agent_wallet",
+                        "amount_toman": int(amount_toman),
+                        "count": len(manual_wallet_matches),
+                    }
+                if manual_wallet_matches:
+                    manual_payment = manual_wallet_matches[0]
+                    payment_id = int(manual_payment.get("id") or 0)
+                    ok, message, updated, _wallet, _new = agent_wallet_payments.approve_wallet_charge_from_sms(
+                        payment_id,
+                        event_id=event_id,
+                        reference=reference,
+                        sender=sender,
+                        amount_raw=amount_raw,
+                        currency_raw=currency_raw,
+                    )
+                    userbot_db.update_sms_webhook_event(
+                        event_id,
+                        status="approved" if ok else "approve_failed",
+                        matched_payment_id=payment_id if ok else 0,
+                        message=message,
+                        amount_toman=int(amount_toman),
+                    )
+                    return 200 if ok else 500, {
+                        "ok": bool(ok),
+                        "matched": bool(ok),
+                        "status": "attached_manual_agent_wallet" if ok else "approve_failed",
+                        "scope": "agent_wallet",
+                        "payment_id": payment_id,
+                        "agent_id": int((updated or manual_payment).get("agent_id") or 0),
+                        "amount_toman": int(amount_toman),
+                        "message": message,
+                    }
+        except Exception as exc:
+            logger.warning("manual agent wallet SMS attachment failed: %s", exc)
+
         matches: list[dict] = []
         matched_amount = 0
         for amount_toman in candidates:
@@ -1209,89 +1815,124 @@ class _SubHandler(BaseHTTPRequestHandler):
                 matched_amount = int(amount_toman)
                 break
 
-        if not matches:
-            # تطبیق با پرداخت‌های مشتریانِ نمایندگی‌ها (دیتابیس CustomerBot) —
-            # پرداخت صف می‌شود تا پروسه AgentBot سرویس را بسازد و تحویل دهد
-            agency_matches: list = []
-            agency_matched_amount = 0
+        # ضد تطبیق مبهم: حتی اگر پرداخت UserBot واجد شرایط بود، پرداخت
+        # هم‌مبلغ شارژ کیف پول نماینده نباید نادیده گرفته شود — رویداد
+        # مبهم اعلام میشود و انتخاب تصادفی انجام نمیشود. (پرداخت مشتریان
+        # نمایندگی اصلاً در محدودهٔ مسیر مرکزی نیست.)
+        if matches:
+            agent_wallet_matches: list = []
             try:
-                from CustomerBot.database import find_pending_card_payments_by_amount as _find_agency_pending
+                _agentbot_db = agent_wallet_payments.agentbot_db
                 for amount_toman in candidates:
-                    agency_matches = _find_agency_pending(
+                    agent_wallet_matches = _agentbot_db.find_pending_wallet_charge_payments_by_amount(
                         int(amount_toman),
+                        card_last4=card_last4,
                         max_age_minutes=_sms_webhook_max_pending_age_minutes(),
                         sms_time_ms=sms_time_ms,
                     )
-                    if agency_matches:
-                        agency_matched_amount = int(amount_toman)
+                    if agent_wallet_matches:
                         break
             except Exception as exc:
-                logger.warning("agency sms match failed: %s", exc)
-
-            if agency_matches:
-                if len(agency_matches) > 1:
-                    userbot_db.update_sms_webhook_event(
-                        event_id,
-                        status="ambiguous",
-                        message=f"multiple agency pending card payments matched amount={agency_matched_amount}",
-                        amount_toman=agency_matched_amount,
-                    )
-                    return 409, {
-                        "ok": False,
-                        "matched": False,
-                        "error": "ambiguous_pending_payments",
-                        "scope": "agency",
-                        "amount_toman": agency_matched_amount,
-                        "count": len(agency_matches),
-                    }
-                agency_pay = agency_matches[0]
-                agency_id = int(agency_pay.get("agent_id") or 0)
-                agency_pay_id = int(agency_pay.get("id") or 0)
-                try:
-                    from CustomerBot.database import enqueue_sms_auto_approval as _enqueue_agency
-                    queued = _enqueue_agency(
-                        agency_id,
-                        agency_pay_id,
-                        event_id,
-                        agency_matched_amount,
-                        card_last4=card_last4,
-                    )
-                except Exception as exc:
-                    queued = False
-                    logger.warning("agency sms enqueue failed: %s", exc)
+                logger.warning("agent wallet ambiguity check failed: %s", exc)
+            if agent_wallet_matches:
                 userbot_db.update_sms_webhook_event(
                     event_id,
-                    status="agency_queued" if queued else "approve_failed",
-                    matched_payment_id=agency_pay_id if queued else 0,
-                    message=(
-                        f"agency payment queued for auto approval (agent_id={agency_id})"
-                        if queued
-                        else "agency match found but enqueue failed"
-                    ),
-                    amount_toman=agency_matched_amount,
+                    status="ambiguous",
+                    message="same amount matched payments in multiple scopes (admin/agent wallet)",
+                    amount_toman=matched_amount,
                 )
-                if queued:
-                    return 200, {
-                        "ok": True,
-                        "matched": True,
-                        "status": "agency_queued",
-                        "payment_id": agency_pay_id,
-                        "agent_id": agency_id,
-                        "amount_toman": agency_matched_amount,
-                        "message": "agency payment queued for automatic approval",
-                    }
-                return 500, {
+                return 409, {
                     "ok": False,
-                    "matched": True,
-                    "status": "agency_queue_failed",
-                    "payment_id": agency_pay_id,
-                    "agent_id": agency_id,
+                    "matched": False,
+                    "error": "ambiguous_pending_payments",
+                    "scope": "cross_scope",
+                    "amount_toman": matched_amount,
+                    "scopes": ["admin"] + (["agent_wallet"] if agent_wallet_matches else []),
+                }
+
+        if not matches:
+            # مسیر مرکزی فقط شارژ کیف پول عمده نماینده‌ها را تطبیق میکند؛
+            # پرداخت مشتریان نمایندگی فقط از مسیر اختصاصی همان نماینده
+            # (Secret و URL اختصاصی) قابل پردازش است — هیچ fallback
+            # سراسری به customer_payments وجود ندارد.
+            agent_wallet_matches: list = []
+            agent_wallet_amount = 0
+            try:
+                _agentbot_db = agent_wallet_payments.agentbot_db
+                for amount_toman in candidates:
+                    agent_wallet_matches = _agentbot_db.find_pending_wallet_charge_payments_by_amount(
+                        int(amount_toman),
+                        card_last4=card_last4,
+                        max_age_minutes=_sms_webhook_max_pending_age_minutes(),
+                        sms_time_ms=sms_time_ms,
+                    )
+                    if agent_wallet_matches:
+                        agent_wallet_amount = int(amount_toman)
+                        break
+            except Exception as exc:
+                logger.warning("agent wallet sms match failed: %s", exc)
+
+            if len(agent_wallet_matches) > 1:
+                userbot_db.update_sms_webhook_event(
+                    event_id,
+                    status="ambiguous",
+                    message="multiple representative wallet payments matched",
+                    amount_toman=agent_wallet_amount,
+                )
+                return 409, {
+                    "ok": False,
+                    "matched": False,
+                    "error": "ambiguous_pending_payments",
+                    "scope": "agent_wallet",
+                    "amount_toman": agent_wallet_amount,
+                    "count": len(agent_wallet_matches),
+                }
+
+            if agent_wallet_matches:
+                wallet_payment = agent_wallet_matches[0]
+                wallet_payment_id = int(wallet_payment.get("id") or 0)
+                try:
+                    ok, message, updated, wallet, newly_approved = agent_wallet_payments.approve_wallet_charge_from_sms(
+                        wallet_payment_id,
+                        event_id=event_id,
+                        reference=reference,
+                        sender=sender,
+                        amount_raw=amount_raw,
+                        currency_raw=currency_raw,
+                    )
+                except Exception as exc:
+                    ok, message, updated, wallet, newly_approved = False, str(exc), None, None, False
+                    logger.exception("agent wallet SMS approval failed payment_id=%s", wallet_payment_id)
+                userbot_db.update_sms_webhook_event(
+                    event_id,
+                    status="approved" if ok else "approve_failed",
+                    matched_payment_id=wallet_payment_id if ok else 0,
+                    message=message,
+                    amount_toman=agent_wallet_amount,
+                )
+                if ok and newly_approved:
+                    _send_agent_wallet_sms_payment_report(
+                        updated or wallet_payment,
+                        wallet or {},
+                        agent_wallet_amount,
+                        sender,
+                        reference,
+                    )
+                return 200 if ok else 500, {
+                    "ok": bool(ok),
+                    "matched": bool(ok),
+                    "status": "approved" if ok else "approve_failed",
+                    "scope": "agent_wallet",
+                    "payment_id": wallet_payment_id,
+                    "agent_id": int((updated or wallet_payment).get("agent_id") or 0),
+                    "amount_toman": agent_wallet_amount,
+                    "message": message,
                 }
 
             userbot_db.update_sms_webhook_event(
                 event_id,
                 status="no_pending_match",
-                message=f"no pending card payment for candidates={candidates}",
+                message=f"no pending admin-scope payment for candidates={candidates}",
                 amount_toman=candidates[0],
             )
             return 202, {

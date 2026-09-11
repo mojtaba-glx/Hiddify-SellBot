@@ -611,11 +611,15 @@ def deduct_wallet(agent_id: int, amount: int, description: str = "", service_id:
         """,
         (agent_id, amount, description or "خرید سرویس", service_id, now),
     )
+    tx_id = int(cur.lastrowid or 0)
     conn.commit()
     cur.execute("SELECT * FROM agent_wallets WHERE agent_id = ?", (agent_id,))
     row = cur.fetchone()
     conn.close()
-    return True, dict(row) if row else get_wallet(agent_id)
+    wallet_info = dict(row) if row else get_wallet(agent_id)
+    # شناسه تراکنش برای اتصال قطعی بعدی به سرویس واقعی (مثلاً پس از ساخت سرویس)
+    wallet_info["_transaction_id"] = tx_id
+    return True, wallet_info
 
 
 def refund_wallet(agent_id: int, amount: int, description: str = "", service_id: int = 0) -> Dict[str, Any]:
@@ -1456,14 +1460,23 @@ def get_inactive_services_by_agent_paged(agent_id: int, page: int = 1, page_size
 
 
 def get_agent_services_stats(agent_id: int) -> Dict[str, Any]:
-    """آمار سرویس‌های یک نماینده برای نوار داشبورد.
+    """آمار سرویس‌های یک نماینده — منطق وضعیت انحصاریِ مشترک با فیلترها.
+
+    وضعیت‌ها هم‌پوشان نیستند:
+      - expired     : زمان پایان مشخص و گذشته (UTC) یا در نبود end_date
+                      days_left منفی — مستقل از is_active.
+      - active      : منقضی نیست و is_active = 1.
+      - inactive    : منقضی نیست و is_active = 0.
+      - near_expiry : فعال است و اعتبار مثبت آن حداکثر ۳ روز است.
+      - مابقی (end_date خالی و days_left=0) → «نامشخص»؛ حدس زده نمی‌شود.
 
     Returns:
         {
             "total": int,
             "active": int,
             "inactive": int,
-            "near_expiry": int,     # تعداد سرویس‌هایی که تا ۳ روز دیگر منقضی می‌شوند
+            "near_expiry": int,
+            "expired": int,
             "top_server": str,      # عنوان پرتکرارترین سرور (به همراه flag) یا ""
             "top_server_count": int,
         }
@@ -1475,15 +1488,17 @@ def get_agent_services_stats(agent_id: int) -> Dict[str, Any]:
         base = "FROM agent_services WHERE agent_id = ? AND (deleted_at IS NULL OR deleted_at = '')"
         cur.execute(f"SELECT COUNT(*) AS c {base}", (agent_id,))
         total = int(cur.fetchone()["c"] or 0)
-        cur.execute(f"SELECT COUNT(*) AS c {base} AND is_active = 1", (agent_id,))
-        active = int(cur.fetchone()["c"] or 0)
 
-        # نزدیک انقضا: کمتر یا مساوی ۳ روز باقی‌مانده (هم‌چون منقضی نشده)
-        cur.execute(
-            f"SELECT COUNT(*) AS c {base} AND days_left >= 0 AND days_left <= 3",
-            (agent_id,),
-        )
-        near_expiry = int(cur.fetchone()["c"] or 0)
+        now_str = _utcnow_naive().strftime("%Y-%m-%d %H:%M:%S")
+        status_sql = _service_status_sql(now_str)
+        counts: Dict[str, int] = {}
+        for key in ("active", "inactive", "near", "expired"):
+            cur.execute(f"SELECT COUNT(*) AS c {base} AND {status_sql[key]}", (agent_id,))
+            counts[key] = int(cur.fetchone()["c"] or 0)
+        active = counts["active"]
+        inactive = counts["inactive"]
+        near_expiry = counts["near"]
+        expired = counts["expired"]
 
         # پرتکرارترین سرور
         cur.execute(
@@ -1499,11 +1514,197 @@ def get_agent_services_stats(agent_id: int) -> Dict[str, Any]:
         return {
             "total": total,
             "active": active,
-            "inactive": total - active,
+            "inactive": inactive,
             "near_expiry": near_expiry,
+            "expired": expired,
             "top_server": top_server,
             "top_server_count": top_server_count,
         }
+    finally:
+        conn.close()
+
+
+# -----------------------------------------------
+#   ادمین: لیست/جستجو/مرتب‌سازی سرویس‌های یک نماینده
+# -----------------------------------------------
+
+def _utcnow_naive() -> datetime:
+    """زمان فعلی به‌صورت UTC بدون timezone — هم‌قرارداد با ذخیره‌سازی end_date."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _service_status_sql(now_str: str) -> Dict[str, str]:
+    """شرط‌های SQL وضعیت سرویس — منطق مشترک و انحصاری برای آمار/فیلتر/رابط.
+
+    - expired  : زمان پایان مشخص و گذشته، یا در نبود end_date مقدار days_left
+                 منفی — مستقل از is_active.
+    - inactive : منقضی نباشد و is_active = 0.
+    - active   : منقضی نباشد و is_active = 1.
+    - near     : فعال و اعتبار مثبت با حداکثر ۳ روز باقی‌مانده.
+    unknown (end_date خالی و days_left=0) در هیچ‌کدام حدس زده نمی‌شود.
+    """
+    expired = (
+        "((end_date IS NOT NULL AND end_date != '' AND end_date < {now}) "
+        "OR ((end_date IS NULL OR end_date = '') AND days_left < 0))"
+    ).format(now="'%s'" % now_str)
+    not_expired = f"(NOT {expired})"
+    active = f"({not_expired} AND is_active = 1)"
+    near = (
+        f"({active} AND ("
+        f"(end_date IS NOT NULL AND end_date != '' AND end_date <= {{plus3}}) "
+        f"OR (days_left > 0 AND days_left <= 3)"
+        f"))"
+    ).format(plus3="'%s'" % (datetime.strptime(now_str, "%Y-%m-%d %H:%M:%S") + timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S"))
+    return {
+        "expired": expired,
+        "not_expired": not_expired,
+        "active": active,
+        "inactive": f"({not_expired} AND is_active = 0)",
+        "near": near,
+    }
+
+
+AGENT_SERVICE_SORTS = ("newest", "expiry", "name")
+
+
+def list_services_by_agent_sorted(
+    agent_id: int,
+    page: int = 1,
+    page_size: int = 8,
+    status_filter: str = "all",
+    sort: str = "newest",
+    search: str = "",
+) -> Tuple[List[Dict[str, Any]], int]:
+    """لیست سرویس‌های یک نماینده با فیلتر/مرتب‌سازی/جستجو (سمت ادمین).
+
+    status_filter (منطق انحصاریِ مشترک با آمار — _service_status_sql):
+      - all      : همه
+      - active   : منقضی نیست و is_active = 1
+      - inactive : منقضی نیست و is_active = 0 (با منقضی اشتباه گرفته نمی‌شود)
+      - expired  : اعتبار تمام‌شده (end_date در گذشته‌ی UTC یا days_left < 0)
+    sort:
+      - newest : جدیدترین (id نزولی)
+      - expiry : نزدیک‌ترین انقضا (سرویس بدون تاریخ انقضا در انتها)
+      - name   : بر اساس نام
+    search: جستجوی جزئی در نام سرویس، شناسه ۷ رقمی (comment code:)، UUID و
+    تطبیق دقیق id داخلی نمایش‌داده‌شده در دکمه‌ها (مثل 66 یا #66).
+    سرویس‌های حذف‌شده (deleted_at) هرگز برنمی‌گردند.
+    """
+    init_db()
+    page = max(1, int(page or 1))
+    status_filter = str(status_filter or "all").strip().lower()
+    if status_filter not in {"all", "active", "inactive", "expired"}:
+        status_filter = "all"
+    sort = str(sort or "newest").strip().lower()
+    if sort not in AGENT_SERVICE_SORTS:
+        sort = "newest"
+    term = str(search or "").strip()
+
+    now_str = _utcnow_naive().strftime("%Y-%m-%d %H:%M:%S")
+    status_sql = _service_status_sql(now_str)
+
+    where = ["agent_id = ?", "(deleted_at IS NULL OR deleted_at = '')"]
+    params: List[Any] = [int(agent_id)]
+
+    if status_filter == "active":
+        where.append(status_sql["active"])
+    elif status_filter == "inactive":
+        where.append(status_sql["inactive"])
+    elif status_filter == "expired":
+        where.append(status_sql["expired"])
+
+    if term:
+        like = f"%{term}%"
+        condition = (
+            "(LOWER(name) LIKE LOWER(?) OR LOWER(panel_user_uuid) LIKE LOWER(?) "
+            "OR comment LIKE ?)"
+        )
+        params.extend([like, like, f"%code:{term}%"])
+        # تطبیق دقیق id داخلی (مثل 66 یا #66) — جستجوی «6» نباید 66/106 را برگرداند
+        digits = term.lstrip("#").strip()
+        if digits.isdigit():
+            condition = condition[:-1] + f" OR id = {int(digits)})"
+        where.append(condition)
+
+    where_sql = " AND ".join(where)
+
+    if sort == "expiry":
+        order_sql = (
+            "CASE WHEN end_date IS NULL OR end_date = '' THEN 1 ELSE 0 END, "
+            "end_date ASC, id DESC"
+        )
+    elif sort == "name":
+        order_sql = "LOWER(name) ASC, id DESC"
+    else:
+        order_sql = "id DESC"
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"SELECT COUNT(*) AS c FROM agent_services WHERE {where_sql}",
+            params,
+        )
+        total = int(cur.fetchone()["c"] or 0)
+        offset = (page - 1) * page_size
+        cur.execute(
+            f"SELECT * FROM agent_services WHERE {where_sql} "
+            f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            [*params, page_size, offset],
+        )
+        return [dict(r) for r in cur.fetchall()], total
+    finally:
+        conn.close()
+
+
+def attach_transaction_to_service(transaction_id: int, agent_id: int, service_id: int) -> bool:
+    """اتصال قطعی یک تراکنش به سرویس واقعی (مثلاً خرید اولیه پس از ساخت سرویس).
+
+    - با شناسه تراکنش انجام می‌شود (نه تطبیق مبلغ/متن) → دقیق و بدون حدس.
+    - فقط وقتی تراکنش هنوز service_id=0 دارد متصل می‌شود (ایمن در برابر
+      هم‌زمانی و بدون کسر/اتصال دوباره).
+    - تراکنش‌های متعلق به نماینده دیگر متصل نمی‌شوند.
+    """
+    init_db()
+    try:
+        tx_id = int(transaction_id or 0)
+        agent_id = int(agent_id or 0)
+        service_id = int(service_id or 0)
+    except (TypeError, ValueError):
+        return False
+    if tx_id <= 0 or agent_id <= 0 or service_id <= 0:
+        return False
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE agent_transactions SET service_id = ? "
+            "WHERE id = ? AND agent_id = ? AND service_id = 0",
+            (service_id, tx_id, agent_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_service_transactions(service_id: int, agent_id: int, limit: int = 8) -> List[Dict[str, Any]]:
+    """تراکنش‌های مرتبط با یک سرویس خاص (ستون service_id در agent_transactions).
+
+    فقط تراکنش‌هایی برگردانده می‌شود که صریحاً به همین سرویس از همین نماینده
+    متصل هستند؛ تراکنش‌های کلی نماینده (service_id=0) نسبت داده نمی‌شوند.
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT * FROM agent_transactions "
+            "WHERE service_id = ? AND agent_id = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (int(service_id or 0), int(agent_id or 0), max(1, int(limit or 8))),
+        )
+        return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 

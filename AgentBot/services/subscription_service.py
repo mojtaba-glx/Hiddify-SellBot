@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+import math
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from Shared import agent_db, multi_panel, hiddify_api, database
-from Shared.sub_links import get_or_create_bot_sub_links
+from Shared.sub_links import get_or_create_bot_sub_links, get_service_panel_targets
 from AgentBot.services.hiddify_service import (
     get_available_servers, get_server_by_id, get_agent_plans,
     create_user_on_panel, disable_user_on_panel, enable_user_on_panel,
@@ -120,6 +121,12 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
     ok, wallet = agent_db.deduct_wallet(agent_id, wholesale, description=f"\u062e\u0631\u06cc\u062f \u0633\u0631\u0648\u06cc\u0633: {name}", service_id=0)
     if not ok:
         return None
+    # شناسه تراکنش خرید برای اتصال قطعی به سرویس واقعی پس از ساخت
+    purchase_tx_id = 0
+    try:
+        purchase_tx_id = int((wallet or {}).get("_transaction_id") or 0)
+    except (TypeError, ValueError):
+        purchase_tx_id = 0
 
     targets = _get_cluster_servers(server_id)
     if not targets:
@@ -192,6 +199,13 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
                 panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
                 marzban_username=str(item.get("marzban_username") or "").strip(),
             )
+        # اتصال قطعی تراکنش خرید اولیه به سرویس واقعی (بدون کسر دوباره؛
+        # فقط وقتی تراکنش هنوز service_id=0 دارد)
+        try:
+            if purchase_tx_id > 0:
+                agent_db.attach_transaction_to_service(purchase_tx_id, agent_id, int(svc["id"]))
+        except Exception as attach_error:
+            logger.warning("Failed to link purchase tx %s to service: %s", purchase_tx_id, attach_error)
 
     # اگر بعضی نودها در دسترس نبودند → گزارش partial به ادمین + دکمه sync.
     created_set = {int(int(n.get("server_id") or 0)) for n in (created_nodes or [])}
@@ -415,6 +429,21 @@ def _lookup_marzban_username(service_id: int, server_id: int) -> str:
     return ""
 
 
+def _panel_user_already_absent(exc: Exception) -> bool:
+    """Return true when a delete failed only because the user is already gone."""
+    message = str(exc or "").strip().lower()
+    return any(
+        marker in message
+        for marker in (
+            "user not found",
+            "client not found",
+            "no such user",
+            "not found (uuid=",
+            "کاربر یافت نشد",
+        )
+    )
+
+
 async def disable_subscription(agent_id: int, service_id: int) -> bool:
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
@@ -447,40 +476,48 @@ async def delete_subscription(agent_id: int, service_id: int) -> bool:
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return False
-    sid = int(svc.get("server_id") or 0)
 
-    # کل خوشه (سرور اصلی + همه نودهای mapping شده) را با uuid هر سرور حذف کن.
-    mappings = agent_db.get_service_nodes(service_id)
-    targets: List[dict] = []
-    seen_server: set[int] = set()
-    if sid > 0:
-        targets.append((sid, str(svc.get("panel_user_uuid") or "").strip()))
-        seen_server.add(sid)
-    for m in mappings:
-        try:
-            msid = int(m.get("server_id") or 0)
-        except (TypeError, ValueError):
-            msid = 0
-        if msid <= 0 or msid in seen_server:
-            continue
-        m_uuid = str(m.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
-        targets.append((msid, m_uuid))
-        seen_server.add(msid)
+    # Use the same complete cluster resolver as subscription delivery/runtime.
+    # Besides saved mappings, it includes configured child nodes and therefore
+    # also covers legacy services whose X-UI node mapping was never persisted.
+    targets = get_service_panel_targets(svc)
+    if not targets:
+        logger.error("delete_subscription has no panel targets svc=%s", service_id)
+        return False
 
     failures: List[str] = []
-    for t_sid, t_uuid in targets:
-        if not t_sid or not t_uuid:
+    for server, panel_uuid, marzban_username in targets:
+        try:
+            server_id = int((server or {}).get("id") or 0)
+        except (TypeError, ValueError):
+            server_id = 0
+        panel_uuid = str(panel_uuid or "").strip()
+        if server_id <= 0 or not panel_uuid:
+            failures.append(f"server={server_id or '?'}: invalid deletion target")
             continue
         try:
-            marzban_un = _lookup_marzban_username(service_id, t_sid)
-            await delete_user_on_panel(t_uuid, t_sid, marzban_username=marzban_un)
-            agent_db.delete_service_node(service_id, t_sid, t_uuid)
+            await multi_panel.delete_user(
+                server,
+                panel_uuid,
+                marzban_username=str(marzban_username or "").strip(),
+            )
         except Exception as e:
-            failures.append(f"server={t_sid}: {str(e)[:100]}")
-            logger.error("delete panel node failed svc=%s server=%s: %s", service_id, t_sid, e)
+            # Deletion is idempotent: an already-absent panel user is complete.
+            if not _panel_user_already_absent(e):
+                failures.append(f"server={server_id}: {str(e)[:100]}")
+                logger.error(
+                    "delete panel node failed svc=%s server=%s: %s",
+                    service_id,
+                    server_id,
+                    e,
+                )
+                continue
+        agent_db.delete_service_node(service_id, server_id, panel_uuid)
 
     if failures:
         logger.warning("delete_subscription partial failures svc=%s: %s", service_id, "; ".join(failures))
+        # Keep the local service and failed mappings so the agent can retry.
+        return False
 
     return agent_db.delete_service(service_id)
 
@@ -639,26 +676,111 @@ def get_sub_link_for_type(agent_id: int, service_id: int, link_type: str) -> str
     return ""
 
 
+def _parse_panel_datetime(value: Any) -> Optional[datetime]:
+    """Parse panel timestamps and normalize them to timezone-aware UTC."""
+    if value is None or value == "":
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        stamp = float(raw)
+        if stamp > 0:
+            if stamp > 10_000_000_000:
+                stamp /= 1000.0
+            return datetime.fromtimestamp(stamp, timezone.utc)
+    except (TypeError, ValueError, OSError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _panel_expiry_datetime(user: Dict[str, Any], now: Optional[datetime] = None) -> Optional[datetime]:
+    for key in ("expire", "expire_date", "end_date", "expires_at", "expiry_date", "expiration_date"):
+        end = _parse_panel_datetime((user or {}).get(key))
+        if end is not None:
+            return end
+    start = _parse_panel_datetime((user or {}).get("start_date"))
+    try:
+        package_days = float((user or {}).get("package_days") or 0)
+    except (TypeError, ValueError):
+        package_days = 0
+    if start is not None and package_days > 0:
+        return start + timedelta(days=package_days)
+    for key in ("remaining_days", "remaining_day", "days_left"):
+        try:
+            days = float((user or {}).get(key))
+        except (TypeError, ValueError):
+            continue
+        base = now or datetime.now(timezone.utc)
+        return base + timedelta(days=days)
+    return None
+
+
+def _duration_words(value: float) -> str:
+    """Return up to two exact units instead of dropping hours after whole days."""
+    try:
+        seconds = max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return "چند لحظه"
+    if seconds < 60:
+        return "چند ثانیه"
+    if seconds < 3600:
+        return f"{seconds // 60} دقیقه"
+    if seconds < 86400:
+        hours, remainder = divmod(seconds, 3600)
+        minutes = remainder // 60
+        return f"{hours} ساعت" + (f" و {minutes} دقیقه" if minutes else "")
+    days, remainder = divmod(seconds, 86400)
+    hours = remainder // 3600
+    return f"{days} روز" + (f" و {hours} ساعت" if hours else "")
+
+
 def _human_duration(value: float) -> str:
-    """تبدیل ثانیه به بازه‌ی انسانی (مثال: «1 ساعت پیش»)."""
     try:
         seconds = float(value)
     except (TypeError, ValueError):
-        return "چند لحظه پیش"
+        return "نامشخص"
     if seconds < 0:
-        return "چند لحظه پیش"
-    if seconds < 60:
-        return "چند ثانیه پیش"
-    if seconds < 3600:
-        return f"{int(seconds // 60)} دقیقه پیش"
-    if seconds < 86400:
-        return f"{int(seconds // 3600)} ساعت پیش"
-    days = seconds / 86400
-    if days < 30:
-        return f"{int(days)} روز پیش"
-    if days < 365:
-        return f"{int(days // 30)} ماه پیش"
-    return f"{int(days // 365)} سال پیش"
+        seconds = 0
+    return f"{_duration_words(seconds)} پیش"
+
+
+def format_service_expiry(svc: Dict[str, Any], now: Optional[datetime] = None) -> str:
+    """Format remaining subscription time from its absolute end timestamp."""
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    end = _parse_panel_datetime(
+        (svc or {}).get("_panel_end_date") or (svc or {}).get("end_date")
+    )
+    if end is not None:
+        remaining = (end - current).total_seconds()
+        if remaining >= 0:
+            if remaining < 60:
+                return "کمتر از یک دقیقه دیگر"
+            return f"{_duration_words(remaining)} دیگر"
+        return f"منقضی شده ({_human_duration(abs(remaining))})"
+
+    raw_days = (svc or {}).get("_panel_days_left")
+    if raw_days is None:
+        raw_days = (svc or {}).get("days_left")
+    try:
+        days = int(float(raw_days))
+    except (TypeError, ValueError):
+        return "نامشخص"
+    if days > 0:
+        return f"{days} روز دیگر"
+    if days < 0:
+        return f"منقضی شده ({abs(days)} روز پیش)"
+    return "امروز"
 
 
 async def get_service_last_online(svc) -> str:
@@ -666,33 +788,91 @@ async def get_service_last_online(svc) -> str:
     «آنلاین» اگر در حال استفاده است، «X پیش» اگر مدتی قبل وصل شده، در غیر این صورت «هرگز»."""
     ONLINE_WINDOW = 15 * 60  # ثانیه
     CLOCK_SKEW = 120
-    try:
+    if not isinstance(svc, dict):
+        return "نامشخص"
+    targets = get_service_panel_targets(svc)
+    if not targets:
         sid = int(svc.get("server_id") or 0)
         server = get_server_by_id(sid)
         uuid = str(svc.get("panel_user_uuid") or "").strip()
-        if not server or not uuid:
-            return "هرگز"
-        panel_user = await hiddify_api.get_user_by_uuid(server, uuid)
-        raw = (panel_user or {}).get("last_online")
-        if not raw:
-            return "هرگز"
-        last_dt = None
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-            try:
-                last_dt = datetime.strptime(str(raw), fmt)
-                break
-            except ValueError:
-                continue
-        if last_dt is None:
-            return "هرگز"
-    except Exception:
-        return "هرگز"
+        if server and uuid:
+            targets = [(server, uuid, "")]
+    if not targets:
+        return "نامشخص"
 
+    async def _fetch(target):
+        server, uuid, _marzban_username = target
+        try:
+            return target, await hiddify_api.get_user_by_uuid(server, uuid)
+        except Exception as exc:
+            logger.warning(
+                "Agent runtime refresh failed svc=%s server=%s: %s",
+                svc.get("id"),
+                (server or {}).get("id"),
+                type(exc).__name__,
+            )
+            return target, None
+
+    fetched = await asyncio.gather(*[_fetch(target) for target in targets])
+    available = [(target, user) for target, user in fetched if isinstance(user, dict) and user]
+    if not available:
+        return "نامشخص"
+
+    primary_id = int(svc.get("server_id") or 0)
+    authoritative = next(
+        (user for (server, _uuid, _name), user in available if int((server or {}).get("id") or 0) == primary_id),
+        available[0][1],
+    )
+    now = datetime.now(timezone.utc)
+    updates: Dict[str, Any] = {}
+    usage_values = []
+    for _target, user in available:
+        try:
+            usage_values.append(float(user.get("current_usage_GB") or 0))
+        except (TypeError, ValueError):
+            pass
+    if usage_values and len(available) == len(targets):
+        updates["usage_current"] = sum(usage_values)
     try:
-        now = datetime.now()
-        seconds = (now - last_dt).total_seconds()
-    except Exception:
+        if authoritative.get("usage_limit_GB") is not None:
+            updates["usage_limit"] = float(authoritative.get("usage_limit_GB") or 0)
+    except (TypeError, ValueError):
+        pass
+    end = _panel_expiry_datetime(authoritative, now)
+    if end is not None:
+        remaining = (end - now).total_seconds()
+        updates["end_date"] = end.astimezone(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        updates["days_left"] = math.ceil(remaining / 86400) if remaining >= 0 else math.floor(remaining / 86400)
+        svc["_panel_end_date"] = end.isoformat()
+        svc["_panel_days_left"] = updates["days_left"]
+    if "is_active" in authoritative:
+        active_raw = authoritative.get("is_active")
+        if active_raw is not None:
+            if isinstance(active_raw, str):
+                active = active_raw.strip().lower() not in {"0", "false", "off", "inactive", "disabled"}
+            else:
+                active = bool(active_raw)
+            updates["is_active"] = 1 if active else 0
+    if updates:
+        svc.update(updates)
+        try:
+            service_id = int(svc.get("id") or 0)
+            if service_id > 0:
+                agent_db.update_service(service_id, updates)
+        except Exception as exc:
+            logger.warning("Agent runtime cache update failed svc=%s: %s", svc.get("id"), type(exc).__name__)
+
+    latest_dt: Optional[datetime] = None
+    latest_source = ""
+    for _target, user in available:
+        candidate = _parse_panel_datetime(user.get("last_online"))
+        if candidate is not None and (latest_dt is None or candidate > latest_dt):
+            latest_dt = candidate
+            latest_source = str(user.get("_source") or "").strip().lower()
+    if latest_dt is None:
         return "هرگز"
-    if -CLOCK_SKEW <= seconds <= ONLINE_WINDOW:
+    seconds = (now - latest_dt).total_seconds()
+    online_window = 90 if latest_source == "xui" else ONLINE_WINDOW
+    if -CLOCK_SKEW <= seconds <= online_window:
         return "آنلاین"
     return _human_duration(seconds)

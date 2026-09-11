@@ -232,15 +232,86 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             agent_id INTEGER NOT NULL,
             pay_id INTEGER NOT NULL,
-            event_id TEXT NOT NULL UNIQUE,
+            event_id TEXT NOT NULL,
             amount_toman INTEGER DEFAULT 0,
             card_last4 TEXT DEFAULT '',
             created_at TEXT,
             processed INTEGER DEFAULT 0,
             note TEXT DEFAULT '',
-            processed_at TEXT DEFAULT ''
+            processed_at TEXT DEFAULT '',
+            UNIQUE(agent_id, event_id)
         )
     """)
+    # Older releases made event_id global across every representative. SMS
+    # ids may be device-local, so uniqueness belongs to the authenticated
+    # agent. Preserve existing rows while changing the constraint.
+    legacy_global_event_unique = False
+    cur.execute("PRAGMA index_list(customer_payment_sms_queue)")
+    for index_row in cur.fetchall():
+        if not int(index_row[2] or 0):
+            continue
+        index_name = str(index_row[1] or "")
+        cur.execute(f'PRAGMA index_info("{index_name}")')
+        columns = [str(column_row[2] or "") for column_row in cur.fetchall()]
+        if columns == ["event_id"]:
+            legacy_global_event_unique = True
+            break
+    if legacy_global_event_unique:
+        cur.execute("ALTER TABLE customer_payment_sms_queue RENAME TO customer_payment_sms_queue_legacy")
+        cur.execute(
+            """
+            CREATE TABLE customer_payment_sms_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                pay_id INTEGER NOT NULL,
+                event_id TEXT NOT NULL,
+                amount_toman INTEGER DEFAULT 0,
+                card_last4 TEXT DEFAULT '',
+                created_at TEXT,
+                processed INTEGER DEFAULT 0,
+                note TEXT DEFAULT '',
+                processed_at TEXT DEFAULT '',
+                UNIQUE(agent_id, event_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO customer_payment_sms_queue (
+                id, agent_id, pay_id, event_id, amount_toman, card_last4,
+                created_at, processed, note, processed_at
+            )
+            SELECT id, agent_id, pay_id, event_id, amount_toman, card_last4,
+                   created_at, processed, note, processed_at
+            FROM customer_payment_sms_queue_legacy
+            """
+        )
+        cur.execute("DROP TABLE customer_payment_sms_queue_legacy")
+
+    # One pending payment may be reserved by only one bank event. Historical
+    # duplicates are closed without executing them before the unique partial
+    # index is installed.
+    cur.execute(
+        """
+        UPDATE customer_payment_sms_queue
+        SET processed = 1,
+            note = 'duplicate payment reservation closed during migration',
+            processed_at = COALESCE(NULLIF(processed_at, ''), ?)
+        WHERE processed = 0
+          AND id NOT IN (
+              SELECT MIN(id) FROM customer_payment_sms_queue
+              WHERE processed = 0 GROUP BY agent_id, pay_id
+          )
+        """,
+        (_now(),),
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cust_sms_queue_pending_payment
+        ON customer_payment_sms_queue(agent_id, pay_id)
+        WHERE processed = 0
+        """
+    )
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS customer_tickets (
@@ -1043,6 +1114,12 @@ def get_pending_payments(agent_id: int) -> List[Dict[str, Any]]:
 # ---- SMS webhook auto-approval queue ----
 
 def enqueue_sms_auto_approval(agent_id: int, pay_id: int, event_id: str, amount_toman: int = 0, card_last4: str = "") -> bool:
+    """Reserve a bank SMS event for one agent payment atomically.
+
+    The event_id is UNIQUE, so a concurrent or duplicate enqueue of the same
+    event returns False — the event is reserved for exactly one payment and
+    can never be consumed twice, even across simultaneous webhook requests.
+    """
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
@@ -1058,15 +1135,37 @@ def enqueue_sms_auto_approval(agent_id: int, pay_id: int, event_id: str, amount_
         conn.close()
 
 
-def fetch_pending_sms_auto_queue(limit: int = 10) -> List[Dict[str, Any]]:
+def get_pending_sms_auto_queue_for_payment(agent_id: int, pay_id: int) -> Optional[Dict[str, Any]]:
+    """Return the active bank-event reservation for one customer payment."""
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM customer_payment_sms_queue "
+            "WHERE agent_id = ? AND pay_id = ? AND processed = 0 LIMIT 1",
+            (int(agent_id or 0), int(pay_id or 0)),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def fetch_pending_sms_auto_queue(limit: int = 10, agent_id: int = 0) -> List[Dict[str, Any]]:
+    """Pending queue rows; agent_id > 0 restricts to that agent's own rows."""
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
     try:
-        cur.execute(
-            "SELECT * FROM customer_payment_sms_queue WHERE processed = 0 ORDER BY id LIMIT ?",
-            (max(1, min(50, int(limit or 10))),),
-        )
+        if int(agent_id or 0) > 0:
+            cur.execute(
+                "SELECT * FROM customer_payment_sms_queue WHERE processed = 0 AND agent_id = ? ORDER BY id LIMIT ?",
+                (int(agent_id), max(1, min(50, int(limit or 10)))),
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM customer_payment_sms_queue WHERE processed = 0 ORDER BY id LIMIT ?",
+                (max(1, min(50, int(limit or 10))),),
+            )
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
@@ -1091,11 +1190,15 @@ def find_pending_card_payments_by_amount(
     max_age_minutes: int = 360,
     sms_time_ms: int = 0,
     limit: int = 20,
+    agent_id: int = 0,
 ) -> List[Dict[str, Any]]:
-    """پرداخت‌های کارت‌به‌کارت pending همه نمایندگی‌ها با مبلغ مشخص (وب‌هوک SMS بانکی).
+    """پرداخت‌های کارت‌به‌کارت pending نمایندگی‌ها با مبلغ مشخص (وب‌هوک SMS بانکی).
 
     پنجره زمانی مثل منطق ربات اصلی: SMS ممکن است کمی قبل از ثبت تراکنش بیاید
     (مشتری اول واریز می‌کند بعد سفارش می‌سازد — تا ۳۰ دقیقه) یا کمی بعد (۵ دقیقه).
+
+    agent_id > 0 فیلتر را داخل SQL و قبل از LIMIT اعمال می‌کند تا پرداخت‌های
+    نماینده‌های دیگر، سهمیهٔ LIMIT را مصرف نکنند.
     """
     init_db()
     amount = int(amount_toman or 0)
@@ -1104,6 +1207,10 @@ def find_pending_card_payments_by_amount(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff = now - timedelta(minutes=max(5, int(max_age_minutes or 360)))
     params: List[Any] = [amount, cutoff.strftime("%Y-%m-%d %H:%M:%S")]
+    agent_filter_sql = ""
+    if int(agent_id or 0) > 0:
+        agent_filter_sql = " AND cp.agent_id = ? "
+        params.append(int(agent_id))
     sms_window_sql = ""
     if sms_time_ms and int(sms_time_ms) > 0:
         try:
@@ -1123,7 +1230,8 @@ def find_pending_card_payments_by_amount(
             "SELECT cp.* FROM customer_payments cp "
             "WHERE cp.status = 'pending' AND cp.method IN ('card', 'card_to_card') AND cp.amount = ? "
             "AND COALESCE(cp.created_at, '') >= ? "
-            + sms_window_sql +
+            + agent_filter_sql +
+            sms_window_sql +
             "ORDER BY cp.created_at DESC LIMIT ?",
             params,
         )
@@ -1472,3 +1580,121 @@ def redeem_zarin_voucher(agent_id: int, code: str, user_id: int) -> Tuple[bool, 
     conn.commit()
     conn.close()
     return True, str(amount)
+
+
+# ---- SMS webhook ownership helpers (per-agent isolation) ----
+
+def find_recently_agent_approved_card_payments(
+    agent_id: int,
+    amount_toman: int,
+    *,
+    max_age_minutes: int = 120,
+    sms_time_ms: int = 0,
+) -> List[Dict[str, Any]]:
+    """Customer card payments of this exact agent that were approved manually
+    (without SMS) very recently. A late bank SMS must attach to these instead
+    of approving another pending payment (anti cross-scope replay)."""
+    init_db()
+    aid = int(agent_id or 0)
+    amount = int(amount_toman or 0)
+    if aid <= 0 or amount <= 0:
+        return []
+    window = max(5, min(1440, int(max_age_minutes or 120)))
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    lower = (now - timedelta(minutes=window)).strftime("%Y-%m-%d %H:%M:%S")
+    upper = (now + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT * FROM customer_payments
+            WHERE agent_id = ?
+              AND status = 'approved'
+              AND method IN ('card', 'card_to_card')
+              AND amount = ?
+              AND COALESCE(updated_at, '') >= ?
+              AND COALESCE(updated_at, '') <= ?
+              AND COALESCE(receipt_image, '') NOT LIKE '%sms_event_id:%'
+            ORDER BY updated_at DESC
+            LIMIT 10
+            """,
+            (aid, amount, lower, upper),
+        )
+        rows = [dict(r) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+    # keep only approvals near/after the SMS time (late SMS attaches, not older ones)
+    from datetime import timezone as _tz
+    sms_dt = None
+    if int(sms_time_ms or 0) > 0:
+        try:
+            sms_dt = datetime.fromtimestamp(int(sms_time_ms) / 1000, tz=_tz.utc).replace(tzinfo=None)
+        except Exception:
+            sms_dt = None
+    if sms_dt is None:
+        return rows
+    filtered = []
+    for row in rows:
+        approved_dt = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                approved_dt = datetime.strptime(str(row.get("updated_at") or "")[:19], fmt)
+                break
+            except Exception:
+                continue
+        if approved_dt is not None and sms_dt < approved_dt - timedelta(minutes=window):
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def attach_sms_event_to_customer_payment(
+    agent_id: int,
+    payment_id: int,
+    *,
+    event_id: str,
+    reference: str = "",
+    sender: str = "",
+    amount_raw: int = 0,
+    currency_raw: str = "",
+) -> bool:
+    """Attach a bank SMS event to an already-approved customer payment of this
+    agent (idempotency for late SMS) — never changes any financial state."""
+    aid = int(agent_id or 0)
+    pid = int(payment_id or 0)
+    if aid <= 0 or pid <= 0:
+        return False
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT receipt_image FROM customer_payments WHERE agent_id = ? AND id = ? LIMIT 1",
+            (aid, pid),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        meta_raw = str(row["receipt_image"] or "")
+        marker = f"agent{aid}_sms_event_id:{event_id}"
+        if marker in meta_raw:
+            return True
+        from datetime import timezone as _tz
+        patch = f"|{marker}"
+        if reference:
+            patch += f"|agent{aid}_sms_reference:{reference[:60]}"
+        if sender:
+            patch += f"|agent{aid}_sms_sender:{sender[:60]}"
+        patch += f"|agent{aid}_sms_amount_raw:{int(amount_raw or 0)}"
+        if currency_raw:
+            patch += f"|agent{aid}_sms_currency:{currency_raw[:16]}"
+        cur.execute(
+            "UPDATE customer_payments SET receipt_image = ?, updated_at = ? WHERE agent_id = ? AND id = ?",
+            (meta_raw + patch, _now(), aid, pid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()

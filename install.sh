@@ -189,25 +189,77 @@ prompt_secret_required() {
   local prompt="$3"
   local current="${4:-}"
   local value=""
+  local char=""
+  local prompt_label=""
 
+  _yellow "INFO: token input is masked. Paste/type the token, then press Enter; each character appears as *." >&2
   while true; do
     if [ -n "$current" ]; then
-      read -r -s -p "$prompt [configured]: " value
-      printf '\n' >&2
-      value="${value:-$current}"
+      prompt_label="$prompt [configured]: "
     else
-      read -r -s -p "$prompt: " value
-      printf '\n' >&2
+      prompt_label="$prompt: "
+    fi
+
+    value=""
+    printf '%s' "$prompt_label" >&2
+    while IFS= read -r -s -n 1 char; do
+      if [ -z "$char" ]; then
+        break
+      fi
+      if [ "$char" = $'\177' ] || [ "$char" = $'\b' ]; then
+        if [ -n "$value" ]; then
+          value="${value%?}"
+          printf '\b \b' >&2
+        fi
+      else
+        value+="$char"
+        printf '*' >&2
+      fi
+    done
+    printf '\n' >&2
+
+    if [ -n "$current" ]; then
+      value="${value:-$current}"
     fi
     if [ -n "$value" ]; then
       printf -v "$result_var" '%s' "$value"
+      _green "OK: $key received securely." >&2
       return 0
     fi
     _yellow "WARN: $key cannot be empty." >&2
   done
 }
 
+validate_bot_token_format() {
+  local token="${1:-}"
+  [[ "$token" =~ ^[0-9]{5,}:[A-Za-z0-9_-]{20,}$ ]]
+}
+
+validate_core_bot_tokens() {
+  local key token
+  for key in ADMIN_BOT_TOKEN USER_BOT_TOKEN AGENT_BOT_TOKEN; do
+    token="${!key:-}"
+    if ! validate_bot_token_format "$token"; then
+      _red "ERROR: $key does not have a valid Telegram bot-token format."
+      return 1
+    fi
+  done
+
+  if [ "$ADMIN_BOT_TOKEN" = "$USER_BOT_TOKEN" ] \
+    || [ "$ADMIN_BOT_TOKEN" = "$AGENT_BOT_TOKEN" ] \
+    || [ "$USER_BOT_TOKEN" = "$AGENT_BOT_TOKEN" ]; then
+    _red "ERROR: AdminBot, UserBot and AgentBot must use three different Telegram bot tokens."
+    return 1
+  fi
+}
+
 configure_env() {
+  if { [ -e "$ENV_FILE" ] && [ ! -w "$ENV_FILE" ]; } \
+    || { [ ! -e "$ENV_FILE" ] && [ ! -w "$ROOT_DIR" ]; }; then
+    _red "ERROR: $ENV_FILE is not writable by the current user."
+    _yellow "Run the configuration panel with sufficient access: sudo $ROOT_DIR/install.sh config"
+    return 1
+  fi
   ensure_dirs
   touch "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
@@ -224,6 +276,7 @@ configure_env() {
   prompt_secret_required ADMIN_BOT_TOKEN "ADMIN_BOT_TOKEN" "Admin bot token" "${ADMIN_BOT_TOKEN:-}"
   prompt_secret_required USER_BOT_TOKEN "USER_BOT_TOKEN" "User bot token" "${USER_BOT_TOKEN:-}"
   prompt_secret_required AGENT_BOT_TOKEN "AGENT_BOT_TOKEN" "Agent bot token" "${AGENT_BOT_TOKEN:-}"
+  validate_core_bot_tokens || return 1
   set_env_var "ADMIN_ID" "$ADMIN_ID" "$ENV_FILE" || { _red "ERROR: failed to update .env."; return 1; }
   set_env_var "ADMIN_BOT_TOKEN" "$ADMIN_BOT_TOKEN" "$ENV_FILE" || { _red "ERROR: failed to update .env."; return 1; }
   set_env_var "USER_BOT_TOKEN" "$USER_BOT_TOKEN" "$ENV_FILE" || { _red "ERROR: failed to update .env."; return 1; }
@@ -231,6 +284,7 @@ configure_env() {
 
   ENV_CONFIGURED_IN_RUN=1
   _green "OK: .env updated."
+  _yellow "Restart the bots (menu option 4) to apply the new tokens."
 }
 
 check_required_env() {
@@ -1059,13 +1113,13 @@ get_stabilizer_mode() {
 stabilizer_mode_label() {
   case "${1:-}" in
     toggle)
-      printf 'toggle / کامل و پیشنهادی'
+      printf 'toggle / full and recommended'
       ;;
     update)
-      printf 'update / فقط ذخیره مجدد'
+      printf 'update / update only'
       ;;
     off)
-      printf 'off / خاموش'
+      printf 'off / disabled'
       ;;
     *)
       printf 'unknown'
@@ -1842,6 +1896,7 @@ interactive_menu() {
     echo "9) stop bots"
     echo "10) uninstall"
     echo "11) help"
+    echo "12) change bot tokens / admin ID"
     echo "0) exit"
     echo "-----------------------------------------"
     read -rp "Select option: " choice
@@ -1857,6 +1912,7 @@ interactive_menu() {
       9) _run_menu_cmd stop ;;
       10) _run_menu_cmd uninstall ;;
       11) _run_menu_cmd help ;;
+      12) _run_menu_cmd config ;;
       0|q|Q|quit|exit)
         _green "Exit."
         return 0
