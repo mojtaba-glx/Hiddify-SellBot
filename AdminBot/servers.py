@@ -1745,6 +1745,30 @@ async def _node_target_verify_uuid(target: Dict[str, Any], uuid: str) -> Optiona
     return True if _panel_user_uuid(user) else None
 
 
+async def _create_with_conflict_retry(
+    target: Dict[str, Any], payload: Dict[str, Any], uuid: str
+) -> Dict[str, Any]:
+    """Create a node user; on a conflicting leftover row, delete + retry once.
+
+    When the panel answers 'subId/email already in use' for a uuid that reads
+    as absent, a hidden (soft-deleted / xray-only) row is squatting the
+    identity. Best-effort delete it by uuid, then retry the create exactly
+    once. Bounded by construction — never loops. Raises the last error when
+    the conflict cannot be cleared (needs manual panel-DB surgery then).
+    """
+    try:
+        return await hiddify_api.create_user(target, payload)
+    except Exception as e:
+        msg = str(e or "").strip().lower()
+        if "already in use" not in msg and "already exists" not in msg:
+            raise
+        try:
+            await hiddify_api.delete_user(target, uuid)
+        except Exception:
+            pass
+        return await hiddify_api.create_user(target, payload)
+
+
 # Node-sync runtime guards: bounded parallelism + per-user timeout so one slow/hung
 # panel cannot stall the whole run (and jam the bot / block shutdown), plus a
 # registry of running syncs so double-tapping the button cannot stack runs.
@@ -1908,7 +1932,7 @@ async def _run_node_sync(
             source_user = source_by_uuid[uuid]
             payload = _build_node_sync_payload(source_user, for_create=True)
             try:
-                created = await hiddify_api.create_user(target, payload)
+                created = await _create_with_conflict_retry(target, payload, uuid)
                 created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
                 # Verify the row is really addressable (no ghost/xray-only
                 # row): only verified rows are counted and mapped, so a
@@ -2001,7 +2025,7 @@ async def _run_node_sync(
                             # Truly gone — recreate like a missing user.
                             try:
                                 create_payload = _build_node_sync_payload(source_user, for_create=True)
-                                created = await hiddify_api.create_user(target, create_payload)
+                                created = await _create_with_conflict_retry(target, create_payload, uuid)
                                 created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
                                 verified = await _node_target_verify_uuid(target, created_uuid or uuid)
                                 if verified is False:
