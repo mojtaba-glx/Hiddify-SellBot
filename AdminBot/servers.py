@@ -1748,21 +1748,11 @@ async def _node_target_verify_uuid(target: Dict[str, Any], uuid: str) -> Optiona
 # Node-sync runtime guards: bounded parallelism + per-user timeout so one slow/hung
 # panel cannot stall the whole run (and jam the bot / block shutdown), plus a
 # registry of running syncs so double-tapping the button cannot stack runs.
-# Parallelism is tunable without code changes for weak panels:
-#   NODE_SYNC_MAX_PARALLEL=2  (default 4; 1 = fully sequential)
-_NODE_SYNC_MAX_PARALLEL_DEFAULT = 4
+_NODE_SYNC_MAX_PARALLEL = 4
 _NODE_SYNC_USER_TIMEOUT = 90.0
 _NODE_SYNC_PROGRESS_EVERY = 10
 _NODE_SYNC_PROGRESS_MIN_INTERVAL = 12.0
 _NODE_SYNC_RUNNING: set = set()
-
-
-def _node_sync_parallelism() -> int:
-    try:
-        from Shared.env_utils import env_int
-        return env_int("NODE_SYNC_MAX_PARALLEL", _NODE_SYNC_MAX_PARALLEL_DEFAULT, minimum=1, maximum=16)
-    except Exception:
-        return _NODE_SYNC_MAX_PARALLEL_DEFAULT
 
 
 async def _run_node_sync(
@@ -2043,7 +2033,7 @@ async def _run_node_sync(
                     result["errors"].append(err)
 
         async def _run_bounded(uuids: List[str], worker) -> None:
-            sem = asyncio.Semaphore(_node_sync_parallelism())
+            sem = asyncio.Semaphore(_NODE_SYNC_MAX_PARALLEL)
 
             async def _one(uuid: str) -> None:
                 async with sem:
