@@ -52,8 +52,42 @@ def _calc_dynamic_price(agent_id: int, server_id: int, gb: int, months: int):
 
 def _get_wizard_defaults(agent_id: int):
     settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
-    min_gb = settings.get("min_gb", 1)
+    min_gb = _wiz_num(settings.get("min_gb", 1), 1)
     return min_gb, 1
+
+
+def _wiz_num(value, default):
+    """Coerce wizard/settings numbers defensively (legacy data may hold strings).
+
+    Keeps ints/floats untouched; parses numeric strings; falls back to default
+    on garbage instead of raising TypeError inside the tap handler (which
+    would make the +/- buttons look dead).
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        num = float(str(value).strip())
+    except (TypeError, ValueError, AttributeError):
+        return default
+    return int(num) if float(int(num)) == num else num
+
+
+def _is_duplicate_wizard_tap(query, context, slot: str) -> bool:
+    """Drop exact-duplicate callback deliveries (same Telegram callback id).
+
+    Each physical tap carries a unique query id, so this only swallows network
+    redeliveries of an already-applied tap — one press can never move the
+    volume twice. Distinct rapid taps keep working normally.
+    """
+    qid = str(getattr(query, "id", "") or "")
+    if not qid:
+        return False
+    if context.user_data.get(slot) == qid:
+        return True
+    context.user_data[slot] = qid
+    return False
 
 
 async def _safe_answer(query, text: str = "", alert: bool = False) -> None:
@@ -796,9 +830,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "wiz":
         sub = parts[3] if len(parts) > 3 else ""
+        if _is_duplicate_wizard_tap(query, context, "_wiz_last_qid"):
+            await _safe_answer(query)
+            return
         server_id = context.user_data.get(UD_SELECTED_SERVER, 0) or 0
-        gb = context.user_data.get("wiz_gb", 1)
-        months = context.user_data.get("wiz_months", 1)
+        gb = _wiz_num(context.user_data.get("wiz_gb", 1), 1)
+        months = _wiz_num(context.user_data.get("wiz_months", 1), 1)
 
         if sub == "confirm":
             wholesale = context.user_data.get("wiz_wholesale", 0)
@@ -822,12 +859,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
-        step_gb = settings.get("step_gb", 1)
-        step_month = settings.get("step_month", 1)
-        min_gb = settings.get("min_gb", 1)
-        max_gb = settings.get("max_gb", 999)
-        min_month = settings.get("min_month", 1)
-        max_month = settings.get("max_month", 12)
+        step_gb = _wiz_num(settings.get("step_gb", 1), 1)
+        step_month = _wiz_num(settings.get("step_month", 1), 1)
+        min_gb = _wiz_num(settings.get("min_gb", 1), 1)
+        max_gb = _wiz_num(settings.get("max_gb", 999), 999)
+        min_month = _wiz_num(settings.get("min_month", 1), 1)
+        max_month = _wiz_num(settings.get("max_month", 12), 12)
         if sub == "gb_inc":
             gb = min(gb + step_gb, max_gb)
         elif sub == "gb_dec":
@@ -1006,14 +1043,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "rewiz":
         sub = parts[3] if len(parts) > 3 else ""
+        if _is_duplicate_wizard_tap(query, context, "_rewiz_last_qid"):
+            await _safe_answer(query)
+            return
         svc_id = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
         svc = agent_db.get_service_by_id(svc_id)
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
             await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
             return
         server_id = int(svc.get("server_id") or 0)
-        gb = context.user_data.get("rewiz_gb", 1)
-        months = context.user_data.get("rewiz_months", 1)
+        gb = _wiz_num(context.user_data.get("rewiz_gb", 1), 1)
+        months = _wiz_num(context.user_data.get("rewiz_months", 1), 1)
 
         if sub == "confirm":
             wholesale = int(context.user_data.get("rewiz_wholesale", 0) or 0)
@@ -1080,12 +1120,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
-        step_gb = settings.get("step_gb", 1)
-        step_month = settings.get("step_month", 1)
-        min_gb = settings.get("min_gb", 1)
-        max_gb = settings.get("max_gb", 999)
-        min_month = settings.get("min_month", 1)
-        max_month = settings.get("max_month", 12)
+        step_gb = _wiz_num(settings.get("step_gb", 1), 1)
+        step_month = _wiz_num(settings.get("step_month", 1), 1)
+        min_gb = _wiz_num(settings.get("min_gb", 1), 1)
+        max_gb = _wiz_num(settings.get("max_gb", 999), 999)
+        min_month = _wiz_num(settings.get("min_month", 1), 1)
+        max_month = _wiz_num(settings.get("max_month", 12), 12)
         if sub == "gb_inc":
             gb = min(gb + step_gb, max_gb)
         elif sub == "gb_dec":

@@ -1,4 +1,5 @@
 import asyncio
+import fcntl
 import logging
 import os
 import sys
@@ -73,9 +74,112 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error("AgentBot error:", exc_info=context.error)
 
 
+_AGENTBOT_PID_FILE = str(ROOT_DIR / "logs" / "agentbot.pid")
+_pid_lock_fd = None  # global file descriptor for flock
+
+
+def _acquire_pid_lock() -> bool:
+    """Prevent multiple AgentBot instances by PID file locking.
+
+    Uses fcntl.flock for atomic lock acquisition to prevent race conditions.
+    If a stale instance is found via the PID file, kill it and take over.
+    Without this guard, two processes polling the same token each keep their
+    own in-memory wizard state (wiz_gb/rewiz_gb), so rapid +10/-10 taps get
+    load-balanced across desynced states and the volume jumps or goes up
+    on minus. Mirrors UserBot's single-instance guard.
+    """
+    global _pid_lock_fd
+    try:
+        os.makedirs(os.path.dirname(_AGENTBOT_PID_FILE), exist_ok=True)
+
+        # Open PID file with exclusive non-blocking lock (atomic operation)
+        _pid_lock_fd = open(_AGENTBOT_PID_FILE, "a+")
+        try:
+            fcntl.flock(_pid_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.error("Another AgentBot instance is already running. Exiting.")
+            try:
+                _pid_lock_fd.close()
+            except Exception:
+                pass
+            _pid_lock_fd = None
+            return False
+
+        # Read old PID (if any)
+        _pid_lock_fd.seek(0)
+        old_pid_str = _pid_lock_fd.read().strip()
+
+        if old_pid_str:
+            try:
+                old_pid = int(old_pid_str)
+            except ValueError:
+                old_pid = None
+
+            if old_pid is not None:
+                if old_pid == os.getpid():
+                    logger.debug("PID file contains our own PID (written by start script). Overwriting.")
+                elif os.path.exists(f"/proc/{old_pid}"):
+                    logger.warning("Stale AgentBot PID %s found. Sending SIGTERM...", old_pid)
+                    try:
+                        os.kill(old_pid, 15)
+                        for _ in range(10):
+                            if not os.path.exists(f"/proc/{old_pid}"):
+                                break
+                            time.sleep(0.5)
+                        if os.path.exists(f"/proc/{old_pid}"):
+                            os.kill(old_pid, 9)
+                            time.sleep(0.5)
+                        logger.info("Old AgentBot instance (PID %s) terminated.", old_pid)
+                    except ProcessLookupError:
+                        pass
+                    except Exception as e:
+                        logger.warning("Failed to kill old PID %s: %s", old_pid, e)
+                else:
+                    logger.warning("Stale PID file found for PID %s. Removing.", old_pid)
+
+        # Write our PID (atomic because we hold the lock)
+        _pid_lock_fd.seek(0)
+        _pid_lock_fd.truncate()
+        _pid_lock_fd.write(str(os.getpid()))
+        _pid_lock_fd.flush()
+
+        # Keep _pid_lock_fd open to hold the lock for the lifetime of the process
+        return True
+    except Exception as e:
+        logger.warning("Failed to acquire PID lock: %s", e)
+        return True  # Fallback: allow startup even if locking fails
+
+
+def _release_pid_lock() -> None:
+    global _pid_lock_fd
+    try:
+        if _pid_lock_fd is not None:
+            try:
+                fcntl.flock(_pid_lock_fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                _pid_lock_fd.close()
+            except Exception:
+                pass
+            _pid_lock_fd = None
+        if os.path.exists(_AGENTBOT_PID_FILE):
+            try:
+                os.remove(_AGENTBOT_PID_FILE)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def main() -> None:
     if not AGENT_BOT_TOKEN:
         raise RuntimeError("AGENT_BOT_TOKEN is not set in .env")
+
+    if not _acquire_pid_lock():
+        sys.exit(1)
+    import atexit
+    atexit.register(_release_pid_lock)
 
     init_agent_db()
 
