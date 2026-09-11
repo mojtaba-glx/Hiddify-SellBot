@@ -45,6 +45,7 @@ import httpx
 from Shared import hiddify_api
 from Shared.env_utils import env_float
 from Shared.xui_common import default_cert_domain, get_loop_lock, sync_run
+from Shared.xui_common import _deterministic_uuid_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,16 @@ def _unique_xui_email(base: str, existing: set, fallback: str) -> str:
     """
     if base not in existing and base.lower() not in existing and not _bot_has_service_name(base):
         return base
+    # Deterministic uuid-derived candidate FIRST (see Shared.xui_common):
+    # same inputs always yield the same email, so repeated sync/create runs
+    # converge instead of piling up suffixed duplicates. Randoms stay fallback.
+    det = _deterministic_uuid_suffix(fallback)
+    if det:
+        max_len = 64 - len(det)
+        b = base[:max_len] if len(base) > max_len else base
+        cand = f"{b}{det}"
+        if cand not in existing and cand.lower() not in existing and not _bot_has_service_name(cand):
+            return cand
     # If base is fallback uuid it is already unique, but still handle fallback
     for _ in range(12):
         rnd = str(random.randint(100, 9999))

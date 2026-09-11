@@ -41,6 +41,7 @@ from Shared.xui_common import (
     _to_float,
     _to_int,
     _unique_xui_email,
+    _deterministic_uuid_suffix,
     _existing_xui_emails,
     _settings_clients,
     _client_key_value,
@@ -919,9 +920,19 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
         except XuiApiError as e:
             # If already exists, try to find and return
             if "already" in str(e).lower() or "exists" in str(e).lower():
-                # generate unique email and retry once
-                suffix = uuid4()[:4]
-                client_payload["email"] = f"{base_email[:60-len(suffix)]}{suffix}"
+                # Deterministic second candidate (uuid-derived, distinct from
+                # the _unique_xui_email candidate) so repeated runs converge
+                # instead of piling up a new random-suffixed duplicate each
+                # time. Random suffix stays as the last resort.
+                det_retry = _deterministic_uuid_suffix(user_uuid, salt="retry1")
+                if det_retry:
+                    retry_base = _sanitize_xui_email(raw_name, user_uuid) if raw_name else user_uuid
+                    max_len = 64 - len(det_retry)
+                    b = retry_base[:max_len] if len(retry_base) > max_len else retry_base
+                    client_payload["email"] = f"{b}{det_retry}"
+                else:
+                    suffix = uuid4()[:4]
+                    client_payload["email"] = f"{base_email[:60-len(suffix)]}{suffix}"
                 body["client"] = client_payload
                 await ctx.request("POST", "clients/add", json_body=body)
             else:

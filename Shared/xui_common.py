@@ -147,9 +147,44 @@ def _bot_has_service_name(name: str) -> bool:
     return False
 
 
+def _deterministic_uuid_suffix(fallback: str, salt: str = "") -> str:
+    """Derive a stable 3-4 digit suffix from a uuid-like seed (idempotent).
+
+    The old behavior appended random digits on every collision, so re-running
+    node sync created a NEW suffixed duplicate each time (vpn-766755,
+    vpn-7667555036, ...). A uuid-derived suffix yields the SAME candidate on
+    every run, so retries converge instead of piling up. Different salts give
+    distinct stable candidates (first try vs already-exists retry).
+    Returns '' when the seed has no usable hex (caller falls back to random).
+    """
+    try:
+        hex_chars = "".join(
+            ch for ch in str(fallback or "").lower() if ch in "0123456789abcdef"
+        )
+        if len(hex_chars) < 8:
+            return ""
+        num = int(hex_chars[:8], 16)
+        if salt:
+            # Distinct stable candidate for the already-exists retry path.
+            num += sum(ord(c) for c in str(salt)) * 7919
+        return str(num % 9000 + 100)
+    except (TypeError, ValueError):
+        return ""
+
+
 def _unique_xui_email(base: str, existing: set, fallback: str) -> str:
     if base not in existing and base.lower() not in existing and not _bot_has_service_name(base):
         return base
+    # Deterministic uuid-derived candidate FIRST: same inputs always yield the
+    # same email, so repeated sync/create runs converge instead of creating
+    # yet another suffixed duplicate. Random suffixes remain as fallback.
+    det = _deterministic_uuid_suffix(fallback)
+    if det:
+        max_len = 64 - len(det)
+        b = base[:max_len] if len(base) > max_len else base
+        cand = f"{b}{det}"
+        if cand not in existing and cand.lower() not in existing and not _bot_has_service_name(cand):
+            return cand
     for _ in range(12):
         rnd = str(random.randint(100, 9999))
         max_len = 64 - len(rnd)

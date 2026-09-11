@@ -1696,6 +1696,55 @@ def _record_node_sync_mapping(
     return True
 
 
+def _invalidate_node_target_caches(target: Dict[str, Any]) -> None:
+    """Force the next panel list for a node target to be freshly fetched.
+
+    The X-UI adapters cache clients/inbounds for a few seconds; node sync
+    mutates the panel (create/rename), so uuid decisions (create vs patch)
+    must be made on fresh truth, not on a stale/renamed view. Hiddify panels
+    keep no local cache — the calls below are best-effort no-ops for them.
+    """
+    try:
+        from Shared import xui_sanaei
+        xui_sanaei._invalidate_caches(target)
+    except Exception:
+        pass
+    try:
+        from Shared import xui_alireza
+        xui_alireza._invalidate_xui_inbounds_cache(target)
+    except Exception:
+        pass
+
+
+def _is_absent_record_error(exc: Exception) -> bool:
+    """True when the panel says the record itself is gone (not a validation error).
+
+    Covers Sanaei 'record not found', bot-side 'user not found (uuid=…)' and
+    Sanaei 'empty client …' — all mean 'no patchable row for this uuid', which
+    the sync can self-heal by recreating. Anything else is a real failure.
+    """
+    msg = str(exc or "").strip().lower()
+    return bool(msg) and ("not found" in msg or "empty client" in msg)
+
+
+async def _node_target_verify_uuid(target: Dict[str, Any], uuid: str) -> Optional[bool]:
+    """Fresh (cache-bypassed) check that one uuid is addressable on the target.
+
+    Returns True (present), False (confirmed absent) or None (could not verify
+    — e.g. the panel failed to answer; callers must keep the old behavior then
+    and never treat it as proof of absence).
+    """
+    uuid = str(uuid or "").strip()
+    if not uuid:
+        return False
+    _invalidate_node_target_caches(target)
+    try:
+        user = await hiddify_api.get_user_by_uuid(target, uuid)
+    except Exception as e:
+        return False if _is_absent_record_error(e) else None
+    return True if _panel_user_uuid(user) else None
+
+
 async def _run_node_sync(
     server_id: int,
     *,
@@ -1780,6 +1829,29 @@ async def _run_node_sync(
                 target_by_uuid[uuid] = user
         target_summary["total"] = len(target_by_uuid)
 
+        # Fresh truth when we are about to mutate the panel: the inventory list
+        # above may predate renames/deletes made directly on the panel (or by a
+        # concurrent writer). Uuid decisions for create-vs-patch must use a
+        # fresh view, otherwise we re-create users that already exist (piling
+        # up suffixed duplicates) or patch ghosts. Only uuids that newly
+        # appeared are merged in — never removed — so a partial fresh fetch
+        # can never flip a present user to missing. Report-only mode keeps the
+        # cheap inventory list.
+        if create_missing or patch_existing:
+            _invalidate_node_target_caches(target)
+            try:
+                fresh_raw = await hiddify_api.list_users(target)
+            except Exception:
+                fresh_raw = None
+            if fresh_raw is not None:
+                for user in fresh_raw or []:
+                    if not isinstance(user, dict):
+                        continue
+                    fuuid = _panel_user_uuid(user)
+                    if fuuid and fuuid not in target_by_uuid:
+                        target_by_uuid[fuuid] = user
+                target_summary["total"] = len(target_by_uuid)
+
         missing_uuids = [uuid for uuid in source_by_uuid.keys() if uuid not in target_by_uuid]
         existing_uuids = [uuid for uuid in source_by_uuid.keys() if uuid in target_by_uuid]
         extra_uuids = [uuid for uuid in target_by_uuid.keys() if uuid not in source_by_uuid]
@@ -1798,6 +1870,17 @@ async def _run_node_sync(
                 try:
                     created = await hiddify_api.create_user(target, payload)
                     created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
+                    # Verify the row is really addressable (no ghost/xray-only
+                    # row): only verified rows are counted and mapped, so a
+                    # half-created user can never silently pile up duplicates
+                    # on the next run.
+                    verified = await _node_target_verify_uuid(target, created_uuid or uuid)
+                    if verified is False:
+                        raise RuntimeError(
+                            "created on panel but not visible in fresh list (ghost); "
+                            "skipped to avoid duplicate pile-up"
+                        )
+                    target_by_uuid[created_uuid or uuid] = created if isinstance(created, dict) else source_user
                     target_summary["created"] += 1
                     result["created"] += 1
                     mapped = _record_node_sync_mapping(
@@ -1839,9 +1922,71 @@ async def _run_node_sync(
                         target_summary["mapped"] += 1
                         result["mapped"] += 1
                 except Exception as e:
-                    err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
-                    target_summary["errors"].append(err)
-                    result["errors"].append(err)
+                    # Self-heal when the row is actually gone (stale inventory,
+                    # panel-side delete/rename): retry once on fresh truth; if
+                    # the uuid is truly absent, recreate it through the create
+                    # path (limit copied from source, usage starts at 0 on the
+                    # node — same as a fresh missing user) instead of logging
+                    # the same error on every run.
+                    recovered = False
+                    if _is_absent_record_error(e):
+                        try:
+                            _invalidate_node_target_caches(target)
+                            await hiddify_api.get_user_by_uuid(target, uuid)
+                            # Present after all — retry the patch once.
+                            patched = await hiddify_api.patch_user(target, uuid, payload)
+                            if _panel_user_is_active(source_user):
+                                await hiddify_api.enable_user(target, uuid)
+                            else:
+                                await hiddify_api.disable_user(target, uuid)
+                            target_summary["patched"] += 1
+                            result["patched"] += 1
+                            mapped = _record_node_sync_mapping(
+                                source_uuid=uuid,
+                                target=target,
+                                target_uuid=str(patched.get("uuid") or uuid).strip(),
+                                target_user_id=patched.get("id") or target_user.get("id"),
+                                is_active=_panel_user_is_active(source_user),
+                            )
+                            if mapped:
+                                target_summary["mapped"] += 1
+                                result["mapped"] += 1
+                            recovered = True
+                        except Exception as retry_err:
+                            if _is_absent_record_error(retry_err):
+                                # Truly gone — recreate like a missing user.
+                                try:
+                                    create_payload = _build_node_sync_payload(source_user, for_create=True)
+                                    created = await hiddify_api.create_user(target, create_payload)
+                                    created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
+                                    verified = await _node_target_verify_uuid(target, created_uuid or uuid)
+                                    if verified is False:
+                                        raise RuntimeError(
+                                            "recreated on panel but not visible in fresh list (ghost)"
+                                        )
+                                    target_by_uuid[created_uuid or uuid] = created if isinstance(created, dict) else source_user
+                                    target_summary["created"] += 1
+                                    result["created"] += 1
+                                    mapped = _record_node_sync_mapping(
+                                        source_uuid=uuid,
+                                        target=target,
+                                        target_uuid=created_uuid,
+                                        target_user_id=created.get("id"),
+                                        is_active=_panel_user_is_active(source_user),
+                                    )
+                                    if mapped:
+                                        target_summary["mapped"] += 1
+                                        result["mapped"] += 1
+                                    recovered = True
+                                except Exception as create_err:
+                                    e = create_err
+                            else:
+                                # The fresh read itself failed — keep that error.
+                                e = retry_err
+                    if not recovered:
+                        err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
+                        target_summary["errors"].append(err)
+                        result["errors"].append(err)
 
         result["targets"].append(target_summary)
 
