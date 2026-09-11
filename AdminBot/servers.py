@@ -1745,12 +1745,31 @@ async def _node_target_verify_uuid(target: Dict[str, Any], uuid: str) -> Optiona
     return True if _panel_user_uuid(user) else None
 
 
+# Node-sync runtime guards: bounded parallelism + per-user timeout so one slow/hung
+# panel cannot stall the whole run (and jam the bot / block shutdown), plus a
+# registry of running syncs so double-tapping the button cannot stack runs.
+_NODE_SYNC_MAX_PARALLEL = 6
+_NODE_SYNC_USER_TIMEOUT = 90.0
+_NODE_SYNC_PROGRESS_EVERY = 10
+_NODE_SYNC_PROGRESS_MIN_INTERVAL = 12.0
+_NODE_SYNC_RUNNING: set = set()
+
+
 async def _run_node_sync(
     server_id: int,
     *,
     create_missing: bool = False,
     patch_existing: bool = False,
+    progress_cb=None,
 ) -> Dict[str, Any]:
+    """Sync main-server users onto attached nodes (uuid-matched).
+
+    Users within one phase run with bounded parallelism (_NODE_SYNC_MAX_PARALLEL)
+    and a per-user timeout (_NODE_SYNC_USER_TIMEOUT) so one hung panel call
+    (e.g. a slow node) can neither stall the whole run nor jam the bot's
+    stop/shutdown. progress_cb, when given, is an async callable
+    ``await progress_cb(done, total)`` invoked (throttled) per target.
+    """
     source, targets, warnings = _node_sync_targets(server_id)
     result: Dict[str, Any] = {
         "source_title": str((source or {}).get("title") or f"سرور #{server_id}"),
@@ -1863,130 +1882,187 @@ async def _run_node_sync(
         result["existing"] += len(existing_uuids)
         result["extra"] += len(extra_uuids)
 
-        if create_missing:
-            for uuid in missing_uuids:
-                source_user = source_by_uuid[uuid]
-                payload = _build_node_sync_payload(source_user, for_create=True)
+        # Bounded-parallel workers: same logic as the old sequential loops, but up
+        # to _NODE_SYNC_MAX_PARALLEL users in flight and each user bounded by
+        # _NODE_SYNC_USER_TIMEOUT. Counter/list mutations below contain no
+        # awaits, so they are atomic w.r.t. the event loop.
+        work_total = (len(missing_uuids) if create_missing else 0) + (
+            len(existing_uuids) if patch_existing else 0
+        )
+        work_state = {"done": 0}
+        progress_lock = asyncio.Lock()
+
+        async def _report_progress() -> None:
+            if progress_cb is None:
+                return
+            done = work_state["done"]
+            if done < work_total and done % _NODE_SYNC_PROGRESS_EVERY != 0:
+                return
+            async with progress_lock:
                 try:
-                    created = await hiddify_api.create_user(target, payload)
-                    created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
-                    # Verify the row is really addressable (no ghost/xray-only
-                    # row): only verified rows are counted and mapped, so a
-                    # half-created user can never silently pile up duplicates
-                    # on the next run.
-                    verified = await _node_target_verify_uuid(target, created_uuid or uuid)
-                    if verified is False:
-                        raise RuntimeError(
-                            "created on panel but not visible in fresh list (ghost); "
-                            "skipped to avoid duplicate pile-up"
-                        )
-                    target_by_uuid[created_uuid or uuid] = created if isinstance(created, dict) else source_user
-                    target_summary["created"] += 1
-                    result["created"] += 1
-                    mapped = _record_node_sync_mapping(
-                        source_uuid=uuid,
-                        target=target,
-                        target_uuid=created_uuid,
-                        target_user_id=created.get("id"),
-                        is_active=_panel_user_is_active(source_user),
+                    await progress_cb(done, work_total)
+                except Exception:
+                    pass
+
+        async def _create_one(uuid: str) -> None:
+            source_user = source_by_uuid[uuid]
+            payload = _build_node_sync_payload(source_user, for_create=True)
+            try:
+                created = await hiddify_api.create_user(target, payload)
+                created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
+                # Verify the row is really addressable (no ghost/xray-only
+                # row): only verified rows are counted and mapped, so a
+                # half-created user can never silently pile up duplicates
+                # on the next run.
+                verified = await _node_target_verify_uuid(target, created_uuid or uuid)
+                if verified is False:
+                    raise RuntimeError(
+                        "created on panel but not visible in fresh list (ghost); "
+                        "skipped to avoid duplicate pile-up"
                     )
-                    if mapped:
-                        target_summary["mapped"] += 1
-                        result["mapped"] += 1
-                except Exception as e:
+                target_by_uuid[created_uuid or uuid] = created if isinstance(created, dict) else source_user
+                target_summary["created"] += 1
+                result["created"] += 1
+                mapped = _record_node_sync_mapping(
+                    source_uuid=uuid,
+                    target=target,
+                    target_uuid=created_uuid,
+                    target_user_id=created.get("id"),
+                    is_active=_panel_user_is_active(source_user),
+                )
+                if mapped:
+                    target_summary["mapped"] += 1
+                    result["mapped"] += 1
+            except Exception as e:
+                err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
+                target_summary["errors"].append(err)
+                result["errors"].append(err)
+
+        async def _patch_one(uuid: str) -> None:
+            source_user = source_by_uuid[uuid]
+            target_user = target_by_uuid[uuid]
+            payload = _build_node_sync_payload(source_user, for_create=False)
+            want_active = _panel_user_is_active(source_user)
+            try:
+                patched = await hiddify_api.patch_user(target, uuid, payload)
+                # The patch payload already carries the active state; the
+                # explicit enable/disable is only needed when it differs.
+                if _panel_user_is_active(target_user) != want_active:
+                    if want_active:
+                        await hiddify_api.enable_user(target, uuid)
+                    else:
+                        await hiddify_api.disable_user(target, uuid)
+                target_summary["patched"] += 1
+                result["patched"] += 1
+                mapped = _record_node_sync_mapping(
+                    source_uuid=uuid,
+                    target=target,
+                    target_uuid=str(patched.get("uuid") or uuid).strip(),
+                    target_user_id=patched.get("id") or target_user.get("id"),
+                    is_active=want_active,
+                )
+                if mapped:
+                    target_summary["mapped"] += 1
+                    result["mapped"] += 1
+            except Exception as e:
+                # Self-heal when the row is actually gone (stale inventory,
+                # panel-side delete/rename): retry once on fresh truth; if
+                # the uuid is truly absent, recreate it through the create
+                # path (limit copied from source, usage starts at 0 on the
+                # node — same as a fresh missing user) instead of logging
+                # the same error on every run.
+                recovered = False
+                if _is_absent_record_error(e):
+                    try:
+                        _invalidate_node_target_caches(target)
+                        await hiddify_api.get_user_by_uuid(target, uuid)
+                        # Present after all — retry the patch once.
+                        patched = await hiddify_api.patch_user(target, uuid, payload)
+                        if _panel_user_is_active(target_user) != want_active:
+                            if want_active:
+                                await hiddify_api.enable_user(target, uuid)
+                            else:
+                                await hiddify_api.disable_user(target, uuid)
+                        target_summary["patched"] += 1
+                        result["patched"] += 1
+                        mapped = _record_node_sync_mapping(
+                            source_uuid=uuid,
+                            target=target,
+                            target_uuid=str(patched.get("uuid") or uuid).strip(),
+                            target_user_id=patched.get("id") or target_user.get("id"),
+                            is_active=want_active,
+                        )
+                        if mapped:
+                            target_summary["mapped"] += 1
+                            result["mapped"] += 1
+                        recovered = True
+                    except Exception as retry_err:
+                        if _is_absent_record_error(retry_err):
+                            # Truly gone — recreate like a missing user.
+                            try:
+                                create_payload = _build_node_sync_payload(source_user, for_create=True)
+                                created = await hiddify_api.create_user(target, create_payload)
+                                created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
+                                verified = await _node_target_verify_uuid(target, created_uuid or uuid)
+                                if verified is False:
+                                    raise RuntimeError(
+                                        "recreated on panel but not visible in fresh list (ghost)"
+                                    )
+                                target_by_uuid[created_uuid or uuid] = created if isinstance(created, dict) else source_user
+                                target_summary["created"] += 1
+                                result["created"] += 1
+                                mapped = _record_node_sync_mapping(
+                                    source_uuid=uuid,
+                                    target=target,
+                                    target_uuid=created_uuid,
+                                    target_user_id=created.get("id"),
+                                    is_active=want_active,
+                                )
+                                if mapped:
+                                    target_summary["mapped"] += 1
+                                    result["mapped"] += 1
+                                recovered = True
+                            except Exception as create_err:
+                                e = create_err
+                        else:
+                            # The fresh read itself failed — keep that error.
+                            e = retry_err
+                if not recovered:
                     err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
                     target_summary["errors"].append(err)
                     result["errors"].append(err)
 
-        if patch_existing:
-            for uuid in existing_uuids:
-                source_user = source_by_uuid[uuid]
-                target_user = target_by_uuid[uuid]
-                payload = _build_node_sync_payload(source_user, for_create=False)
-                try:
-                    patched = await hiddify_api.patch_user(target, uuid, payload)
-                    if _panel_user_is_active(source_user):
-                        await hiddify_api.enable_user(target, uuid)
-                    else:
-                        await hiddify_api.disable_user(target, uuid)
-                    target_summary["patched"] += 1
-                    result["patched"] += 1
-                    mapped = _record_node_sync_mapping(
-                        source_uuid=uuid,
-                        target=target,
-                        target_uuid=str(patched.get("uuid") or uuid).strip(),
-                        target_user_id=patched.get("id") or target_user.get("id"),
-                        is_active=_panel_user_is_active(source_user),
-                    )
-                    if mapped:
-                        target_summary["mapped"] += 1
-                        result["mapped"] += 1
-                except Exception as e:
-                    # Self-heal when the row is actually gone (stale inventory,
-                    # panel-side delete/rename): retry once on fresh truth; if
-                    # the uuid is truly absent, recreate it through the create
-                    # path (limit copied from source, usage starts at 0 on the
-                    # node — same as a fresh missing user) instead of logging
-                    # the same error on every run.
-                    recovered = False
-                    if _is_absent_record_error(e):
-                        try:
-                            _invalidate_node_target_caches(target)
-                            await hiddify_api.get_user_by_uuid(target, uuid)
-                            # Present after all — retry the patch once.
-                            patched = await hiddify_api.patch_user(target, uuid, payload)
-                            if _panel_user_is_active(source_user):
-                                await hiddify_api.enable_user(target, uuid)
-                            else:
-                                await hiddify_api.disable_user(target, uuid)
-                            target_summary["patched"] += 1
-                            result["patched"] += 1
-                            mapped = _record_node_sync_mapping(
-                                source_uuid=uuid,
-                                target=target,
-                                target_uuid=str(patched.get("uuid") or uuid).strip(),
-                                target_user_id=patched.get("id") or target_user.get("id"),
-                                is_active=_panel_user_is_active(source_user),
-                            )
-                            if mapped:
-                                target_summary["mapped"] += 1
-                                result["mapped"] += 1
-                            recovered = True
-                        except Exception as retry_err:
-                            if _is_absent_record_error(retry_err):
-                                # Truly gone — recreate like a missing user.
-                                try:
-                                    create_payload = _build_node_sync_payload(source_user, for_create=True)
-                                    created = await hiddify_api.create_user(target, create_payload)
-                                    created_uuid = str(created.get("uuid") or created.get("id") or uuid).strip()
-                                    verified = await _node_target_verify_uuid(target, created_uuid or uuid)
-                                    if verified is False:
-                                        raise RuntimeError(
-                                            "recreated on panel but not visible in fresh list (ghost)"
-                                        )
-                                    target_by_uuid[created_uuid or uuid] = created if isinstance(created, dict) else source_user
-                                    target_summary["created"] += 1
-                                    result["created"] += 1
-                                    mapped = _record_node_sync_mapping(
-                                        source_uuid=uuid,
-                                        target=target,
-                                        target_uuid=created_uuid,
-                                        target_user_id=created.get("id"),
-                                        is_active=_panel_user_is_active(source_user),
-                                    )
-                                    if mapped:
-                                        target_summary["mapped"] += 1
-                                        result["mapped"] += 1
-                                    recovered = True
-                                except Exception as create_err:
-                                    e = create_err
-                            else:
-                                # The fresh read itself failed — keep that error.
-                                e = retry_err
-                    if not recovered:
-                        err = f"{target_title} / {source_user.get('name') or uuid}: {_short_error(e)}"
+        async def _run_bounded(uuids: List[str], worker) -> None:
+            sem = asyncio.Semaphore(_NODE_SYNC_MAX_PARALLEL)
+
+            async def _one(uuid: str) -> None:
+                async with sem:
+                    try:
+                        await asyncio.wait_for(worker(uuid), timeout=_NODE_SYNC_USER_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        name = str((source_by_uuid.get(uuid) or {}).get("name") or uuid)
+                        err = (
+                            f"{target_title} / {name}: "
+                            f"timeout after {int(_NODE_SYNC_USER_TIMEOUT)}s (panel not responding)"
+                        )
                         target_summary["errors"].append(err)
                         result["errors"].append(err)
+                    finally:
+                        work_state["done"] += 1
+                        await _report_progress()
+
+            if uuids:
+                await asyncio.gather(*(_one(uuid) for uuid in uuids))
+
+        if create_missing:
+            await _run_bounded(missing_uuids, _create_one)
+
+        if patch_existing:
+            await _run_bounded(existing_uuids, _patch_one)
+
+        if progress_cb is not None and work_total:
+            work_state["done"] = work_total
+            await _report_progress()
 
         result["targets"].append(target_summary)
 
@@ -7309,17 +7385,43 @@ async def handle_server_inline_callback(
                 "sync_nodes_details": "🔁 در حال همسان‌سازی مشخصات کاربران موجود...",
                 "sync_nodes_full": "✅ در حال اجرای کامل امن همگام‌سازی...",
             }.get(action, "🔄 در حال همگام‌سازی...")
-            await msg.edit_text(mode_text)
+            # Single-run guard: double-tapping the button must not stack
+            # overlapping syncs (that multiplies panel load and looked like a jam).
+            run_key = (server_id, action)
+            if run_key in _NODE_SYNC_RUNNING:
+                try:
+                    await msg.edit_text(
+                        "⏳ یک همگام‌سازی برای همین سرور در حال اجراست؛\n"
+                        "لطفاً صبر کنید تمام شود و دوباره دکمه را نزنید.",
+                        reply_markup=build_node_sync_menu_keyboard(server_id),
+                    )
+                except Exception:
+                    pass
+                return
+            _NODE_SYNC_RUNNING.add(run_key)
+            try:
+                await msg.edit_text(mode_text)
 
-            summary = await _run_node_sync(
-                server_id,
-                create_missing=action in {"sync_nodes_missing", "sync_nodes_full"},
-                patch_existing=action in {"sync_nodes_details", "sync_nodes_full"},
-            )
-            await msg.edit_text(
-                _format_node_sync_report(summary),
-                reply_markup=build_node_sync_menu_keyboard(server_id),
-            )
+                async def _sync_progress(done: int, total: int) -> None:
+                    try:
+                        await msg.edit_text(
+                            f"{mode_text}\n\n⏳ پیشرفت: {done} از {total} کاربر...",
+                        )
+                    except Exception:
+                        pass
+
+                summary = await _run_node_sync(
+                    server_id,
+                    create_missing=action in {"sync_nodes_missing", "sync_nodes_full"},
+                    patch_existing=action in {"sync_nodes_details", "sync_nodes_full"},
+                    progress_cb=_sync_progress,
+                )
+                await msg.edit_text(
+                    _format_node_sync_report(summary),
+                    reply_markup=build_node_sync_menu_keyboard(server_id),
+                )
+            finally:
+                _NODE_SYNC_RUNNING.discard(run_key)
             return
 
         if action == "sync_nodes_extra":
