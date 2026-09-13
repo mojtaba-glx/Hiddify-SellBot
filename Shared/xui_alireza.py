@@ -1197,7 +1197,7 @@ async def _online_emails(server: Dict[str, Any], *, _force_refresh: bool = False
 # ---------------------------------------------------------------------------
 async def test_connect(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Login + list inbounds.  Returns the raw inbound list (wizard uses it)."""
-    return await _list_inbounds(server)
+    return await _list_inbounds(server, _force_refresh=True)
 
 
 async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
