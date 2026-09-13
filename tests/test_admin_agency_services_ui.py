@@ -10,6 +10,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import types
@@ -1069,6 +1070,71 @@ class DeleteTargetsTests(_Base):
         _run(flow())
 
 
+class DirectServiceSchemaMigrationTests(unittest.TestCase):
+    def test_old_zero_customer_service_becomes_nullable_without_breaking_children(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy-agency.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                """
+                CREATE TABLE agent_users(id INTEGER PRIMARY KEY);
+                CREATE TABLE agent_customers(id INTEGER PRIMARY KEY);
+                CREATE TABLE agent_services (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_id INTEGER NOT NULL,
+                    customer_id INTEGER NOT NULL,
+                    server_id INTEGER NOT NULL,
+                    server_title TEXT DEFAULT '', name TEXT DEFAULT '',
+                    panel_user_uuid TEXT DEFAULT '', usage_current REAL DEFAULT 0,
+                    usage_limit REAL DEFAULT 0, days_left INTEGER DEFAULT 0,
+                    start_date TEXT DEFAULT '', end_date TEXT DEFAULT '',
+                    is_active INTEGER DEFAULT 1, comment TEXT DEFAULT '',
+                    wholesale_price INTEGER DEFAULT 0, sale_price INTEGER DEFAULT 0,
+                    is_trial INTEGER DEFAULT 0, created_at TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT '', deleted_at TEXT DEFAULT '',
+                    payment_operation_key TEXT DEFAULT '',
+                    last_payment_operation_key TEXT DEFAULT '',
+                    FOREIGN KEY(agent_id) REFERENCES agent_users(id),
+                    FOREIGN KEY(customer_id) REFERENCES agent_customers(id)
+                );
+                CREATE TABLE agent_service_nodes(
+                    id INTEGER PRIMARY KEY,
+                    service_id INTEGER REFERENCES agent_services(id)
+                );
+                CREATE TABLE agent_service_probe(
+                    service_id INTEGER PRIMARY KEY REFERENCES agent_services(id)
+                );
+                INSERT INTO agent_users VALUES(1);
+                INSERT INTO agent_services(id, agent_id, customer_id, server_id, name)
+                    VALUES(1, 1, 0, 1, 'direct');
+                INSERT INTO agent_service_nodes VALUES(1, 1);
+                INSERT INTO agent_service_probe VALUES(1);
+                """
+            )
+            conn.close()
+
+            with patch.object(agent_db, "DB_PATH", db_path):
+                agent_db._migrate_service_customer_nullable()
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            customer_col = next(
+                row for row in conn.execute("PRAGMA table_info(agent_services)")
+                if row["name"] == "customer_id"
+            )
+            self.assertEqual(customer_col["notnull"], 0)
+            self.assertIsNone(conn.execute(
+                "SELECT customer_id FROM agent_services WHERE id=1"
+            ).fetchone()["customer_id"])
+            self.assertEqual(
+                conn.execute("PRAGMA foreign_key_list(agent_service_nodes)").fetchone()["table"],
+                "agent_services",
+            )
+            conn.execute("PRAGMA foreign_keys=ON")
+            self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+            conn.close()
+
+
 class TransactionLinkTests(_Base):
     """مورد ۶: اتصال قطعی تراکنش خرید اولیه به سرویس + عدم کسر دوباره."""
 
@@ -1111,6 +1177,83 @@ class TransactionLinkTests(_Base):
         # بدون کسر دوباره
         w = agent_db.get_wallet(self.agent1)
         self.assertEqual(int(w["balance"]), 95000)
+
+    def test_agent_can_create_service_without_customer(self):
+        """Direct AgentBot purchases intentionally have no customer row."""
+        from AgentBot.services import subscription_service as subs
+        agent_db.charge_wallet(self.agent1, 100000)
+        server = {"id": 1, "title": "srv", "panel_type": "hiddify"}
+
+        async def fake_cluster_create(targets, payload):
+            return ({"uuid": payload["uuid"]}, [{
+                "server_id": 1, "server_title": "srv",
+                "panel_user_uuid": payload["uuid"], "marzban_username": "",
+            }])
+
+        with patch.object(subs, "get_server_by_id", return_value=server), \
+             patch.object(subs, "_get_cluster_servers", return_value=[server]), \
+             patch.object(subs, "_create_user_on_cluster", new=AsyncMock(side_effect=fake_cluster_create)):
+            created = _run(subs.create_subscription(
+                self.agent1, 0, 1,
+                {"days": 30, "gb": 10, "wholesale_price": 5000, "sale_price": 7000},
+                "سرویس مستقیم", operation_key="direct-agent-create",
+            ))
+
+        self.assertIsNotNone(created)
+        self.assertIsNone(created["customer_id"])
+        self.assertEqual(agent_db.get_wallet_balance(self.agent1), 95000)
+
+    def test_create_retry_is_idempotent(self):
+        from AgentBot.services import subscription_service as subs
+        agent_db.charge_wallet(self.agent1, 100000)
+        server = {"id": 1, "title": "srv", "panel_type": "hiddify"}
+        create_mock = AsyncMock(return_value=({"uuid": "retry-u"}, [{
+            "server_id": 1, "server_title": "srv",
+            "panel_user_uuid": "retry-u", "marzban_username": "",
+        }]))
+        kwargs = {
+            "agent_id": self.agent1,
+            "customer_id": 0,
+            "server_id": 1,
+            "plan": {"days": 30, "gb": 10, "wholesale_price": 5000, "sale_price": 7000},
+            "name": "تکرار امن",
+            "operation_key": "same-wizard-operation",
+        }
+
+        with patch.object(subs, "get_server_by_id", return_value=server), \
+             patch.object(subs, "_get_cluster_servers", return_value=[server]), \
+             patch.object(subs, "_create_user_on_cluster", new=create_mock):
+            first = _run(subs.create_subscription(**kwargs))
+            second = _run(subs.create_subscription(**kwargs))
+
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(create_mock.await_count, 1)
+        self.assertEqual(agent_db.get_wallet_balance(self.agent1), 95000)
+        services, total = agent_db.get_services_by_agent(self.agent1)
+        self.assertEqual(sum(1 for svc in services if svc["name"] == "تکرار امن"), 1)
+
+    def test_node_mapping_failure_does_not_hide_created_service(self):
+        from AgentBot.services import subscription_service as subs
+        agent_db.charge_wallet(self.agent1, 100000)
+        server = {"id": 1, "title": "srv", "panel_type": "hiddify"}
+        create_mock = AsyncMock(return_value=({"uuid": "map-u"}, [{
+            "server_id": 1, "server_title": "srv",
+            "panel_user_uuid": "map-u", "marzban_username": "",
+        }]))
+
+        with patch.object(subs, "get_server_by_id", return_value=server), \
+             patch.object(subs, "_get_cluster_servers", return_value=[server]), \
+             patch.object(subs, "_create_user_on_cluster", new=create_mock), \
+             patch.object(agent_db, "add_service_node", side_effect=RuntimeError("db busy")):
+            created = _run(subs.create_subscription(
+                self.agent1, 0, 1,
+                {"days": 30, "gb": 10, "wholesale_price": 5000, "sale_price": 7000},
+                "نگاشت ناموفق", operation_key="node-map-failure",
+            ))
+
+        self.assertIsNotNone(created)
+        self.assertEqual(agent_db.get_wallet_balance(self.agent1), 95000)
+        self.assertIsNotNone(agent_db.get_service_by_id(int(created["id"])))
 
     def test_create_failure_leaves_refund_unlinked(self):
         from AgentBot.services import subscription_service as subs

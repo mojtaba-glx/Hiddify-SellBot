@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -27,7 +28,7 @@ from AgentBot.services.subscription_service import (
     create_subscription, renew_subscription,
     disable_subscription, enable_subscription, delete_subscription,
     change_subscription_link, get_subs_link_settings, get_sub_link_for_type,
-    rename_service_on_panels,
+    rename_service_on_panels, InsufficientWalletError, SubscriptionCreationError,
     format_service_expiry,
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
@@ -36,6 +37,7 @@ from Shared.qr_utils import make_qr_image
 logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 8
+_UD_CREATE_OPERATION = "create_service_operation"
 
 
 def _calc_dynamic_price(agent_id: int, server_id: int, gb: int, months: int):
@@ -848,6 +850,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "price": sale,
             }
             context.user_data[UD_SELECTED_PLAN] = plan
+            context.user_data[_UD_CREATE_OPERATION] = uuid.uuid4().hex
             context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
             try:
                 await query.edit_message_text(
@@ -906,6 +909,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         plan["wholesale_price"] = agent_db.calculate_wholesale_price(agent_id, plan.get("gb", 0), plan.get("days", 30), server_id)
         plan["sale_price"] = plan.get("price", 0)
         context.user_data[UD_SELECTED_PLAN] = plan
+        context.user_data[_UD_CREATE_OPERATION] = uuid.uuid4().hex
         context.user_data[UD_STATE] = STATE_CREATE_SERVICE_NAME
         try:
             await query.edit_message_text(
@@ -1491,21 +1495,75 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await update.message.reply_text("\u062e\u0637\u0627: \u0627\u0637\u0644\u0627\u0639\u0627\u062a \u06af\u0645 \u0634\u062f. \u062f\u0648\u0628\u0627\u0631\u0647 \u0634\u0631\u0648\u0639 \u06a9\u0646\u06cc\u062f.")
             context.user_data.pop(UD_STATE, None)
             return True
+        operation_key = str(context.user_data.get(_UD_CREATE_OPERATION) or "").strip()
+        if not operation_key:
+            operation_key = uuid.uuid4().hex
+            context.user_data[_UD_CREATE_OPERATION] = operation_key
         note_text = agent_db.make_service_note(agent_id)
-        svc = await create_subscription(agent_id, 0, server_id, plan, text, note=note_text)
-        if not svc:
+        await update.message.reply_text("⏳ در حال ساخت اشتراک... لطفاً صبر کنید.")
+        try:
+            svc = await create_subscription(
+                agent_id,
+                0,
+                server_id,
+                plan,
+                text,
+                note=note_text,
+                operation_key=operation_key,
+                raise_on_error=True,
+            )
+        except InsufficientWalletError as exc:
             await update.message.reply_text(
-                "\u062e\u0637\u0627 \u062f\u0631 \u0633\u0627\u062e\u062a \u0633\u0631\u0648\u06cc\u0633. \u0645\u0648\u062c\u0648\u062f\u06cc \u06a9\u0627\u0641\u06cc \u0646\u06cc\u0633\u062a \u06cc\u0627 \u062e\u0637\u0627\u06cc \u0633\u06cc\u0633\u062a\u0645.",
+                "❌ موجودی کیف پول کافی نیست.\n\n"
+                f"💰 موجودی: {_fmt_toman(exc.balance)} تومان\n"
+                f"🧾 مبلغ لازم: {_fmt_toman(exc.required)} تومان",
                 reply_markup=cancel_keyboard(),
             )
             return True
-        plan_title = f"{plan['days']} \u0631\u0648\u0632 / {_fmt_gb(plan['gb'])}GB"
-        db_create_order(agent_id, 0, "", plan.get("wholesale_price", 0), "new", plan.get("id", 0), text, volume_gb=plan.get("gb", 0))
+        except SubscriptionCreationError as exc:
+            if exc.refunded:
+                # A refunded attempt is complete.  A later retry must use a
+                # fresh operation key so it can debit and create normally.
+                context.user_data[_UD_CREATE_OPERATION] = uuid.uuid4().hex
+                error_text = "❌ ساخت اشتراک ناموفق بود و مبلغ به کیف پول بازگردانده شد. لطفاً دوباره تلاش کنید."
+            else:
+                # Keep the same key: a retry can resume without a second debit.
+                error_text = (
+                    "❌ ساخت اشتراک کامل نشد. عملیات مالی برای جلوگیری از کسر دوباره محفوظ مانده است. "
+                    "لطفاً دوباره همان نام را ارسال کنید."
+                )
+            await update.message.reply_text(error_text, reply_markup=cancel_keyboard())
+            return True
+        except Exception:
+            logger.exception("Unexpected agent subscription creation failure")
+            await update.message.reply_text(
+                "❌ خطای سیستمی در ساخت اشتراک رخ داد. برای جلوگیری از کسر دوباره، همان نام را دوباره ارسال کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
+        if not svc:
+            context.user_data[_UD_CREATE_OPERATION] = uuid.uuid4().hex
+            await update.message.reply_text(
+                "❌ سرور انتخاب‌شده در دسترس نیست یا حذف شده است. لطفاً خرید را دوباره شروع کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_SELECTED_PLAN, None)
         context.user_data.pop(UD_SELECTED_SERVER, None)
+        context.user_data.pop(_UD_CREATE_OPERATION, None)
         svc_id = int(svc["id"])
         is_active = bool(int(svc.get("is_active", 0) or 0))
+
+        # Order history is supplementary.  A failure here must never hide an
+        # already-paid and successfully-created subscription from the agent.
+        try:
+            db_create_order(
+                agent_id, 0, "", plan.get("wholesale_price", 0), "new",
+                plan.get("id", 0), text, volume_gb=plan.get("gb", 0),
+            )
+        except Exception:
+            logger.exception("Failed to record agent self-service order service=%s", svc_id)
 
         # پیام اول: تأیید کوتاه ساخت
         await update.message.reply_text(

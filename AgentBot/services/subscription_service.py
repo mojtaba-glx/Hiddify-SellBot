@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,23 @@ from AgentBot.services.hiddify_service import (
 from AgentBot.database import create_order as db_create_order
 
 logger = logging.getLogger(__name__)
+
+
+class InsufficientWalletError(RuntimeError):
+    """Raised when an agent cannot pay for a new subscription."""
+
+    def __init__(self, required: int, balance: int):
+        super().__init__("insufficient agent wallet balance")
+        self.required = int(required or 0)
+        self.balance = int(balance or 0)
+
+
+class SubscriptionCreationError(RuntimeError):
+    """A new subscription could not be completed safely."""
+
+    def __init__(self, *, refunded: bool):
+        super().__init__("agent subscription creation failed")
+        self.refunded = bool(refunded)
 
 
 def _get_cluster_servers(server_id: int) -> List[Dict[str, Any]]:
@@ -108,7 +126,22 @@ async def _rollback_node_if_failed(item: dict) -> None:
     pass
 
 
-async def create_subscription(agent_id: int, customer_id: int, server_id: int, plan: Dict[str, Any], name: str, note: str = "") -> Optional[Dict[str, Any]]:
+async def create_subscription(
+    agent_id: int,
+    customer_id: int,
+    server_id: int,
+    plan: Dict[str, Any],
+    name: str,
+    note: str = "",
+    operation_key: str = "",
+    raise_on_error: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Create and persist an agent subscription without double charging.
+
+    ``operation_key`` identifies one click-through of the creation wizard.  A
+    Telegram retry with the same key returns the already-created local service
+    and never charges the wallet for a second time.
+    """
     server = get_server_by_id(server_id)
     if not server:
         return None
@@ -118,24 +151,51 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
     wholesale = int(plan.get("wholesale_price", 0))
     sale = int(plan.get("sale_price", 0))
 
-    ok, wallet = agent_db.deduct_wallet(agent_id, wholesale, description=f"\u062e\u0631\u06cc\u062f \u0633\u0631\u0648\u06cc\u0633: {name}", service_id=0)
-    if not ok:
-        return None
-    # شناسه تراکنش خرید برای اتصال قطعی به سرویس واقعی پس از ساخت
-    purchase_tx_id = 0
-    try:
-        purchase_tx_id = int((wallet or {}).get("_transaction_id") or 0)
-    except (TypeError, ValueError):
-        purchase_tx_id = 0
-
     targets = _get_cluster_servers(server_id)
     if not targets:
         targets = [server]
+
+    op_key = str(operation_key or "").strip() or uuid.uuid4().hex
+    existing = agent_db.get_service_by_payment_operation(op_key)
+    if existing:
+        if int(existing.get("agent_id") or 0) != int(agent_id):
+            logger.error("Subscription operation key belongs to another agent")
+            raise SubscriptionCreationError(refunded=False)
+        return existing
+
+    debit_key = f"agent-service-create:{agent_id}:{op_key}:debit"
+    refund_key = f"agent-service-create:{agent_id}:{op_key}:refund"
+    ok, wallet = agent_db.deduct_wallet_once(
+        agent_id,
+        wholesale,
+        debit_key,
+        description=f"\u062e\u0631\u06cc\u062f \u0633\u0631\u0648\u06cc\u0633: {name}",
+        service_id=0,
+    )
+    if not ok:
+        error = InsufficientWalletError(
+            required=wholesale, balance=int((wallet or {}).get("balance") or 0)
+        )
+        if raise_on_error:
+            raise error
+        return None
+
+    try:
+        purchase_tx = agent_db.get_wallet_transaction_by_key(debit_key) or {}
+        purchase_tx_id = int(purchase_tx.get("id") or 0)
+    except Exception:
+        # Linking the ledger row to the resulting service is useful history,
+        # but failure to read it must not interrupt a paid creation midway.
+        logger.exception("Failed to read agent purchase transaction")
+        purchase_tx_id = 0
 
     payload = {
         "name": name,
         "usage_limit_GB": gb,
         "package_days": days,
+        # Stable across a Telegram retry.  This prevents a retry from creating
+        # a different panel identity after the wallet operation was recorded.
+        "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"agent-service:{agent_id}:{op_key}")),
     }
     if str(note or "").strip():
         payload["comment"] = str(note).strip()
@@ -144,7 +204,17 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
         panel_result, created_nodes = await _create_user_on_cluster(targets, payload)
     except Exception as e:
         logger.error("Cluster create failed for %s: %s", name, e)
-        agent_db.refund_wallet(agent_id, wholesale, description=f"\u0628\u0627\u0632\u06af\u0631\u062f\u0627\u0646\u062a \u0645\u0648\u062c\u0648\u062f\u06cc \u0628\u0647 \u062f\u0644\u06cc\u0644 \u062e\u0637\u0627\u06cc \u0633\u0627\u062e\u062a \u06a9\u0627\u0631\u0628\u0631: {name}")
+        refunded = False
+        try:
+            agent_db.refund_wallet_once(
+                agent_id,
+                wholesale,
+                refund_key,
+                description=f"\u0628\u0627\u0632\u06af\u0631\u062f\u0627\u0646\u062a \u0645\u0648\u062c\u0648\u062f\u06cc \u0628\u0647 \u062f\u0644\u06cc\u0644 \u062e\u0637\u0627\u06cc \u0633\u0627\u062e\u062a \u06a9\u0627\u0631\u0628\u0631: {name}",
+            )
+            refunded = True
+        except Exception:
+            logger.exception("Failed to refund wallet after panel creation error")
         try:
             from Shared.admin_reports import notify_admin_delivery_report
             await notify_admin_delivery_report(
@@ -160,23 +230,32 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
             )
         except Exception as _report_e:
             logger.warning("Failed to send delivery error report: %s", _report_e)
+        if raise_on_error:
+            raise SubscriptionCreationError(refunded=refunded) from e
         return None
     panel_uuid = str(panel_result.get("uuid", "") or panel_result.get("id", "") or "").strip()
-    primary_marzban = str((panel_result or {}).get("_marzban_username") or "").strip()
-
-    svc = agent_db.create_service(
-        agent_id=agent_id,
-        customer_id=customer_id,
-        server_id=server_id,
-        server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
-        name=name,
-        panel_user_uuid=panel_uuid,
-        usage_limit=gb,
-        days=days,
-        wholesale_price=wholesale,
-        sale_price=sale,
-        note=note,
-    )
+    try:
+        svc = agent_db.create_service(
+            agent_id=agent_id,
+            customer_id=customer_id,
+            server_id=server_id,
+            server_title=server.get("title", f"\u0633\u0631\u0648\u0631 #{server_id}"),
+            name=name,
+            panel_user_uuid=panel_uuid,
+            usage_limit=gb,
+            days=days,
+            wholesale_price=wholesale,
+            sale_price=sale,
+            note=note,
+            payment_operation_key=op_key,
+        )
+    except Exception:
+        # A concurrent retry may have won the unique operation-key insert.
+        svc = agent_db.get_service_by_payment_operation(op_key)
+        if not svc:
+            logger.exception("Failed to persist newly-created agent service")
+        else:
+            logger.info("Recovered concurrently-created subscription operation")
     if not svc or not panel_uuid:
         # Remote users must not be orphaned when local persistence fails.
         for item in created_nodes:
@@ -188,17 +267,38 @@ async def create_subscription(agent_id: int, customer_id: int, server_id: int, p
                 )
             except Exception as rollback_error:
                 logger.error("Failed rolling back orphan panel user: %s", rollback_error)
-        agent_db.refund_wallet(agent_id, wholesale, description=f"بازگشت وجه ساخت ناموفق سرویس: {name}")
+        refunded = False
+        try:
+            agent_db.refund_wallet_once(
+                agent_id,
+                wholesale,
+                refund_key,
+                description=f"بازگشت وجه ساخت ناموفق سرویس: {name}",
+            )
+            refunded = True
+        except Exception:
+            logger.exception("Failed to refund wallet after local persistence error")
+        if raise_on_error:
+            raise SubscriptionCreationError(refunded=refunded)
         return None
     if svc and panel_uuid:
         for item in created_nodes:
-            agent_db.add_service_node(
-                service_id=svc["id"],
-                server_id=int(item.get("server_id") or 0),
-                server_title=item.get("server_title") or "",
-                panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
-                marzban_username=str(item.get("marzban_username") or "").strip(),
-            )
+            try:
+                agent_db.add_service_node(
+                    service_id=svc["id"],
+                    server_id=int(item.get("server_id") or 0),
+                    server_title=item.get("server_title") or "",
+                    panel_user_uuid=str(item.get("panel_user_uuid") or "").strip(),
+                    marzban_username=str(item.get("marzban_username") or "").strip(),
+                )
+            except Exception as node_error:
+                # The authoritative local service and panel user already
+                # exist.  A secondary mapping failure must not turn a paid,
+                # usable subscription into an apparent purchase failure.
+                logger.error(
+                    "Failed to persist service-node mapping service=%s server=%s: %s",
+                    svc.get("id"), item.get("server_id"), node_error,
+                )
         # اتصال قطعی تراکنش خرید اولیه به سرویس واقعی (بدون کسر دوباره؛
         # فقط وقتی تراکنش هنوز service_id=0 دارد)
         try:
