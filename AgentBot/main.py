@@ -18,6 +18,7 @@ if str(ROOT_DIR) not in sys.path:
 from AgentBot.handlers.main_menu import handle_start, handle_main_menu_callback, handle_agent_text
 from AgentBot.database import init_db as init_agent_db
 from Shared import secure_io
+from Shared.env_utils import env_float, env_int
 
 load_dotenv()
 AGENT_BOT_TOKEN = os.getenv("AGENT_BOT_TOKEN")
@@ -30,9 +31,19 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+# The HTTP webhook runs in UserBot and hands work to AgentBot through SQLite.
+# Keep this poll short so a queued bank SMS starts fulfillment promptly.  The
+# operation itself remains protected by the existing payment/idempotency locks.
+AGENT_SMS_QUEUE_POLL_SECONDS = env_float(
+    "AGENT_SMS_QUEUE_POLL_SECONDS", 0.75, minimum=0.25, maximum=10.0
+)
+AGENT_SMS_QUEUE_BATCH_SIZE = env_int(
+    "AGENT_SMS_QUEUE_BATCH_SIZE", 10, minimum=1, maximum=50
+)
+
 
 async def _sms_webhook_queue_worker(application) -> None:
-    """صف تایید خودکار وب‌هوک SMS بانکی را هر ۲۰ ثانیه پردازش می‌کند.
+    """صف تایید خودکار وب‌هوک SMS بانکی را با تأخیر کمتر از یک ثانیه می‌خواند.
 
     وب‌هوک پرداخت‌های تطبیق‌یافته نمایندگی‌ها را در customer_bot.db صف می‌کند؛
     ساخت سرویس و تحویل باید در همین پروسه انجام شود (توکن ربات مشتری اینجاست).
@@ -40,11 +51,20 @@ async def _sms_webhook_queue_worker(application) -> None:
     from AgentBot.handlers.settings_customer_payments import process_sms_webhook_queue
 
     while True:
+        processed = 0
         try:
-            await process_sms_webhook_queue(application, limit=5)
+            processed = await process_sms_webhook_queue(
+                application, limit=AGENT_SMS_QUEUE_BATCH_SIZE
+            )
         except Exception as e:
             logger.warning("sms webhook queue worker error: %s", e)
-        await asyncio.sleep(20)
+        # If a full batch was completed, drain the next batch immediately.
+        # Otherwise avoid a busy loop while still starting new SMS approvals
+        # well below the previous 20-second latency.
+        if processed >= AGENT_SMS_QUEUE_BATCH_SIZE:
+            await asyncio.sleep(0)
+        else:
+            await asyncio.sleep(AGENT_SMS_QUEUE_POLL_SECONDS)
 
 
 async def _post_init(application) -> None:

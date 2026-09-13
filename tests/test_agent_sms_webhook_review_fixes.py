@@ -812,5 +812,33 @@ class SmsWebhookMigrationTests(unittest.TestCase):
                 ))
 
 
+class SmsQueueLatencyTests(unittest.TestCase):
+    def test_agent_worker_uses_fast_configured_poll_interval(self):
+        from AgentBot import main as agent_main
+        from AgentBot.handlers import settings_customer_payments as worker_module
+
+        calls = []
+
+        async def fake_process(application, limit):
+            calls.append((application, limit))
+            return 0
+
+        async def stop_after_first_sleep(delay):
+            calls.append(("sleep", delay))
+            raise asyncio.CancelledError
+
+        application = object()
+        with patch.object(worker_module, "process_sms_webhook_queue", new=fake_process), \
+             patch.object(agent_main, "AGENT_SMS_QUEUE_POLL_SECONDS", 0.75), \
+             patch.object(agent_main, "AGENT_SMS_QUEUE_BATCH_SIZE", 10), \
+             patch.object(agent_main.asyncio, "sleep", new=stop_after_first_sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(agent_main._sms_webhook_queue_worker(application))
+
+        self.assertEqual(calls[0], (application, 10))
+        self.assertEqual(calls[1], ("sleep", 0.75))
+        self.assertLess(calls[1][1], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
