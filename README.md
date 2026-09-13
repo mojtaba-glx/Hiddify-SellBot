@@ -162,4 +162,4 @@ AGENT_BOT_TOKEN=345678:GHI...   # اختیاری — سیستم نمایندگی
 
 ## 📄 نسخه
 
-نسخه فعلی: **5.2.0** — تاریخچه کامل در [CHANGELOG.md](CHANGELOG.md)
+نسخه فعلی: **5.2.13** — تاریخچه کامل در [CHANGELOG.md](CHANGELOG.md)

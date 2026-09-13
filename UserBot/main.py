@@ -5868,6 +5868,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_obj = update.callback_query.message if update.callback_query else update.message
     if not msg_obj:
         return
+
+    # A deep-link payload exists only on the original /start update.  Persist a
+    # valid referral before force-join can stop this handler; the membership
+    # check callback cannot recover Telegram's original payload afterwards.
+    start_payload = _extract_start_payload(update)
+    referral_consumed = False
+    if start_payload:
+        referral_consumed = _handle_referral_start_payload(
+            start_payload, int(internal_user_id)
+        )
+
     allowed = await _enforce_force_join(
         context=context,
         user_id=int(user.id),
@@ -5876,8 +5887,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed:
         return
 
-    start_payload = _extract_start_payload(update)
-    referral_consumed = False
     if start_payload:
         shot_handled = await _handle_user_ticket_shot_start(
             update=update,
@@ -5900,7 +5909,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if connect_handled:
                 return
 
-        referral_consumed = _handle_referral_start_payload(start_payload, int(internal_user_id))
+        # Retry only when the pre-force-join attempt did not consume the
+        # payload (for example, after a transient database read failure).
+        if not referral_consumed:
+            referral_consumed = _handle_referral_start_payload(
+                start_payload, int(internal_user_id)
+            )
     text_settings = _get_text_settings()
     welcome_text = (
         text_settings.get("welcome_message")

@@ -5368,14 +5368,26 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
             target_ids = userbot_db.get_broadcast_target_telegram_ids(segment)
             try:
-                await _send_broadcast_to_targets(context, target_ids, body_text, photo_file_id)
+                sent_count, fail_count = await _send_broadcast_to_targets(
+                    context, target_ids, body_text, photo_file_id)
             except Exception as e:
-                await msg.reply_text(f"❌ خطا در ارسال پیام همگانی:\n{e}", reply_markup=admin_main_keyboard())
+                logger.warning(
+                    "Broadcast setup failed (segment=%s): %s",
+                    segment,
+                    secure_io.safe_exception_name(e),
+                )
+                await msg.reply_text(
+                    "❌ آماده‌سازی یا ارسال پیام همگانی با خطا مواجه شد.",
+                    reply_markup=admin_main_keyboard(),
+                )
                 context.user_data.pop(BROADCAST_SEND_STATE, None)
                 return
 
             context.user_data.pop(BROADCAST_SEND_STATE, None)
-            await msg.reply_text("✅پیام به کاربران ارسال شد", reply_markup=admin_main_keyboard())
+            await msg.reply_text(
+                _broadcast_result_text(sent_count, fail_count),
+                reply_markup=admin_main_keyboard(),
+            )
             return
 
         # fallback
@@ -8215,19 +8227,48 @@ async def _send_broadcast_to_targets(
     if not USER_BOT_TOKEN:
         raise RuntimeError("USER_BOT_TOKEN تنظیم نشده است.")
 
-    user_bot = Bot(token=USER_BOT_TOKEN)
     body = str(text or "").strip()
     photo_id = str(photo_file_id or "").strip()
+    photo_bytes = b""
+    if photo_id:
+        try:
+            # Telegram file_id values belong to the bot that received the
+            # file.  The admin bot must download the image before UserBot can
+            # upload it under its own identity.
+            file_obj = await context.bot.get_file(photo_id)
+            photo_bytes = bytes(await file_obj.download_as_bytearray())
+        except Exception:
+            raise RuntimeError("broadcast photo download failed") from None
+        if not photo_bytes:
+            raise RuntimeError("broadcast photo is empty")
+
+    user_bot = Bot(token=USER_BOT_TOKEN)
+    reusable_userbot_photo_id = ""
     sent_count = 0
     fail_count = 0
 
     for tg_id in telegram_ids:
         try:
             if photo_id:
-                if len(body) <= 1024:
-                    await user_bot.send_photo(chat_id=tg_id, photo=photo_id, caption=body)
+                outgoing_photo: Any
+                if reusable_userbot_photo_id:
+                    outgoing_photo = reusable_userbot_photo_id
                 else:
-                    await user_bot.send_photo(chat_id=tg_id, photo=photo_id)
+                    outgoing_photo = BytesIO(photo_bytes)
+                    outgoing_photo.name = "broadcast.jpg"
+                if len(body) <= 1024:
+                    sent = await user_bot.send_photo(
+                        chat_id=tg_id, photo=outgoing_photo, caption=body)
+                else:
+                    sent = await user_bot.send_photo(
+                        chat_id=tg_id, photo=outgoing_photo)
+                if not reusable_userbot_photo_id:
+                    photos = getattr(sent, "photo", None) or []
+                    if photos:
+                        reusable_userbot_photo_id = str(
+                            getattr(photos[-1], "file_id", "") or ""
+                        ).strip()
+                if len(body) > 1024:
                     await user_bot.send_message(chat_id=tg_id, text=body)
             else:
                 await user_bot.send_message(chat_id=tg_id, text=body)
@@ -8237,6 +8278,23 @@ async def _send_broadcast_to_targets(
         await asyncio.sleep(0.03)
 
     return sent_count, fail_count
+
+
+def _broadcast_result_text(sent_count: int, fail_count: int) -> str:
+    sent = max(0, int(sent_count or 0))
+    failed = max(0, int(fail_count or 0))
+    total = sent + failed
+    if total == 0:
+        return "ℹ️ کاربری در گروه انتخاب‌شده برای ارسال پیدا نشد."
+    if failed == 0:
+        return f"✅ پیام برای {sent} کاربر ارسال شد."
+    if sent == 0:
+        return f"❌ ارسال پیام برای هر {failed} کاربر ناموفق بود."
+    return (
+        "⚠️ ارسال همگانی به‌صورت ناقص انجام شد.\n"
+        f"✅ موفق: {sent}\n"
+        f"❌ ناموفق: {failed}"
+    )
 
 
 async def send_tickets_list(
