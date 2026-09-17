@@ -1824,6 +1824,7 @@ async def _run_node_sync(
         return result
 
     try:
+        xui_api.invalidate_user_list_cache(source)
         source_users_raw = await hiddify_api.list_users(source)
     except Exception as e:
         result["errors"].append(f"{result['source_title']}: {_short_error(e)}")
@@ -1855,6 +1856,7 @@ async def _run_node_sync(
             "errors": [],
         }
         try:
+            xui_api.invalidate_user_list_cache(target)
             target_users_raw = await hiddify_api.list_users(target)
         except Exception as e:
             err = f"{target_title}: {_short_error(e)}"

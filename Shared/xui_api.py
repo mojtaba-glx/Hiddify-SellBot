@@ -101,6 +101,16 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
             raise XuiApiError(str(e)) from e
 
 
+def invalidate_user_list_cache(server: Dict[str, Any]) -> None:
+    """Invalidate the process-local X-UI inventory cache before a fresh scan."""
+    if _use_sanaei(server):
+        from Shared import xui_sanaei
+        xui_sanaei._invalidate_caches(server)
+    else:
+        from Shared import xui_alireza
+        xui_alireza._invalidate_xui_inbounds_cache(server)
+
+
 async def get_user_by_uuid(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]:
     if _use_sanaei(server):
         from Shared import xui_sanaei
