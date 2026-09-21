@@ -221,23 +221,30 @@ async def _process_service(svc: dict) -> Dict[str, str]:
         # سروری که از تنظیمات حذف شده، snapshot مصرفش تا تمدید حفظ می‌شود.
         if int(node.get("deleted") or 0) == 1:
             total_usage += prev_usage
-            frozen_count += 1
+            if prev_usage > 0.0:
+                frozen_count += 1
             continue
 
         srv = database.get_server_by_id(server_id)
         if not srv:
             total_usage += prev_usage
-            frozen_count += 1
+            has_snapshot = prev_usage > 0.0
+            if has_snapshot:
+                frozen_count += 1
             try:
                 agent_db.update_service_node_runtime(
                     service_id,
                     server_id,
                     uuid,
-                    frozen=1,
+                    frozen=1 if has_snapshot else 0,
                     deleted=1,
                     is_active=0,
-                    frozen_at=str(node.get("frozen_at") or "").strip() or now_str,
-                    frozen_reason="server_deleted",
+                    frozen_at=(
+                        str(node.get("frozen_at") or "").strip() or now_str
+                        if has_snapshot
+                        else ""
+                    ),
+                    frozen_reason="server_deleted" if has_snapshot else "",
                 )
             except Exception:
                 pass
