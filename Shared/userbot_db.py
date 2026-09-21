@@ -3410,14 +3410,20 @@ def get_frozen_nodes_summary() -> Dict[str, int]:
     conn = _get_conn()
     cur = conn.cursor()
     try:
+        meaningful = "COALESCE(usage_current,0) > 0"
         cur.execute(
-            "SELECT COUNT(*) FROM userbot_service_nodes WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0"
+            "SELECT COUNT(*) FROM userbot_service_nodes "
+            "WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0 AND " + meaningful
         )
         frozen = int((cur.fetchone() or [0])[0] or 0)
-        cur.execute("SELECT COUNT(*) FROM userbot_service_nodes WHERE COALESCE(deleted,0)=1")
+        cur.execute(
+            "SELECT COUNT(*) FROM userbot_service_nodes "
+            "WHERE COALESCE(deleted,0)=1 AND " + meaningful
+        )
         deleted = int((cur.fetchone() or [0])[0] or 0)
         cur.execute(
-            "SELECT COUNT(DISTINCT service_id) FROM userbot_service_nodes WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0"
+            "SELECT COUNT(DISTINCT service_id) FROM userbot_service_nodes "
+            "WHERE (COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1) AND " + meaningful
         )
         frozen_services = int((cur.fetchone() or [0])[0] or 0)
         return {"frozen_nodes": frozen, "deleted_nodes": deleted, "frozen_services": frozen_services}
@@ -3441,7 +3447,8 @@ def get_frozen_nodes_report(limit: int = 100) -> List[Dict[str, Any]]:
             FROM userbot_service_nodes n
             JOIN userbot_services s ON s.id = n.service_id
             LEFT JOIN userbot_users u ON u.id = s.user_id
-            WHERE COALESCE(n.frozen,0)=1 OR COALESCE(n.deleted,0)=1
+            WHERE (COALESCE(n.frozen,0)=1 OR COALESCE(n.deleted,0)=1)
+              AND COALESCE(n.usage_current,0) > 0
             ORDER BY COALESCE(NULLIF(n.last_ok_at,''), n.updated_at, n.created_at) DESC, n.id DESC
             LIMIT ?
             """,
