@@ -493,6 +493,12 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             logger.error("Primary panel renewal failed; local state and wallet restored (service=%s)", service_id)
             return None
 
+        # تمدید روی سرور مرجع قطعی شد؛ حالا snapshot/frozen دوره قبل پاک شود.
+        try:
+            agent_db.reset_service_nodes_on_renew(service_id)
+        except Exception as e:
+            logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
+
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         primary_enable_ok = False
         for tgt in targets:
