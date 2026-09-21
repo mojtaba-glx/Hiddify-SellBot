@@ -10,13 +10,28 @@
 """
 
 import logging
+import os
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from Shared import hiddify_api, agent_db
+from Shared import hiddify_api, agent_db, database
 from Shared.sub_links import get_service_panel_targets
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 20) -> int:
+    try:
+        value = int(str(os.getenv(name, default) or default).strip())
+    except Exception:
+        value = int(default)
+    return max(minimum, min(maximum, value))
+
+
+# مثل UserBot: پس از ۳ خطای پیاپی شبکه، snapshot مصرف نود frozen می‌شود.
+AGENT_ENFORCER_NODE_FROZEN_THRESHOLD = _env_int(
+    "AGENT_ENFORCER_NODE_FROZEN_THRESHOLD", 3
+)
 
 
 def _to_float(value, default: float = 0.0) -> float:
@@ -39,56 +54,207 @@ def _to_int(value, default: int = 0) -> int:
         return int(default)
 
 
-async def _disable_on_all_targets(svc: dict, targets: list) -> int:
-    """غیرفعال کردن کاربر روی سرور اصلی + همه نودها. تعداد موفق را برمی‌گرداند."""
+async def _disable_on_all_targets(svc: dict, mappings: List[dict]) -> int:
+    """غیرفعال کردن سرویس روی همه نودهای موجود؛ نود حذف‌شده فقط محلی می‌ماند."""
     disabled = 0
-    for srv, uuid, marzban_un in targets:
-        if not srv or not uuid:
+    for node in mappings:
+        if int(node.get("deleted") or 0) == 1:
+            continue
+        server_id = _to_int(node.get("server_id"), 0)
+        uuid = str(node.get("panel_user_uuid") or "").strip()
+        if server_id <= 0 or not uuid:
+            continue
+        srv = database.get_server_by_id(server_id)
+        if not srv:
             continue
         try:
             await hiddify_api.disable_user(srv, uuid)
             disabled += 1
         except Exception as e:
-            logger.warning("agent enforcer disable svc=%s node=%s failed: %s", svc.get("id"), uuid[:8], e)
+            logger.warning(
+                "agent enforcer disable svc=%s server=%s uuid=%s failed: %s",
+                svc.get("id"), server_id, uuid[:8], e,
+            )
     return disabled
 
 
+def _is_user_not_found_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    return (
+        "user not found" in msg
+        or ("http 404" in msg and "not found" in msg and "user" in msg)
+        or "empty client" in msg
+    )
+
+
+def _service_mappings(svc: dict) -> List[dict]:
+    """Ensure old agency services also have per-node rows before accounting."""
+    service_id = _to_int(svc.get("id"), 0)
+    if service_id <= 0:
+        return []
+    mappings = agent_db.get_service_nodes(service_id) or []
+    if mappings:
+        return mappings
+
+    # Legacy fallback: discover the old targets once and persist them.
+    for srv, uuid, marzban_un in get_service_panel_targets(svc) or []:
+        try:
+            sid = int(srv.get("id") or 0)
+        except Exception:
+            sid = 0
+        uuid = str(uuid or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+        try:
+            agent_db.add_service_node(
+                service_id=service_id,
+                server_id=sid,
+                server_title=str(srv.get("title") or f"سرور #{sid}"),
+                panel_user_uuid=uuid,
+                marzban_username=str(marzban_un or ""),
+            )
+        except Exception as e:
+            logger.warning(
+                "agent enforcer legacy mapping failed svc=%s server=%s: %s",
+                service_id, sid, e,
+            )
+    return agent_db.get_service_nodes(service_id) or []
+
+
 async def _process_service(svc: dict) -> Dict[str, str]:
-    """بررسی و در صورت نیاز قطع یک سرویس. خلاصه نتیجه برمی‌گرداند."""
+    """جمع مصرف زنده + snapshot نودهای قطع/حذف‌شده و اعمال سقف سرویس."""
     result: Dict[str, str] = {}
-    # Guard: DB may return None or corrupted rows (seen in logs svc=2..30)
     if not svc or not isinstance(svc, dict):
         logger.warning("agent enforcer skip: svc is None or not dict: %r", svc)
         return result
+
     service_id = _to_int(svc.get("id"), 0)
     if service_id <= 0:
         return result
 
-    targets = get_service_panel_targets(svc)
-    if not targets:
+    mappings = _service_mappings(svc)
+    if not mappings:
         return result
 
     total_usage = 0.0
-    found_any = False
-    for srv, uuid, marzban_un in targets:
+    live_success = 0
+    frozen_count = 0
+    now_str = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+    for node in mappings:
+        server_id = _to_int(node.get("server_id"), 0)
+        uuid = str(node.get("panel_user_uuid") or "").strip()
+        if server_id <= 0 or not uuid:
+            continue
+
+        prev_usage = _to_float(node.get("usage_current"), 0.0)
+
+        # سروری که از تنظیمات حذف شده، snapshot مصرفش تا تمدید حفظ می‌شود.
+        if int(node.get("deleted") or 0) == 1:
+            total_usage += prev_usage
+            frozen_count += 1
+            continue
+
+        srv = database.get_server_by_id(server_id)
+        if not srv:
+            total_usage += prev_usage
+            frozen_count += 1
+            try:
+                agent_db.update_service_node_runtime(
+                    service_id,
+                    server_id,
+                    uuid,
+                    frozen=1,
+                    deleted=1,
+                    is_active=0,
+                    frozen_at=str(node.get("frozen_at") or "").strip() or now_str,
+                    frozen_reason="server_deleted",
+                )
+            except Exception:
+                pass
+            continue
+
         try:
             user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
-            total_usage += _to_float(user_data.get("current_usage_GB"), 0.0)
-            found_any = True
+            usage = _to_float(user_data.get("current_usage_GB"), 0.0)
+            total_usage += usage
+            live_success += 1
+            try:
+                agent_db.update_service_node_runtime(
+                    service_id,
+                    server_id,
+                    uuid,
+                    usage_current=usage,
+                    days_left=(
+                        _to_int(user_data.get("remaining_days"), 0)
+                        if user_data.get("remaining_days") is not None
+                        else None
+                    ),
+                    frozen=0,
+                    fail_count=0,
+                    last_ok_at=now_str,
+                    frozen_at="",
+                    frozen_reason="",
+                    deleted=0,
+                    is_active=1,
+                )
+            except Exception as db_err:
+                logger.warning(
+                    "agent enforcer runtime save svc=%s server=%s failed: %s",
+                    service_id, server_id, db_err,
+                )
+            continue
         except Exception as e:
-            logger.warning("agent enforcer sync svc=%s node=%s failed: %s", service_id, uuid[:8], e)
+            # حتی قبل از رسیدن به threshold، آخرین مصرف این نود از جمع حذف نمی‌شود.
+            total_usage += prev_usage
+            prev_fail = _to_int(node.get("fail_count"), 0)
+            new_fail = prev_fail + 1
+            was_frozen = int(node.get("frozen") or 0) == 1
 
-    if not found_any:
-        return result
+            if _is_user_not_found_error(e):
+                frozen = 1
+                reason = "user_not_found"
+                active = 0
+            else:
+                frozen = 1 if new_fail >= AGENT_ENFORCER_NODE_FROZEN_THRESHOLD else int(was_frozen)
+                reason = "network_error" if frozen else str(node.get("frozen_reason") or "")
+                active = int(node.get("is_active") if node.get("is_active") is not None else 1)
+
+            if frozen:
+                frozen_count += 1
+            try:
+                agent_db.update_service_node_runtime(
+                    service_id,
+                    server_id,
+                    uuid,
+                    frozen=frozen,
+                    fail_count=new_fail,
+                    frozen_at=(
+                        str(node.get("frozen_at") or "").strip() or now_str
+                        if frozen
+                        else str(node.get("frozen_at") or "")
+                    ),
+                    frozen_reason=reason,
+                    is_active=active,
+                )
+            except Exception:
+                pass
+            logger.warning(
+                "agent node unavailable svc=%s server=%s uuid=%s fail=%s frozen=%s kept_usage=%.3f: %s",
+                service_id, server_id, uuid[:8], new_fail, frozen, prev_usage, e,
+            )
+
+    # اگر کل خوشه در یک دور از دسترس بود و snapshot قدیمی ناقص بود،
+    # هرگز مصرف سرویس را کمتر از آخرین مقدار سراسری ثبت‌شده نکن.
+    if live_success == 0:
+        total_usage = max(total_usage, _to_float(svc.get("usage_current"), 0.0))
 
     usage_limit = _to_float(svc.get("usage_limit"), 0.0)
     updates: Dict[str, Any] = {"usage_current": total_usage}
     if usage_limit > 0:
         updates["usage_limit"] = usage_limit
 
-    # تشخیص قطع: مصرف از سقف رد شده یا زمان گذشته
     usage_exceeded = usage_limit > 0 and total_usage >= usage_limit
-
     time_expired = False
     try:
         days_left = _to_int(svc.get("days_left"), None) if svc.get("days_left") is not None else None
@@ -98,36 +264,35 @@ async def _process_service(svc: dict) -> Dict[str, str]:
         days_left = None
 
     if not time_expired:
-        try:
-            end_raw = str(svc.get("end_date") or "").strip()
-            if end_raw:
-                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-                    try:
-                        end_dt = datetime.strptime(end_raw[:19], fmt)
-                        now = datetime.now(timezone.utc).replace(tzinfo=None)
-                        if end_dt < now:
-                            time_expired = True
-                        break
-                    except ValueError:
-                        continue
-        except Exception:
-            pass
+        end_raw = str(svc.get("end_date") or "").strip()
+        if end_raw:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                try:
+                    end_dt = datetime.strptime(end_raw[:19], fmt)
+                    if end_dt < datetime.now(timezone.utc).replace(tzinfo=None):
+                        time_expired = True
+                    break
+                except ValueError:
+                    continue
 
     if usage_exceeded or time_expired:
-        disabled = await _disable_on_all_targets(svc, targets)
+        disabled = await _disable_on_all_targets(svc, mappings)
         agent_db.set_service_active(service_id, False)
         agent_db.set_service_nodes_active(service_id, False)
         updates["is_active"] = 0
         reason = "usage_limit_reached" if usage_exceeded else "time_expired"
-        logger.info("agent enforcer DISABLED svc=%s reason=%s usage=%s/%s disabled_nodes=%s",
-                    service_id, reason, total_usage, usage_limit, disabled)
         result["status"] = "disabled"
         result["reason"] = reason
         result["nodes_disabled"] = str(disabled)
+        logger.info(
+            "agent enforcer DISABLED svc=%s reason=%s usage=%s/%s disabled_nodes=%s frozen_nodes=%s",
+            service_id, reason, total_usage, usage_limit, disabled, frozen_count,
+        )
     else:
         updates["is_active"] = 1
         result["status"] = "synced"
         result["reason"] = "ok"
+        result["frozen_nodes"] = str(frozen_count)
 
     agent_db.update_service(service_id, updates)
     return result
