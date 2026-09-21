@@ -38,6 +38,73 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
         get_mock.assert_awaited_once_with(server, "shared-user-uuid")
         delete_mock.assert_not_awaited()
 
+    async def test_timeout_after_create_recovers_existing_hiddify_user_without_second_post(self):
+        server = {"id": 7, "title": "node"}
+        payload = {"name": "user", "uuid": "shared-user-uuid"}
+        timeout = RuntimeError("read timeout")
+
+        with patch.object(
+            multi_panel,
+            "create_user",
+            new=AsyncMock(side_effect=timeout),
+        ) as create_mock, patch.object(
+            multi_panel.hiddify_api,
+            "_is_xui_server",
+            return_value=False,
+        ), patch.object(
+            multi_panel,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value={"uuid": "shared-user-uuid", "name": "user"}),
+        ) as get_mock:
+            result = await multi_panel.create_user_with_uuid(server, payload)
+
+        self.assertEqual(result["uuid"], "shared-user-uuid")
+        create_mock.assert_awaited_once_with(server, payload)
+        get_mock.assert_awaited_once_with(server, "shared-user-uuid")
+
+    async def test_timeout_without_persisted_user_fails_without_second_post(self):
+        server = {"id": 7, "title": "node"}
+        payload = {"name": "user", "uuid": "shared-user-uuid"}
+        timeout = RuntimeError("read timeout")
+
+        with patch.object(
+            multi_panel,
+            "create_user",
+            new=AsyncMock(side_effect=timeout),
+        ) as create_mock, patch.object(
+            multi_panel.hiddify_api,
+            "_is_xui_server",
+            return_value=False,
+        ), patch.object(
+            multi_panel,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=RuntimeError("not found")),
+        ) as get_mock, patch.object(
+            multi_panel.asyncio,
+            "sleep",
+            new=AsyncMock(),
+        ):
+            with self.assertRaises(RuntimeError):
+                await multi_panel.create_user_with_uuid(server, payload)
+
+        create_mock.assert_awaited_once_with(server, payload)
+        self.assertEqual(get_mock.await_count, 2)
+
+    async def test_cluster_does_not_retry_create_after_timeout_failure(self):
+        targets = [{"id": 1, "title": "main"}]
+        payload = {"name": "user", "uuid": "shared-user-uuid"}
+        create_mock = AsyncMock(side_effect=RuntimeError("read timeout"))
+
+        with patch.object(
+            subscription_service.multi_panel,
+            "create_user_with_uuid",
+            new=create_mock,
+        ):
+            with self.assertRaises(RuntimeError):
+                await subscription_service._create_user_on_cluster(targets, payload)
+
+        self.assertEqual(create_mock.await_count, 1)
+
     async def test_cluster_creation_rolls_back_when_one_node_fails(self):
         targets = [
             {"id": 1, "title": "main"},
