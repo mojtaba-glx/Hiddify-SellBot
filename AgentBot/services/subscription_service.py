@@ -75,26 +75,14 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
     primary_created: Optional[Dict[str, Any]] = None
     try:
         for idx, srv in enumerate(targets):
-            created = None
-            last_exc = None
-            for attempt in (1, 2):
-                try:
-                    created = await multi_panel.create_user_with_uuid(srv, payload_base)
-                    last_exc = None
-                    break
-                except Exception as e:
-                    last_exc = e
-                    msg = str(e).lower()
-                    is_transient = any(k in msg for k in ("readerror", "connecterror", "timeout", "timed out", "connection", "temporarily", "read error"))
-                    if is_transient and attempt == 1:
-                        logger.warning("Cluster create retry server=%s: %s", srv.get("id"), e)
-                        await asyncio.sleep(0.7)
-                        continue
-                    break
-            if created is None:
+            try:
+                created = await multi_panel.create_user_with_uuid(srv, payload_base)
+            except Exception as e:
+                # create_user_with_uuid owns timeout recovery. Retrying POST
+                # here could create a duplicate/orphan after a lost response.
                 raise RuntimeError(
-                    f"cluster user creation failed on server {srv.get('id')}: {last_exc}"
-                ) from last_exc
+                    f"cluster user creation failed on server {srv.get('id')}: {e}"
+                ) from e
 
             user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if user_uuid != shared_uuid:
