@@ -325,6 +325,32 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(node["frozen_reason"] or ""), "")
         self.assertEqual(agent_db.get_frozen_nodes_report(), [])
 
+    async def test_clear_frozen_snapshot_keeps_healthy_node_and_subtracts_usage(self):
+        agent_db.update_service_node_runtime(
+            1, 1, "uuid-a",
+            usage_current=3.0,
+            frozen=0,
+            fail_count=0,
+        )
+        agent_db.update_service_node_runtime(
+            1, 2, "uuid-a",
+            usage_current=7.0,
+            frozen=1,
+            fail_count=3,
+            frozen_at="2026-09-20 12:00:00",
+            frozen_reason="network_error",
+        )
+        agent_db.update_service(1, {"usage_current": 10.0})
+
+        removed = agent_db.clear_frozen_service_nodes(1)
+        self.assertEqual(removed, 1)
+
+        nodes = agent_db.get_service_nodes(1)
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(int(nodes[0]["server_id"]), 1)
+        self.assertAlmostEqual(float(nodes[0]["usage_current"]), 3.0)
+        self.assertAlmostEqual(float(agent_db.get_service_by_id(1)["usage_current"]), 3.0)
+
     async def test_deleted_server_holds_usage_until_renewal(self):
         agent_db.update_service_node_runtime(
             1, 2, "uuid-a", usage_current=6.25, last_ok_at="2026-09-20 12:00:00"
