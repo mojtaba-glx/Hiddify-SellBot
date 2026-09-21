@@ -2329,6 +2329,267 @@ async def send_servers_list(
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
 
 
+def _frozen_fmt_usage(value: Any) -> str:
+    try:
+        gb = max(0.0, float(value or 0.0))
+    except Exception:
+        gb = 0.0
+    if gb >= 1:
+        return f"{gb:.2f} GB"
+    mb = gb * 1024.0
+    if mb >= 1:
+        return f"{mb:.1f} MB"
+    kb_value = mb * 1024.0
+    if kb_value >= 1:
+        return f"{kb_value:.0f} KB"
+    return "0"
+
+
+def _frozen_fmt_time(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "ثبت نشده"
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return raw
+
+
+def _frozen_reason_text(raw: Any, deleted: bool = False) -> str:
+    reason = str(raw or "").strip()
+    if deleted or reason == "server_deleted":
+        return "سرور/نود حذف شده"
+    if reason == "user_not_found":
+        return "UUID پس از بررسی لیست کاربران پنل پیدا نشد"
+    if reason == "network_error":
+        return "خطای ارتباط با پنل پس از چند تلاش"
+    if reason == "server_missing":
+        return "سرور در تنظیمات ربات پیدا نشد"
+    if reason.startswith("renew_pending:"):
+        return "تمدید این نود هنوز همگام نشده"
+    return reason or "علت ثبت نشده"
+
+
+def _frozen_source_code(source: str) -> str:
+    return "a" if str(source or "").strip().lower() in {"agent", "a"} else "u"
+
+
+def _frozen_source_title(source: str) -> str:
+    return "🏢 نمایندگی / ربات مشتری" if _frozen_source_code(source) == "a" else "🤖 ربات کاربران"
+
+
+def _frozen_owner_text(row: Dict[str, Any], source: str) -> str:
+    if _frozen_source_code(source) == "a":
+        customer = str(row.get("customer_username") or row.get("customer_full_name") or "").strip()
+        agent_name = str(row.get("agent_username") or row.get("agent_full_name") or "").strip()
+        owner_parts: List[str] = []
+        if customer:
+            owner_parts.append(f"مشتری: @{escape(customer.lstrip('@'))}")
+        elif int(row.get("customer_id") or 0) > 0:
+            owner_parts.append(f"مشتری #{int(row.get('customer_id') or 0)}")
+        else:
+            owner_parts.append("مشتری مستقیم نماینده")
+        if agent_name:
+            owner_parts.append(f"نماینده: @{escape(agent_name.lstrip('@'))}")
+        elif int(row.get("agent_id") or 0) > 0:
+            owner_parts.append(f"نماینده #{int(row.get('agent_id') or 0)}")
+        return " | ".join(owner_parts)
+
+    username = str(row.get("username") or "").strip()
+    full_name = str(row.get("full_name") or "").strip()
+    telegram_id = int(row.get("telegram_id") or 0)
+    user_id_value = int(row.get("user_id") or 0)
+    if username:
+        return f"مالک: @{escape(username.lstrip('@'))}"
+    if full_name:
+        return f"مالک: {escape(full_name)}"
+    if telegram_id > 0:
+        return f"مالک: ID {telegram_id}"
+    if user_id_value <= 0:
+        return "مالک: ادمین / سرویس قدیمی"
+    return f"مالک: کاربر #{user_id_value}"
+
+
+def _frozen_report_rows() -> List[Dict[str, Any]]:
+    from Shared import agent_db as _ab
+    user_rows = [dict(r, source="userbot") for r in (userbot_db.get_frozen_nodes_report(500) or [])]
+    agent_rows = [dict(r, source="agent") for r in (_ab.get_frozen_nodes_report(500) or [])]
+    return user_rows + agent_rows
+
+
+def _frozen_service_rows(source_code: str, service_id: int) -> List[Dict[str, Any]]:
+    code = _frozen_source_code(source_code)
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return []
+    rows = _frozen_report_rows()
+    return [
+        row for row in rows
+        if _frozen_source_code(str(row.get("source") or "")) == code
+        and int(row.get("service_id") or 0) == sid
+    ]
+
+
+def _service_uuid_from_comment(service: Dict[str, Any]) -> str:
+    comment = str((service or {}).get("comment") or "")
+    for part in comment.split("|"):
+        if part.startswith("uuid:"):
+            return part.split(":", 1)[1].strip()
+    return ""
+
+
+async def _get_panel_user_with_list_fallback(
+    server: Dict[str, Any],
+    user_uuid: str,
+) -> Optional[Dict[str, Any]]:
+    uuid = str(user_uuid or "").strip()
+    if not server or not uuid:
+        return None
+    try:
+        user = await hiddify_api.get_user_by_uuid(server, uuid)
+        if isinstance(user, dict) and user:
+            return user
+    except Exception:
+        pass
+    try:
+        users = await hiddify_api.list_users(server)
+    except Exception:
+        return None
+    for user in users or []:
+        if not isinstance(user, dict):
+            continue
+        candidate = str(user.get("uuid") or user.get("id") or "").strip()
+        if candidate == uuid:
+            return user
+    return None
+
+
+async def _find_live_frozen_service_user(
+    source_code: str,
+    service_id: int,
+) -> Optional[tuple[int, str]]:
+    code = _frozen_source_code(source_code)
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return None
+
+    from Shared import agent_db as _ab
+    if code == "a":
+        service = _ab.get_service_by_id(sid) or {}
+        nodes = _ab.get_service_nodes(sid) or []
+        primary_uuid = str(service.get("panel_user_uuid") or "").strip()
+    else:
+        service = userbot_db.get_service_by_id(sid) or {}
+        nodes = userbot_db.get_service_nodes(sid) or []
+        primary_uuid = _service_uuid_from_comment(service)
+
+    candidates: List[tuple[int, str, int]] = []
+    try:
+        primary_sid = int(service.get("server_id") or 0)
+    except Exception:
+        primary_sid = 0
+    if primary_sid > 0 and primary_uuid:
+        candidates.append((primary_sid, primary_uuid, 0))
+
+    for node in nodes:
+        try:
+            node_sid = int(node.get("server_id") or 0)
+        except Exception:
+            node_sid = 0
+        node_uuid = str(node.get("panel_user_uuid") or "").strip()
+        if node_sid <= 0 or not node_uuid:
+            continue
+        is_problem = 1 if (int(node.get("frozen") or 0) == 1 or int(node.get("deleted") or 0) == 1) else 0
+        candidates.append((node_sid, node_uuid, is_problem))
+
+    seen: set[tuple[int, str]] = set()
+    for node_sid, node_uuid, _priority in sorted(candidates, key=lambda item: item[2]):
+        key = (node_sid, node_uuid)
+        if key in seen:
+            continue
+        seen.add(key)
+        server = database.get_server_by_id(node_sid)
+        if not server:
+            continue
+        user = await _get_panel_user_with_list_fallback(server, node_uuid)
+        if user:
+            actual_uuid = str(user.get("uuid") or user.get("id") or node_uuid).strip()
+            return node_sid, actual_uuid
+    return None
+
+
+def _panel_delete_absent_error(exc: Exception) -> bool:
+    msg = str(exc or "").strip().lower()
+    return any(token in msg for token in ("not found", "does not exist", "not exist", "404", "empty client"))
+
+
+async def _delete_userbot_service_everywhere(service_id: int) -> tuple[int, List[str]]:
+    sid = int(service_id or 0)
+    service = userbot_db.get_service_by_id(sid) or {}
+    if not service:
+        return 0, ["سرویس محلی پیدا نشد"]
+
+    mappings = userbot_db.get_service_nodes(sid) or []
+    targets: List[tuple[int, str]] = []
+    primary_uuid = _service_uuid_from_comment(service)
+    try:
+        primary_sid = int(service.get("server_id") or 0)
+    except Exception:
+        primary_sid = 0
+    if primary_sid > 0 and primary_uuid:
+        targets.append((primary_sid, primary_uuid))
+
+    for node in mappings:
+        try:
+            node_sid = int(node.get("server_id") or 0)
+        except Exception:
+            node_sid = 0
+        node_uuid = str(node.get("panel_user_uuid") or "").strip()
+        if node_sid > 0 and node_uuid:
+            targets.append((node_sid, node_uuid))
+
+    # اگر mapping یک نود قدیمی ناقص باشد، UUID اصلی را روی سرورهای مرتبط هم امتحان کن.
+    if primary_sid > 0 and primary_uuid:
+        for server in _get_related_server_targets(primary_sid):
+            try:
+                related_sid = int(server.get("id") or 0)
+            except Exception:
+                related_sid = 0
+            if related_sid > 0:
+                targets.append((related_sid, primary_uuid))
+
+    success = 0
+    failures: List[str] = []
+    seen: set[tuple[int, str]] = set()
+    for target_sid, target_uuid in targets:
+        key = (target_sid, target_uuid)
+        if key in seen:
+            continue
+        seen.add(key)
+        server = database.get_server_by_id(target_sid)
+        if not server:
+            # سرور حذف‌شده از تنظیمات: پنل قابل دسترس نیست، ولی این مانع پاکسازی
+            # سرویس محلی بعد از حذف بقیه نودهای قابل‌دسترسی نمی‌شود.
+            continue
+        title = str(server.get("title") or f"سرور #{target_sid}").strip()
+        try:
+            await hiddify_api.delete_user(server, target_uuid)
+            success += 1
+        except Exception as exc:
+            if _panel_delete_absent_error(exc):
+                success += 1
+                continue
+            failures.append(f"{title}: {str(exc)[:120]}")
+
+    if not failures:
+        userbot_db.delete_service(sid)
+    return success, failures
+
+
 async def send_frozen_nodes_report(
     chat_id: int,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2337,14 +2598,11 @@ async def send_frozen_nodes_report(
     page: int = 1,
     server_id: Optional[int] = None,
 ) -> None:
-    """گزارش گروه‌بندی‌شده snapshotهای واقعی یخ‌زده برای یک لوکیشن/خوشه."""
+    """خلاصه مدیریت رکوردهای یخ‌زده؛ جزئیات هر سرویس در صفحه جدا باز می‌شود."""
     try:
-        from Shared import userbot_db as _ub
-        from Shared import agent_db as _ab
-        user_rows = [dict(r, source="userbot") for r in (_ub.get_frozen_nodes_report(500) or [])]
-        agent_rows = [dict(r, source="agent") for r in (_ab.get_frozen_nodes_report(500) or [])]
-    except Exception as e:
-        logger.exception("frozen report load failed: %s", e)
+        rows = _frozen_report_rows()
+    except Exception as exc:
+        logger.exception("frozen report load failed: %s", exc)
         back_cb = f"server:{server_id}" if server_id else "servers:list_back"
         text = "❌ دریافت گزارش یخ‌زده‌ها ناموفق بود."
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data=back_cb)]])
@@ -2362,208 +2620,103 @@ async def send_frozen_nodes_report(
             int((srv or {}).get("id") or 0)
             for srv in related
             if int((srv or {}).get("id") or 0) > 0
-        }
-        if not related_ids:
-            related_ids = {int(server_id)}
+        } or {int(server_id)}
         current_server = database.get_server_by_id(int(server_id))
         if current_server:
             location_title = str(current_server.get("title") or f"سرور #{server_id}").strip()
 
-    rows = user_rows + agent_rows
     if related_ids:
-        rows = [r for r in rows if int(r.get("server_id") or 0) in related_ids]
-
-    def _sort_key(row: Dict[str, Any]) -> str:
-        return str(row.get("frozen_at") or row.get("last_ok_at") or row.get("created_at") or "")
-
-    rows.sort(key=_sort_key, reverse=True)
+        rows = [row for row in rows if int(row.get("server_id") or 0) in related_ids]
 
     grouped: Dict[tuple[str, int], Dict[str, Any]] = {}
     for row in rows:
-        source = str(row.get("source") or "")
+        source = _frozen_source_code(str(row.get("source") or ""))
         service_id_value = int(row.get("service_id") or 0)
         key = (source, service_id_value)
+        current_time = str(row.get("frozen_at") or row.get("last_ok_at") or row.get("created_at") or "")
         if key not in grouped:
             grouped[key] = {
                 "source": source,
                 "service_id": service_id_value,
                 "service_name": str(row.get("service_name") or f"سرویس #{service_id_value}").strip(),
                 "rows": [],
-                "latest": _sort_key(row),
+                "latest": current_time,
                 "sample": row,
             }
         grouped[key]["rows"].append(row)
-        if _sort_key(row) > str(grouped[key].get("latest") or ""):
-            grouped[key]["latest"] = _sort_key(row)
+        if current_time > str(grouped[key].get("latest") or ""):
+            grouped[key]["latest"] = current_time
 
     groups = list(grouped.values())
-    user_groups = [g for g in groups if g.get("source") == "userbot"]
-    agent_groups = [g for g in groups if g.get("source") == "agent"]
-    user_groups.sort(key=lambda g: str(g.get("latest") or ""), reverse=True)
-    agent_groups.sort(key=lambda g: str(g.get("latest") or ""), reverse=True)
+    user_groups = sorted(
+        [g for g in groups if g.get("source") == "u"],
+        key=lambda g: str(g.get("latest") or ""),
+        reverse=True,
+    )
+    agent_groups = sorted(
+        [g for g in groups if g.get("source") == "a"],
+        key=lambda g: str(g.get("latest") or ""),
+        reverse=True,
+    )
     groups = user_groups + agent_groups
 
-    page_size = 3
+    page_size = 5
     total_services = len(groups)
-    total_nodes = len(rows)
     pages = max(1, (total_services + page_size - 1) // page_size)
     page = max(1, min(int(page or 1), pages))
     start = (page - 1) * page_size
     selected = groups[start:start + page_size]
 
-    user_service_count = sum(1 for g in groups if g["source"] == "userbot")
-    agent_service_count = sum(1 for g in groups if g["source"] == "agent")
-    total_usage = sum(float(r.get("usage_current") or 0.0) for r in rows)
-
-    def _fmt_usage(value: Any) -> str:
-        try:
-            gb = max(0.0, float(value or 0.0))
-        except Exception:
-            gb = 0.0
-        if gb >= 1:
-            return f"{gb:.2f} GB"
-        mb = gb * 1024.0
-        if mb >= 1:
-            return f"{mb:.1f} MB"
-        kb_value = mb * 1024.0
-        if kb_value >= 1:
-            return f"{kb_value:.0f} KB"
-        return "0"
-
-    def _fmt_time(value: Any) -> str:
-        raw = str(value or "").strip()
-        if not raw:
-            return "ثبت نشده"
-        try:
-            from zoneinfo import ZoneInfo
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return raw
-
-    def _reason_text(raw: Any, deleted: bool) -> str:
-        reason = str(raw or "").strip()
-        if deleted or reason == "server_deleted":
-            return "سرور/نود حذف شده"
-        if reason == "user_not_found":
-            return "UUID پس از بررسی لیست کاربران پنل پیدا نشد"
-        if reason == "network_error":
-            return "خطای ارتباط با پنل پس از چند تلاش"
-        if reason == "server_missing":
-            return "سرور در تنظیمات ربات پیدا نشد"
-        if reason.startswith("renew_pending:"):
-            return "تمدید این نود هنوز همگام نشده"
-        if reason:
-            return reason
-        return "علت ثبت نشده"
-
-    def _owner_text(row: Dict[str, Any], source: str) -> str:
-        if source == "agent":
-            customer = str(row.get("customer_username") or row.get("customer_full_name") or "").strip()
-            agent_name = str(row.get("agent_username") or row.get("agent_full_name") or "").strip()
-            owner_parts: List[str] = []
-            if customer:
-                owner_parts.append(f"مشتری: @{escape(customer.lstrip('@'))}")
-            elif int(row.get("customer_id") or 0) > 0:
-                owner_parts.append(f"مشتری #{int(row.get('customer_id') or 0)}")
-            else:
-                owner_parts.append("مشتری مستقیم نماینده")
-            if agent_name:
-                owner_parts.append(f"نماینده: @{escape(agent_name.lstrip('@'))}")
-            elif int(row.get("agent_id") or 0) > 0:
-                owner_parts.append(f"نماینده #{int(row.get('agent_id') or 0)}")
-            return " | ".join(owner_parts)
-
-        username = str(row.get("username") or "").strip()
-        full_name = str(row.get("full_name") or "").strip()
-        telegram_id = int(row.get("telegram_id") or 0)
-        user_id_value = int(row.get("user_id") or 0)
-        if username:
-            return f"مالک: @{escape(username.lstrip('@'))}"
-        if full_name:
-            return f"مالک: {escape(full_name)}"
-        if telegram_id > 0:
-            return f"مالک: ID {telegram_id}"
-        if user_id_value <= 0:
-            return "مالک: ادمین / سرویس قدیمی"
-        return f"مالک: کاربر #{user_id_value}"
-
+    total_usage = sum(float(row.get("usage_current") or 0.0) for row in rows)
     lines = [
-        f"❄️ <b>گزارش یخ‌زدگی — {escape(location_title)}</b>",
+        f"❄️ <b>مدیریت کاربران یخ‌زده — {escape(location_title)}</b>",
         "❖⬩──────────────⬩❖",
         f"📦 سرویس‌های درگیر: <b>{total_services}</b>",
-        f"🧊 نودهای دارای مصرف محفوظ: <b>{total_nodes}</b>",
-        f"📊 مجموع مصرف محفوظ: <b>{_fmt_usage(total_usage)}</b>",
-        f"🤖 ربات کاربران: {user_service_count} سرویس",
-        f"🏢 نمایندگی/مشتری: {agent_service_count} سرویس",
+        f"🧊 نودهای یخ‌زده/حذف‌شده: <b>{len(rows)}</b>",
+        f"📊 مصرف محفوظ: <b>{_frozen_fmt_usage(total_usage)}</b>",
         f"📄 صفحه {page} از {pages}",
+        "",
+        "برای مشاهده یا پاک‌سازی، سرویس را از دکمه‌های پایین انتخاب کنید.",
         "",
     ]
 
+    button_rows: List[List[InlineKeyboardButton]] = []
     if not selected:
         lines.extend([
-            "✅ در این لوکیشن هیچ مصرف یخ‌زده‌ای وجود ندارد.",
-            "",
-            "ℹ️ رکوردهای صفر گیگ و خطاهای تأییدنشده در این گزارش نمایش داده نمی‌شوند.",
+            "✅ رکورد یخ‌زده‌ای برای این لوکیشن وجود ندارد.",
+            "رکوردهای صفر مصرف و خطاهای تأییدنشده نمایش داده نمی‌شوند.",
         ])
     else:
         current_source = ""
         for idx, group in enumerate(selected, start=start + 1):
             source = str(group["source"])
             if source != current_source:
-                lines.append("🤖 <b>ربات کاربران</b>" if source == "userbot" else "🏢 <b>نمایندگی / ربات مشتری</b>")
-                lines.append("────────────")
+                lines.extend([_frozen_source_title(source), "────────────"])
                 current_source = source
 
             sample = group["sample"]
             group_rows = list(group["rows"])
-            group_usage = sum(float(r.get("usage_current") or 0.0) for r in group_rows)
-            uuids = {
-                str(r.get("panel_user_uuid") or "").strip()
-                for r in group_rows
-                if str(r.get("panel_user_uuid") or "").strip()
-            }
-            shared_uuid = next(iter(uuids)) if len(uuids) == 1 else ""
-
-            lines.extend([
-                f"{idx}) <b>{escape(str(group['service_name']))}</b>",
-                f"👤 {_owner_text(sample, source)}",
-                (
-                    f"🆔 <code>{escape(shared_uuid if len(shared_uuid) <= 22 else shared_uuid[:8] + '…' + shared_uuid[-6:])}</code>"
-                    if shared_uuid
-                    else "🆔 UUID: چندگانه / سرویس قدیمی"
-                ),
-                f"📊 مصرف محفوظ این سرویس: <b>{_fmt_usage(group_usage)}</b>",
-            ])
-
+            usage = sum(float(row.get("usage_current") or 0.0) for row in group_rows)
+            server_names = []
             for row in group_rows:
-                server_title = str(row.get("server_title") or f"سرور #{row.get('server_id')}").strip()
-                usage_text = _fmt_usage(row.get("usage_current"))
-                deleted = int(row.get("deleted") or 0) == 1
-                fail_count = int(row.get("fail_count") or 0)
-                frozen_at = str(row.get("frozen_at") or "").strip()
-                last_ok = str(row.get("last_ok_at") or "").strip()
-                reason_text = _reason_text(row.get("frozen_reason"), deleted)
-                status = "🗑 حذف‌شده" if deleted else "❄️ یخ‌زده"
-
-                node_uuid = str(row.get("panel_user_uuid") or "").strip()
-                short_node_uuid = (
-                    node_uuid
-                    if len(node_uuid) <= 22
-                    else f"{node_uuid[:8]}…{node_uuid[-6:]}"
+                title = str(row.get("server_title") or f"سرور #{row.get('server_id')}").strip()
+                if title not in server_names:
+                    server_names.append(title)
+            server_summary = "، ".join(server_names[:3]) or "نامشخص"
+            service_name = str(group["service_name"])
+            lines.extend([
+                f"{idx}) <b>{escape(service_name)}</b>",
+                f"   👤 {_frozen_owner_text(sample, source)}",
+                f"   🖥 نود مشکل‌دار: {escape(server_summary)}",
+                f"   💾 مصرف محفوظ: <b>{_frozen_fmt_usage(usage)}</b>",
+                "",
+            ])
+            button_rows.append([
+                InlineKeyboardButton(
+                    f"👤 {service_name[:28]}",
+                    callback_data=f"server:{server_id}:fzsvc:{source}:{int(group['service_id'])}:{page}",
                 )
-                lines.extend([
-                    f"  • 🖥 <b>{escape(server_title)}</b> — {status}",
-                    f"    🆔 <code>{escape(short_node_uuid)}</code>",
-                    f"    💾 مصرف نگه‌داشته: {usage_text}",
-                    f"    ⚠️ علت: {escape(reason_text)}",
-                    f"    ❌ خطاهای متوالی: {fail_count}",
-                    f"    🧊 شروع یخ‌زدگی: {_fmt_time(frozen_at)} (ایران)",
-                    f"    🕒 آخرین دریافت موفق: {_fmt_time(last_ok)} (ایران)",
-                ])
-            lines.append("")
+            ])
 
     nav: List[InlineKeyboardButton] = []
     cb_prefix = f"server:{server_id}:frozen" if server_id else "servers:frozen"
@@ -2571,24 +2724,105 @@ async def send_frozen_nodes_report(
         nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"{cb_prefix}:{page-1}"))
     if page < pages:
         nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"{cb_prefix}:{page+1}"))
-    kb_rows: List[List[InlineKeyboardButton]] = []
     if nav:
-        kb_rows.append(nav)
-    kb_rows.append([InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"{cb_prefix}:{page}")])
-    kb_rows.append([
+        button_rows.append(nav)
+    button_rows.append([InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"{cb_prefix}:{page}")])
+    button_rows.append([
         InlineKeyboardButton(
             "🔙 بازگشت",
             callback_data=f"server:{server_id}" if server_id else "servers:list_back",
         )
     ])
-    kb = InlineKeyboardMarkup(kb_rows)
-
+    kb = InlineKeyboardMarkup(button_rows)
     text = "\n".join(lines)
+
     if message is not None:
         try:
             await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        except BadRequest:
+        except BadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return
             await message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+
+async def send_frozen_service_detail(
+    server_id: int,
+    source_code: str,
+    service_id: int,
+    page: int,
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    message=None,
+) -> None:
+    source = _frozen_source_code(source_code)
+    sid = int(service_id or 0)
+    rows = _frozen_service_rows(source, sid)
+    if not rows:
+        text = "✅ این رکورد دیگر در فهرست یخ‌زدگی وجود ندارد."
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 بازگشت به گزارش", callback_data=f"server:{server_id}:frozen:{page}")]
+        ])
+        if message is not None:
+            await message.edit_text(text, reply_markup=kb)
+        else:
+            await context.bot.send_message(chat_id, text, reply_markup=kb)
+        return
+
+    sample = rows[0]
+    service_name = str(sample.get("service_name") or f"سرویس #{sid}").strip()
+    total_usage = sum(float(row.get("usage_current") or 0.0) for row in rows)
+    lines = [
+        "❄️ <b>جزئیات رکورد یخ‌زده</b>",
+        "❖⬩──────────────⬩❖",
+        f"📦 سرویس: <b>{escape(service_name)}</b>",
+        f"🏷 نوع: {_frozen_source_title(source)}",
+        f"👤 {_frozen_owner_text(sample, source)}",
+        f"💾 مجموع مصرف محفوظ: <b>{_frozen_fmt_usage(total_usage)}</b>",
+        "",
+        "🧊 <b>نودهای ثبت‌شده</b>",
+    ]
+
+    for idx, row in enumerate(rows, start=1):
+        title = str(row.get("server_title") or f"سرور #{row.get('server_id')}").strip()
+        uuid = str(row.get("panel_user_uuid") or "").strip()
+        short_uuid = uuid if len(uuid) <= 30 else f"{uuid[:10]}…{uuid[-8:]}"
+        deleted = int(row.get("deleted") or 0) == 1
+        status = "🗑 حذف‌شده" if deleted else "❄️ یخ‌زده"
+        lines.extend([
+            "",
+            f"{idx}) 🖥 <b>{escape(title)}</b> — {status}",
+            f"   🆔 <code>{escape(short_uuid)}</code>",
+            f"   💾 مصرف: <b>{_frozen_fmt_usage(row.get('usage_current'))}</b>",
+            f"   ⚠️ علت: {escape(_frozen_reason_text(row.get('frozen_reason'), deleted))}",
+            f"   ❌ خطاهای متوالی: {int(row.get('fail_count') or 0)}",
+            f"   🧊 شروع یخ‌زدگی: {_frozen_fmt_time(row.get('frozen_at'))}",
+            f"   🕒 آخرین دریافت موفق: {_frozen_fmt_time(row.get('last_ok_at'))}",
+        ])
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "👁 مشاهده کاربر روی پنل",
+            callback_data=f"server:{server_id}:fzview:{source}:{sid}:{page}",
+        )],
+        [InlineKeyboardButton(
+            "🧹 پاک‌کردن فقط داده یخ‌زدگی",
+            callback_data=f"server:{server_id}:fzclear:{source}:{sid}:{page}",
+        )],
+        [InlineKeyboardButton(
+            "🗑 حذف کامل کاربر و داده‌ها",
+            callback_data=f"server:{server_id}:fzdelete:{source}:{sid}:{page}",
+        )],
+        [InlineKeyboardButton(
+            "🔙 بازگشت به گزارش",
+            callback_data=f"server:{server_id}:frozen:{page}",
+        )],
+    ])
+
+    text = "\n".join(lines)
+    if message is not None:
+        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
