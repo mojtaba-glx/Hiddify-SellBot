@@ -38,6 +38,7 @@ from AdminBot.keyboards import (
     BTN_STATUS,
     BTN_BACKUP,
     BTN_AGENCIES,
+    BTN_DAILY_REPORT,
     cancel_keyboard,
 )
 
@@ -8845,6 +8846,16 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if _is_backup_button(text, text_key):
         await send_admin_full_backup(chat_id, context, message=message)
+        return
+
+    if text == BTN_DAILY_REPORT or "گزارشروزانه" in text_key:
+        try:
+            from Shared.daily_admin_report import build_daily_report
+            report_text, _report_day = build_daily_report(tz_name="Asia/Tehran")
+            await message.reply_text(report_text, parse_mode="HTML", reply_markup=admin_main_keyboard())
+        except Exception:
+            logger.exception("Manual daily report button failed")
+            await message.reply_text("❌ ساخت گزارش روزانه ناموفق بود.", reply_markup=admin_main_keyboard())
         return
 
     # دکمه‌های منوی اصلی ادمین
