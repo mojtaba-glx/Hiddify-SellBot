@@ -3268,6 +3268,8 @@ def update_service_node_runtime(
     last_ok_at: Optional[str] = None,
     frozen_at: Optional[str] = None,
     frozen_reason: Optional[str] = None,
+    deleted: Optional[int] = None,
+    is_active: Optional[int] = None,
 ) -> None:
     """بروزرسانی وضعیت زمان‌بندی‌شدهٔ یک نود (مصرف/روز/یخ‌زدگی/خطا).
     فقط فیلدهایی که مقدار دارند آپدیت می‌شوند."""
@@ -3299,6 +3301,12 @@ def update_service_node_runtime(
     if frozen_reason is not None:
         parts.append("frozen_reason = ?")
         params.append(str(frozen_reason))
+    if deleted is not None:
+        parts.append("deleted = ?")
+        params.append(int(bool(deleted)))
+    if is_active is not None:
+        parts.append("is_active = ?")
+        params.append(int(bool(is_active)))
     if not parts:
         return
     params.extend([sid, srv, uuid])
