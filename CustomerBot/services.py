@@ -138,18 +138,45 @@ async def buy_service(
         targets = _get_cluster_servers(server_id)
         if not targets:
             targets = [server]
-        shared_uuid = user_uuid
-        payload["uuid"] = shared_uuid
-        panel_user = None
-        primary_marzban = ""
-        for idx, tgt in enumerate(targets):
+
+        # The real UUID persisted by the primary panel is authoritative.
+        # Child nodes must reuse exactly that UUID.
+        primary = targets[0]
+        primary_payload = dict(payload)
+        primary_payload["uuid"] = user_uuid
+        try:
+            panel_user = await multi_panel.create_primary_user(primary, primary_payload)
+        except Exception as e:
+            raise RuntimeError(
+                f"cluster user creation failed on primary server {primary.get('id')}: {e}"
+            ) from e
+
+        shared_uuid = str(
+            (panel_user or {}).get("uuid") or (panel_user or {}).get("id") or ""
+        ).strip()
+        if not shared_uuid:
+            raise RuntimeError("primary server returned no UUID")
+
+        panel_user = dict(panel_user or {})
+        panel_user["uuid"] = shared_uuid
+        primary_marzban = str(panel_user.get("_marzban_username") or "").strip()
+        created_nodes.append(
+            {
+                "server_id": int(primary.get("id") or 0),
+                "server_title": primary.get("title") or f"سرور #{primary.get('id')}",
+                "panel_user_uuid": shared_uuid,
+                "panel_user_id": str(panel_user.get("id") or "").strip(),
+                "marzban_username": primary_marzban,
+                "is_primary": True,
+            }
+        )
+
+        child_payload = dict(payload)
+        child_payload["uuid"] = shared_uuid
+        for tgt in targets[1:]:
             try:
-                created = await multi_panel.create_user_with_uuid(tgt, payload)
+                created = await multi_panel.create_user_with_uuid(tgt, child_payload)
             except Exception as e:
-                if idx == 0:
-                    raise RuntimeError(
-                        f"cluster user creation failed on primary server {tgt.get('id')}: {e}"
-                    ) from e
                 logger.warning(
                     "Customer child create deferred server=%s uuid=%s: %s",
                     tgt.get("id"),
@@ -157,12 +184,25 @@ async def buy_service(
                     e,
                 )
                 continue
+
             created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if created_uuid != shared_uuid:
-                raise RuntimeError(
-                    f"cluster UUID mismatch on server {tgt.get('id')} "
-                    f"(expected={shared_uuid}, returned={created_uuid or 'empty'})"
+                logger.error(
+                    "Customer child UUID mismatch deferred server=%s expected=%s returned=%s",
+                    tgt.get("id"),
+                    shared_uuid,
+                    created_uuid or "empty",
                 )
+                try:
+                    await multi_panel.delete_user(
+                        tgt,
+                        created_uuid,
+                        marzban_username=str(created.get("_marzban_username") or "").strip(),
+                    )
+                except Exception:
+                    pass
+                continue
+
             created_nodes.append(
                 {
                     "server_id": int(tgt.get("id") or 0),
@@ -170,15 +210,11 @@ async def buy_service(
                     "panel_user_uuid": shared_uuid,
                     "panel_user_id": str(created.get("id") or "").strip(),
                     "marzban_username": str(created.get("_marzban_username") or "").strip(),
-                    "is_primary": idx == 0,
+                    "is_primary": False,
                 }
             )
-            if idx == 0:
-                panel_user = created
-                primary_marzban = str(created.get("_marzban_username") or "").strip()
-        if panel_user is None:
-            raise RuntimeError("no primary node created")
-        panel_uuid = str(panel_user.get("uuid") or user_uuid).strip()
+
+        panel_uuid = shared_uuid
         panel_user_id = str(panel_user.get("id") or "").strip()
         marzban_username = primary_marzban
     except Exception as e:
