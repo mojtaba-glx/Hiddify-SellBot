@@ -1426,6 +1426,12 @@ async def _renew_subscription_from_order(
         # could grant a free or double renewal, so startup recovery must flag it.
         raise PaymentFulfillmentNeedsReview("panel updated but local renewal persistence failed")
 
+    # پنل اصلی و دیتابیس هر دو تمدید را پذیرفته‌اند؛ دوره frozen قبلی تمام است.
+    try:
+        agent_db.reset_service_nodes_on_renew(service_id)
+    except Exception as e:
+        logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
+
     # ── فعال‌سازی مجدد (اگر به‌خاطر اتمام حجم/زمان غیرفعال شده بود) ──
     for srv, uuid, marzban_un in targets:
         try:
