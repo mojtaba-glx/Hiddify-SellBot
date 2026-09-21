@@ -9025,10 +9025,22 @@ async def send_server_status_detail(chat_id: int, context: ContextTypes.DEFAULT_
     
     ram_u = stats.get('ram_used', 0)
     ram_t = stats.get('ram_total', 1)
-    ram_p = (ram_u / ram_t * 100) if ram_t else 0
-    
     disk_u = stats.get('disk_used', 0)
     disk_t = stats.get('disk_total', 20)
+
+    # X-UI /server/status returns memory and disk values in bytes, while
+    # Hiddify already exposes these fields in GB. Normalize only X-UI here
+    # so both panel types keep the same display contract.
+    panel_type = str(server.get("panel_type") or "").strip().lower()
+    is_xui = panel_type in {"xui", "x-ui"}
+    if is_xui:
+        gib = float(1024 ** 3)
+        ram_u = float(ram_u or 0) / gib
+        ram_t = float(ram_t or 0) / gib
+        disk_u = float(disk_u or 0) / gib
+        disk_t = float(disk_t or 0) / gib
+
+    ram_p = (ram_u / ram_t * 100) if ram_t else 0
     disk_p = (disk_u / disk_t * 100) if disk_t else 0
     
     u_total = stats.get('users_total', 0)
@@ -9064,7 +9076,7 @@ async def send_server_status_detail(chat_id: int, context: ContextTypes.DEFAULT_
         f"Server: {title_line}\n"
         "--------------------------------\n"
         "SYSTEM INFO\n"
-        f"CPU: {cpu}% - {core} CORE\n"
+        f"CPU: {float(cpu or 0):.2f}% - {core} CORE\n"
         f"RAM: {ram_u:.2f} GB / {ram_t:.2f} GB ({ram_p:.2f}%)\n"
         f"DISK: {disk_u:.2f} GB / {disk_t:.2f} GB  ({disk_p:.2f}%)\n\n"
         "NETWORK INFO\n"
