@@ -361,7 +361,20 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
         except Exception as e:
             logger.warning("renew patch failed svc=%s: %s", service_id, e)
 
-    agent_db.renew_service(service_id, extra_days=extra_days)
+    if not agent_db.renew_service(service_id, extra_days=extra_days):
+        agent_db.refund_wallet(
+            agent_id,
+            cost,
+            description=f"Refund: renew local persist svc #{service_id}",
+            service_id=service_id,
+        )
+        return {"ok": False, "error": "local_renew_failed"}
+
+    # Renewal is confirmed on primary + local DB: start a fresh frozen period.
+    try:
+        agent_db.reset_service_nodes_on_renew(service_id)
+    except Exception as e:
+        logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
     return {"ok": True, "wallet_balance": wallet.get("balance", 0)}
 
