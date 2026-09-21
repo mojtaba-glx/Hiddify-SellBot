@@ -7,6 +7,7 @@
 
 import logging
 import os
+from html import escape
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,8 @@ async def notify_admin_delivery_report(
         if customer_name:
             lines.append(f"👥 مشتری: {customer_name}")
         if service_name:
-            lines.append(f"📦 سرویس: {service_name}")
+            # Telegram HTML <code> makes the service name tap-to-copy.
+            lines.append(f"📦 سرویس: <code>{escape(str(service_name))}</code>")
         if server_title:
             lines.append(f"🖥 سرور: {server_title}")
         if volume_gb > 0:
