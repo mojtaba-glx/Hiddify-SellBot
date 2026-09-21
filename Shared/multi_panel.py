@@ -26,58 +26,81 @@ class PanelUuidMismatchError(RuntimeError):
     """The panel did not persist the UUID requested by the bot."""
 
 
+def _looks_like_panel_uuid(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text and len(text) >= 8 and " " not in text and not text.isdigit())
+
+
+async def _probe_requested_user(
+    server: Dict[str, Any],
+    requested_uuid: str,
+    *,
+    is_xui: bool,
+    attempts: int = 4,
+) -> Dict[str, Any] | None:
+    """Read a freshly-created user without issuing another create POST."""
+    for attempt in range(max(1, int(attempts))):
+        try:
+            candidate = await get_user_by_uuid(server, requested_uuid)
+            if isinstance(candidate, dict):
+                explicit_uuid = str(candidate.get("uuid") or "").strip()
+                fallback_id = str(candidate.get("id") or "").strip()
+                if explicit_uuid == requested_uuid or fallback_id == requested_uuid:
+                    result = dict(candidate)
+                    result["uuid"] = requested_uuid
+                    return result
+                # Hiddify's UUID-addressed endpoint can return a numeric DB id
+                # without echoing uuid. A successful GET by requested UUID is
+                # still authoritative for that row.
+                if not is_xui and not explicit_uuid:
+                    result = dict(candidate)
+                    result["uuid"] = requested_uuid
+                    return result
+        except Exception:
+            pass
+        if attempt + 1 < max(1, int(attempts)):
+            await asyncio.sleep(0.25 * (attempt + 1))
+    return None
+
+
 async def create_user_with_uuid(
     server: Dict[str, Any],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Create a panel user and guarantee the UUID supplied in the payload.
+    """Create a panel user while keeping one canonical UUID across the cluster.
 
-    Hiddify and X-UI normally honour ``payload['uuid']``. Some panel versions
-    can return or persist another UUID. Correct that new row immediately and
-    verify it through the read API. If verification fails, remove the new row
-    best-effort and fail instead of accepting divergent identities.
+    A lost create response is recovered by reading the requested UUID instead
+    of repeating POST. Successful creates are verified with a short grace
+    period so Hiddify's eventual persistence does not turn a valid creation
+    into a false failure.
     """
     requested_uuid = str((payload or {}).get("uuid") or "").strip()
     if not requested_uuid:
         raise ValueError("create_user_with_uuid requires payload.uuid")
 
     try:
+        is_xui = bool(hiddify_api._is_xui_server(server))
+    except Exception:
+        is_xui = False
+
+    try:
         created = await create_user(server, dict(payload or {}))
     except Exception:
-        # A create POST can reach the panel successfully while its response is
-        # lost (for example a read timeout). Never blindly POST the same UUID
-        # again. For Hiddify, probe the requested UUID and treat a persisted
-        # row as success. X-UI can span multiple inbounds, so an interrupted
-        # create may be partial; clean that UUID best-effort and fail instead.
-        is_xui = False
-        try:
-            is_xui = bool(hiddify_api._is_xui_server(server))
-        except Exception:
-            is_xui = False
-
         if is_xui:
+            # X-UI may create a subset of configured inbounds before an error.
+            # Best-effort cleanup is safer than retrying the same create POST.
             try:
                 await delete_user(server, requested_uuid)
             except Exception:
                 pass
             raise
 
-        recovered = None
-        for attempt in range(2):
-            try:
-                candidate = await get_user_by_uuid(server, requested_uuid)
-                candidate_uuid = str(
-                    (candidate or {}).get("uuid") or (candidate or {}).get("id") or ""
-                ).strip()
-                if candidate_uuid == requested_uuid:
-                    recovered = dict(candidate)
-                    recovered["uuid"] = requested_uuid
-                    break
-            except Exception:
-                pass
-            if attempt == 0:
-                await asyncio.sleep(0.35)
-
+        recovered = await _probe_requested_user(
+            server,
+            requested_uuid,
+            is_xui=False,
+            attempts=4,
+        )
         if recovered is not None:
             return recovered
         raise
@@ -85,33 +108,63 @@ async def create_user_with_uuid(
     if not isinstance(created, dict):
         raise PanelUuidMismatchError("panel returned an invalid create response")
 
-    returned_uuid = str(created.get("uuid") or created.get("id") or "").strip()
-    cleanup_uuids = [returned_uuid] if returned_uuid else []
+    # First try the UUID we explicitly asked the panel to persist. This avoids
+    # false negatives when Hiddify needs a moment before GET sees the new row.
+    verified = await _probe_requested_user(
+        server,
+        requested_uuid,
+        is_xui=is_xui,
+        attempts=3,
+    )
+    if verified is not None:
+        result = dict(created)
+        result.update(verified)
+        result["uuid"] = requested_uuid
+        return result
+
+    explicit_uuid = str(created.get("uuid") or "").strip()
+    fallback_id = str(created.get("id") or "").strip()
+    returned_uuid = explicit_uuid
+    if not returned_uuid and _looks_like_panel_uuid(fallback_id):
+        returned_uuid = fallback_id
+
+    # If the panel response itself explicitly confirms the requested UUID,
+    # accept it even when the immediate read endpoint is still catching up.
+    if returned_uuid == requested_uuid:
+        result = dict(created)
+        result["uuid"] = requested_uuid
+        return result
+
+    cleanup_uuids: List[str] = []
+    if returned_uuid and _looks_like_panel_uuid(returned_uuid):
+        cleanup_uuids.append(returned_uuid)
 
     try:
         if returned_uuid and returned_uuid != requested_uuid:
             await patch_user(server, returned_uuid, {"uuid": requested_uuid})
-            cleanup_uuids.append(requested_uuid)
-
-        verified = await get_user_by_uuid(server, requested_uuid)
-        verified_uuid = str(
-            (verified or {}).get("uuid") or (verified or {}).get("id") or ""
-        ).strip()
-        if verified_uuid != requested_uuid:
-            raise PanelUuidMismatchError(
-                "panel UUID mismatch "
-                f"(requested={requested_uuid}, returned={verified_uuid or returned_uuid or 'empty'})"
+            verified = await _probe_requested_user(
+                server,
+                requested_uuid,
+                is_xui=is_xui,
+                attempts=3,
             )
+            if verified is not None:
+                result = dict(created)
+                result.update(verified)
+                result["uuid"] = requested_uuid
+                return result
 
-        result = dict(created)
-        if isinstance(verified, dict):
-            result.update(verified)
-        result["uuid"] = requested_uuid
-        return result
+        raise PanelUuidMismatchError(
+            "panel UUID mismatch "
+            f"(requested={requested_uuid}, returned={returned_uuid or 'unverified'})"
+        )
     except Exception as exc:
+        # This operation is being failed/refunded, so remove any identity that
+        # may have been created. Never use a numeric DB id as a UUID cleanup key.
+        cleanup_uuids.append(requested_uuid)
         seen = set()
         for candidate in cleanup_uuids:
-            if candidate in seen:
+            if not _looks_like_panel_uuid(candidate) or candidate in seen:
                 continue
             seen.add(candidate)
             try:

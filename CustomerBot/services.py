@@ -146,11 +146,17 @@ async def buy_service(
             try:
                 created = await multi_panel.create_user_with_uuid(tgt, payload)
             except Exception as e:
-                # Timeout recovery happens inside create_user_with_uuid.
-                # Never issue a second create POST for the same UUID here.
-                raise RuntimeError(
-                    f"cluster user creation failed on server {tgt.get('id')}: {e}"
-                ) from e
+                if idx == 0:
+                    raise RuntimeError(
+                        f"cluster user creation failed on primary server {tgt.get('id')}: {e}"
+                    ) from e
+                logger.warning(
+                    "Customer child create deferred server=%s uuid=%s: %s",
+                    tgt.get("id"),
+                    shared_uuid,
+                    e,
+                )
+                continue
             created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if created_uuid != shared_uuid:
                 raise RuntimeError(
