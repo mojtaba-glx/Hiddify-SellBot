@@ -1462,6 +1462,32 @@ async def _renew_subscription_from_order(
     except Exception as notify_error:
         logger.warning("Renewal completed but customer notification failed: %s", notify_error)
     updated_svc = agent_db.get_service_by_id(service_id) or dict(svc)
+
+    # Report successful customer-bot renewals to the central AdminBot, just
+    # like new-service delivery and representative renewals.
+    try:
+        from Shared.admin_reports import notify_admin_delivery_report
+        agent = agent_db.get_agent_by_id(agent_id)
+        customer_name = (
+            str((shared_cust or {}).get("full_name") or "").strip()
+            or str((shared_cust or {}).get("username") or "").strip()
+            or str(user_tg_id)
+        )
+        primary_server = (primary_target[0] if targets else {})
+        await notify_admin_delivery_report(
+            action_title="تمدید سرویس مشتری",
+            agent=agent,
+            customer_name=customer_name,
+            service_name=str(svc.get("name") or ""),
+            server_title=str(primary_server.get("title") or svc.get("server_title") or ""),
+            volume_gb=float(new_usage_limit or 0),
+            days=int(new_days_left or 0),
+            amount=int(order.get("amount") or order.get("price") or 0),
+            status="success",
+        )
+    except Exception as report_error:
+        logger.warning("Renewal completed but admin report failed: %s", report_error)
+
     try:
         await _send_subscription_delivery(context, agent_id, user_tg_id, service_id)
     except Exception as delivery_error:
