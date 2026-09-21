@@ -2152,22 +2152,6 @@ def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float 
             (new_days_left, new_usage_limit, now.strftime("%Y-%m-%d %H:%M:%S"),
              new_end_str, operation_key, _now(), service_id),
         )
-    # هر تمدید یک دوره runtime تازه برای حسابداری نودها شروع می‌کند.
-    # مصرف/فریز نودهای حذف‌شده مربوط به دوره قبل است و نباید برای دوره جدید بماند.
-    cur.execute(
-        "DELETE FROM agent_service_nodes WHERE service_id = ? AND COALESCE(deleted,0) = 1",
-        (service_id,),
-    )
-    cur.execute(
-        """
-        UPDATE agent_service_nodes
-        SET usage_current = 0, days_left = NULL, frozen = 0, fail_count = 0,
-            last_ok_at = '', frozen_at = '', frozen_reason = '',
-            is_active = 1, updated_at = ?
-        WHERE service_id = ?
-        """,
-        (_now(), service_id),
-    )
     conn.commit()
     conn.close()
     return True
