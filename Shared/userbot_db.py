@@ -490,6 +490,21 @@ def init_db() -> None:
         """
     )
 
+    # Daily traffic snapshots used by server-status reporting.  One row per
+    # server/day; harmless for existing installations and survives restarts.
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS server_traffic_daily (
+            server_id INTEGER NOT NULL,
+            day TEXT NOT NULL,
+            baseline_gb REAL NOT NULL DEFAULT 0,
+            last_total_gb REAL NOT NULL DEFAULT 0,
+            updated_at TEXT DEFAULT '',
+            PRIMARY KEY(server_id, day)
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
@@ -710,6 +725,20 @@ def _migrate_db():
     )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_userbot_users_referral_code ON userbot_users(referral_code)"
+    )
+
+    # Server status daily-traffic snapshot (safe additive migration).
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS server_traffic_daily (
+            server_id INTEGER NOT NULL,
+            day TEXT NOT NULL,
+            baseline_gb REAL NOT NULL DEFAULT 0,
+            last_total_gb REAL NOT NULL DEFAULT 0,
+            updated_at TEXT DEFAULT '',
+            PRIMARY KEY(server_id, day)
+        )
+        """
     )
 
     # Expiry notice: track whether the "subscription expired" notification was sent
@@ -6705,3 +6734,58 @@ def find_prior_active_sms_webhook_event(
                 or (same_ref and same_sender):
             return row
     return None
+
+
+def update_server_daily_traffic(server_id: int, total_gb: float, day: Optional[str] = None) -> float:
+    """Persist a daily baseline and return traffic used since that baseline.
+
+    The first observation of a day establishes the baseline.  If X-UI traffic
+    counters are reset during the day, the new counter becomes the baseline so
+    the UI never reports a negative value.
+    """
+    sid = int(server_id or 0)
+    if sid <= 0:
+        return 0.0
+    try:
+        total = max(0.0, float(total_gb or 0.0))
+    except (TypeError, ValueError):
+        total = 0.0
+    day_key = str(day or datetime.now().strftime("%Y-%m-%d"))
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS server_traffic_daily (
+                server_id INTEGER NOT NULL, day TEXT NOT NULL,
+                baseline_gb REAL NOT NULL DEFAULT 0,
+                last_total_gb REAL NOT NULL DEFAULT 0,
+                updated_at TEXT DEFAULT '',
+                PRIMARY KEY(server_id, day)
+            )
+            """
+        )
+        row = conn.execute(
+            "SELECT baseline_gb, last_total_gb FROM server_traffic_daily WHERE server_id=? AND day=?",
+            (sid, day_key),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO server_traffic_daily(server_id, day, baseline_gb, last_total_gb, updated_at) VALUES(?,?,?,?,?)",
+                (sid, day_key, total, total, now_text),
+            )
+            conn.commit()
+            return 0.0
+        baseline = max(0.0, float(row["baseline_gb"] or 0.0))
+        last_total = max(0.0, float(row["last_total_gb"] or 0.0))
+        if total < last_total:
+            baseline = total
+        used = max(0.0, total - baseline)
+        conn.execute(
+            "UPDATE server_traffic_daily SET baseline_gb=?, last_total_gb=?, updated_at=? WHERE server_id=? AND day=?",
+            (baseline, total, now_text, sid, day_key),
+        )
+        conn.commit()
+        return used
+    finally:
+        conn.close()
