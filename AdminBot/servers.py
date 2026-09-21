@@ -2427,13 +2427,13 @@ async def send_frozen_nodes_report(
             if source == "agent":
                 owner = str(row.get("customer_username") or row.get("customer_full_name") or "").strip()
                 agent_name = str(row.get("agent_username") or row.get("agent_full_name") or "").strip()
-                owner_line = f"👥 مشتری: @{owner.lstrip('@')}" if owner else "👥 مشتری: —"
+                owner_line = f"👥 مشتری: @{escape(owner.lstrip('@'))}" if owner else "👥 مشتری: —"
                 if agent_name:
-                    owner_line += f" | نماینده: @{agent_name.lstrip('@')}"
+                    owner_line += f" | نماینده: @{escape(agent_name.lstrip('@'))}"
                 source_title = "🏢 نمایندگی/مشتری"
             else:
                 owner = str(row.get("username") or row.get("full_name") or "").strip()
-                owner_line = f"👤 مالک: @{owner.lstrip('@')}" if owner else "👤 مالک: —"
+                owner_line = f"👤 مالک: @{escape(owner.lstrip('@'))}" if owner else "👤 مالک: —"
                 source_title = "🤖 ربات کاربران"
 
             status = "🗑 سرور حذف‌شده" if deleted else "❄️ یخ‌زده"
