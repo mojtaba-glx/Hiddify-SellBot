@@ -3414,6 +3414,34 @@ def reset_service_nodes_on_renew(service_id: int) -> None:
         conn.close()
 
 
+def clear_frozen_service_nodes(service_id: int) -> int:
+    """Delete only frozen/deleted node snapshots for one UserBot service.
+
+    The service itself and any healthy/live node mappings remain untouched.
+    Returns the number of removed node records.
+    """
+    init_db()
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return 0
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            DELETE FROM userbot_service_nodes
+            WHERE service_id = ?
+              AND (COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1)
+            """,
+            (sid,),
+        )
+        removed = int(cur.rowcount or 0)
+        conn.commit()
+        return removed
+    finally:
+        conn.close()
+
+
 def get_frozen_nodes_summary() -> Dict[str, int]:
     """خلاصه تعداد نودهای یخ‌زده/حذف‌شده برای داشبورد ادمین."""
     init_db()
