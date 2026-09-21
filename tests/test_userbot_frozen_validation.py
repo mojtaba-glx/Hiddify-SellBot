@@ -123,6 +123,44 @@ class UserBotFrozenReportDbTests(unittest.TestCase):
         service = userbot_db.get_service_by_id(1)
         self.assertAlmostEqual(float(service["usage_current"]), 0.008)
 
+    def test_manual_thaw_can_restore_deleted_and_active_flags(self):
+        conn = userbot_db._get_conn()
+        try:
+            conn.execute(
+                """
+                UPDATE userbot_service_nodes
+                SET usage_current = 0.012, frozen = 1, fail_count = 4,
+                    deleted = 1, is_active = 0,
+                    frozen_at = '2026-09-21 02:00:00',
+                    frozen_reason = 'server_deleted'
+                WHERE service_id = 1
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        userbot_db.update_service_node_runtime(
+            1,
+            1,
+            "uuid-a",
+            usage_current=0.020,
+            frozen=0,
+            fail_count=0,
+            frozen_at="",
+            frozen_reason="",
+            deleted=0,
+            is_active=1,
+        )
+
+        node = userbot_db.get_service_nodes(1)[0]
+        self.assertAlmostEqual(float(node["usage_current"]), 0.020)
+        self.assertEqual(int(node["frozen"]), 0)
+        self.assertEqual(int(node["fail_count"]), 0)
+        self.assertEqual(int(node["deleted"]), 0)
+        self.assertEqual(int(node["is_active"]), 1)
+        self.assertEqual(str(node["frozen_reason"] or ""), "")
+
     def test_positive_snapshot_is_reported(self):
         conn = userbot_db._get_conn()
         try:

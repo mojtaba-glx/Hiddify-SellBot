@@ -2751,6 +2751,376 @@ async def send_frozen_nodes_report(
         await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
 
+async def _recover_frozen_service_now(
+    source_code: str,
+    service_id: int,
+) -> Dict[str, Any]:
+    """Check every node for one service and thaw only previously frozen nodes."""
+    source = _frozen_source_code(source_code)
+    sid = int(service_id or 0)
+    frozen_before = _frozen_service_rows(source, sid)
+    result: Dict[str, Any] = {
+        "source": source,
+        "service_id": sid,
+        "service_name": str((frozen_before[0] if frozen_before else {}).get("service_name") or f"سرویس #{sid}"),
+        "checked": 0,
+        "recovered": 0,
+        "remaining": 0,
+        "nodes": [],
+    }
+    if sid <= 0:
+        return result
+
+    def _key(row: Dict[str, Any]) -> tuple[int, str]:
+        return (
+            int(row.get("server_id") or 0),
+            str(row.get("panel_user_uuid") or "").strip(),
+        )
+
+    frozen_keys = {_key(row) for row in frozen_before}
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    live_probe: Dict[tuple[int, str], bool] = {}
+    probe_reason: Dict[tuple[int, str], str] = {}
+
+    if source == "a":
+        from Shared import agent_db as _ab
+        from Shared import agent_enforcer as _ae
+
+        svc = _ab.get_service_by_id(sid) or {}
+        if not svc:
+            result["error"] = "سرویس نمایندگی در دیتابیس پیدا نشد."
+            return result
+
+        # Agent Enforcer همان منطق رسمی thaw و renew_pending را اجرا می‌کند.
+        try:
+            await _ae._process_service(svc)
+        except Exception as exc:
+            logger.warning("manual frozen agent recovery failed svc=%s: %s", sid, exc)
+
+        nodes = _ab.get_service_nodes(sid) or []
+
+        # deleted عمداً توسط Enforcer خوانده نمی‌شود؛ اگر سرور دوباره با همان ID
+        # برگشته باشد، وجود UUID را بررسی و mapping را دوباره فعال می‌کنیم.
+        restored_deleted = False
+        for node in nodes:
+            key = _key(node)
+            if int(node.get("deleted") or 0) != 1:
+                continue
+            server_id, user_uuid = key
+            server = database.get_server_by_id(server_id)
+            if not server:
+                live_probe[key] = False
+                probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+                continue
+            try:
+                panel_user = await _ae._get_user_with_list_fallback(server, user_uuid)
+            except Exception:
+                live_probe[key] = False
+                probe_reason[key] = "UUID روی پنل پیدا نشد یا پنل پاسخ نداد"
+                continue
+            if not panel_user:
+                live_probe[key] = False
+                probe_reason[key] = "UUID روی پنل پیدا نشد"
+                continue
+
+            live_probe[key] = True
+            usage = float(panel_user.get("current_usage_GB") or 0.0)
+            days_raw = panel_user.get("remaining_days")
+            try:
+                days_left = int(days_raw) if days_raw is not None else None
+            except Exception:
+                days_left = None
+            _ab.update_service_node_runtime(
+                sid,
+                server_id,
+                user_uuid,
+                usage_current=usage,
+                days_left=days_left,
+                frozen=0,
+                fail_count=0,
+                last_ok_at=now_str,
+                frozen_at="",
+                frozen_reason="",
+                deleted=0,
+                is_active=1 if int(svc.get("is_active") or 0) == 1 else 0,
+            )
+            restored_deleted = True
+
+        if restored_deleted:
+            try:
+                await _ae._process_service(_ab.get_service_by_id(sid) or svc)
+            except Exception as exc:
+                logger.warning("agent recovery resync failed svc=%s: %s", sid, exc)
+
+        after_nodes = _ab.get_service_nodes(sid) or []
+
+        # برای نمایش نتیجه، همه نودها را همان لحظه probe می‌کنیم. شکست یک probe
+        # سالم را فقط هشدار می‌دهد و باعث freeze جدید نمی‌شود.
+        for node in after_nodes:
+            key = _key(node)
+            if key in live_probe:
+                continue
+            server_id, user_uuid = key
+            server = database.get_server_by_id(server_id)
+            if not server:
+                live_probe[key] = False
+                probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+                continue
+            try:
+                await _ae._get_user_with_list_fallback(server, user_uuid)
+                live_probe[key] = True
+            except Exception:
+                live_probe[key] = False
+                probe_reason[key] = "پنل/UUID در این بررسی پاسخ نداد"
+
+    else:
+        from Shared import service_enforcer as _se
+
+        svc = userbot_db.get_service_by_id(sid) or {}
+        if not svc:
+            result["error"] = "سرویس UserBot در دیتابیس پیدا نشد."
+            return result
+
+        before_nodes = userbot_db.get_service_nodes(sid) or []
+        recovered_keys: List[tuple[int, str]] = []
+
+        for node in before_nodes:
+            key = _key(node)
+            server_id, user_uuid = key
+            if server_id <= 0 or not user_uuid:
+                continue
+            server = database.get_server_by_id(server_id)
+            if not server:
+                live_probe[key] = False
+                probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+                continue
+
+            probe_node = dict(node)
+            try:
+                probe = await _se._fetch_service_node_usage(
+                    service_id=sid,
+                    node=probe_node,
+                    servers_map={server_id: server},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "manual frozen UserBot probe failed svc=%s server=%s: %s",
+                    sid, server_id, exc,
+                )
+                live_probe[key] = False
+                probe_reason[key] = "پنل در این بررسی پاسخ نداد"
+                continue
+
+            if not bool(probe.get("ok")):
+                live_probe[key] = False
+                if bool(probe.get("server_missing")):
+                    probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+                elif bool(probe.get("not_found")):
+                    probe_reason[key] = "UUID روی پنل پیدا نشد"
+                else:
+                    probe_reason[key] = "پنل در این بررسی پاسخ نداد"
+                continue
+
+            live_probe[key] = True
+            panel_user = probe.get("panel_user") or {}
+
+            # نود سالم فقط بررسی می‌شود. نودی که قبل از بررسی frozen/deleted بود
+            # در صورت موفقیت همان لحظه thaw و snapshot آن تازه می‌شود.
+            if key not in frozen_keys:
+                continue
+
+            usage = float(panel_user.get("current_usage_GB") or 0.0)
+            try:
+                days_left = _se._days_left_from_panel_user(panel_user)
+            except Exception:
+                days_left = None
+
+            userbot_db.update_service_node_runtime(
+                sid,
+                server_id,
+                user_uuid,
+                usage_current=usage,
+                days_left=days_left,
+                frozen=0,
+                fail_count=0,
+                last_ok_at=now_str,
+                frozen_at="",
+                frozen_reason="",
+                deleted=0,
+                is_active=0,
+            )
+            recovered_keys.append(key)
+
+        after_nodes = userbot_db.get_service_nodes(sid) or []
+        total_usage = sum(float(node.get("usage_current") or 0.0) for node in after_nodes)
+        day_values: List[int] = []
+        for node in after_nodes:
+            if node.get("days_left") is None:
+                continue
+            try:
+                day_values.append(int(node.get("days_left")))
+            except Exception:
+                pass
+        min_days = min(day_values) if day_values else None
+
+        try:
+            usage_limit = float(svc.get("usage_limit") or 0.0)
+        except Exception:
+            usage_limit = 0.0
+        service_days = min_days
+        if service_days is None:
+            try:
+                service_days = int(svc.get("days_left")) if svc.get("days_left") is not None else None
+            except Exception:
+                service_days = None
+
+        allowed = not (
+            (usage_limit > 0 and total_usage >= usage_limit)
+            or (service_days is not None and service_days < 0)
+        )
+        for server_id, user_uuid in recovered_keys:
+            userbot_db.set_service_node_active(
+                sid,
+                server_id,
+                user_uuid,
+                1 if allowed else 0,
+            )
+
+        userbot_db.update_service_runtime(
+            service_id=sid,
+            usage_current=total_usage,
+            days_left=min_days,
+        )
+        after_nodes = userbot_db.get_service_nodes(sid) or []
+
+    after_map = {_key(node): node for node in after_nodes}
+    result["checked"] = len(after_nodes)
+
+    for node in after_nodes:
+        key = _key(node)
+        server_id, user_uuid = key
+        title = str(node.get("server_title") or f"سرور #{server_id}").strip()
+        was_frozen = key in frozen_keys
+        is_problem = int(node.get("frozen") or 0) == 1 or int(node.get("deleted") or 0) == 1
+        reachable = bool(live_probe.get(key))
+
+        if was_frozen and not is_problem and reachable:
+            result["recovered"] += 1
+            state = "recovered"
+            reason = "بازیابی شد"
+        elif was_frozen and is_problem:
+            result["remaining"] += 1
+            state = "problem"
+            reason = probe_reason.get(key) or _frozen_reason_text(
+                node.get("frozen_reason"),
+                int(node.get("deleted") or 0) == 1,
+            )
+        elif reachable:
+            state = "healthy"
+            reason = "سالم"
+        else:
+            state = "warning"
+            reason = probe_reason.get(key) or "در این بررسی پاسخ نداد"
+
+        result["nodes"].append({
+            "server_id": server_id,
+            "title": title,
+            "uuid": user_uuid,
+            "state": state,
+            "ok": state in {"recovered", "healthy"},
+            "usage_current": float(node.get("usage_current") or 0.0),
+            "reason": reason,
+        })
+
+    # اگر یک frozen mapping از دیتابیس به هر دلیل حذف شده باشد، آن را در نتیجه
+    # به عنوان حل‌شده حساب نمی‌کنیم مگر اینکه صراحتاً در after_map وجود داشته باشد.
+    for key in frozen_keys:
+        if key in after_map:
+            continue
+        old_row = next((row for row in frozen_before if _key(row) == key), {})
+        result["remaining"] += 1
+        result["nodes"].append({
+            "server_id": key[0],
+            "title": str(old_row.get("server_title") or f"سرور #{key[0]}"),
+            "uuid": key[1],
+            "state": "problem",
+            "ok": False,
+            "usage_current": float(old_row.get("usage_current") or 0.0),
+            "reason": "رکورد نود پس از بررسی در دیتابیس پیدا نشد",
+        })
+
+    return result
+
+
+async def send_frozen_recovery_result(
+    server_id: int,
+    source_code: str,
+    service_id: int,
+    page: int,
+    recovery: Dict[str, Any],
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    message=None,
+) -> None:
+    name = str(recovery.get("service_name") or f"سرویس #{service_id}")
+    recovered = int(recovery.get("recovered") or 0)
+    remaining = int(recovery.get("remaining") or 0)
+    checked = int(recovery.get("checked") or 0)
+
+    lines = [
+        "🔄 <b>نتیجه بررسی و بازیابی</b>",
+        "❖⬩──────────────⬩❖",
+        f"📦 سرویس: <b>{escape(name)}</b>",
+        f"🔎 نودهای بررسی‌شده: {checked}",
+        f"✅ بازیابی‌شده: <b>{recovered}</b>",
+        f"❌ باقی‌مانده: <b>{remaining}</b>",
+        "",
+    ]
+    if recovery.get("error"):
+        lines.append(f"⚠️ {escape(str(recovery.get('error')))}")
+    else:
+        for node in recovery.get("nodes") or []:
+            state = str(node.get("state") or "")
+            title = escape(str(node.get("title") or f"سرور #{node.get('server_id')}"))
+            reason = escape(str(node.get("reason") or ""))
+            if state == "recovered":
+                lines.append(
+                    f"✅ <b>{title}</b> — بازیابی شد | "
+                    f"مصرف فعلی: {_frozen_fmt_usage(node.get('usage_current'))}"
+                )
+            elif state == "healthy":
+                lines.append(
+                    f"✅ <b>{title}</b> — سالم | "
+                    f"مصرف فعلی: {_frozen_fmt_usage(node.get('usage_current'))}"
+                )
+            elif state == "warning":
+                lines.append(f"⚠️ <b>{title}</b> — {reason}")
+            else:
+                lines.append(f"❌ <b>{title}</b> — {reason or 'هنوز مشکل دارد'}")
+
+    back_rows: List[List[InlineKeyboardButton]] = []
+    if remaining > 0:
+        back_rows.append([
+            InlineKeyboardButton(
+                "🔙 بازگشت به جزئیات",
+                callback_data=f"server:{server_id}:fzsvc:{_frozen_source_code(source_code)}:{service_id}:{page}",
+            )
+        ])
+    back_rows.append([
+        InlineKeyboardButton(
+            "❄️ بازگشت به گزارش",
+            callback_data=f"server:{server_id}:frozen:{page}",
+        )
+    ])
+    kb = InlineKeyboardMarkup(back_rows)
+    text = "\n".join(lines)
+
+    if message is not None:
+        await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+
 async def send_frozen_service_detail(
     server_id: int,
     source_code: str,
@@ -2806,6 +3176,10 @@ async def send_frozen_service_detail(
         ])
 
     kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "🔄 بررسی و بازیابی همین الان",
+            callback_data=f"server:{server_id}:fzrecover:{source}:{sid}:{page}",
+        )],
         [InlineKeyboardButton(
             "👁 مشاهده کاربر روی پنل",
             callback_data=f"server:{server_id}:fzview:{source}:{sid}:{page}",
@@ -7543,7 +7917,7 @@ async def handle_server_inline_callback(
             return
 
 
-        if action in {"fzsvc", "fzview", "fzclear", "fzclearok", "fzdelete", "fzdeleteok"}:
+        if action in {"fzsvc", "fzrecover", "fzview", "fzclear", "fzclearok", "fzdelete", "fzdeleteok"}:
             if len(parts) < 6:
                 await msg.edit_text("❌ داده مدیریت یخ‌زدگی نامعتبر است.")
                 return
@@ -7565,6 +7939,42 @@ async def handle_server_inline_callback(
                     source,
                     frozen_service_id,
                     frozen_page,
+                    chat_id,
+                    context,
+                    message=msg,
+                )
+                return
+
+            if action == "fzrecover":
+                try:
+                    await msg.edit_text(
+                        "🔄 در حال بررسی نودهای این سرویس و تلاش برای بازیابی..."
+                    )
+                    recovery = await _recover_frozen_service_now(
+                        source,
+                        frozen_service_id,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "manual frozen recovery failed source=%s service=%s: %s",
+                        source,
+                        frozen_service_id,
+                        exc,
+                    )
+                    await msg.edit_text(
+                        "❌ بررسی و بازیابی ناموفق بود.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 بازگشت", callback_data=back_detail_cb)]
+                        ]),
+                    )
+                    return
+
+                await send_frozen_recovery_result(
+                    server_id,
+                    source,
+                    frozen_service_id,
+                    frozen_page,
+                    recovery,
                     chat_id,
                     context,
                     message=msg,
