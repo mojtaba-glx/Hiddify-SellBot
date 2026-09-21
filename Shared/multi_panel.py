@@ -190,6 +190,12 @@ async def create_primary_user(
                 canonical_uuid = requested_uuid
                 created = {**created, **recovered}
 
+    if not canonical_uuid and not is_xui:
+        recovered = await _recover_primary_by_identity(server, payload)
+        if recovered is not None:
+            canonical_uuid = str(recovered.get("uuid") or "").strip()
+            created = {**created, **recovered}
+
     if not canonical_uuid:
         raise PanelUuidMismatchError("primary panel returned no usable UUID")
 
