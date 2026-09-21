@@ -1405,12 +1405,16 @@ async def _renew_subscription_from_order(
             )
         except Exception as e:
             raise RuntimeError(f"panel_patch_failed: {str(e)[:100]}")
+        renew_failed_ids: list[int] = []
         for srv, uuid, marzban_un in targets:
             if int(srv.get("id") or 0) == int(primary_target[0].get("id") or 0):
                 continue
             try:
                 await multi_panel.patch_user(srv, uuid, patch_data, marzban_username=marzban_un)
             except Exception as e:
+                failed_sid = int(srv.get("id") or 0)
+                if failed_sid > 0 and failed_sid not in renew_failed_ids:
+                    renew_failed_ids.append(failed_sid)
                 logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
 
     # ── دیتابیس محلی ──
@@ -1425,6 +1429,17 @@ async def _renew_subscription_from_order(
         # The primary panel was already changed. Refunding or retrying blindly
         # could grant a free or double renewal, so startup recovery must flag it.
         raise PaymentFulfillmentNeedsReview("panel updated but local renewal persistence failed")
+
+    # پنل اصلی و دیتابیس هر دو تمدید را پذیرفته‌اند؛ دوره frozen قبلی تمام است.
+    try:
+        agent_db.reset_service_nodes_on_renew(
+            service_id,
+            reset_usage=vol_mode == "reset",
+            reset_time=time_mode == "reset",
+            pending_server_ids=renew_failed_ids if targets else [],
+        )
+    except Exception as e:
+        logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
     # ── فعال‌سازی مجدد (اگر به‌خاطر اتمام حجم/زمان غیرفعال شده بود) ──
     for srv, uuid, marzban_un in targets:

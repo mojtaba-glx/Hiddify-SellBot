@@ -340,6 +340,7 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
 
                 # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.
                 failed_nodes: List[str] = []
+                failed_node_ids: List[int] = []
                 for srv, uuid, marzban_un in targets:
                     if int(srv.get("id") or 0) == primary_sid:
                         continue
@@ -351,6 +352,9 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
                         )
                     except Exception as e:
                         failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
+                        failed_sid = int(srv.get("id") or 0)
+                        if failed_sid > 0 and failed_sid not in failed_node_ids:
+                            failed_node_ids.append(failed_sid)
                         logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
                 if failed_nodes:
                     logger.warning(
@@ -361,7 +365,27 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
         except Exception as e:
             logger.warning("renew patch failed svc=%s: %s", service_id, e)
 
-    agent_db.renew_service(service_id, extra_days=extra_days)
+    if not agent_db.renew_service(service_id, extra_days=extra_days):
+        agent_db.refund_wallet(
+            agent_id,
+            cost,
+            description=f"Refund: renew local persist svc #{service_id}",
+            service_id=service_id,
+        )
+        return {"ok": False, "error": "local_renew_failed"}
+
+    # Renewal is confirmed on primary + local DB. This path extends time only,
+    # so existing traffic snapshots remain valid; failed child nodes stay
+    # renew_pending until they receive the new expiry.
+    try:
+        agent_db.reset_service_nodes_on_renew(
+            service_id,
+            reset_usage=False,
+            reset_time=False,
+            pending_server_ids=locals().get("failed_node_ids", []),
+        )
+    except Exception as e:
+        logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
     return {"ok": True, "wallet_balance": wallet.get("balance", 0)}
 
@@ -428,46 +452,8 @@ async def sync_service_usage(service_id: int) -> Dict[str, Any]:
 
 
 async def refresh_service_status(service_id: int) -> Dict[str, Any]:
-    """Refresh service runtime from Hiddify panel and disable stale local rows."""
-    svc = agent_db.get_service_by_id(service_id)
-    if not svc:
-        return {"ok": False, "error": "service_not_found"}
-
-    panel_uuid = str(svc.get("panel_user_uuid", "")).strip()
-    server_id = int(svc["server_id"])
-    if not panel_uuid:
-        return {"ok": False}
-
-    server = database.get_server_by_id(server_id)
-    if not server:
-        return {"ok": False}
-
-    try:
-        user_data = await hiddify_api.get_user_by_uuid(server, panel_uuid)
-        usage = float(user_data.get("current_usage_GB", 0) or 0)
-        updates = {"usage_current": usage, "is_active": 1}
-        if user_data.get("usage_limit_GB") is not None:
-            updates["usage_limit"] = float(user_data.get("usage_limit_GB") or 0)
-        derived_days = _extract_days_left(user_data, int(svc.get("days_left") or 0))
-        if derived_days is not None:
-            updates["days_left"] = int(derived_days)
-        agent_db.update_service(service_id, updates)
-        agent_db.mark_service_seen(service_id)
-        return {"ok": True, "usage_current": usage, "service": agent_db.get_service_by_id(service_id)}
-    except Exception as e:
-        try:
-            users = await hiddify_api.list_users(server)
-            exists = any(str(u.get("uuid") or u.get("id") or "").strip() == panel_uuid for u in users)
-            if not exists:
-                agent_db.update_service(service_id, {"is_active": 0, "days_left": 0})
-                agent_db.mark_service_missing(service_id)
-                agent_db.cleanup_stale_agent_services(7)
-                logger.info("disabled stale customer service svc=%s uuid=%s", service_id, panel_uuid)
-                return {"ok": False, "error": "panel_user_not_found", "disabled": True}
-        except Exception as list_error:
-            logger.warning("verify stale service failed svc=%s: %s", service_id, list_error)
-        logger.warning("sync_usage failed svc=%s: %s", service_id, e)
-        return {"ok": False, "error": str(e)[:100]}
+    """Refresh through the shared frozen-aware agency accounting path."""
+    return await sync_service_status_from_panels(service_id)
 
 
 # =====================================================================
@@ -1121,59 +1107,28 @@ def get_or_create_bot_sub_links(svc: dict) -> Tuple[str, str]:
 # ---------- بروزرسانی اطلاعات از همه پنل‌ها ----------
 
 async def sync_service_status_from_panels(service_id: int) -> Dict[str, Any]:
-    """سینک مصرف و روز باقیمانده از همه نودها + سرور اصلی (مثل UserBot)"""
+    """سینک وضعیت با همان ماشین‌حساب frozen مشترک AgentBot."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc:
         return {"ok": False, "error": "service_not_found"}
-    targets = get_service_panel_targets(svc)
-    if not targets:
-        return {"ok": False, "error": "no_targets"}
+    try:
+        from Shared import agent_enforcer
+        result = await agent_enforcer._process_service(svc)
+    except Exception as e:
+        logger.warning("sync frozen runtime failed svc=%s: %s", service_id, e)
+        return {"ok": False, "error": str(e)[:100]}
 
-    total_usage = 0.0
-    max_limit = 0.0
-    min_days_left: Optional[int] = None
-    found_any = False
-    missing_any = False
-    for srv, uuid, marzban_un in targets:
-        try:
-            user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
-            usage = _to_float(user_data.get("current_usage_GB"), 0.0)
-            total_usage += usage
-            found_any = True
-            limit = _to_float(user_data.get("usage_limit_GB"), 0.0)
-            if limit > max_limit:
-                max_limit = limit
-            derived_days = _extract_days_left(user_data, None)
-            if derived_days is not None:
-                min_days_left = derived_days if min_days_left is None else min(min_days_left, derived_days)
-        except Exception as e:
-            if _is_user_missing_error(e):
-                missing_any = True
-            logger.warning("sync svc=%s node=%s failed: %s", service_id, uuid[:8], e)
-
-    if found_any:
-        try:
-            agent_db.mark_service_seen(service_id)
-        except Exception:
-            pass
-    elif missing_any:
-        try:
-            agent_db.mark_service_missing(service_id)
-            agent_db.cleanup_stale_agent_services(7)
-        except Exception:
-            pass
-        return {"ok": False, "error": "panel_user_not_found"}
-
-    if not found_any:
-        return {"ok": False, "error": "no_reachable_panel"}
-
-    updates = {"usage_current": total_usage, "is_active": 1}
-    if max_limit > 0:
-        updates["usage_limit"] = max_limit
-    if min_days_left is not None:
-        updates["days_left"] = int(min_days_left)
-    agent_db.update_service(service_id, updates)
-    return {"ok": True, "service": agent_db.get_service_by_id(service_id)}
+    updated = agent_db.get_service_by_id(service_id)
+    if not updated:
+        return {"ok": False, "error": "service_not_found"}
+    if not result:
+        return {"ok": False, "error": "no_targets", "service": updated}
+    return {
+        "ok": True,
+        "service": updated,
+        "frozen_nodes": int(result.get("frozen_nodes") or 0),
+        "status": str(result.get("status") or "synced"),
+    }
 
 
 # ---------- تغییر نام روی همه پنل‌ها ----------

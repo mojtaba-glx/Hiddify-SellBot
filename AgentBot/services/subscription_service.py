@@ -452,6 +452,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
 
     # Sync with panel (update usage_limit_GB and package_days) on all cluster nodes
     renew_failed: list[str] = []
+    renew_failed_ids: list[int] = []
     if updated:
         sid = int(updated.get("server_id") or 0)
         server = get_server_by_id(sid)
@@ -482,6 +483,8 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             except Exception as e:
                 logger.warning("renew panel sync failed svc=%s server=%s: %s", service_id, tgt_id, e)
                 renew_failed.append(str(tgt.get("title") or f"\u0633\u0631\u0648\u0631 #{tgt_id}"))
+                if tgt_id > 0 and tgt_id not in renew_failed_ids:
+                    renew_failed_ids.append(tgt_id)
                 if tgt_id == sid:
                     break
 
@@ -492,6 +495,17 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                 agent_db.refund_wallet(agent_id, cost, description=f"بازگشت وجه تمدید ناموفق سرویس #{service_id}", service_id=service_id)
             logger.error("Primary panel renewal failed; local state and wallet restored (service=%s)", service_id)
             return None
+
+        # تمدید روی سرور مرجع قطعی شد؛ حالا snapshot/frozen دوره قبل پاک شود.
+        try:
+            agent_db.reset_service_nodes_on_renew(
+                service_id,
+                reset_usage=str(volume_mode).strip().lower() == "reset",
+                reset_time=str(time_mode).strip().lower() == "reset",
+                pending_server_ids=renew_failed_ids,
+            )
+        except Exception as e:
+            logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         primary_enable_ok = False

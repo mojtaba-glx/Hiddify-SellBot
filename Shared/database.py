@@ -168,26 +168,32 @@ def delete_server(server_id: int) -> bool:
         return False
     _save_servers(new_servers)
     # فریز کردن حجم کاربران روی این نود تا زمان تمدید (به‌جای پاک‌کردن سرویس‌ها).
-    # به‌صورت lazy برای جلوگیری از واردات دوری (userbot_db خودش database را import می‌کند).
-    try:
-        from Shared import userbot_db
-        held = userbot_db.hold_deleted_server_nodes(server_id)
+    # هر دو دیتابیس UserBot و AgentBot باید snapshot مصرف خودشان را نگه دارند.
+    for _db_name in ("userbot_db", "agent_db"):
         try:
-            import logging
-            if held:
-                logging.getLogger(__name__).info(
-                    "hold_deleted_server_nodes: server_id=%s held %s services", server_id, len(held)
+            if _db_name == "userbot_db":
+                from Shared import userbot_db as _runtime_db
+            else:
+                from Shared import agent_db as _runtime_db
+            held = _runtime_db.hold_deleted_server_nodes(server_id)
+            try:
+                import logging
+                if held:
+                    logging.getLogger(__name__).info(
+                        "%s.hold_deleted_server_nodes: server_id=%s held %s services",
+                        _db_name, server_id, len(held),
+                    )
+            except Exception:
+                pass
+        except Exception as e:  # noqa: BLE001
+            try:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "%s.hold_deleted_server_nodes failed for server_id=%s: %s",
+                    _db_name, server_id, e, exc_info=True,
                 )
-        except Exception:
-            pass
-    except Exception as e:  # noqa: BLE001
-        try:
-            import logging
-            logging.getLogger(__name__).warning(
-                "hold_deleted_server_nodes failed for server_id=%s: %s", server_id, e, exc_info=True
-            )
-        except Exception:
-            pass
+            except Exception:
+                pass
     return True
 
 
