@@ -523,6 +523,8 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                         frozen=0,
                         fail_count=0,
                         last_ok_at=now_str,
+                        frozen_at="",
+                        frozen_reason="",
                     )
                     continue
 
@@ -544,6 +546,15 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                     not_found_keys.add((server_id, user_uuid))
                     try:
                         userbot_db.set_service_node_active(service_id, server_id, user_uuid, 0)
+                        if node_rec is not None:
+                            userbot_db.update_service_node_runtime(
+                                service_id,
+                                server_id,
+                                user_uuid,
+                                frozen=1,
+                                frozen_at=str(node_rec.get("frozen_at") or "").strip() or now_str,
+                                frozen_reason="user_not_found",
+                            )
                     except Exception:
                         pass
                     continue
@@ -558,6 +569,16 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                             service_id, server_id, user_uuid,
                             frozen=frozen,
                             fail_count=new_fail,
+                            frozen_at=(
+                                str(node_rec.get("frozen_at") or "").strip() or now_str
+                                if frozen
+                                else str(node_rec.get("frozen_at") or "")
+                            ),
+                            frozen_reason=(
+                                "network_error"
+                                if frozen
+                                else str(node_rec.get("frozen_reason") or "")
+                            ),
                         )
                     except Exception:
                         pass
