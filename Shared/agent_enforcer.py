@@ -121,6 +121,39 @@ def _service_mappings(svc: dict) -> List[dict]:
     return agent_db.get_service_nodes(service_id) or []
 
 
+def _renew_pending_payload(svc: dict, reason: str) -> Dict[str, Any]:
+    """Build the panel patch needed before a pending renewed node can thaw."""
+    reason = str(reason or "")
+    usage_reset = "usage_reset=1" in reason
+    time_reset = "time_reset=1" in reason
+    payload: Dict[str, Any] = {}
+
+    usage_limit = _to_float(svc.get("usage_limit"), 0.0)
+    if usage_limit > 0:
+        payload["usage_limit_GB"] = usage_limit
+
+    days_left = _to_int(svc.get("days_left"), 0)
+    if days_left > 0:
+        payload["package_days"] = days_left
+
+    if usage_reset:
+        payload["current_usage_GB"] = 0
+
+    if time_reset:
+        start_date = str(svc.get("start_date") or "").strip()
+        payload["start_date"] = (
+            start_date[:10]
+            if start_date
+            else datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
+        )
+    else:
+        end_date = str(svc.get("end_date") or "").strip()
+        if end_date:
+            payload["expire_date"] = end_date[:10]
+
+    return payload
+
+
 async def _process_service(svc: dict) -> Dict[str, str]:
     """جمع مصرف زنده + snapshot نودهای قطع/حذف‌شده و اعمال سقف سرویس."""
     result: Dict[str, str] = {}
@@ -176,6 +209,34 @@ async def _process_service(svc: dict) -> Dict[str, str]:
 
         try:
             user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
+
+            frozen_reason = str(node.get("frozen_reason") or "").strip()
+            if frozen_reason.startswith("renew_pending:"):
+                # The node came back after missing a renewal. Apply the current
+                # service period before trusting its stale usage counter.
+                pending_payload = _renew_pending_payload(svc, frozen_reason)
+                try:
+                    if pending_payload:
+                        await hiddify_api.patch_user(srv, uuid, pending_payload)
+                    user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
+                except Exception as pending_err:
+                    total_usage += prev_usage
+                    frozen_count += 1
+                    agent_db.update_service_node_runtime(
+                        service_id,
+                        server_id,
+                        uuid,
+                        frozen=1,
+                        is_active=0,
+                        frozen_at=str(node.get("frozen_at") or "").strip() or now_str,
+                        frozen_reason=frozen_reason,
+                    )
+                    logger.warning(
+                        "agent renew-pending node still unsynced svc=%s server=%s uuid=%s: %s",
+                        service_id, server_id, uuid[:8], pending_err,
+                    )
+                    continue
+
             usage = _to_float(user_data.get("current_usage_GB"), 0.0)
             total_usage += usage
             live_success += 1
