@@ -3616,6 +3616,9 @@ async def send_user_detail(
     chat_id: int,
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
+    *,
+    back_callback: Optional[str] = None,
+    back_text: str = "بازگشت به لیست کاربران",
 ) -> None:
     context.user_data["userdel_source"] = "users"
     server = database.get_server_by_id(server_id)
@@ -3630,9 +3633,11 @@ async def send_user_detail(
     user_data = None
     source = "api"
     try:
-        user_data = await hiddify_api.get_user_by_uuid(server, user_uuid)
-    except hiddify_api.HiddifyApiError as e:
-        logger.warning("get_user_by_uuid error: %s", e)
+        user_data = await _get_panel_user_with_list_fallback(server, user_uuid)
+    except Exception as e:
+        logger.warning("get_user_by_uuid/list fallback error: %s", e)
+        user_data = None
+    if not user_data:
         try:
             local_id = int(user_uuid)
         except ValueError:
@@ -3694,8 +3699,8 @@ async def send_user_detail(
             ],
             [
                 InlineKeyboardButton(
-                    "بازگشت به لیست کاربران",
-                    callback_data=f"server:{server_id}:users",
+                    back_text,
+                    callback_data=(back_callback or f"server:{server_id}:users"),
                 )
             ],
         ]
