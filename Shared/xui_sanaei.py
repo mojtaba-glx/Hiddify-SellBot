@@ -1423,7 +1423,13 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(tr, dict):
                 total_up += _to_int(tr.get("up"), 0)
                 total_down += _to_int(tr.get("down"), 0)
-        out["usage_30days_gb"] = round(_bytes_to_gb(total_up + total_down), 3)
+        total_client_up_gb = _bytes_to_gb(total_up)
+        total_client_down_gb = _bytes_to_gb(total_down)
+        out["usage_30days_gb"] = round(total_client_up_gb + total_client_down_gb, 3)
+        # Client counters are the reliable cumulative VPN traffic totals.
+        # server/status netIO is only the current OS network rate on recent Sanaei.
+        out["traffic_ul"] = round(total_client_up_gb, 3)
+        out["traffic_dl"] = round(total_client_down_gb, 3)
     except Exception:
         pass
 
@@ -1449,8 +1455,6 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     # network counters as bytes in netIO.up/down.
     net_down = _to_int(net_io.get("down"), 0)
     net_up = _to_int(net_io.get("up"), 0)
-    out["traffic_dl"] = round(_bytes_to_gb(net_down), 3)
-    out["traffic_ul"] = round(_bytes_to_gb(net_up), 3)
     out["now_net_recv_mb"] = round(net_down / (1024 ** 2), 2)
     out["now_net_sent_mb"] = round(net_up / (1024 ** 2), 2)
     out["uptime"] = _to_int(data.get("uptime"), 0)
