@@ -2791,45 +2791,55 @@ async def _recover_frozen_service_now(
             result["error"] = "سرویس نمایندگی در دیتابیس پیدا نشد."
             return result
 
-        # Agent Enforcer همان منطق رسمی thaw و renew_pending را اجرا می‌کند.
-        try:
-            await _ae._process_service(svc)
-        except Exception as exc:
-            logger.warning("manual frozen agent recovery failed svc=%s: %s", sid, exc)
-
         nodes = _ab.get_service_nodes(sid) or []
+        service_active = int(svc.get("is_active") or 0) == 1
 
-        # deleted عمداً توسط Enforcer خوانده نمی‌شود؛ اگر سرور دوباره با همان ID
-        # برگشته باشد، وجود UUID را بررسی و mapping را دوباره فعال می‌کنیم.
-        restored_deleted = False
+        # بررسی دستی نباید fail_count را بالا ببرد. فقط نودی که واقعاً برگشته
+        # همان لحظه thaw می‌شود. renew_pending هم قبل از thaw، دوره جدید را می‌گیرد.
         for node in nodes:
             key = _key(node)
-            if int(node.get("deleted") or 0) != 1:
-                continue
             server_id, user_uuid = key
             server = database.get_server_by_id(server_id)
             if not server:
                 live_probe[key] = False
                 probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
                 continue
+
             try:
                 panel_user = await _ae._get_user_with_list_fallback(server, user_uuid)
+
+                pending_reason = str(node.get("frozen_reason") or "").strip()
+                if pending_reason.startswith("renew_pending:"):
+                    pending_payload = _ae._renew_pending_payload(svc, pending_reason)
+                    if pending_payload:
+                        await hiddify_api.patch_user(server, user_uuid, pending_payload)
+                    panel_user = await _ae._get_user_with_list_fallback(server, user_uuid)
             except Exception:
                 live_probe[key] = False
                 probe_reason[key] = "UUID روی پنل پیدا نشد یا پنل پاسخ نداد"
                 continue
+
             if not panel_user:
                 live_probe[key] = False
                 probe_reason[key] = "UUID روی پنل پیدا نشد"
                 continue
 
             live_probe[key] = True
+
+            was_problem = (
+                int(node.get("frozen") or 0) == 1
+                or int(node.get("deleted") or 0) == 1
+            )
+            if not was_problem:
+                continue
+
             usage = float(panel_user.get("current_usage_GB") or 0.0)
             days_raw = panel_user.get("remaining_days")
             try:
                 days_left = int(days_raw) if days_raw is not None else None
             except Exception:
                 days_left = None
+
             _ab.update_service_node_runtime(
                 sid,
                 server_id,
@@ -2842,36 +2852,28 @@ async def _recover_frozen_service_now(
                 frozen_at="",
                 frozen_reason="",
                 deleted=0,
-                is_active=1 if int(svc.get("is_active") or 0) == 1 else 0,
+                is_active=1 if service_active else 0,
             )
-            restored_deleted = True
-
-        if restored_deleted:
-            try:
-                await _ae._process_service(_ab.get_service_by_id(sid) or svc)
-            except Exception as exc:
-                logger.warning("agent recovery resync failed svc=%s: %s", sid, exc)
 
         after_nodes = _ab.get_service_nodes(sid) or []
 
-        # برای نمایش نتیجه، همه نودها را همان لحظه probe می‌کنیم. شکست یک probe
-        # سالم را فقط هشدار می‌دهد و باعث freeze جدید نمی‌شود.
+        # مصرف تجمیعی فقط از snapshotهای تازه/باقی‌مانده محاسبه می‌شود.
+        total_usage = sum(float(node.get("usage_current") or 0.0) for node in after_nodes)
+        day_values: List[int] = []
         for node in after_nodes:
-            key = _key(node)
-            if key in live_probe:
-                continue
-            server_id, user_uuid = key
-            server = database.get_server_by_id(server_id)
-            if not server:
-                live_probe[key] = False
-                probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+            if node.get("days_left") is None:
                 continue
             try:
-                await _ae._get_user_with_list_fallback(server, user_uuid)
-                live_probe[key] = True
+                day_values.append(int(node.get("days_left")))
             except Exception:
-                live_probe[key] = False
-                probe_reason[key] = "پنل/UUID در این بررسی پاسخ نداد"
+                pass
+        updates: Dict[str, Any] = {"usage_current": total_usage}
+        if day_values:
+            updates["days_left"] = min(day_values)
+        try:
+            _ab.update_service(sid, updates)
+        except Exception as exc:
+            logger.warning("manual agent recovery aggregate update failed svc=%s: %s", sid, exc)
 
     else:
         from Shared import service_enforcer as _se
