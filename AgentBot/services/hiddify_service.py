@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 
 from Shared import hiddify_api, multi_panel, database, agent_db
@@ -31,10 +32,11 @@ async def create_user_on_panel(server_id: int, server: Dict[str, Any], name: str
         "name": name,
         "usage_limit_GB": usage_limit_gb,
         "package_days": days,
+        "uuid": str(uuid.uuid4()),
     }
     if str(comment or "").strip():
         payload["comment"] = str(comment).strip()
-    result = await multi_panel.create_user(server, payload)
+    result = await multi_panel.create_user_with_uuid(server, payload)
     if result and result.get("uuid"):
         return result
     raise RuntimeError(f"panel returned no uuid for user {name}")

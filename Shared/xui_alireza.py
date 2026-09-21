@@ -664,7 +664,13 @@ def _normalize_user(
 ) -> Dict[str, Any]:
     protocol = (inbound.get("protocol") or "").strip().lower()
     email = str(client.get("email") or "").strip()
-    uuid = _client_key_value(client, protocol) or email
+    sub_id = str(client.get("subId") or "").strip()
+    # Shadowsocks uses email as its panel update key, but subId is the stable
+    # cross-panel subscription identity supplied by the bot.
+    if protocol == "shadowsocks" and sub_id:
+        uuid = sub_id
+    else:
+        uuid = _client_key_value(client, protocol) or sub_id or email
     stats = _find_stats_by_email(inbound, email)
     up = _to_int(stats.get("up"), 0)
     down = _to_int(stats.get("down"), 0)
@@ -1435,6 +1441,18 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
                 cur_ms = _to_int(client.get("expiryTime"), 0)
                 new_client = dict(client)
                 new_client = _apply_payload_to_client(new_client, protocol, payload, cur_ms=cur_ms)
+                requested_uuid = str(payload.get("uuid") or "").strip()
+                if requested_uuid:
+                    if protocol == "trojan":
+                        new_client["password"] = requested_uuid
+                    elif protocol == "shadowsocks":
+                        new_client["password"] = requested_uuid
+                    elif protocol in ("hysteria", "hysteria2"):
+                        new_client["password"] = requested_uuid
+                        new_client["auth"] = requested_uuid
+                    else:
+                        new_client["id"] = requested_uuid
+                    new_client["subId"] = requested_uuid
                 # اگر نام جدید آمد، ایمیل را هم با الگوی یونیک به‌روز کن
                 if raw_name_global:
                     if len(pairs) == 1:
@@ -1466,6 +1484,11 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
     if last_norm is None:
         raise XuiApiError(f"patch failed on all inbounds for {user_uuid[:8]}: {'; '.join(errors[:2])}")
     if errors:
+        if str(payload.get("uuid") or "").strip():
+            raise XuiApiError(
+                f"UUID patch was not applied to every inbound for {user_uuid[:8]}: "
+                f"{'; '.join(errors[:2])}"
+            )
         logger.warning("X-UI patch partial success user=%s errors=%s", user_uuid[:8], "; ".join(errors[:2]))
     _invalidate_xui_inbounds_cache(server)
     return last_norm

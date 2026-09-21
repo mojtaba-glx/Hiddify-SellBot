@@ -10,7 +10,7 @@ from Shared.sub_links import get_or_create_bot_sub_links, get_service_panel_targ
 from AgentBot.services.hiddify_service import (
     get_available_servers, get_server_by_id, get_agent_plans,
     create_user_on_panel, disable_user_on_panel, enable_user_on_panel,
-    delete_user_on_panel, get_user_configs, revoke_user_link_on_panel,
+    delete_user_on_panel, get_user_configs,
 )
 from AgentBot.database import create_order as db_create_order
 
@@ -73,48 +73,52 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
     payload_base["uuid"] = shared_uuid
     created_nodes: List[dict] = []
     primary_created: Optional[Dict[str, Any]] = None
-    for idx, srv in enumerate(targets):
-        created = None
-        last_exc = None
-        for attempt in (1, 2):
-            try:
-                created = await multi_panel.create_user(srv, payload_base)
-                last_exc = None
-                break
-            except Exception as e:
-                last_exc = e
-                msg = str(e).lower()
-                is_transient = any(k in msg for k in ("readerror", "connecterror", "timeout", "timed out", "connection", "temporarily", "read error"))
-                if idx == 0:
+    try:
+        for idx, srv in enumerate(targets):
+            created = None
+            last_exc = None
+            for attempt in (1, 2):
+                try:
+                    created = await multi_panel.create_user_with_uuid(srv, payload_base)
+                    last_exc = None
+                    break
+                except Exception as e:
+                    last_exc = e
+                    msg = str(e).lower()
+                    is_transient = any(k in msg for k in ("readerror", "connecterror", "timeout", "timed out", "connection", "temporarily", "read error"))
                     if is_transient and attempt == 1:
+                        logger.warning("Cluster create retry server=%s: %s", srv.get("id"), e)
                         await asyncio.sleep(0.7)
                         continue
-                    raise
-                if is_transient and attempt == 1:
-                    logger.warning("Cluster node create_user transient retry server=%s attempt=%s: %s", srv.get("id"), attempt, e)
-                    await asyncio.sleep(0.7)
-                    continue
-                logger.warning("Cluster node create_user failed server=%s: %s", srv.get("id"), e)
-                break
-        if last_exc is not None and created is None:
-            continue
-        user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
-        if not user_uuid:
+                    break
+            if created is None:
+                raise RuntimeError(
+                    f"cluster user creation failed on server {srv.get('id')}: {last_exc}"
+                ) from last_exc
+
+            user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
+            if user_uuid != shared_uuid:
+                raise RuntimeError(
+                    f"cluster UUID mismatch on server {srv.get('id')} "
+                    f"(expected={shared_uuid}, returned={user_uuid or 'empty'})"
+                )
             if idx == 0:
-                raise RuntimeError("uuid \u06a9\u0627\u0631\u0628\u0631 \u0633\u0627\u062e\u062a\u0647\u200c\u0634\u062f\u0647 \u0627\u0632 \u067e\u0646\u0644 \u062f\u0631\u06cc\u0627\u0641\u062a \u0646\u0634\u062f.")
-            continue
-        if idx == 0:
-            primary_created = created
-        marzban_username = str(created.get("_marzban_username") or "").strip()
-        created_nodes.append(
-            {
-                "server_id": int(srv.get("id") or 0),
-                "server_title": srv.get("title") or f"\u0633\u0631\u0648\u0631 #{srv.get('id')}",
-                "panel_user_uuid": user_uuid,
-                "marzban_username": marzban_username,
-                "is_primary": idx == 0,
-            }
-        )
+                primary_created = created
+            marzban_username = str(created.get("_marzban_username") or "").strip()
+            created_nodes.append(
+                {
+                    "server_id": int(srv.get("id") or 0),
+                    "server_title": srv.get("title") or f"\u0633\u0631\u0648\u0631 #{srv.get('id')}",
+                    "panel_user_uuid": shared_uuid,
+                    "panel_user_id": str(created.get("id") or "").strip(),
+                    "marzban_username": marzban_username,
+                    "is_primary": idx == 0,
+                }
+            )
+    except Exception:
+        for item in reversed(created_nodes):
+            await _rollback_node_if_failed(item)
+        raise
     if primary_created is None:
         raise RuntimeError("no primary node created")
     for item in created_nodes:
@@ -123,7 +127,19 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
 
 
 async def _rollback_node_if_failed(item: dict) -> None:
-    pass
+    try:
+        await delete_user_on_panel(
+            str(item.get("panel_user_uuid") or ""),
+            int(item.get("server_id") or 0),
+            marzban_username=str(item.get("marzban_username") or ""),
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed rolling back cluster user server=%s uuid=%s: %s",
+            item.get("server_id"),
+            item.get("panel_user_uuid"),
+            exc,
+        )
 
 
 async def create_subscription(
@@ -623,27 +639,105 @@ async def delete_subscription(agent_id: int, service_id: int) -> bool:
 
 
 async def change_subscription_link(agent_id: int, service_id: int) -> Optional[Dict[str, Any]]:
-    """Regenerate user config links (new UUID on Hiddify, revoke sub on Marzban)."""
+    """Set one new UUID on the primary panel and every attached node."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return None
 
-    sid = int(svc.get("server_id") or 0)
     old_uuid = str(svc.get("panel_user_uuid") or "")
     if not old_uuid:
         return None
 
-    marzban_un = _lookup_marzban_username(service_id, sid)
-    try:
-        result = await revoke_user_link_on_panel(old_uuid, sid, marzban_username=marzban_un)
-    except Exception as e:
-        logger.error("change_subscription_link panel failed svc=%s: %s", service_id, e)
+    targets = get_service_panel_targets(svc)
+    if not targets:
         return None
 
-    new_uuid = str(result.get("new_uuid") or "")
-    if new_uuid and new_uuid != old_uuid:
-        agent_db.update_service(service_id, {"panel_user_uuid": new_uuid})
-        agent_db.update_service_node_uuid(service_id, sid, old_uuid, new_uuid)
+    desired_uuid = str(uuid.uuid4())
+    updated_targets: List[Tuple[Dict[str, Any], str]] = []
+
+    try:
+        for server, target_old_uuid, _marzban_username in targets:
+            target_old_uuid = str(target_old_uuid or "").strip()
+            if not target_old_uuid:
+                raise RuntimeError(f"empty node UUID on server {server.get('id')}")
+            await hiddify_api.patch_user(
+                server,
+                target_old_uuid,
+                {"uuid": desired_uuid},
+            )
+            verified = await hiddify_api.get_user_by_uuid(server, desired_uuid)
+            verified_uuid = str(
+                (verified or {}).get("uuid") or (verified or {}).get("id") or ""
+            ).strip()
+            if verified_uuid != desired_uuid:
+                raise RuntimeError(
+                    f"UUID verification failed on server {server.get('id')}"
+                )
+            updated_targets.append((server, target_old_uuid))
+    except Exception as exc:
+        for server, target_old_uuid in reversed(updated_targets):
+            try:
+                await hiddify_api.patch_user(
+                    server,
+                    desired_uuid,
+                    {"uuid": target_old_uuid},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed rolling back subscription UUID service=%s server=%s",
+                    service_id,
+                    server.get("id"),
+                )
+        logger.error("change_subscription_link failed svc=%s: %s", service_id, exc)
+        return None
+
+    mapping_updates: List[Tuple[int, str]] = []
+    try:
+        if not agent_db.update_service(service_id, {"panel_user_uuid": desired_uuid}):
+            raise RuntimeError("failed to update service UUID")
+        for server, target_old_uuid in updated_targets:
+            server_id = int(server.get("id") or 0)
+            updated = agent_db.update_service_node_uuid(
+                service_id,
+                server_id,
+                target_old_uuid,
+                desired_uuid,
+            )
+            if not updated:
+                agent_db.add_service_node(
+                    service_id=service_id,
+                    server_id=server_id,
+                    server_title=str(server.get("title") or ""),
+                    panel_user_uuid=desired_uuid,
+                )
+            mapping_updates.append((server_id, target_old_uuid))
+    except Exception as exc:
+        agent_db.update_service(service_id, {"panel_user_uuid": old_uuid})
+        for server_id, target_old_uuid in mapping_updates:
+            try:
+                agent_db.update_service_node_uuid(
+                    service_id,
+                    server_id,
+                    desired_uuid,
+                    target_old_uuid,
+                )
+            except Exception:
+                pass
+        for server, target_old_uuid in reversed(updated_targets):
+            try:
+                await hiddify_api.patch_user(
+                    server,
+                    desired_uuid,
+                    {"uuid": target_old_uuid},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed rolling back UUID after DB error service=%s server=%s",
+                    service_id,
+                    server.get("id"),
+                )
+        logger.error("change_subscription_link DB update failed svc=%s: %s", service_id, exc)
+        return None
 
     return agent_db.get_service_by_id(service_id)
 

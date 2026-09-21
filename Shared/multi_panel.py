@@ -21,6 +21,69 @@ async def create_user(server: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     return await hiddify_api.create_user(server, payload)
 
 
+class PanelUuidMismatchError(RuntimeError):
+    """The panel did not persist the UUID requested by the bot."""
+
+
+async def create_user_with_uuid(
+    server: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Create a panel user and guarantee the UUID supplied in the payload.
+
+    Hiddify and X-UI normally honour ``payload['uuid']``. Some panel versions
+    can return or persist another UUID. Correct that new row immediately and
+    verify it through the read API. If verification fails, remove the new row
+    best-effort and fail instead of accepting divergent identities.
+    """
+    requested_uuid = str((payload or {}).get("uuid") or "").strip()
+    if not requested_uuid:
+        raise ValueError("create_user_with_uuid requires payload.uuid")
+
+    created = await create_user(server, dict(payload or {}))
+    if not isinstance(created, dict):
+        raise PanelUuidMismatchError("panel returned an invalid create response")
+
+    returned_uuid = str(created.get("uuid") or created.get("id") or "").strip()
+    cleanup_uuids = [returned_uuid] if returned_uuid else []
+
+    try:
+        if returned_uuid and returned_uuid != requested_uuid:
+            await patch_user(server, returned_uuid, {"uuid": requested_uuid})
+            cleanup_uuids.append(requested_uuid)
+
+        verified = await get_user_by_uuid(server, requested_uuid)
+        verified_uuid = str(
+            (verified or {}).get("uuid") or (verified or {}).get("id") or ""
+        ).strip()
+        if verified_uuid != requested_uuid:
+            raise PanelUuidMismatchError(
+                "panel UUID mismatch "
+                f"(requested={requested_uuid}, returned={verified_uuid or returned_uuid or 'empty'})"
+            )
+
+        result = dict(created)
+        if isinstance(verified, dict):
+            result.update(verified)
+        result["uuid"] = requested_uuid
+        return result
+    except Exception as exc:
+        seen = set()
+        for candidate in cleanup_uuids:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                await delete_user(server, candidate)
+            except Exception:
+                pass
+        if isinstance(exc, PanelUuidMismatchError):
+            raise
+        raise PanelUuidMismatchError(
+            f"could not verify requested UUID {requested_uuid}: {exc}"
+        ) from exc
+
+
 async def patch_user(
     server: Dict[str, Any],
     user_uuid: str,

@@ -9,6 +9,7 @@ from telegram import Update, InlineKeyboardMarkup
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
+from Shared import multi_panel
 
 from CustomerBot.constants import (
     UD_STATE, UD_BUY_GB, UD_BUY_MONTHS, UD_BUY_SERVER_ID, UD_BUY_PLAN_ID,
@@ -1590,7 +1591,7 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
     gb = trial.get("usage_gb", 1)
     days = trial.get("days", 1)
 
-    from Shared.hiddify_api import create_user
+    from AgentBot.services.subscription_service import _create_user_on_cluster, _get_cluster_servers
     import uuid
     new_uuid = str(uuid.uuid4())
     note = make_service_note(agent_id)
@@ -1602,8 +1603,12 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         "is_active": True,
         "comment": note,
     }
+    targets = _get_cluster_servers(server_id)
+    if not targets:
+        targets = [server]
+    created_nodes = []
     try:
-        result = await create_user(server, payload)
+        result, created_nodes = await _create_user_on_cluster(targets, payload)
     except Exception as exc:
         logger.exception("customer trial create_user failed uid=%s: %s", user.id, exc)
         result = None
@@ -1618,26 +1623,45 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
     if not cust_id:
         cust_id = upsert_customer(agent_id, user.id, user.username or "", user.full_name or "")
 
-    svc = create_service(
-        agent_id=agent_id,
-        customer_id=cust_id,
-        server_id=server_id,
-        server_title=server.get("title", ""),
-        name=service_name or f"تست رایگان {gb}GB",
-        panel_user_uuid=new_uuid,
-        usage_limit=float(gb),
-        days=days,
-        sale_price=0,
-        is_trial=1,
-        note=note,
-    )
-    add_service_node(
-        service_id=svc["id"],
-        server_id=server_id,
-        server_title=server.get("title", ""),
-        panel_user_uuid=new_uuid,
-        panel_user_id=str(result.get("id", "")),
-    )
+    try:
+        svc = create_service(
+            agent_id=agent_id,
+            customer_id=cust_id,
+            server_id=server_id,
+            server_title=server.get("title", ""),
+            name=service_name or f"تست رایگان {gb}GB",
+            panel_user_uuid=new_uuid,
+            usage_limit=float(gb),
+            days=days,
+            sale_price=0,
+            is_trial=1,
+            note=note,
+        )
+        if not svc:
+            raise RuntimeError("trial service persistence failed")
+        for item in created_nodes:
+            add_service_node(
+                service_id=svc["id"],
+                server_id=int(item.get("server_id") or 0),
+                server_title=str(item.get("server_title") or ""),
+                panel_user_uuid=new_uuid,
+                panel_user_id=str(item.get("panel_user_id") or ""),
+                marzban_username=str(item.get("marzban_username") or ""),
+            )
+    except Exception as exc:
+        for item in reversed(created_nodes):
+            try:
+                target = get_server_by_id(int(item.get("server_id") or 0))
+                if target:
+                    await multi_panel.delete_user(target, new_uuid)
+            except Exception:
+                logger.exception("customer trial rollback failed")
+        logger.exception("customer trial persistence failed uid=%s: %s", user.id, exc)
+        await update.message.reply_text(
+            "❌ ثبت سرویس تست کامل نشد؛ لطفاً دوباره تلاش کنید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
 
     try:
         set_got_free_trial(agent_id, user.id)

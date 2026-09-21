@@ -133,13 +133,13 @@ async def buy_service(
         "comment": note,
     }
 
+    created_nodes: List[dict] = []
     try:
         targets = _get_cluster_servers(server_id)
         if not targets:
             targets = [server]
         shared_uuid = user_uuid
         payload["uuid"] = shared_uuid
-        created_nodes: List[dict] = []
         panel_user = None
         primary_marzban = ""
         for idx, tgt in enumerate(targets):
@@ -147,36 +147,33 @@ async def buy_service(
             last_exc = None
             for attempt in (1, 2):
                 try:
-                    created = await multi_panel.create_user(tgt, payload)
+                    created = await multi_panel.create_user_with_uuid(tgt, payload)
                     last_exc = None
                     break
                 except Exception as e:
                     last_exc = e
                     msg = str(e).lower()
                     is_transient = any(k in msg for k in ("readerror", "connecterror", "timeout", "timed out", "connection", "temporarily"))
-                    if idx == 0:
-                        if is_transient and attempt == 1:
-                            await asyncio.sleep(0.7)
-                            continue
-                        raise
                     if is_transient and attempt == 1:
                         logger.warning("Cluster node create_user transient retry server=%s attempt=%s: %s", tgt.get("id"), attempt, e)
                         await asyncio.sleep(0.7)
                         continue
-                    logger.warning("Cluster node create_user failed server=%s: %s", tgt.get("id"), e)
                     break
-            if last_exc is not None and created is None:
-                continue
+            if created is None:
+                raise RuntimeError(
+                    f"cluster user creation failed on server {tgt.get('id')}: {last_exc}"
+                ) from last_exc
             created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
-            if not created_uuid:
-                if idx == 0:
-                    raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
-                continue
+            if created_uuid != shared_uuid:
+                raise RuntimeError(
+                    f"cluster UUID mismatch on server {tgt.get('id')} "
+                    f"(expected={shared_uuid}, returned={created_uuid or 'empty'})"
+                )
             created_nodes.append(
                 {
                     "server_id": int(tgt.get("id") or 0),
                     "server_title": tgt.get("title") or f"سرور #{tgt.get('id')}",
-                    "panel_user_uuid": created_uuid,
+                    "panel_user_uuid": shared_uuid,
                     "panel_user_id": str(created.get("id") or "").strip(),
                     "marzban_username": str(created.get("_marzban_username") or "").strip(),
                     "is_primary": idx == 0,
@@ -192,6 +189,17 @@ async def buy_service(
         marzban_username = primary_marzban
     except Exception as e:
         logger.error("buy_service create_user failed agent=%s: %s", agent_id, e)
+        for item in reversed(created_nodes):
+            try:
+                target_server = database.get_server_by_id(int(item.get("server_id") or 0))
+                if target_server:
+                    await multi_panel.delete_user(
+                        target_server,
+                        str(item.get("panel_user_uuid") or ""),
+                        marzban_username=str(item.get("marzban_username") or ""),
+                    )
+            except Exception as rollback_error:
+                logger.error("Failed rolling back partial customer cluster: %s", rollback_error)
         agent_db.refund_wallet(agent_id, wholesale, description="Refund: API error")
         return {"ok": False, "error": f"api_error: {str(e)[:100]}"}
 
@@ -1181,46 +1189,67 @@ async def regenerate_service_uuid(svc: dict) -> Tuple[bool, str, Optional[str]]:
         return False, "❌ مسیرهای پنل این اشتراک پیدا نشد.", None
 
     desired_uuid = str(uuid4())
-    final_uuid: Optional[str] = None
-    updated_targets: List[Tuple[dict, str, str]] = []  # (srv, old_uuid, new_uuid)
+    updated_targets: List[Tuple[dict, str]] = []  # (server, old_uuid)
 
     for srv, old_uuid, _marzban_un in targets:
         if not old_uuid:
             continue
         try:
-            patched = await hiddify_api.patch_user(srv, old_uuid, {"uuid": desired_uuid})
+            await hiddify_api.patch_user(srv, old_uuid, {"uuid": desired_uuid})
+            verified = await hiddify_api.get_user_by_uuid(srv, desired_uuid)
+            returned_uuid = str(
+                (verified or {}).get("uuid") or (verified or {}).get("id") or ""
+            ).strip()
+            if returned_uuid != desired_uuid:
+                raise RuntimeError("UUID verification failed")
         except Exception as e:
             rollback_ok = True
-            for srv2, old_uuid2, new_uuid2 in updated_targets:
+            for srv2, old_uuid2 in reversed(updated_targets):
                 try:
-                    await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
+                    await hiddify_api.patch_user(srv2, desired_uuid, {"uuid": old_uuid2})
                 except Exception:
                     rollback_ok = False
             where = str(srv.get("title") or f"سرور #{srv.get('id')}")
             extra = "" if rollback_ok else "\n⚠️ برگرداندن برخی نودها به UUID قبلی ممکن نشد؛ لطفاً با پشتیبانی هماهنگ کنید."
             return False, f"❌ بازسازی UUID روی «{where}» انجام نشد.\nجزئیات: {str(e)[:120]}{extra}", None
+        updated_targets.append((srv, old_uuid))
 
-        returned_uuid = str(patched.get("uuid") or patched.get("id") or "").strip()
-        if not returned_uuid:
-            returned_uuid = desired_uuid
-        if final_uuid is None:
-            final_uuid = returned_uuid
-        elif returned_uuid != final_uuid:
-            for srv2, old_uuid2, new_uuid2 in updated_targets:
-                try:
-                    await hiddify_api.patch_user(srv2, new_uuid2, {"uuid": old_uuid2})
-                except Exception:
-                    pass
-            return False, "❌ UUID جدید روی همه سرورها همگن نشد. لطفاً مجدداً تلاش کنید.", None
-        updated_targets.append((srv, old_uuid, returned_uuid))
-
-    if not final_uuid:
+    if not updated_targets:
         return False, "❌ UUID جدید تهیه نشد.", None
 
-    agent_db.update_service(service_id, {"panel_user_uuid": final_uuid})
-    for srv, old_uuid, new_uuid in updated_targets:
-        try:
-            agent_db.update_service_node_uuid(service_id, int(srv.get("id") or 0), old_uuid, new_uuid)
-        except Exception:
-            pass
-    return True, "✅ لینک اشتراک با موفقیت تغییر یافت.", final_uuid
+    mapping_updates: List[Tuple[int, str]] = []
+    try:
+        if not agent_db.update_service(service_id, {"panel_user_uuid": desired_uuid}):
+            raise RuntimeError("failed to update service UUID")
+        for srv, old_uuid in updated_targets:
+            server_id = int(srv.get("id") or 0)
+            updated = agent_db.update_service_node_uuid(
+                service_id, server_id, old_uuid, desired_uuid
+            )
+            if not updated:
+                agent_db.add_service_node(
+                    service_id=service_id,
+                    server_id=server_id,
+                    server_title=str(srv.get("title") or ""),
+                    panel_user_uuid=desired_uuid,
+                )
+            mapping_updates.append((server_id, old_uuid))
+    except Exception as e:
+        agent_db.update_service(service_id, {"panel_user_uuid": current_uuid})
+        for server_id, old_uuid in mapping_updates:
+            try:
+                agent_db.update_service_node_uuid(
+                    service_id, server_id, desired_uuid, old_uuid
+                )
+            except Exception:
+                pass
+        rollback_ok = True
+        for srv, old_uuid in reversed(updated_targets):
+            try:
+                await hiddify_api.patch_user(srv, desired_uuid, {"uuid": old_uuid})
+            except Exception:
+                rollback_ok = False
+        extra = "" if rollback_ok else "\n⚠️ برگرداندن برخی نودها ممکن نشد؛ لطفاً با پشتیبانی هماهنگ کنید."
+        return False, f"❌ ذخیره UUID جدید کامل نشد.\nجزئیات: {str(e)[:120]}{extra}", None
+
+    return True, "✅ لینک اشتراک با موفقیت تغییر یافت.", desired_uuid

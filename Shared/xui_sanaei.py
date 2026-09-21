@@ -1035,13 +1035,19 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
     cur_ms = _to_int(target.get("expiryTime"), 0)
     new_expiry = _compute_expiry_ms(payload, current_ms=cur_ms)
     enable_val = _enable_from_payload(payload)
-    # Determine Xray UUID - prefer uuid/subId with dashes, fallback to user_uuid
+    # A requested UUID change must update both the Xray credential and subId.
+    # AgentBot/CustomerBot use this when rotating one subscription identity on
+    # the primary panel and all nodes.
+    requested_uuid = str(payload.get("uuid") or "").strip()
+    # Determine Xray UUID - prefer requested uuid, then current uuid/subId.
     orig_uuid = str(target.get("uuid") or "").strip()
     orig_subId = str(target.get("subId") or "").strip()
     # orig id may be numeric DB pk - ignore if no dashes
     orig_id_str = str(target.get("id") or "").strip()
     xray_uuid = ""
-    if orig_uuid and "-" in orig_uuid:
+    if requested_uuid:
+        xray_uuid = requested_uuid
+    elif orig_uuid and "-" in orig_uuid:
         xray_uuid = orig_uuid
     elif orig_subId and "-" in orig_subId:
         xray_uuid = orig_subId
@@ -1111,7 +1117,7 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
     # Do not include numeric DB id, traffic, inboundIds
     updated = {
         "email": final_email,
-        "subId": orig_subId or xray_uuid,
+        "subId": xray_uuid if requested_uuid else (orig_subId or xray_uuid),
         "uuid": xray_uuid,
         "id": xray_uuid,  # for VLESS/VMess, id is Xray UUID string (not numeric)
         "totalGB": int(final_total),
@@ -1121,6 +1127,10 @@ async def patch_user(server: Dict[str, Any], user_uuid: str, payload: Dict[str, 
         "limitIp": int(orig_limitIp),
         "comment": str(final_comment or ""),
     }
+    if "password" in target:
+        updated["password"] = xray_uuid if requested_uuid else str(target.get("password") or xray_uuid)
+    if "auth" in target:
+        updated["auth"] = xray_uuid if requested_uuid else str(target.get("auth") or xray_uuid)
     # Preserve limitHwid if present
     if "limitHwid" in target:
         try:

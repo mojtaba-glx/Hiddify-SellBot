@@ -1160,7 +1160,7 @@ async def _create_subscription_from_order(
     import time
     import uuid
 
-    from AgentBot.services.subscription_service import _get_cluster_servers
+    from AgentBot.services.subscription_service import _create_user_on_cluster, _get_cluster_servers
     from Shared import multi_panel
     from Shared.agent_db import upsert_customer, create_service, add_service_node, get_customer_by_telegram_id, make_service_note
     from AgentBot.database import upsert_customer_user, get_customer_user
@@ -1228,40 +1228,12 @@ async def _create_subscription_from_order(
     if not targets:
         targets = [server]
 
-    from Shared.multi_panel import create_user as mp_create_user
     shared_uuid = new_uuid
     payload["uuid"] = shared_uuid
-    created_nodes: list[dict] = []
-    panel_user = None
-    primary_marzban = ""
-    for idx, tgt in enumerate(targets):
-        try:
-            created = await mp_create_user(tgt, payload)
-        except Exception as e:
-            if idx == 0:
-                raise
-            logger.warning("Cluster node create_user failed server=%s: %s", tgt.get("id"), e)
-            continue
-        created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
-        if not created_uuid:
-            if idx == 0:
-                raise RuntimeError("uuid کاربر ساخته‌شده از پنل دریافت نشد.")
-            continue
-        created_nodes.append(
-            {
-                "server_id": int(tgt.get("id") or 0),
-                "server_title": tgt.get("title") or f"سرور #{tgt.get('id')}",
-                "panel_user_uuid": created_uuid,
-                "panel_user_id": str(created.get("id") or "").strip(),
-                "marzban_username": str(created.get("_marzban_username") or "").strip(),
-                "is_primary": idx == 0,
-            }
-        )
-        if idx == 0:
-            panel_user = created
-            primary_marzban = str(created.get("_marzban_username") or "").strip()
+    panel_user, created_nodes = await _create_user_on_cluster(targets, payload)
     if panel_user is None:
         raise RuntimeError("no primary node created")
+    primary_marzban = str(panel_user.get("_marzban_username") or "").strip()
     panel_uuid = str(panel_user.get("uuid") or shared_uuid).strip()
     panel_user_id = str(panel_user.get("id") or "").strip()
 
