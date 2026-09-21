@@ -3351,9 +3351,19 @@ def hold_deleted_server_nodes(server_id: int) -> List[int]:
         cur.execute(
             """
             UPDATE userbot_service_nodes
-            SET deleted = 1, frozen = 1, is_active = 0,
-                frozen_at = CASE WHEN COALESCE(frozen_at,'') = '' THEN ? ELSE frozen_at END,
-                frozen_reason = 'server_deleted', updated_at = ?
+            SET deleted = 1,
+                frozen = CASE WHEN COALESCE(usage_current,0) > 0 THEN 1 ELSE 0 END,
+                is_active = 0,
+                frozen_at = CASE
+                    WHEN COALESCE(usage_current,0) > 0 AND COALESCE(frozen_at,'') = '' THEN ?
+                    WHEN COALESCE(usage_current,0) <= 0 THEN ''
+                    ELSE frozen_at
+                END,
+                frozen_reason = CASE
+                    WHEN COALESCE(usage_current,0) > 0 THEN 'server_deleted'
+                    ELSE ''
+                END,
+                updated_at = ?
             WHERE server_id = ? AND COALESCE(deleted, 0) = 0
             """,
             (now, now, srv),
