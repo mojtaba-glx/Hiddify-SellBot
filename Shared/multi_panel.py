@@ -63,6 +63,120 @@ async def _probe_requested_user(
     return None
 
 
+async def _recover_primary_by_identity(
+    server: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """Recover a primary Hiddify create whose POST response was lost."""
+    requested_uuid = str((payload or {}).get("uuid") or "").strip()
+    if requested_uuid:
+        recovered = await _probe_requested_user(
+            server,
+            requested_uuid,
+            is_xui=False,
+            attempts=4,
+        )
+        if recovered is not None:
+            return recovered
+
+    name = str((payload or {}).get("name") or "").strip()
+    comment = str((payload or {}).get("comment") or "").strip()
+    if not name or not comment:
+        return None
+
+    # Agent/customer service notes are random per purchase, so exact
+    # name+comment is a safe recovery key for a lost create response.
+    for attempt in range(3):
+        try:
+            users = await list_users(server)
+            matches: List[Dict[str, Any]] = []
+            for user in users or []:
+                if not isinstance(user, dict):
+                    continue
+                if str(user.get("name") or "").strip() != name:
+                    continue
+                if str(user.get("comment") or "").strip() != comment:
+                    continue
+                matches.append(user)
+            if len(matches) == 1:
+                row = dict(matches[0])
+                explicit_uuid = str(row.get("uuid") or "").strip()
+                fallback_id = str(row.get("id") or "").strip()
+                canonical_uuid = explicit_uuid
+                if not canonical_uuid and _looks_like_panel_uuid(fallback_id):
+                    canonical_uuid = fallback_id
+                if canonical_uuid:
+                    row["uuid"] = canonical_uuid
+                    return row
+        except Exception:
+            pass
+        if attempt < 2:
+            await asyncio.sleep(0.35 * (attempt + 1))
+    return None
+
+
+async def create_primary_user(
+    server: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Create the authoritative primary user and return the panel's real UUID.
+
+    Hiddify may ignore a client-supplied UUID and generate its own. That is
+    valid for the primary node: its persisted UUID becomes the canonical UUID
+    that every child node and the smart subscription link must reuse.
+    """
+    try:
+        is_xui = bool(hiddify_api._is_xui_server(server))
+    except Exception:
+        is_xui = False
+
+    try:
+        created = await create_user(server, dict(payload or {}))
+    except Exception:
+        if is_xui:
+            requested_uuid = str((payload or {}).get("uuid") or "").strip()
+            if requested_uuid:
+                try:
+                    await delete_user(server, requested_uuid)
+                except Exception:
+                    pass
+            raise
+
+        recovered = await _recover_primary_by_identity(server, payload)
+        if recovered is not None:
+            return recovered
+        raise
+
+    if not isinstance(created, dict):
+        raise PanelUuidMismatchError("panel returned an invalid primary create response")
+
+    explicit_uuid = str(created.get("uuid") or "").strip()
+    fallback_id = str(created.get("id") or "").strip()
+    canonical_uuid = explicit_uuid
+    if not canonical_uuid and _looks_like_panel_uuid(fallback_id):
+        canonical_uuid = fallback_id
+
+    if not canonical_uuid:
+        requested_uuid = str((payload or {}).get("uuid") or "").strip()
+        if requested_uuid:
+            recovered = await _probe_requested_user(
+                server,
+                requested_uuid,
+                is_xui=is_xui,
+                attempts=3,
+            )
+            if recovered is not None:
+                canonical_uuid = requested_uuid
+                created = {**created, **recovered}
+
+    if not canonical_uuid:
+        raise PanelUuidMismatchError("primary panel returned no usable UUID")
+
+    result = dict(created)
+    result["uuid"] = canonical_uuid
+    return result
+
+
 async def create_user_with_uuid(
     server: Dict[str, Any],
     payload: Dict[str, Any],
