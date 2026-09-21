@@ -340,6 +340,7 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
 
                 # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.
                 failed_nodes: List[str] = []
+                failed_node_ids: List[int] = []
                 for srv, uuid, marzban_un in targets:
                     if int(srv.get("id") or 0) == primary_sid:
                         continue
@@ -351,6 +352,9 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
                         )
                     except Exception as e:
                         failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
+                        failed_sid = int(srv.get("id") or 0)
+                        if failed_sid > 0 and failed_sid not in failed_node_ids:
+                            failed_node_ids.append(failed_sid)
                         logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
                 if failed_nodes:
                     logger.warning(
@@ -370,9 +374,16 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
         )
         return {"ok": False, "error": "local_renew_failed"}
 
-    # Renewal is confirmed on primary + local DB: start a fresh frozen period.
+    # Renewal is confirmed on primary + local DB. This path extends time only,
+    # so existing traffic snapshots remain valid; failed child nodes stay
+    # renew_pending until they receive the new expiry.
     try:
-        agent_db.reset_service_nodes_on_renew(service_id)
+        agent_db.reset_service_nodes_on_renew(
+            service_id,
+            reset_usage=False,
+            reset_time=False,
+            pending_server_ids=locals().get("failed_node_ids", []),
+        )
     except Exception as e:
         logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
