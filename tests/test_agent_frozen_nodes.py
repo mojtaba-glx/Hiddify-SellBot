@@ -86,6 +86,57 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(nodes[2]["frozen_reason"], "network_error")
         self.assertTrue(str(nodes[2]["frozen_at"] or ""))
 
+    async def test_direct_not_found_falls_back_to_list_users(self):
+        server = {"id": 2, "title": "Turkey"}
+        direct = AsyncMock(side_effect=RuntimeError("HTTP 404 user not found"))
+        listing = AsyncMock(
+            return_value=[{"uuid": "uuid-a", "current_usage_GB": 1.25}]
+        )
+        with patch.object(
+            agent_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=direct,
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "list_users",
+            new=listing,
+        ):
+            row = await agent_enforcer._get_user_with_list_fallback(server, "uuid-a")
+
+        self.assertEqual(row["uuid"], "uuid-a")
+        direct.assert_awaited_once()
+        listing.assert_awaited_once_with(server)
+
+    async def test_zero_usage_node_is_not_frozen_after_network_threshold(self):
+        agent_db.update_service_node_runtime(
+            1, 2, "uuid-a",
+            usage_current=0.0,
+            fail_count=2,
+        )
+        svc = agent_db.get_service_by_id(1)
+
+        async def get_user(server, _uuid):
+            if int(server["id"]) == 1:
+                return {"uuid": "uuid-a", "current_usage_GB": 0.0}
+            raise TimeoutError("node offline")
+
+        with patch.object(
+            agent_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: {"id": sid, "title": str(sid)},
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ):
+            await agent_enforcer._process_service(svc)
+
+        nodes = {int(n["server_id"]): n for n in agent_db.get_service_nodes(1)}
+        self.assertEqual(int(nodes[2]["fail_count"]), 3)
+        self.assertEqual(int(nodes[2]["frozen"]), 0)
+        self.assertEqual(str(nodes[2]["frozen_reason"] or ""), "")
+        self.assertEqual(agent_db.get_frozen_nodes_report(), [])
+
     async def test_recovered_node_unfreezes_and_refreshes_snapshot(self):
         agent_db.update_service_node_runtime(
             1, 2, "uuid-a",
@@ -260,6 +311,19 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(float(node["usage_current"]), 7.0)
         self.assertEqual(int(node["frozen"]), 0)
         self.assertEqual(int(node["fail_count"]), 0)
+
+    async def test_deleted_zero_usage_node_is_not_reported_as_frozen(self):
+        agent_db.update_service_node_runtime(
+            1, 2, "uuid-a", usage_current=0.0
+        )
+        held = agent_db.hold_deleted_server_nodes(2)
+        self.assertEqual(held, [1])
+
+        node = next(n for n in agent_db.get_service_nodes(1) if int(n["server_id"]) == 2)
+        self.assertEqual(int(node["deleted"]), 1)
+        self.assertEqual(int(node["frozen"]), 0)
+        self.assertEqual(str(node["frozen_reason"] or ""), "")
+        self.assertEqual(agent_db.get_frozen_nodes_report(), [])
 
     async def test_deleted_server_holds_usage_until_renewal(self):
         agent_db.update_service_node_runtime(

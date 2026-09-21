@@ -277,9 +277,10 @@ async def _fetch_service_node_usage(
             "user_uuid": user_uuid,
             "valid": True,
             "ok": False,
-            "not_found": True,
+            "not_found": False,
+            "server_missing": True,
             "panel_user": None,
-            "error": "server not found",
+            "error": "server configuration missing",
         }
 
     # محدود کردن همزمانی درخواست‌ها به پنل‌ها
@@ -293,16 +294,53 @@ async def _fetch_service_node_usage(
                 "valid": True,
                 "ok": True,
                 "not_found": False,
+                "server_missing": False,
                 "panel_user": panel_user,
                 "error": None,
             }
         except Exception as e:
+            # بعضی نسخه‌های Hiddify روی GET مستقیم UUID، برای کاربر موجود
+            # هم 404/user not found می‌دهند. قبل از ثبت missing/frozen،
+            # لیست کامل کاربران را به‌عنوان منبع دوم بررسی می‌کنیم.
+            if _is_user_not_found_error(e):
+                try:
+                    users = await hiddify_api.list_users(server)
+                    for candidate in users or []:
+                        if not isinstance(candidate, dict):
+                            continue
+                        candidate_uuid = str(
+                            candidate.get("uuid") or candidate.get("id") or ""
+                        ).strip()
+                        if candidate_uuid == user_uuid:
+                            return {
+                                "server_id": server_id,
+                                "user_uuid": user_uuid,
+                                "valid": True,
+                                "ok": True,
+                                "not_found": False,
+                                "panel_user": candidate,
+                                "error": None,
+                            }
+                except Exception:
+                    # اگر list_users هم شکست خورد، این دیگر «عدم وجود قطعی کاربر»
+                    # نیست؛ به‌صورت خطای شبکه/پنل نگه می‌داریم.
+                    return {
+                        "server_id": server_id,
+                        "user_uuid": user_uuid,
+                        "valid": True,
+                        "ok": False,
+                        "not_found": False,
+                        "panel_user": None,
+                        "error": e,
+                    }
+
             return {
                 "server_id": server_id,
                 "user_uuid": user_uuid,
                 "valid": True,
                 "ok": False,
                 "not_found": _is_user_not_found_error(e),
+                "server_missing": False,
                 "panel_user": None,
                 "error": e,
             }
@@ -540,10 +578,37 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                 if prev_days is not None:
                     min_days_left = prev_days if min_days_left is None else min(min_days_left, prev_days)
 
+                if bool(result.get("server_missing")) and server_id > 0 and user_uuid:
+                    prev_fail = int(node_rec.get("fail_count") or 0) if node_rec else 0
+                    new_fail = prev_fail + 1
+                    should_freeze = prev_usage > 0.0
+                    if node_rec is not None:
+                        try:
+                            userbot_db.update_service_node_runtime(
+                                service_id,
+                                server_id,
+                                user_uuid,
+                                frozen=1 if should_freeze else 0,
+                                fail_count=new_fail,
+                                frozen_at=(
+                                    str(node_rec.get("frozen_at") or "").strip() or now_str
+                                    if should_freeze
+                                    else ""
+                                ),
+                                frozen_reason="server_missing" if should_freeze else "",
+                            )
+                        except Exception:
+                            pass
+                    continue
+
                 if bool(result.get("not_found")) and server_id > 0 and user_uuid:
-                    # کاربر از روی پنل پاک شده؛ مصرف قبلی نگه داشته می‌شود و نود غیرفعال می‌گردد.
+                    # list_users هم نبودن UUID را تأیید کرده است. فقط وقتی واقعاً
+                    # مصرفی برای حفظ‌کردن داریم آن را frozen حساب می‌کنیم.
                     not_found_nodes += 1
                     not_found_keys.add((server_id, user_uuid))
+                    prev_fail = int(node_rec.get("fail_count") or 0) if node_rec else 0
+                    new_fail = prev_fail + 1
+                    should_freeze = prev_usage > 0.0
                     try:
                         userbot_db.set_service_node_active(service_id, server_id, user_uuid, 0)
                         if node_rec is not None:
@@ -551,9 +616,14 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                                 service_id,
                                 server_id,
                                 user_uuid,
-                                frozen=1,
-                                frozen_at=str(node_rec.get("frozen_at") or "").strip() or now_str,
-                                frozen_reason="user_not_found",
+                                frozen=1 if should_freeze else 0,
+                                fail_count=new_fail,
+                                frozen_at=(
+                                    str(node_rec.get("frozen_at") or "").strip() or now_str
+                                    if should_freeze
+                                    else ""
+                                ),
+                                frozen_reason="user_not_found" if should_freeze else "",
                             )
                     except Exception:
                         pass
@@ -562,7 +632,10 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                 # خطای شبکه → افزایش شمارنده؛ پس از آستانه حجم یخ‌زده (فریز) می‌شود.
                 prev_fail = int(node_rec.get("fail_count") or 0) if node_rec else 0
                 new_fail = prev_fail + 1
-                frozen = 1 if new_fail >= node_down_threshold else (int(node_rec.get("frozen") or 0) if node_rec else 0)
+                was_frozen = int(node_rec.get("frozen") or 0) if node_rec else 0
+                frozen = 1 if (prev_usage > 0.0 and new_fail >= node_down_threshold) else (
+                    was_frozen if prev_usage > 0.0 else 0
+                )
                 if node_rec is not None:
                     try:
                         userbot_db.update_service_node_runtime(
