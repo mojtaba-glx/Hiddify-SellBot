@@ -2433,32 +2433,102 @@ def hold_deleted_server_nodes(server_id: int) -> List[int]:
         conn.close()
 
 
-def reset_service_nodes_on_renew(service_id: int) -> None:
-    """Start a fresh agency accounting period after renewal."""
+def reset_service_nodes_on_renew(
+    service_id: int,
+    *,
+    reset_usage: bool = True,
+    reset_time: bool = True,
+    pending_server_ids: Optional[List[int]] = None,
+) -> None:
+    """Start a fresh agency runtime period after a confirmed renewal.
+
+    Reachable nodes are unfrozen immediately. Nodes that missed the renewal
+    remain frozen as renew_pending so their stale panel counters cannot
+    leak back into the new period when they reconnect.
+    """
     sid = int(service_id or 0)
     if sid <= 0:
         return
+    pending = set()
+    for value in (pending_server_ids or []):
+        try:
+            server_id = int(value or 0)
+        except (TypeError, ValueError):
+            server_id = 0
+        if server_id > 0:
+            pending.add(server_id)
     now = _now()
     conn = _get_conn()
     try:
-        conn.execute(
-            "DELETE FROM agent_service_nodes WHERE service_id = ? AND COALESCE(deleted,0) = 1",
+        # Deleted/removed nodes only belong to the old accounting period when
+        # traffic itself is reset. For add-mode renewals their held usage must
+        # remain part of the service total.
+        if reset_usage:
+            conn.execute(
+                "DELETE FROM agent_service_nodes "
+                "WHERE service_id = ? AND COALESCE(deleted,0) = 1",
+                (sid,),
+            )
+
+        rows = conn.execute(
+            "SELECT server_id, usage_current, deleted FROM agent_service_nodes WHERE service_id = ?",
             (sid,),
-        )
-        conn.execute(
-            """
-            UPDATE agent_service_nodes
-            SET usage_current = 0, days_left = NULL, frozen = 0, fail_count = 0,
-                last_ok_at = '', frozen_at = '', frozen_reason = '',
-                is_active = 1, updated_at = ?
-            WHERE service_id = ?
-            """,
-            (now, sid),
-        )
+        ).fetchall()
+        for row in rows:
+            server_id = int(row["server_id"] or 0)
+            deleted = int(row["deleted"] or 0) == 1
+            if deleted:
+                # add-mode renewal: keep deleted snapshot frozen/held.
+                continue
+
+            if server_id in pending:
+                reason = (
+                    "renew_pending:"
+                    f"usage_reset={1 if reset_usage else 0}:"
+                    f"time_reset={1 if reset_time else 0}"
+                )
+                conn.execute(
+                    """
+                    UPDATE agent_service_nodes
+                    SET usage_current = CASE WHEN ? THEN 0 ELSE usage_current END,
+                        days_left = NULL,
+                        frozen = 1,
+                        fail_count = 0,
+                        frozen_at = ?,
+                        frozen_reason = ?,
+                        is_active = 0,
+                        updated_at = ?
+                    WHERE service_id = ? AND server_id = ?
+                    """,
+                    (1 if reset_usage else 0, now, reason, now, sid, server_id),
+                )
+                continue
+
+            conn.execute(
+                """
+                UPDATE agent_service_nodes
+                SET usage_current = CASE WHEN ? THEN 0 ELSE usage_current END,
+                    days_left = NULL,
+                    frozen = 0,
+                    fail_count = 0,
+                    last_ok_at = CASE WHEN ? THEN '' ELSE last_ok_at END,
+                    frozen_at = '',
+                    frozen_reason = '',
+                    is_active = 1,
+                    updated_at = ?
+                WHERE service_id = ? AND server_id = ?
+                """,
+                (
+                    1 if reset_usage else 0,
+                    1 if reset_usage else 0,
+                    now,
+                    sid,
+                    server_id,
+                ),
+            )
         conn.commit()
     finally:
         conn.close()
-
 
 def get_frozen_nodes_summary() -> Dict[str, int]:
     """Summary used by admin dashboards/reports."""
