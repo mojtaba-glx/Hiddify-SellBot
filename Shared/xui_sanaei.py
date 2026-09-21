@@ -1409,8 +1409,9 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
         "xray_version": "",
     }
     # users count from clients/list
+    clients: List[Dict[str, Any]] = []
     try:
-        clients = await _list_clients(server)
+        clients = await _list_clients(server, _force_refresh=True)
         out["users_total"] = len([c for c in clients if isinstance(c, dict) and str(c.get("email") or "").strip()])
         # sum traffic
         total_up = 0
@@ -1457,14 +1458,44 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     out["xray_state"] = str(xray.get("state") or "unknown")
     out["xray_version"] = str(xray.get("version") or "")
 
-    # Current Sanaei exposes live clients at POST /panel/api/clients/onlines.
-    # Force a fresh read for the status screen so this value is not stale.
+    # Current Sanaei exposes live clients and last-online timestamps.
+    # Use both to provide real live/today/30-day counts on the status screen.
     try:
         onlines = await _online_emails(server, _force_refresh=True)
-        out["users_online"] = len(onlines)
+        # The helper stores both original and lowercase aliases. Count unique
+        # case-insensitive identities so a client is never counted twice.
+        online_unique = {str(x).strip().lower() for x in onlines if str(x).strip()}
+        out["users_online"] = len(online_unique)
     except Exception as exc:
+        online_unique = set()
         logger.debug("sanaei online clients failed: %s", exc)
 
+    try:
+        last_map = await _last_online_map(server, _force_refresh=True)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        seen_today = set(online_unique)
+        seen_month = set(online_unique)
+        for identity, value in (last_map or {}).items():
+            ident = str(identity or "").strip().lower()
+            if not ident or not value:
+                continue
+            try:
+                dt = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+            age = (now_utc - dt).total_seconds()
+            if 0 <= age <= 86400:
+                seen_today.add(ident)
+            if 0 <= age <= 30 * 86400:
+                seen_month.add(ident)
+        out["users_today"] = len(seen_today)
+        out["users_month"] = len(seen_month)
+    except Exception as exc:
+        logger.debug("sanaei last-online stats failed: %s", exc)
+
+    # Sanaei's client traffic counters are cumulative since their last reset;
+    # they do not contain a trustworthy per-day traffic history. Do not label
+    # cumulative traffic as today's usage.
     return out
 
 
