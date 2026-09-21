@@ -2711,12 +2711,14 @@ async def send_frozen_nodes_report(
                 f"   💾 مصرف محفوظ: <b>{_frozen_fmt_usage(usage)}</b>",
                 "",
             ])
-            button_rows.append([
-                InlineKeyboardButton(
-                    f"👤 {service_name[:28]}",
-                    callback_data=f"server:{server_id}:fzsvc:{source}:{int(group['service_id'])}:{page}",
-                )
-            ])
+            detail_server_id = int(server_id or sample.get("server_id") or 0)
+            if detail_server_id > 0:
+                button_rows.append([
+                    InlineKeyboardButton(
+                        f"👤 {service_name[:28]}",
+                        callback_data=f"server:{detail_server_id}:fzsvc:{source}:{int(group['service_id'])}:{page}",
+                    )
+                ])
 
     nav: List[InlineKeyboardButton] = []
     cb_prefix = f"server:{server_id}:frozen" if server_id else "servers:frozen"
@@ -7537,6 +7539,194 @@ async def handle_server_inline_callback(
             )
             return
 
+
+        if action in {"fzsvc", "fzview", "fzclear", "fzclearok", "fzdelete", "fzdeleteok"}:
+            if len(parts) < 6:
+                await msg.edit_text("❌ داده مدیریت یخ‌زدگی نامعتبر است.")
+                return
+            source = _frozen_source_code(parts[3])
+            try:
+                frozen_service_id = int(parts[4])
+                frozen_page = max(1, int(parts[5]))
+            except (TypeError, ValueError):
+                await msg.edit_text("❌ شناسه سرویس یخ‌زده نامعتبر است.")
+                return
+
+            back_detail_cb = (
+                f"server:{server_id}:fzsvc:{source}:{frozen_service_id}:{frozen_page}"
+            )
+
+            if action == "fzsvc":
+                await send_frozen_service_detail(
+                    server_id,
+                    source,
+                    frozen_service_id,
+                    frozen_page,
+                    chat_id,
+                    context,
+                    message=msg,
+                )
+                return
+
+            if action == "fzview":
+                target = await _find_live_frozen_service_user(source, frozen_service_id)
+                if not target:
+                    await msg.edit_text(
+                        "⚠️ این UUID روی هیچ‌کدام از پنل‌های در دسترس پیدا نشد.\n"
+                        "می‌توانید رکورد یخ‌زدگی را پاک کنید یا حذف کامل را بزنید.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 بازگشت", callback_data=back_detail_cb)]
+                        ]),
+                    )
+                    return
+                target_server_id, target_uuid = target
+                await send_user_detail(
+                    target_server_id,
+                    target_uuid,
+                    chat_id,
+                    context,
+                    message=msg,
+                    back_callback=back_detail_cb,
+                    back_text="🔙 بازگشت به رکورد یخ‌زدگی",
+                )
+                return
+
+            if action == "fzclear":
+                await msg.edit_text(
+                    "🧹 <b>پاک‌کردن داده یخ‌زدگی</b>\n\n"
+                    "فقط رکورد frozen/deleted این سرویس از دیتابیس ربات پاک می‌شود.\n"
+                    "✅ خود کاربر از پنل حذف نمی‌شود.\n"
+                    "⚠️ مصرف محفوظ این رکورد دیگر در جمع مصرف سرویس حساب نخواهد شد.\n\n"
+                    "ادامه می‌دهید؟",
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton(
+                                "✅ پاک شود",
+                                callback_data=f"server:{server_id}:fzclearok:{source}:{frozen_service_id}:{frozen_page}",
+                            ),
+                            InlineKeyboardButton("لغو❌", callback_data=back_detail_cb),
+                        ]
+                    ]),
+                    parse_mode="HTML",
+                )
+                return
+
+            if action == "fzclearok":
+                try:
+                    if source == "a":
+                        from Shared import agent_db as _ab
+                        removed = _ab.clear_frozen_service_nodes(frozen_service_id)
+                    else:
+                        removed = userbot_db.clear_frozen_service_nodes(frozen_service_id)
+                except Exception as exc:
+                    logger.exception("clear frozen nodes failed service=%s: %s", frozen_service_id, exc)
+                    await msg.edit_text(
+                        "❌ پاک‌کردن رکورد یخ‌زدگی ناموفق بود.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 بازگشت", callback_data=back_detail_cb)]
+                        ]),
+                    )
+                    return
+
+                if removed <= 0:
+                    await msg.edit_text(
+                        "ℹ️ رکورد یخ‌زده‌ای برای پاک‌کردن باقی نمانده است.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton(
+                                "🔙 بازگشت به گزارش",
+                                callback_data=f"server:{server_id}:frozen:{frozen_page}",
+                            )]
+                        ]),
+                    )
+                    return
+
+                await send_frozen_nodes_report(
+                    chat_id,
+                    context,
+                    message=msg,
+                    page=frozen_page,
+                    server_id=server_id,
+                )
+                return
+
+            if action == "fzdelete":
+                rows = _frozen_service_rows(source, frozen_service_id)
+                name = str((rows[0] if rows else {}).get("service_name") or f"سرویس #{frozen_service_id}")
+                await msg.edit_text(
+                    "🗑 <b>حذف کامل کاربر</b>\n\n"
+                    f"سرویس: <b>{escape(name)}</b>\n\n"
+                    "این عملیات تلاش می‌کند کاربر را از تمام سرورها/نودهای مربوط حذف کند "
+                    "و سپس رکورد سرویس و یخ‌زدگی را از دیتابیس پاک کند.\n"
+                    "⚠️ این عملیات قابل بازگشت نیست.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton(
+                                "✅ حذف کامل",
+                                callback_data=f"server:{server_id}:fzdeleteok:{source}:{frozen_service_id}:{frozen_page}",
+                            ),
+                            InlineKeyboardButton("لغو❌", callback_data=back_detail_cb),
+                        ]
+                    ]),
+                    parse_mode="HTML",
+                )
+                return
+
+            if action == "fzdeleteok":
+                if source == "a":
+                    try:
+                        from Shared import agent_db as _ab
+                        from AgentBot.services.subscription_service import delete_subscription
+                        svc = _ab.get_service_by_id(frozen_service_id) or {}
+                        agent_id = int(svc.get("agent_id") or 0)
+                        deleted_ok = bool(
+                            agent_id > 0
+                            and await delete_subscription(agent_id, frozen_service_id)
+                        )
+                    except Exception as exc:
+                        logger.exception("delete frozen agency service failed service=%s: %s", frozen_service_id, exc)
+                        deleted_ok = False
+
+                    if not deleted_ok:
+                        await msg.edit_text(
+                            "❌ حذف کامل سرویس نمایندگی روی همه نودها کامل نشد.\n"
+                            "رکورد محلی حفظ شد تا دوباره بتوانید تلاش کنید.",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔄 تلاش دوباره", callback_data=back_detail_cb)],
+                                [InlineKeyboardButton(
+                                    "🔙 گزارش",
+                                    callback_data=f"server:{server_id}:frozen:{frozen_page}",
+                                )],
+                            ]),
+                        )
+                        return
+                else:
+                    deleted_count, failures = await _delete_userbot_service_everywhere(
+                        frozen_service_id
+                    )
+                    if failures:
+                        sample_errors = "\n".join(f"• {escape(x)}" for x in failures[:3])
+                        await msg.edit_text(
+                            "⚠️ حذف روی همه سرورها کامل نشد؛ رکورد محلی برای تلاش دوباره حفظ شد.\n\n"
+                            f"{sample_errors}",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔄 تلاش دوباره", callback_data=back_detail_cb)],
+                                [InlineKeyboardButton(
+                                    "🔙 گزارش",
+                                    callback_data=f"server:{server_id}:frozen:{frozen_page}",
+                                )],
+                            ]),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                await send_frozen_nodes_report(
+                    chat_id,
+                    context,
+                    message=msg,
+                    page=frozen_page,
+                    server_id=server_id,
+                )
+                return
 
         if action == "users":
             page = 1
