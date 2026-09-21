@@ -1198,6 +1198,39 @@ async def _online_emails(server: Dict[str, Any], *, _force_refresh: bool = False
         return out
 
 
+async def _last_online_map(server: Dict[str, Any]) -> Dict[str, str]:
+    """Best-effort persistent last-online data from Alireza-compatible APIs."""
+    data = None
+    for path in ("clients/lastOnline", "inbounds/lastOnline"):
+        try:
+            async with _XuiContext(server) as ctx:
+                data = await ctx.request("POST", path, allow_login_retry=False)
+            break
+        except Exception:
+            continue
+    out: Dict[str, str] = {}
+    if isinstance(data, dict):
+        for identity, ts in data.items():
+            try:
+                value = int(ts)
+                if value > 1000000000000:
+                    dt = datetime.fromtimestamp(value / 1000, tz=timezone.utc).replace(tzinfo=None)
+                elif value > 1000000000:
+                    dt = datetime.fromtimestamp(value, tz=timezone.utc).replace(tzinfo=None)
+                else:
+                    continue
+                out[str(identity).strip().lower()] = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+    # Older Alireza builds do not expose lastOnline. Merge the bot's live
+    # observations so Today/30 Days still become useful over time.
+    with _ALIREZA_LAST_SEEN_LOCK:
+        for identity, value in _ALIREZA_LAST_SEEN.items():
+            if identity and value:
+                out.setdefault(str(identity).strip().lower(), value)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Public API (mirrors Shared/hiddify_api.py signatures)
 # ---------------------------------------------------------------------------
@@ -1620,7 +1653,11 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
             total_up += _to_int(stats.get("up"), 0)
             total_down += _to_int(stats.get("down"), 0)
     out["users_total"] = users_total
-    out["usage_30days_gb"] = round(_bytes_to_gb(total_up + total_down), 3)
+    total_up_gb = _bytes_to_gb(total_up)
+    total_down_gb = _bytes_to_gb(total_down)
+    out["usage_30days_gb"] = round(total_up_gb + total_down_gb, 3)
+    out["traffic_ul"] = round(total_up_gb, 3)
+    out["traffic_dl"] = round(total_down_gb, 3)
 
     try:
         async with _XuiContext(server) as ctx:
@@ -1644,8 +1681,6 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     # X-UI forks differ in netIO key names; accept both common variants.
     net_down = net_io.get("down", net_io.get("recv", net_io.get("receive", 0)))
     net_up = net_io.get("up", net_io.get("sent", net_io.get("send", 0)))
-    out["traffic_dl"] = round(_bytes_to_gb(net_down), 3)
-    out["traffic_ul"] = round(_bytes_to_gb(net_up), 3)
     out["now_net_recv_mb"] = round(_to_float(net_down, 0.0) / (1024 ** 2), 2)
     out["now_net_sent_mb"] = round(_to_float(net_up, 0.0) / (1024 ** 2), 2)
     out["uptime"] = _to_int(data.get("uptime"), 0)
@@ -1655,9 +1690,37 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         online = await _online_emails(server, _force_refresh=True)
-        out["users_online"] = len(online)
+        online_unique = {str(x).strip().lower() for x in online if str(x).strip()}
+        out["users_online"] = len(online_unique)
+        now_text = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        with _ALIREZA_LAST_SEEN_LOCK:
+            for identity in online_unique:
+                _ALIREZA_LAST_SEEN[identity] = now_text
     except Exception:
-        pass
+        online_unique = set()
+
+    try:
+        last_map = await _last_online_map(server)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        seen_today = set(online_unique)
+        seen_month = set(online_unique)
+        for identity, value in (last_map or {}).items():
+            ident = str(identity or "").strip().lower()
+            if not ident or not value:
+                continue
+            try:
+                dt = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+            age = (now_utc - dt).total_seconds()
+            if 0 <= age <= 86400:
+                seen_today.add(ident)
+            if 0 <= age <= 30 * 86400:
+                seen_month.add(ident)
+        out["users_today"] = len(seen_today)
+        out["users_month"] = len(seen_month)
+    except Exception as exc:
+        logger.debug("Alireza last-online stats failed: %s", exc)
     return out
 
 
