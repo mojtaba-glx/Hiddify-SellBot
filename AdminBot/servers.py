@@ -3621,6 +3621,7 @@ async def send_user_detail(
     *,
     back_callback: Optional[str] = None,
     back_text: str = "بازگشت به لیست کاربران",
+    delete_callback: Optional[str] = None,
 ) -> None:
     context.user_data["userdel_source"] = "users"
     server = database.get_server_by_id(server_id)
@@ -3696,7 +3697,7 @@ async def send_user_detail(
             [
                 InlineKeyboardButton(
                     "حذف کاربر🗑️",
-                    callback_data=f"server:{server_id}:userdel:{action_user_uuid}",
+                    callback_data=(delete_callback or f"server:{server_id}:userdel:{action_user_uuid}"),
                 )
             ],
             [
@@ -7588,6 +7589,7 @@ async def handle_server_inline_callback(
                     message=msg,
                     back_callback=back_detail_cb,
                     back_text="🔙 بازگشت به رکورد یخ‌زدگی",
+                    delete_callback=f"server:{server_id}:fzdelete:{source}:{frozen_service_id}:{frozen_page}",
                 )
                 return
 
