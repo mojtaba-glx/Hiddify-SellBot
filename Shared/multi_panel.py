@@ -38,7 +38,13 @@ async def _probe_requested_user(
     is_xui: bool,
     attempts: int = 4,
 ) -> Dict[str, Any] | None:
-    """Read a freshly-created user without issuing another create POST."""
+    """Verify a UUID without issuing another create POST.
+
+    Hiddify API v2 has had versions where the direct
+    /admin/user/{uuid}/ lookup returns not-found for a valid user. Therefore
+    every probe also falls back to the full user list before declaring the
+    requested UUID missing.
+    """
     for attempt in range(max(1, int(attempts))):
         try:
             candidate = await get_user_by_uuid(server, requested_uuid)
@@ -49,15 +55,30 @@ async def _probe_requested_user(
                     result = dict(candidate)
                     result["uuid"] = requested_uuid
                     return result
-                # Hiddify's UUID-addressed endpoint can return a numeric DB id
-                # without echoing uuid. A successful GET by requested UUID is
-                # still authoritative for that row.
                 if not is_xui and not explicit_uuid:
                     result = dict(candidate)
                     result["uuid"] = requested_uuid
                     return result
         except Exception:
             pass
+
+        # Do not trust direct UUID lookup alone on Hiddify. The list endpoint
+        # is also what the admin sync/report path uses and is more reliable
+        # across panel versions.
+        try:
+            users = await list_users(server)
+            for candidate in users or []:
+                if not isinstance(candidate, dict):
+                    continue
+                explicit_uuid = str(candidate.get("uuid") or "").strip()
+                fallback_id = str(candidate.get("id") or "").strip()
+                if explicit_uuid == requested_uuid or fallback_id == requested_uuid:
+                    result = dict(candidate)
+                    result["uuid"] = requested_uuid
+                    return result
+        except Exception:
+            pass
+
         if attempt + 1 < max(1, int(attempts)):
             await asyncio.sleep(0.25 * (attempt + 1))
     return None
