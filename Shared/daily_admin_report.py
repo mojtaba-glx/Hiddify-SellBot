@@ -85,6 +85,27 @@ def _userbot_cash(start: str, end: str) -> dict:
     return out
 
 
+def _userbot_sales(start: str, end: str) -> dict:
+    out = {"count": 0, "amount": 0}
+    conn = _connect(USER_DB)
+    if not conn:
+        return out
+    try:
+        if not _has_table(conn, "userbot_orders"):
+            return out
+        out["count"], out["amount"] = _one(
+            conn,
+            "SELECT COUNT(*), COALESCE(SUM(price),0) FROM userbot_orders "
+            "WHERE created_at>=? AND created_at<?",
+            (start, end),
+        )
+    except Exception:
+        logger.exception("daily report: userbot sales query failed")
+    finally:
+        conn.close()
+    return out
+
+
 def _customer_sales(start: str, end: str) -> dict:
     out = {"buy_count": 0, "buy_amount": 0, "renew_count": 0, "renew_amount": 0}
     conn = _connect(CUSTOMER_DB)
@@ -155,13 +176,14 @@ def build_daily_report(*, tz_name: str = "Asia/Tehran", now: datetime | None = N
     start, end = _utc_bounds(report_day, tz)
 
     cash = _userbot_cash(start, end)
+    user_sales = _userbot_sales(start, end)
     customer = _customer_sales(start, end)
     agent = _agent_activity(start, end)
 
-    service_count = customer["buy_count"] + agent["buy_count"]
+    service_count = user_sales["count"] + customer["buy_count"] + agent["buy_count"]
     renew_count = customer["renew_count"] + agent["renew_count"]
     activity_amount = (
-        customer["buy_amount"] + customer["renew_amount"]
+        user_sales["amount"] + customer["buy_amount"] + customer["renew_amount"]
         + agent["buy_amount"] + agent["renew_amount"]
     )
 
@@ -179,6 +201,9 @@ def build_daily_report(*, tz_name: str = "Asia/Tehran", now: datetime | None = N
         "🛒 <b>فروش و تمدید سرویس</b>",
         f"• ساخت سرویس: <b>{service_count}</b> مورد",
         f"• تمدید سرویس: <b>{renew_count}</b> مورد",
+        "",
+        "👤 <b>فروش مستقیم UserBot</b>",
+        f"• سفارش ثبت‌شده: {user_sales['count']} مورد — {_fmt_money(user_sales['amount'])}",
         "",
         "🤖 <b>ربات مشتری نمایندگان</b>",
         f"• خرید: {customer['buy_count']} مورد — {_fmt_money(customer['buy_amount'])}",
