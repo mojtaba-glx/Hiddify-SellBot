@@ -1641,15 +1641,20 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     out["disk_used"] = _to_int(disk.get("current"), 0)
     out["disk_total"] = _to_int(disk.get("total"), 0)
     net_io = data.get("netIO") or {}
-    out["traffic_dl"] = round(_bytes_to_gb(net_io.get("down")), 3)
-    out["traffic_ul"] = round(_bytes_to_gb(net_io.get("up")), 3)
+    # X-UI forks differ in netIO key names; accept both common variants.
+    net_down = net_io.get("down", net_io.get("recv", net_io.get("receive", 0)))
+    net_up = net_io.get("up", net_io.get("sent", net_io.get("send", 0)))
+    out["traffic_dl"] = round(_bytes_to_gb(net_down), 3)
+    out["traffic_ul"] = round(_bytes_to_gb(net_up), 3)
+    out["now_net_recv_mb"] = round(_to_float(net_down, 0.0) / (1024 ** 2), 2)
+    out["now_net_sent_mb"] = round(_to_float(net_up, 0.0) / (1024 ** 2), 2)
     out["uptime"] = _to_int(data.get("uptime"), 0)
     xray = data.get("xray") or {}
     out["xray_state"] = str(xray.get("state") or "unknown")
     out["xray_version"] = str(xray.get("version") or "")
 
     try:
-        online = await _online_emails(server)
+        online = await _online_emails(server, _force_refresh=True)
         out["users_online"] = len(online)
     except Exception:
         pass
