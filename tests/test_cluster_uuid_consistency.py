@@ -38,6 +38,23 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
         get_mock.assert_awaited_once_with(server, "shared-user-uuid")
         delete_mock.assert_not_awaited()
 
+    async def test_primary_accepts_panel_generated_uuid_as_canonical(self):
+        server = {"id": 1, "title": "main"}
+        payload = {"name": "user", "uuid": "requested-uuid", "comment": "agent|1234567"}
+
+        with patch.object(
+            multi_panel,
+            "create_user",
+            new=AsyncMock(return_value={"uuid": "panel-primary-uuid", "name": "user"}),
+        ), patch.object(
+            multi_panel.hiddify_api,
+            "_is_xui_server",
+            return_value=False,
+        ):
+            result = await multi_panel.create_primary_user(server, payload)
+
+        self.assertEqual(result["uuid"], "panel-primary-uuid")
+
     async def test_hiddify_numeric_id_response_is_not_mistaken_for_uuid(self):
         server = {"id": 7, "title": "node"}
         payload = {"name": "user", "uuid": "shared-user-uuid"}
@@ -147,14 +164,14 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
         create_mock.assert_awaited_once_with(server, payload)
         self.assertEqual(get_mock.await_count, 2)
 
-    async def test_cluster_does_not_retry_create_after_timeout_failure(self):
+    async def test_cluster_does_not_retry_primary_create_after_timeout_failure(self):
         targets = [{"id": 1, "title": "main"}]
-        payload = {"name": "user", "uuid": "shared-user-uuid"}
+        payload = {"name": "user", "uuid": "requested-uuid"}
         create_mock = AsyncMock(side_effect=RuntimeError("read timeout"))
 
         with patch.object(
             subscription_service.multi_panel,
-            "create_user_with_uuid",
+            "create_primary_user",
             new=create_mock,
         ):
             with self.assertRaises(RuntimeError):
@@ -162,23 +179,23 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(create_mock.await_count, 1)
 
-    async def test_child_node_failure_keeps_primary_service_for_later_sync(self):
+    async def test_primary_uuid_is_reused_on_child_and_child_failure_is_deferred(self):
         targets = [
             {"id": 1, "title": "main"},
             {"id": 2, "title": "node"},
         ]
-        payload = {"name": "user", "uuid": "shared-user-uuid"}
-        create_mock = AsyncMock(
-            side_effect=[
-                {"uuid": "shared-user-uuid"},
-                RuntimeError("node temporarily unavailable"),
-            ]
-        )
+        payload = {"name": "user", "uuid": "requested-uuid"}
+        primary_mock = AsyncMock(return_value={"uuid": "panel-primary-uuid"})
+        child_mock = AsyncMock(side_effect=RuntimeError("node temporarily unavailable"))
 
         with patch.object(
             subscription_service.multi_panel,
+            "create_primary_user",
+            new=primary_mock,
+        ), patch.object(
+            subscription_service.multi_panel,
             "create_user_with_uuid",
-            new=create_mock,
+            new=child_mock,
         ), patch.object(
             subscription_service,
             "delete_user_on_panel",
@@ -188,9 +205,11 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
                 targets, payload
             )
 
-        self.assertEqual(primary["uuid"], "shared-user-uuid")
+        self.assertEqual(primary["uuid"], "panel-primary-uuid")
         self.assertEqual(len(created_nodes), 1)
-        self.assertEqual(created_nodes[0]["server_id"], 1)
+        self.assertEqual(created_nodes[0]["panel_user_uuid"], "panel-primary-uuid")
+        child_payload = child_mock.await_args.args[1]
+        self.assertEqual(child_payload["uuid"], "panel-primary-uuid")
         delete_mock.assert_not_awaited()
 
     async def test_primary_failure_still_aborts_cluster_creation(self):
@@ -198,14 +217,18 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "title": "main"},
             {"id": 2, "title": "node"},
         ]
-        payload = {"name": "user", "uuid": "shared-user-uuid"}
-        create_mock = AsyncMock(side_effect=RuntimeError("primary failed"))
+        payload = {"name": "user", "uuid": "requested-uuid"}
+        primary_mock = AsyncMock(side_effect=RuntimeError("primary failed"))
 
         with patch.object(
             subscription_service.multi_panel,
-            "create_user_with_uuid",
-            new=create_mock,
+            "create_primary_user",
+            new=primary_mock,
         ), patch.object(
+            subscription_service.multi_panel,
+            "create_user_with_uuid",
+            new=AsyncMock(),
+        ) as child_mock, patch.object(
             subscription_service,
             "delete_user_on_panel",
             new=AsyncMock(return_value=True),
@@ -213,7 +236,8 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await subscription_service._create_user_on_cluster(targets, payload)
 
-        self.assertEqual(create_mock.await_count, 1)
+        self.assertEqual(primary_mock.await_count, 1)
+        child_mock.assert_not_awaited()
         delete_mock.assert_not_awaited()
 
 
