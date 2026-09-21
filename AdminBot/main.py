@@ -53,6 +53,7 @@ from Shared import userbot_db  # noqa: E402
 from Shared import database  # noqa: E402
 from Shared import agent_enforcer  # noqa: E402
 from Shared.daily_admin_report import build_daily_report  # noqa: E402
+from Shared.daily_admin_report import build_daily_report  # noqa: E402
 from Shared.env_utils import env_int  # noqa: E402
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton  # noqa: E402
 
@@ -72,6 +73,8 @@ SERVER_HEALTH_INTERVAL = env_int("SERVER_HEALTH_INTERVAL_SECONDS", 300, minimum=
 SUB_REMINDER_INTERVAL = env_int("SUB_REMINDER_INTERVAL_SECONDS", 300, minimum=60)
 AGENT_ENFORCER_ENABLED = (os.getenv("AGENT_ENFORCER_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 AGENT_ENFORCER_INTERVAL = env_int("AGENT_ENFORCER_INTERVAL_SECONDS", 180, minimum=60)
+DAILY_REPORT_ENABLED = (os.getenv("DAILY_REPORT_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+DAILY_REPORT_TIMEZONE = (os.getenv("DAILY_REPORT_TIMEZONE", "Asia/Tehran") or "Asia/Tehran").strip()
 DAILY_REPORT_ENABLED = (os.getenv("DAILY_REPORT_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 DAILY_REPORT_TIMEZONE = (os.getenv("DAILY_REPORT_TIMEZONE", "Asia/Tehran") or "Asia/Tehran").strip()
 
@@ -824,6 +827,33 @@ async def _daily_admin_report_fallback_job(context: ContextTypes.DEFAULT_TYPE) -
     await _daily_admin_report_job(context)
 
 
+async def _daily_admin_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send one end-of-day financial/sales report to the admin."""
+    if not DAILY_REPORT_ENABLED or not ADMIN_ID:
+        return
+    try:
+        report_text, report_day = build_daily_report(tz_name=DAILY_REPORT_TIMEZONE)
+        bot_data = context.application.bot_data if context and context.application else {}
+        if str(bot_data.get("_daily_admin_report_day") or "") == report_day:
+            return
+        await context.bot.send_message(chat_id=ADMIN_ID, text=report_text, parse_mode="HTML")
+        bot_data["_daily_admin_report_day"] = report_day
+        logger.info("Daily admin report sent for %s", report_day)
+    except Exception:
+        logger.exception("Daily admin report failed")
+
+
+async def _daily_admin_report_fallback_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fallback scheduler: only send during the first hour after local midnight."""
+    try:
+        tz = ZoneInfo(DAILY_REPORT_TIMEZONE)
+    except Exception:
+        tz = ZoneInfo("Asia/Tehran")
+    if datetime.now(tz).hour != 0:
+        return
+    await _daily_admin_report_job(context)
+
+
 async def _purge_soft_deleted_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """پاکسازی قطعی اشتراک‌هایی که بیش از ۷ روز پیش توسط ادمین به‌صورت نرم حذف شده‌اند."""
     try:
@@ -928,6 +958,21 @@ async def _post_init(application) -> None:
             )
         )
         logger.info("✅ Server health fallback scheduler enabled")
+
+    if DAILY_REPORT_ENABLED:
+        fallback_tasks.append(
+            application.create_task(
+                _run_fallback_loop(
+                    application,
+                    name="daily-admin-report-fallback",
+                    worker=_daily_admin_report_fallback_job,
+                    interval=60,
+                    first=30,
+                ),
+                name="daily-admin-report-fallback",
+            )
+        )
+        logger.info("✅ Daily admin report fallback enabled (midnight %s)", DAILY_REPORT_TIMEZONE)
 
     if DAILY_REPORT_ENABLED:
         fallback_tasks.append(
@@ -1091,6 +1136,23 @@ def main() -> None:
         logger.info("✅ Userbot auto backup scheduler enabled (interval=60s)")
     else:
         logger.warning("⚠️ Userbot auto backup scheduler unavailable (no job_queue).")
+
+    if DAILY_REPORT_ENABLED and application.job_queue is not None:
+        try:
+            report_tz = ZoneInfo(DAILY_REPORT_TIMEZONE)
+        except Exception:
+            report_tz = ZoneInfo("Asia/Tehran")
+        application.job_queue.run_daily(
+            _daily_admin_report_job,
+            time=dt_time(hour=0, minute=0, tzinfo=report_tz),
+            name="daily-admin-sales-report",
+            job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 3600},
+        )
+        logger.info("✅ Daily admin report enabled (00:00 %s)", DAILY_REPORT_TIMEZONE)
+    elif DAILY_REPORT_ENABLED:
+        logger.warning("⚠️ Daily admin report uses fallback scheduler (no job_queue).")
+    else:
+        logger.info("ℹ️ Daily admin report disabled by env")
 
     if DAILY_REPORT_ENABLED and application.job_queue is not None:
         try:
