@@ -9054,6 +9054,17 @@ async def send_server_status_detail(chat_id: int, context: ContextTypes.DEFAULT_
     dl_total = stats.get('traffic_dl', 0)
     ul_total = stats.get('traffic_ul', 0)
     net_now_recv_mb = stats.get('now_net_recv_mb', 0)
+
+    # Sanaei has cumulative client traffic but no reliable daily traffic API.
+    # Persist a daily baseline in the bot DB and show the delta as today's usage.
+    xui_variant = str(server.get("xui_variant") or server.get("xui_type") or "").strip().lower()
+    if is_xui and xui_variant in {"sanaei", "3x-ui", "3xui"}:
+        try:
+            usage_today = userbot_db.update_server_daily_traffic(
+                int(server_id), float(usage_30 or 0)
+            )
+        except Exception as exc:
+            logger.debug("daily Sanaei traffic snapshot failed server=%s: %s", server_id, exc)
     net_now_sent_mb = stats.get('now_net_sent_mb', 0)
 
     # نام سرور + پرچم (بدون تکرار)
