@@ -402,6 +402,10 @@ async def recover_service_nodes_now(service_id: int) -> Dict[str, Any]:
             panel_user = probe.get("panel_user") or {}
             usage = _to_float(panel_user.get("current_usage_GB"), 0.0)
             days_left = _days_left_from_panel_user(panel_user)
+            was_problem = (
+                int(node.get("frozen") or 0) == 1
+                or int(node.get("deleted") or 0) == 1
+            )
             userbot_db.update_service_node_runtime(
                 sid,
                 server_id,
@@ -416,12 +420,13 @@ async def recover_service_nodes_now(service_id: int) -> Dict[str, Any]:
                 deleted=0,
             )
             recovered_keys.add((server_id, user_uuid))
-            result["recovered"] += 1
+            if was_problem:
+                result["recovered"] += 1
             result["nodes"].append({
                 "server_id": server_id,
                 "server_title": title,
                 "uuid": user_uuid,
-                "status": "recovered",
+                "status": "recovered" if was_problem else "online",
                 "usage_current": usage,
             })
             continue
