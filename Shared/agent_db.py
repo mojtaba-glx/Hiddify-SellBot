@@ -2535,20 +2535,25 @@ def get_frozen_nodes_summary() -> Dict[str, int]:
     init_db()
     conn = _get_conn()
     try:
+        meaningful = (
+            "(COALESCE(usage_current,0) > 0 "
+            "OR COALESCE(frozen_reason,'') LIKE 'renew_pending:%')"
+        )
         frozen = int(conn.execute(
             "SELECT COUNT(*) FROM agent_service_nodes "
-            "WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0"
+            "WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0 AND " + meaningful
         ).fetchone()[0] or 0)
         deleted = int(conn.execute(
-            "SELECT COUNT(*) FROM agent_service_nodes WHERE COALESCE(deleted,0)=1"
+            "SELECT COUNT(*) FROM agent_service_nodes "
+            "WHERE COALESCE(deleted,0)=1 AND COALESCE(usage_current,0) > 0"
         ).fetchone()[0] or 0)
         services = int(conn.execute(
             "SELECT COUNT(DISTINCT service_id) FROM agent_service_nodes "
-            "WHERE COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1"
+            "WHERE (COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1) AND " + meaningful
         ).fetchone()[0] or 0)
         usage = float(conn.execute(
             "SELECT COALESCE(SUM(usage_current),0) FROM agent_service_nodes "
-            "WHERE COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1"
+            "WHERE (COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1) AND " + meaningful
         ).fetchone()[0] or 0)
         return {
             "frozen_nodes": frozen,
@@ -2583,7 +2588,11 @@ def get_frozen_nodes_report(limit: int = 100) -> List[Dict[str, Any]]:
             JOIN agent_services s ON s.id = n.service_id
             LEFT JOIN agent_users a ON a.id = s.agent_id
             LEFT JOIN agent_customers c ON c.id = s.customer_id
-            WHERE COALESCE(n.frozen,0)=1 OR COALESCE(n.deleted,0)=1
+            WHERE (COALESCE(n.frozen,0)=1 OR COALESCE(n.deleted,0)=1)
+              AND (
+                    COALESCE(n.usage_current,0) > 0
+                    OR COALESCE(n.frozen_reason,'') LIKE 'renew_pending:%'
+                  )
             ORDER BY COALESCE(NULLIF(n.frozen_at,''), n.updated_at, n.created_at) DESC, n.id DESC
             LIMIT ?
             """,
