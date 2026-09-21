@@ -78,11 +78,20 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
             try:
                 created = await multi_panel.create_user_with_uuid(srv, payload_base)
             except Exception as e:
-                # create_user_with_uuid owns timeout recovery. Retrying POST
-                # here could create a duplicate/orphan after a lost response.
-                raise RuntimeError(
-                    f"cluster user creation failed on server {srv.get('id')}: {e}"
-                ) from e
+                # The primary server is authoritative and must succeed.
+                # A child-node failure is recoverable: keep the service usable
+                # on the primary and let node sync create the missing UUID later.
+                if idx == 0:
+                    raise RuntimeError(
+                        f"cluster user creation failed on primary server {srv.get('id')}: {e}"
+                    ) from e
+                logger.warning(
+                    "Cluster child create deferred server=%s uuid=%s: %s",
+                    srv.get("id"),
+                    shared_uuid,
+                    e,
+                )
+                continue
 
             user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if user_uuid != shared_uuid:
