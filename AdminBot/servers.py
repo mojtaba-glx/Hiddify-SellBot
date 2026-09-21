@@ -7843,7 +7843,7 @@ async def handle_server_inline_callback(
             return
 
 
-        if action in {"fzsvc", "fzview", "fzclear", "fzclearok", "fzdelete", "fzdeleteok"}:
+        if action in {"fzsvc", "fzrecover", "fzview", "fzclear", "fzclearok", "fzdelete", "fzdeleteok"}:
             if len(parts) < 6:
                 await msg.edit_text("❌ داده مدیریت یخ‌زدگی نامعتبر است.")
                 return
@@ -7865,6 +7865,42 @@ async def handle_server_inline_callback(
                     source,
                     frozen_service_id,
                     frozen_page,
+                    chat_id,
+                    context,
+                    message=msg,
+                )
+                return
+
+            if action == "fzrecover":
+                try:
+                    await msg.edit_text(
+                        "🔄 در حال بررسی نودهای این سرویس و تلاش برای بازیابی..."
+                    )
+                    recovery = await _recover_frozen_service_now(
+                        source,
+                        frozen_service_id,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "manual frozen recovery failed source=%s service=%s: %s",
+                        source,
+                        frozen_service_id,
+                        exc,
+                    )
+                    await msg.edit_text(
+                        "❌ بررسی و بازیابی ناموفق بود.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔙 بازگشت", callback_data=back_detail_cb)]
+                        ]),
+                    )
+                    return
+
+                await send_frozen_recovery_result(
+                    server_id,
+                    source,
+                    frozen_service_id,
+                    frozen_page,
+                    recovery,
                     chat_id,
                     context,
                     message=msg,
