@@ -10,6 +10,7 @@ BTN_USERBOT = "🤖 مدیریت ربات کاربران"
 BTN_STATUS = "📊 وضعیت سرور"
 BTN_BACKUP = "📫 دریافت بکاپ"
 BTN_AGENCIES = "🏢 نمایندگی"
+BTN_DAILY_REPORT = "📊 گزارش روزانه"
 
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
@@ -17,6 +18,7 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(BTN_SERVERS)],
         [KeyboardButton(BTN_SEARCH_USER)],
         [KeyboardButton(BTN_USERBOT)],
+        [KeyboardButton(BTN_DAILY_REPORT)],
         [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_AGENCIES), KeyboardButton(BTN_BACKUP)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, selective=True)
