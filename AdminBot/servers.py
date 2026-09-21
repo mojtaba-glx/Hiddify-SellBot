@@ -2403,7 +2403,7 @@ async def send_frozen_nodes_report(
     agent_groups.sort(key=lambda g: str(g.get("latest") or ""), reverse=True)
     groups = user_groups + agent_groups
 
-    page_size = 4
+    page_size = 3
     total_services = len(groups)
     total_nodes = len(rows)
     pages = max(1, (total_services + page_size - 1) // page_size)
@@ -2451,6 +2451,8 @@ async def send_frozen_nodes_report(
             return "UUID پس از بررسی لیست کاربران پنل پیدا نشد"
         if reason == "network_error":
             return "خطای ارتباط با پنل پس از چند تلاش"
+        if reason == "server_missing":
+            return "سرور در تنظیمات ربات پیدا نشد"
         if reason.startswith("renew_pending:"):
             return "تمدید این نود هنوز همگام نشده"
         if reason:
@@ -2582,8 +2584,6 @@ async def send_frozen_nodes_report(
     kb = InlineKeyboardMarkup(kb_rows)
 
     text = "\n".join(lines)
-    if len(text) > 3900:
-        text = text[:3870] + "\n…"
     if message is not None:
         try:
             await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
