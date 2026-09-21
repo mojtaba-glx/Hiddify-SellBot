@@ -315,7 +315,14 @@ async def _process_service(svc: dict) -> Dict[str, str]:
             new_fail = prev_fail + 1
             was_frozen = int(node.get("frozen") or 0) == 1
 
-            if _is_user_not_found_error(e):
+            existing_reason = str(node.get("frozen_reason") or "").strip()
+            if existing_reason.startswith("renew_pending:"):
+                # استثنا: حتی با مصرف صفر باید تا زمان اعمال تمدید روی این نود
+                # frozen بماند تا شمارنده/انقضای دوره قبلی وارد دوره جدید نشود.
+                frozen = 1
+                reason = existing_reason
+                active = 0
+            elif _is_user_not_found_error(e):
                 frozen = 1 if prev_usage > 0.0 else 0
                 reason = "user_not_found" if frozen else ""
                 active = 0
