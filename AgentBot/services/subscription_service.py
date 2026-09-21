@@ -556,6 +556,18 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                     pending_servers=renew_failed,
                     sync_primary_server_id=int(sid or 0),
                 )
+            else:
+                await notify_admin_delivery_report(
+                    action_title="تمدید سرویس نماینده",
+                    agent=agent_db.get_agent_by_id(agent_id),
+                    customer_name=_customer_display_name(int(svc.get("customer_id") or 0)),
+                    service_name=str(svc.get("name") or ""),
+                    server_title=server.get("title", f"سرور #{sid}") if server else f"سرور #{sid}",
+                    volume_gb=new_usage,
+                    days=new_days,
+                    amount=cost if extra_days > 0 else 0,
+                    status="success",
+                )
         except Exception as _report_e:
             logger.warning("Failed to send renew delivery report: %s", _report_e)
 
