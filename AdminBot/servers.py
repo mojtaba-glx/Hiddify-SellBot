@@ -2410,7 +2410,7 @@ def _frozen_owner_text(row: Dict[str, Any], source: str) -> str:
     if telegram_id > 0:
         return f"مالک: ID {telegram_id}"
     if user_id_value <= 0:
-        return "مالک: ادمین / سرویس قدیمی"
+        return "ساخته‌شده توسط ادمین"
     return f"مالک: کاربر #{user_id_value}"
 
 
@@ -2543,6 +2543,7 @@ async def _delete_userbot_service_everywhere(service_id: int) -> tuple[int, List
     if primary_sid > 0 and primary_uuid:
         targets.append((primary_sid, primary_uuid))
 
+    mapped_server_ids: set[int] = set()
     for node in mappings:
         try:
             node_sid = int(node.get("server_id") or 0)
@@ -2551,15 +2552,16 @@ async def _delete_userbot_service_everywhere(service_id: int) -> tuple[int, List
         node_uuid = str(node.get("panel_user_uuid") or "").strip()
         if node_sid > 0 and node_uuid:
             targets.append((node_sid, node_uuid))
+            mapped_server_ids.add(node_sid)
 
-    # اگر mapping یک نود قدیمی ناقص باشد، UUID اصلی را روی سرورهای مرتبط هم امتحان کن.
+    # فقط برای نودی که mapping ذخیره‌شده ندارد، UUID اصلی fallback می‌شود.
     if primary_sid > 0 and primary_uuid:
         for server in _get_related_server_targets(primary_sid):
             try:
                 related_sid = int(server.get("id") or 0)
             except Exception:
                 related_sid = 0
-            if related_sid > 0:
+            if related_sid > 0 and related_sid not in mapped_server_ids:
                 targets.append((related_sid, primary_uuid))
 
     success = 0
