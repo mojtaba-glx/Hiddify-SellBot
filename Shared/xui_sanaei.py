@@ -1444,12 +1444,27 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     out["disk_used"] = _to_int(disk.get("current"), 0)
     out["disk_total"] = _to_int(disk.get("total"), 0)
     net_io = data.get("netIO") or {}
-    out["traffic_dl"] = round(_bytes_to_gb(net_io.get("down")), 3)
-    out["traffic_ul"] = round(_bytes_to_gb(net_io.get("up")), 3)
+    # Current MHSanaei 3x-ui /panel/api/server/status returns cumulative
+    # network counters as bytes in netIO.up/down.
+    net_down = _to_int(net_io.get("down"), 0)
+    net_up = _to_int(net_io.get("up"), 0)
+    out["traffic_dl"] = round(_bytes_to_gb(net_down), 3)
+    out["traffic_ul"] = round(_bytes_to_gb(net_up), 3)
+    out["now_net_recv_mb"] = round(net_down / (1024 ** 2), 2)
+    out["now_net_sent_mb"] = round(net_up / (1024 ** 2), 2)
     out["uptime"] = _to_int(data.get("uptime"), 0)
     xray = data.get("xray") or {}
     out["xray_state"] = str(xray.get("state") or "unknown")
     out["xray_version"] = str(xray.get("version") or "")
+
+    # Current Sanaei exposes live clients at POST /panel/api/clients/onlines.
+    # Force a fresh read for the status screen so this value is not stale.
+    try:
+        onlines = await _online_emails(server, _force_refresh=True)
+        out["users_online"] = len(onlines)
+    except Exception as exc:
+        logger.debug("sanaei online clients failed: %s", exc)
+
     return out
 
 
