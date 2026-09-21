@@ -151,6 +151,9 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
             1, 30, 10, "add", "add", "renew:test"
         )
         self.assertTrue(ok)
+        # Runtime reset is intentionally deferred until the panel renewal is
+        # confirmed by the caller.
+        agent_db.reset_service_nodes_on_renew(1)
 
         nodes = {int(n["server_id"]): n for n in agent_db.get_service_nodes(1)}
         self.assertAlmostEqual(float(nodes[2]["usage_current"]), 0.0)
@@ -177,6 +180,7 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
             1, 30, 10, "add", "add", "renew:deleted"
         )
         self.assertTrue(ok)
+        agent_db.reset_service_nodes_on_renew(1)
         self.assertFalse(any(int(n["server_id"]) == 2 for n in agent_db.get_service_nodes(1)))
 
 
