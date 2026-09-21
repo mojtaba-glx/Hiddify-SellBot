@@ -6,7 +6,8 @@ from Shared.tg_button_styles import inline_button as IButton
 
 
 BTN_SUBSCRIPTIONS = "\U0001f4ca \u0645\u062f\u06cc\u0631\u06cc\u062a \u0627\u0634\u062a\u0631\u0627\u06a9\u200c\u0647\u0627"
-BTN_WALLET = "\U0001f4b0 \u06a9\u06cc\u0641 \u067e\u0648\u0644"\nBTN_FINANCE = "📊 گزارش مالی"
+BTN_WALLET = "\U0001f4b0 \u06a9\u06cc\u0641 \u067e\u0648\u0644"
+BTN_FINANCE = "📊 گزارش مالی"
 BTN_PLANS = "\U0001f4b5 \u067e\u0644\u0646\u200c\u0647\u0627"
 BTN_CUSTOMER_BOT = "\U0001f916 \u0631\u0628\u0627\u062a \u0645\u0634\u062a\u0631\u06cc"
 BTN_TICKETS = "\U0001f3ab \u0645\u062f\u06cc\u0631\u06cc\u062a \u062a\u06cc\u06a9\u062a\u200c\u0647\u0627"
@@ -21,7 +22,8 @@ def _ikb(rows: List[List[Any]]) -> InlineKeyboardMarkup:
 def main_menu_keyboard():
     kb = [
         [KButton(BTN_SUBSCRIPTIONS)],
-        [KButton(BTN_PLANS), KButton(BTN_WALLET)],\n        [KButton(BTN_FINANCE)],
+        [KButton(BTN_PLANS), KButton(BTN_WALLET)],
+        [KButton(BTN_FINANCE)],
         [KButton(BTN_CUSTOMER_BOT)],
         [KButton(BTN_TICKETS), KButton(BTN_SETTINGS)],
     ]
