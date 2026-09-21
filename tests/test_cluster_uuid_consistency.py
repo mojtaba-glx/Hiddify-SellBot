@@ -38,6 +38,33 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
         get_mock.assert_awaited_once_with(server, "shared-user-uuid")
         delete_mock.assert_not_awaited()
 
+    async def test_uuid_probe_falls_back_to_list_when_direct_lookup_fails(self):
+        server = {"id": 7, "title": "node"}
+        with patch.object(
+            multi_panel,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=RuntimeError("user not found")),
+        ) as direct_mock, patch.object(
+            multi_panel,
+            "list_users",
+            new=AsyncMock(
+                return_value=[
+                    {"uuid": "shared-user-uuid", "name": "user"},
+                    {"uuid": "other-user-uuid", "name": "other"},
+                ]
+            ),
+        ) as list_mock:
+            result = await multi_panel._probe_requested_user(
+                server,
+                "shared-user-uuid",
+                is_xui=False,
+                attempts=1,
+            )
+
+        self.assertEqual(result["uuid"], "shared-user-uuid")
+        direct_mock.assert_awaited_once()
+        list_mock.assert_awaited_once_with(server)
+
     async def test_primary_accepts_panel_generated_uuid_as_canonical(self):
         server = {"id": 1, "title": "main"}
         payload = {"name": "user", "uuid": "requested-uuid", "comment": "agent|1234567"}
