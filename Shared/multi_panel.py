@@ -8,6 +8,7 @@ are ignored.
 """
 
 from typing import Any, Dict, List
+import asyncio
 
 from Shared import hiddify_api
 
@@ -40,7 +41,47 @@ async def create_user_with_uuid(
     if not requested_uuid:
         raise ValueError("create_user_with_uuid requires payload.uuid")
 
-    created = await create_user(server, dict(payload or {}))
+    try:
+        created = await create_user(server, dict(payload or {}))
+    except Exception:
+        # A create POST can reach the panel successfully while its response is
+        # lost (for example a read timeout). Never blindly POST the same UUID
+        # again. For Hiddify, probe the requested UUID and treat a persisted
+        # row as success. X-UI can span multiple inbounds, so an interrupted
+        # create may be partial; clean that UUID best-effort and fail instead.
+        is_xui = False
+        try:
+            is_xui = bool(hiddify_api._is_xui_server(server))
+        except Exception:
+            is_xui = False
+
+        if is_xui:
+            try:
+                await delete_user(server, requested_uuid)
+            except Exception:
+                pass
+            raise
+
+        recovered = None
+        for attempt in range(2):
+            try:
+                candidate = await get_user_by_uuid(server, requested_uuid)
+                candidate_uuid = str(
+                    (candidate or {}).get("uuid") or (candidate or {}).get("id") or ""
+                ).strip()
+                if candidate_uuid == requested_uuid:
+                    recovered = dict(candidate)
+                    recovered["uuid"] = requested_uuid
+                    break
+            except Exception:
+                pass
+            if attempt == 0:
+                await asyncio.sleep(0.35)
+
+        if recovered is not None:
+            return recovered
+        raise
+
     if not isinstance(created, dict):
         raise PanelUuidMismatchError("panel returned an invalid create response")
 
