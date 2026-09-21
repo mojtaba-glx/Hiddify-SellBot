@@ -813,6 +813,19 @@ async def _daily_admin_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Daily admin report failed")
 
 
+async def daily_report_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin-only manual preview/send of the same daily report used by the scheduler."""
+    if not update.effective_user or int(update.effective_user.id) != int(ADMIN_ID or 0):
+        return
+    try:
+        report_text, _report_day = build_daily_report(tz_name=DAILY_REPORT_TIMEZONE)
+        await context.bot.send_message(chat_id=ADMIN_ID, text=report_text, parse_mode="HTML")
+    except Exception:
+        logger.exception("Manual daily admin report failed")
+        if update.effective_message:
+            await update.effective_message.reply_text("❌ ساخت گزارش روزانه ناموفق بود. جزئیات در لاگ ثبت شد.")
+
+
 async def _daily_admin_report_fallback_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fallback scheduler: only send during the first hour after local midnight."""
     try:
@@ -1010,6 +1023,7 @@ def main() -> None:
     application.add_handler(CommandHandler("enforce_now", enforce_now))
     application.add_handler(CommandHandler("agent_enforce", agent_enforce))
     application.add_handler(CommandHandler("nodes_health", nodes_health))
+    application.add_handler(CommandHandler("daily_report", daily_report_now))
 
     # همه‌ی پیام‌های متنی — داخل AdminBot/servers.py
     application.add_handler(
