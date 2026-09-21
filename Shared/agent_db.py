@@ -2541,18 +2541,28 @@ def reset_service_nodes_on_renew(
         conn.close()
 
 def clear_frozen_service_nodes(service_id: int) -> int:
-    """Delete only frozen/deleted node snapshots for one agency service.
-
-    The service itself and any healthy/live node mappings remain untouched.
-    Returns the number of removed node records.
-    """
+    """Delete frozen/deleted snapshots and remove their held usage from the service total."""
     init_db()
     sid = int(service_id or 0)
     if sid <= 0:
         return 0
     conn = _get_conn()
     try:
-        cur = conn.execute(
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS c, COALESCE(SUM(usage_current),0) AS usage
+            FROM agent_service_nodes
+            WHERE service_id = ?
+              AND (COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1)
+            """,
+            (sid,),
+        ).fetchone()
+        removed_count = int((row["c"] if row else 0) or 0)
+        removed_usage = float((row["usage"] if row else 0.0) or 0.0)
+        if removed_count <= 0:
+            return 0
+
+        conn.execute(
             """
             DELETE FROM agent_service_nodes
             WHERE service_id = ?
@@ -2560,9 +2570,17 @@ def clear_frozen_service_nodes(service_id: int) -> int:
             """,
             (sid,),
         )
-        removed = int(cur.rowcount or 0)
+        conn.execute(
+            """
+            UPDATE agent_services
+            SET usage_current = MAX(0, COALESCE(usage_current,0) - ?),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (removed_usage, _now(), sid),
+        )
         conn.commit()
-        return removed
+        return removed_count
     finally:
         conn.close()
 
