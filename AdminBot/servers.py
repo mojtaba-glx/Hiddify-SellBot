@@ -2270,7 +2270,6 @@ def _format_node_sync_report(summary: Dict[str, Any]) -> str:
 
 def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
     servers = database.get_servers()
-    child_ids = _get_child_server_ids()
     keyboard: List[List[InlineKeyboardButton]] = []
     for s in servers:
         sid = s.get("id")
@@ -8959,7 +8958,7 @@ async def send_status_servers_list(chat_id: int, context: ContextTypes.DEFAULT_T
             sid_int = int(sid or 0)
         except (TypeError, ValueError):
             sid_int = 0
-        if sid_int <= 0 or sid_int in child_ids:
+        if sid_int <= 0:
             continue
         title = (s.get("title") or "Server").strip()
         # تلاش برای اضافه کردن پرچم (سلیقه‌ای طبق عکس)
