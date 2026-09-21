@@ -62,29 +62,52 @@ def _get_cluster_servers(server_id: int) -> List[Dict[str, Any]]:
     return out
 
 
-async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[str, Any]) -> tuple[Optional[dict], List[dict]]:
-    """روی همه افراد هدف با یک uuid مشترک کاربر می‌سازد (مثل UserBot).
+async def _create_user_on_cluster(
+    targets: List[Dict[str, Any]],
+    payload: Dict[str, Any],
+) -> tuple[Optional[dict], List[dict]]:
+    """Create primary first, then reuse its real UUID on every child node."""
+    if not targets:
+        raise RuntimeError("no cluster targets")
 
-    Returns: (primary_created, created_nodes) که created_nodes هر پیروز شامل
-    server_id/server_title/panel_user_uuid/marzban_username/is_primary است.
-    """
-    shared_uuid = str((payload or {}).get("uuid") or "").strip() or (str(len(targets) and __import__("uuid").uuid4()))
     payload_base = dict(payload or {})
-    payload_base["uuid"] = shared_uuid
     created_nodes: List[dict] = []
     primary_created: Optional[Dict[str, Any]] = None
+
     try:
-        for idx, srv in enumerate(targets):
+        primary = targets[0]
+        try:
+            primary_created = await multi_panel.create_primary_user(primary, payload_base)
+        except Exception as e:
+            raise RuntimeError(
+                f"cluster user creation failed on primary server {primary.get('id')}: {e}"
+            ) from e
+
+        shared_uuid = str(
+            (primary_created or {}).get("uuid") or (primary_created or {}).get("id") or ""
+        ).strip()
+        if not shared_uuid:
+            raise RuntimeError("primary server returned no UUID")
+
+        primary_created = dict(primary_created or {})
+        primary_created["uuid"] = shared_uuid
+        created_nodes.append(
+            {
+                "server_id": int(primary.get("id") or 0),
+                "server_title": primary.get("title") or f"سرور #{primary.get('id')}",
+                "panel_user_uuid": shared_uuid,
+                "panel_user_id": str(primary_created.get("id") or "").strip(),
+                "marzban_username": str(primary_created.get("_marzban_username") or "").strip(),
+                "is_primary": True,
+            }
+        )
+
+        child_payload = dict(payload_base)
+        child_payload["uuid"] = shared_uuid
+        for srv in targets[1:]:
             try:
-                created = await multi_panel.create_user_with_uuid(srv, payload_base)
+                created = await multi_panel.create_user_with_uuid(srv, child_payload)
             except Exception as e:
-                # The primary server is authoritative and must succeed.
-                # A child-node failure is recoverable: keep the service usable
-                # on the primary and let node sync create the missing UUID later.
-                if idx == 0:
-                    raise RuntimeError(
-                        f"cluster user creation failed on primary server {srv.get('id')}: {e}"
-                    ) from e
                 logger.warning(
                     "Cluster child create deferred server=%s uuid=%s: %s",
                     srv.get("id"),
@@ -95,31 +118,39 @@ async def _create_user_on_cluster(targets: List[Dict[str, Any]], payload: Dict[s
 
             user_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if user_uuid != shared_uuid:
-                raise RuntimeError(
-                    f"cluster UUID mismatch on server {srv.get('id')} "
-                    f"(expected={shared_uuid}, returned={user_uuid or 'empty'})"
+                logger.error(
+                    "Cluster child UUID mismatch deferred server=%s expected=%s returned=%s",
+                    srv.get("id"),
+                    shared_uuid,
+                    user_uuid or "empty",
                 )
-            if idx == 0:
-                primary_created = created
-            marzban_username = str(created.get("_marzban_username") or "").strip()
+                try:
+                    await delete_user_on_panel(
+                        user_uuid,
+                        int(srv.get("id") or 0),
+                        marzban_username=str(created.get("_marzban_username") or "").strip(),
+                    )
+                except Exception:
+                    pass
+                continue
+
             created_nodes.append(
                 {
                     "server_id": int(srv.get("id") or 0),
-                    "server_title": srv.get("title") or f"\u0633\u0631\u0648\u0631 #{srv.get('id')}",
+                    "server_title": srv.get("title") or f"سرور #{srv.get('id')}",
                     "panel_user_uuid": shared_uuid,
                     "panel_user_id": str(created.get("id") or "").strip(),
-                    "marzban_username": marzban_username,
-                    "is_primary": idx == 0,
+                    "marzban_username": str(created.get("_marzban_username") or "").strip(),
+                    "is_primary": False,
                 }
             )
     except Exception:
         for item in reversed(created_nodes):
             await _rollback_node_if_failed(item)
         raise
+
     if primary_created is None:
         raise RuntimeError("no primary node created")
-    for item in created_nodes:
-        await _rollback_node_if_failed(item) if item.get("_failed") else None
     return primary_created, created_nodes
 
 
