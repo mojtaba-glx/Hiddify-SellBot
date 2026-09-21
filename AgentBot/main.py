@@ -76,9 +76,10 @@ async def _post_init(application) -> None:
     except Exception as e:
         logger.exception("Customer payment recovery failed: %s", e)
 
+    # Keep Telegram's command menu minimal: /start only.
+    # /cancel still works when typed manually; it is simply hidden from the menu.
     commands = [
-        BotCommand("start", "Agent panel"),
-        BotCommand("cancel", "Cancel current operation"),
+        BotCommand("start", "پنل نمایندگی"),
     ]
     try:
         await application.bot.set_my_commands(commands)
