@@ -133,6 +133,16 @@ def _renew_pending_payload(svc: dict, reason: str) -> Dict[str, Any]:
         payload["usage_limit_GB"] = usage_limit
 
     days_left = _to_int(svc.get("days_left"), 0)
+    end_raw = str(svc.get("end_date") or "").strip()
+    if end_raw:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                end_dt = datetime.strptime(end_raw[:19] if "%S" in fmt else end_raw[:10], fmt)
+                seconds_left = (end_dt - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+                days_left = max(0, int((seconds_left + 86399) // 86400)) if seconds_left >= 0 else 0
+                break
+            except ValueError:
+                continue
     if days_left > 0:
         payload["package_days"] = days_left
 
