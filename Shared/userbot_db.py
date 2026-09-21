@@ -3414,6 +3414,31 @@ def get_frozen_nodes_summary() -> Dict[str, int]:
         conn.close()
 
 
+def get_frozen_nodes_report(limit: int = 100) -> List[Dict[str, Any]]:
+    """جزئیات نودهای یخ‌زده/حذف‌شده UserBot برای گزارش ادمین."""
+    init_db()
+    lim = max(1, min(int(limit or 100), 500))
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT n.*, s.name AS service_name, s.user_id,
+                   s.usage_limit AS service_usage_limit,
+                   u.telegram_id, u.username, u.full_name
+            FROM userbot_service_nodes n
+            JOIN userbot_services s ON s.id = n.service_id
+            LEFT JOIN userbot_users u ON u.id = s.user_id
+            WHERE COALESCE(n.frozen,0)=1 OR COALESCE(n.deleted,0)=1
+            ORDER BY COALESCE(NULLIF(n.last_ok_at,''), n.updated_at, n.created_at) DESC, n.id DESC
+            LIMIT ?
+            """,
+            (lim,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def ensure_service_sub_token(service_id: int) -> str:
     init_db()
     sid = int(service_id)
