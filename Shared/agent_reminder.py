@@ -179,7 +179,11 @@ async def run_agent_reminder_cycle(bot, agent_id):
             if should_days and days_left != last_days_notified:
                 day_key = (telegram_id, service_id, days_left)
                 if day_key not in sent_days_keys:
-                    await bot.send_message(chat_id=telegram_id, text=build_renewal_reminder_message(service_name, days_left=days_left))
+                    await bot.send_message(
+                        chat_id=telegram_id,
+                        text=build_renewal_reminder_message(service_name, days_left=days_left),
+                        reply_markup=build_renew_button_keyboard(service_id),
+                    )
                     sent_days_keys.add(day_key)
                     summary["days_sent"] += 1
                 new_days_state = days_left
@@ -188,7 +192,11 @@ async def run_agent_reminder_cycle(bot, agent_id):
             if should_usage and remaining_bucket != last_usage_notified:
                 usage_key = (telegram_id, service_id, remaining_bucket)
                 if usage_key not in sent_usage_keys:
-                    await bot.send_message(chat_id=telegram_id, text=build_renewal_reminder_message(service_name, remaining_gb=remaining_bucket))
+                    await bot.send_message(
+                        chat_id=telegram_id,
+                        text=build_renewal_reminder_message(service_name, remaining_gb=remaining_bucket),
+                        reply_markup=build_renew_button_keyboard(service_id),
+                    )
                     sent_usage_keys.add(usage_key)
                     summary["usage_sent"] += 1
                 new_usage_state = remaining_bucket
