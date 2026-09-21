@@ -277,9 +277,10 @@ async def _fetch_service_node_usage(
             "user_uuid": user_uuid,
             "valid": True,
             "ok": False,
-            "not_found": True,
+            "not_found": False,
+            "server_missing": True,
             "panel_user": None,
-            "error": "server not found",
+            "error": "server configuration missing",
         }
 
     # محدود کردن همزمانی درخواست‌ها به پنل‌ها
@@ -293,6 +294,7 @@ async def _fetch_service_node_usage(
                 "valid": True,
                 "ok": True,
                 "not_found": False,
+                "server_missing": False,
                 "panel_user": panel_user,
                 "error": None,
             }
@@ -338,6 +340,7 @@ async def _fetch_service_node_usage(
                 "valid": True,
                 "ok": False,
                 "not_found": _is_user_not_found_error(e),
+                "server_missing": False,
                 "panel_user": None,
                 "error": e,
             }
@@ -574,6 +577,29 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                         prev_days = None
                 if prev_days is not None:
                     min_days_left = prev_days if min_days_left is None else min(min_days_left, prev_days)
+
+                if bool(result.get("server_missing")) and server_id > 0 and user_uuid:
+                    prev_fail = int(node_rec.get("fail_count") or 0) if node_rec else 0
+                    new_fail = prev_fail + 1
+                    should_freeze = prev_usage > 0.0
+                    if node_rec is not None:
+                        try:
+                            userbot_db.update_service_node_runtime(
+                                service_id,
+                                server_id,
+                                user_uuid,
+                                frozen=1 if should_freeze else 0,
+                                fail_count=new_fail,
+                                frozen_at=(
+                                    str(node_rec.get("frozen_at") or "").strip() or now_str
+                                    if should_freeze
+                                    else ""
+                                ),
+                                frozen_reason="server_missing" if should_freeze else "",
+                            )
+                        except Exception:
+                            pass
+                    continue
 
                 if bool(result.get("not_found")) and server_id > 0 and user_uuid:
                     # list_users هم نبودن UUID را تأیید کرده است. فقط وقتی واقعاً
