@@ -2755,30 +2755,32 @@ async def _recover_frozen_service_now(
     source_code: str,
     service_id: int,
 ) -> Dict[str, Any]:
-    """Check only one frozen service now and thaw nodes that are healthy again."""
+    """Check every node for one service and thaw only previously frozen nodes."""
     source = _frozen_source_code(source_code)
     sid = int(service_id or 0)
-    before_rows = _frozen_service_rows(source, sid)
+    frozen_before = _frozen_service_rows(source, sid)
     result: Dict[str, Any] = {
         "source": source,
         "service_id": sid,
-        "service_name": str((before_rows[0] if before_rows else {}).get("service_name") or f"سرویس #{sid}"),
-        "checked": len(before_rows),
+        "service_name": str((frozen_before[0] if frozen_before else {}).get("service_name") or f"سرویس #{sid}"),
+        "checked": 0,
         "recovered": 0,
         "remaining": 0,
         "nodes": [],
     }
-    if sid <= 0 or not before_rows:
+    if sid <= 0:
         return result
 
-    def _node_key(row: Dict[str, Any]) -> tuple[int, str]:
+    def _key(row: Dict[str, Any]) -> tuple[int, str]:
         return (
             int(row.get("server_id") or 0),
             str(row.get("panel_user_uuid") or "").strip(),
         )
 
-    before_map = {_node_key(row): row for row in before_rows}
+    frozen_keys = {_key(row) for row in frozen_before}
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    live_probe: Dict[tuple[int, str], bool] = {}
+    probe_reason: Dict[tuple[int, str], str] = {}
 
     if source == "a":
         from Shared import agent_db as _ab
@@ -2789,32 +2791,39 @@ async def _recover_frozen_service_now(
             result["error"] = "سرویس نمایندگی در دیتابیس پیدا نشد."
             return result
 
-        # مسیر اصلی AgentBot خودش renew_pending و thaw عادی را مدیریت می‌کند.
+        # Agent Enforcer همان منطق رسمی thaw و renew_pending را اجرا می‌کند.
         try:
             await _ae._process_service(svc)
         except Exception as exc:
             logger.warning("manual frozen agent recovery failed svc=%s: %s", sid, exc)
 
-        # رکورد deleted توسط Enforcer عمداً خوانده نمی‌شود. اگر همان server_id
-        # دوباره در تنظیمات موجود شده و UUID واقعاً روی پنل هست، آن را برگردان.
-        manually_restored = False
-        current_nodes = {
-            _node_key(node): node for node in (_ab.get_service_nodes(sid) or [])
-        }
-        for key, old_row in before_map.items():
-            current = current_nodes.get(key) or {}
-            if int(current.get("deleted") or old_row.get("deleted") or 0) != 1:
+        nodes = _ab.get_service_nodes(sid) or []
+
+        # deleted عمداً توسط Enforcer خوانده نمی‌شود؛ اگر سرور دوباره با همان ID
+        # برگشته باشد، وجود UUID را بررسی و mapping را دوباره فعال می‌کنیم.
+        restored_deleted = False
+        for node in nodes:
+            key = _key(node)
+            if int(node.get("deleted") or 0) != 1:
                 continue
             server_id, user_uuid = key
             server = database.get_server_by_id(server_id)
             if not server:
+                live_probe[key] = False
+                probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
                 continue
             try:
                 panel_user = await _ae._get_user_with_list_fallback(server, user_uuid)
             except Exception:
+                live_probe[key] = False
+                probe_reason[key] = "UUID روی پنل پیدا نشد یا پنل پاسخ نداد"
                 continue
             if not panel_user:
+                live_probe[key] = False
+                probe_reason[key] = "UUID روی پنل پیدا نشد"
                 continue
+
+            live_probe[key] = True
             usage = float(panel_user.get("current_usage_GB") or 0.0)
             days_raw = panel_user.get("remaining_days")
             try:
@@ -2835,17 +2844,34 @@ async def _recover_frozen_service_now(
                 deleted=0,
                 is_active=1 if int(svc.get("is_active") or 0) == 1 else 0,
             )
-            manually_restored = True
+            restored_deleted = True
 
-        if manually_restored:
+        if restored_deleted:
             try:
                 await _ae._process_service(_ab.get_service_by_id(sid) or svc)
             except Exception as exc:
                 logger.warning("agent recovery resync failed svc=%s: %s", sid, exc)
 
-        after_nodes = {
-            _node_key(node): node for node in (_ab.get_service_nodes(sid) or [])
-        }
+        after_nodes = _ab.get_service_nodes(sid) or []
+
+        # برای نمایش نتیجه، همه نودها را همان لحظه probe می‌کنیم. شکست یک probe
+        # سالم را فقط هشدار می‌دهد و باعث freeze جدید نمی‌شود.
+        for node in after_nodes:
+            key = _key(node)
+            if key in live_probe:
+                continue
+            server_id, user_uuid = key
+            server = database.get_server_by_id(server_id)
+            if not server:
+                live_probe[key] = False
+                probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+                continue
+            try:
+                await _ae._get_user_with_list_fallback(server, user_uuid)
+                live_probe[key] = True
+            except Exception:
+                live_probe[key] = False
+                probe_reason[key] = "پنل/UUID در این بررسی پاسخ نداد"
 
     else:
         from Shared import service_enforcer as _se
@@ -2855,16 +2881,21 @@ async def _recover_frozen_service_now(
             result["error"] = "سرویس UserBot در دیتابیس پیدا نشد."
             return result
 
+        before_nodes = userbot_db.get_service_nodes(sid) or []
         recovered_keys: List[tuple[int, str]] = []
-        for key, old_row in before_map.items():
+
+        for node in before_nodes:
+            key = _key(node)
             server_id, user_uuid = key
+            if server_id <= 0 or not user_uuid:
+                continue
             server = database.get_server_by_id(server_id)
             if not server:
+                live_probe[key] = False
+                probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
                 continue
 
-            probe_node = dict(old_row)
-            probe_node["server_id"] = server_id
-            probe_node["panel_user_uuid"] = user_uuid
+            probe_node = dict(node)
             try:
                 probe = await _se._fetch_service_node_usage(
                     service_id=sid,
@@ -2876,12 +2907,28 @@ async def _recover_frozen_service_now(
                     "manual frozen UserBot probe failed svc=%s server=%s: %s",
                     sid, server_id, exc,
                 )
+                live_probe[key] = False
+                probe_reason[key] = "پنل در این بررسی پاسخ نداد"
                 continue
 
             if not bool(probe.get("ok")):
+                live_probe[key] = False
+                if bool(probe.get("server_missing")):
+                    probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+                elif bool(probe.get("not_found")):
+                    probe_reason[key] = "UUID روی پنل پیدا نشد"
+                else:
+                    probe_reason[key] = "پنل در این بررسی پاسخ نداد"
                 continue
 
+            live_probe[key] = True
             panel_user = probe.get("panel_user") or {}
+
+            # نود سالم فقط بررسی می‌شود. نودی که قبل از بررسی frozen/deleted بود
+            # در صورت موفقیت همان لحظه thaw و snapshot آن تازه می‌شود.
+            if key not in frozen_keys:
+                continue
+
             usage = float(panel_user.get("current_usage_GB") or 0.0)
             try:
                 days_left = _se._days_left_from_panel_user(panel_user)
@@ -2904,10 +2951,10 @@ async def _recover_frozen_service_now(
             )
             recovered_keys.append(key)
 
-        after_nodes_list = userbot_db.get_service_nodes(sid) or []
-        total_usage = sum(float(node.get("usage_current") or 0.0) for node in after_nodes_list)
+        after_nodes = userbot_db.get_service_nodes(sid) or []
+        total_usage = sum(float(node.get("usage_current") or 0.0) for node in after_nodes)
         day_values: List[int] = []
-        for node in after_nodes_list:
+        for node in after_nodes:
             if node.get("days_left") is None:
                 continue
             try:
@@ -2944,41 +2991,62 @@ async def _recover_frozen_service_now(
             usage_current=total_usage,
             days_left=min_days,
         )
-        after_nodes = {
-            _node_key(node): node for node in (userbot_db.get_service_nodes(sid) or [])
-        }
+        after_nodes = userbot_db.get_service_nodes(sid) or []
 
-    for key, old_row in before_map.items():
+    after_map = {_key(node): node for node in after_nodes}
+    result["checked"] = len(after_nodes)
+
+    for node in after_nodes:
+        key = _key(node)
         server_id, user_uuid = key
-        title = str(old_row.get("server_title") or f"سرور #{server_id}").strip()
-        current = after_nodes.get(key)
-        if current is not None and int(current.get("frozen") or 0) == 0 and int(current.get("deleted") or 0) == 0:
-            result["recovered"] += 1
-            result["nodes"].append({
-                "server_id": server_id,
-                "title": title,
-                "uuid": user_uuid,
-                "ok": True,
-                "usage_current": float(current.get("usage_current") or 0.0),
-                "reason": "بازیابی شد",
-            })
-            continue
+        title = str(node.get("server_title") or f"سرور #{server_id}").strip()
+        was_frozen = key in frozen_keys
+        is_problem = int(node.get("frozen") or 0) == 1 or int(node.get("deleted") or 0) == 1
+        reachable = bool(live_probe.get(key))
 
-        result["remaining"] += 1
-        row = current or old_row
-        reason = _frozen_reason_text(
-            row.get("frozen_reason"),
-            int(row.get("deleted") or 0) == 1,
-        )
-        if not database.get_server_by_id(server_id):
-            reason = "سرور هنوز در تنظیمات ربات موجود نیست"
+        if was_frozen and not is_problem and reachable:
+            result["recovered"] += 1
+            state = "recovered"
+            reason = "بازیابی شد"
+        elif was_frozen and is_problem:
+            result["remaining"] += 1
+            state = "problem"
+            reason = probe_reason.get(key) or _frozen_reason_text(
+                node.get("frozen_reason"),
+                int(node.get("deleted") or 0) == 1,
+            )
+        elif reachable:
+            state = "healthy"
+            reason = "سالم"
+        else:
+            state = "warning"
+            reason = probe_reason.get(key) or "در این بررسی پاسخ نداد"
+
         result["nodes"].append({
             "server_id": server_id,
             "title": title,
             "uuid": user_uuid,
-            "ok": False,
-            "usage_current": float(row.get("usage_current") or 0.0),
+            "state": state,
+            "ok": state in {"recovered", "healthy"},
+            "usage_current": float(node.get("usage_current") or 0.0),
             "reason": reason,
+        })
+
+    # اگر یک frozen mapping از دیتابیس به هر دلیل حذف شده باشد، آن را در نتیجه
+    # به عنوان حل‌شده حساب نمی‌کنیم مگر اینکه صراحتاً در after_map وجود داشته باشد.
+    for key in frozen_keys:
+        if key in after_map:
+            continue
+        old_row = next((row for row in frozen_before if _key(row) == key), {})
+        result["remaining"] += 1
+        result["nodes"].append({
+            "server_id": key[0],
+            "title": str(old_row.get("server_title") or f"سرور #{key[0]}"),
+            "uuid": key[1],
+            "state": "problem",
+            "ok": False,
+            "usage_current": float(old_row.get("usage_current") or 0.0),
+            "reason": "رکورد نود پس از بررسی در دیتابیس پیدا نشد",
         })
 
     return result
@@ -3012,17 +3080,23 @@ async def send_frozen_recovery_result(
         lines.append(f"⚠️ {escape(str(recovery.get('error')))}")
     else:
         for node in recovery.get("nodes") or []:
-            mark = "✅" if bool(node.get("ok")) else "❌"
+            state = str(node.get("state") or "")
             title = escape(str(node.get("title") or f"سرور #{node.get('server_id')}"))
-            if bool(node.get("ok")):
+            reason = escape(str(node.get("reason") or ""))
+            if state == "recovered":
                 lines.append(
-                    f"{mark} <b>{title}</b> — بازیابی شد | "
+                    f"✅ <b>{title}</b> — بازیابی شد | "
                     f"مصرف فعلی: {_frozen_fmt_usage(node.get('usage_current'))}"
                 )
-            else:
+            elif state == "healthy":
                 lines.append(
-                    f"{mark} <b>{title}</b> — {escape(str(node.get('reason') or 'هنوز مشکل دارد'))}"
+                    f"✅ <b>{title}</b> — سالم | "
+                    f"مصرف فعلی: {_frozen_fmt_usage(node.get('usage_current'))}"
                 )
+            elif state == "warning":
+                lines.append(f"⚠️ <b>{title}</b> — {reason}")
+            else:
+                lines.append(f"❌ <b>{title}</b> — {reason or 'هنوز مشکل دارد'}")
 
     back_rows: List[List[InlineKeyboardButton]] = []
     if remaining > 0:
