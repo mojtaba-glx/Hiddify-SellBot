@@ -163,6 +163,104 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(nodes[2]["frozen_reason"] or ""), "")
         self.assertEqual(int(nodes[2]["is_active"]), 1)
 
+    async def test_failed_child_renewal_stays_pending_until_panel_is_resynced(self):
+        agent_db.update_service_node_runtime(
+            1, 2, "uuid-a",
+            usage_current=7.0,
+            frozen=1,
+            fail_count=3,
+            frozen_at="2026-09-20 12:00:00",
+            frozen_reason="network_error",
+        )
+        agent_db.update_service(
+            1,
+            {
+                "usage_current": 0,
+                "usage_limit": 30,
+                "days_left": 30,
+                "start_date": "2026-09-21 00:00:00",
+                "end_date": "2026-10-21 00:00:00",
+            },
+        )
+        agent_db.reset_service_nodes_on_renew(
+            1,
+            reset_usage=True,
+            reset_time=True,
+            pending_server_ids=[2],
+        )
+
+        pending = next(
+            n for n in agent_db.get_service_nodes(1) if int(n["server_id"]) == 2
+        )
+        self.assertEqual(int(pending["frozen"]), 1)
+        self.assertEqual(int(pending["is_active"]), 0)
+        self.assertAlmostEqual(float(pending["usage_current"]), 0.0)
+        self.assertTrue(str(pending["frozen_reason"]).startswith("renew_pending:"))
+
+        turkey_reads = [
+            {"uuid": "uuid-a", "current_usage_GB": 7.0},
+            {"uuid": "uuid-a", "current_usage_GB": 0.0},
+        ]
+
+        async def get_user(server, _uuid):
+            if int(server["id"]) == 1:
+                return {"uuid": "uuid-a", "current_usage_GB": 2.0}
+            return turkey_reads.pop(0)
+
+        patch_mock = AsyncMock(return_value={"uuid": "uuid-a"})
+        svc = agent_db.get_service_by_id(1)
+        with patch.object(
+            agent_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: {"id": sid, "title": str(sid)},
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "patch_user",
+            new=patch_mock,
+        ):
+            result = await agent_enforcer._process_service(svc)
+
+        self.assertEqual(result["status"], "synced")
+        patch_mock.assert_awaited_once()
+        patch_payload = patch_mock.await_args.args[2]
+        self.assertEqual(float(patch_payload["usage_limit_GB"]), 30.0)
+        self.assertEqual(int(patch_payload["package_days"]), 30)
+        self.assertEqual(float(patch_payload["current_usage_GB"]), 0.0)
+        self.assertEqual(patch_payload["start_date"], "2026-09-21")
+
+        nodes = {int(n["server_id"]): n for n in agent_db.get_service_nodes(1)}
+        self.assertEqual(int(nodes[2]["frozen"]), 0)
+        self.assertEqual(int(nodes[2]["is_active"]), 1)
+        self.assertEqual(str(nodes[2]["frozen_reason"] or ""), "")
+        self.assertAlmostEqual(float(nodes[2]["usage_current"]), 0.0)
+        self.assertAlmostEqual(float(agent_db.get_service_by_id(1)["usage_current"]), 2.0)
+
+    async def test_add_mode_renewal_preserves_snapshot_but_clears_reachable_freeze(self):
+        agent_db.update_service_node_runtime(
+            1, 2, "uuid-a",
+            usage_current=7.0,
+            frozen=1,
+            fail_count=3,
+            frozen_at="2026-09-20 12:00:00",
+            frozen_reason="network_error",
+        )
+        agent_db.reset_service_nodes_on_renew(
+            1,
+            reset_usage=False,
+            reset_time=False,
+            pending_server_ids=[],
+        )
+        node = next(
+            n for n in agent_db.get_service_nodes(1) if int(n["server_id"]) == 2
+        )
+        self.assertAlmostEqual(float(node["usage_current"]), 7.0)
+        self.assertEqual(int(node["frozen"]), 0)
+        self.assertEqual(int(node["fail_count"]), 0)
+
     async def test_deleted_server_holds_usage_until_renewal(self):
         agent_db.update_service_node_runtime(
             1, 2, "uuid-a", usage_current=6.25, last_ok_at="2026-09-20 12:00:00"
