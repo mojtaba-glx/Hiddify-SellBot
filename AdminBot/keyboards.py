@@ -16,9 +16,8 @@ BTN_DAILY_REPORT = "📊 گزارش روزانه"
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(BTN_SERVERS)],
-        [KeyboardButton(BTN_SEARCH_USER)],
+        [KeyboardButton(BTN_SEARCH_USER), KeyboardButton(BTN_DAILY_REPORT)],
         [KeyboardButton(BTN_USERBOT)],
-        [KeyboardButton(BTN_DAILY_REPORT)],
         [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_AGENCIES), KeyboardButton(BTN_BACKUP)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, selective=True)
