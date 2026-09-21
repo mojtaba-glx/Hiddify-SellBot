@@ -658,6 +658,8 @@ def _migrate_db():
         ("frozen", "INTEGER DEFAULT 0"),
         ("fail_count", "INTEGER DEFAULT 0"),
         ("last_ok_at", "TEXT"),
+        ("frozen_at", "TEXT DEFAULT ''"),
+        ("frozen_reason", "TEXT DEFAULT ''"),
         ("deleted", "INTEGER DEFAULT 0"),
     ):
         if _col not in existing_cols:
@@ -3264,6 +3266,8 @@ def update_service_node_runtime(
     frozen: Optional[int] = None,
     fail_count: Optional[int] = None,
     last_ok_at: Optional[str] = None,
+    frozen_at: Optional[str] = None,
+    frozen_reason: Optional[str] = None,
 ) -> None:
     """بروزرسانی وضعیت زمان‌بندی‌شدهٔ یک نود (مصرف/روز/یخ‌زدگی/خطا).
     فقط فیلدهایی که مقدار دارند آپدیت می‌شوند."""
@@ -3289,6 +3293,12 @@ def update_service_node_runtime(
     if last_ok_at is not None:
         parts.append("last_ok_at = ?")
         params.append(str(last_ok_at))
+    if frozen_at is not None:
+        parts.append("frozen_at = ?")
+        params.append(str(frozen_at))
+    if frozen_reason is not None:
+        parts.append("frozen_reason = ?")
+        params.append(str(frozen_reason))
     if not parts:
         return
     params.extend([sid, srv, uuid])
@@ -3341,10 +3351,12 @@ def hold_deleted_server_nodes(server_id: int) -> List[int]:
         cur.execute(
             """
             UPDATE userbot_service_nodes
-            SET deleted = 1, frozen = 1, is_active = 0, updated_at = ?
+            SET deleted = 1, frozen = 1, is_active = 0,
+                frozen_at = CASE WHEN COALESCE(frozen_at,'') = '' THEN ? ELSE frozen_at END,
+                frozen_reason = 'server_deleted', updated_at = ?
             WHERE server_id = ? AND COALESCE(deleted, 0) = 0
             """,
-            (now, srv),
+            (now, now, srv),
         )
         cur.execute(
             "SELECT DISTINCT service_id FROM userbot_service_nodes WHERE server_id = ? AND deleted = 1",
@@ -3375,7 +3387,8 @@ def reset_service_nodes_on_renew(service_id: int) -> None:
             """
             UPDATE userbot_service_nodes
             SET usage_current = 0, days_left = NULL, frozen = 0, fail_count = 0,
-                last_ok_at = NULL, is_active = 1, updated_at = ?
+                last_ok_at = NULL, frozen_at = '', frozen_reason = '',
+                is_active = 1, updated_at = ?
             WHERE service_id = ?
             """,
             (now, sid),
