@@ -87,6 +87,32 @@ def _is_user_not_found_error(exc: Exception) -> bool:
     )
 
 
+async def _get_user_with_list_fallback(
+    server: Dict[str, Any],
+    user_uuid: str,
+) -> Dict[str, Any]:
+    """Read one user without trusting Hiddify's direct UUID endpoint alone."""
+    try:
+        return await hiddify_api.get_user_by_uuid(server, user_uuid)
+    except Exception as exc:
+        if not _is_user_not_found_error(exc):
+            raise
+        try:
+            users = await hiddify_api.list_users(server)
+        except Exception:
+            # نبودن کاربر قطعی نشده؛ خطای اصلی را به‌عنوان خطای پنل نگه دار.
+            raise exc
+        for candidate in users or []:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_uuid = str(
+                candidate.get("uuid") or candidate.get("id") or ""
+            ).strip()
+            if candidate_uuid == user_uuid:
+                return candidate
+        raise
+
+
 def _service_mappings(svc: dict) -> List[dict]:
     """Ensure old agency services also have per-node rows before accounting."""
     service_id = _to_int(svc.get("id"), 0)
@@ -218,7 +244,7 @@ async def _process_service(svc: dict) -> Dict[str, str]:
             continue
 
         try:
-            user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
+            user_data = await _get_user_with_list_fallback(srv, uuid)
 
             frozen_reason = str(node.get("frozen_reason") or "").strip()
             if frozen_reason.startswith("renew_pending:"):
@@ -228,7 +254,7 @@ async def _process_service(svc: dict) -> Dict[str, str]:
                 try:
                     if pending_payload:
                         await hiddify_api.patch_user(srv, uuid, pending_payload)
-                    user_data = await hiddify_api.get_user_by_uuid(srv, uuid)
+                    user_data = await _get_user_with_list_fallback(srv, uuid)
                 except Exception as pending_err:
                     total_usage += prev_usage
                     frozen_count += 1
@@ -283,12 +309,16 @@ async def _process_service(svc: dict) -> Dict[str, str]:
             was_frozen = int(node.get("frozen") or 0) == 1
 
             if _is_user_not_found_error(e):
-                frozen = 1
-                reason = "user_not_found"
+                frozen = 1 if prev_usage > 0.0 else 0
+                reason = "user_not_found" if frozen else ""
                 active = 0
             else:
-                frozen = 1 if new_fail >= AGENT_ENFORCER_NODE_FROZEN_THRESHOLD else int(was_frozen)
-                reason = "network_error" if frozen else str(node.get("frozen_reason") or "")
+                frozen = (
+                    1
+                    if prev_usage > 0.0 and new_fail >= AGENT_ENFORCER_NODE_FROZEN_THRESHOLD
+                    else (int(was_frozen) if prev_usage > 0.0 else 0)
+                )
+                reason = "network_error" if frozen else ""
                 active = int(node.get("is_active") if node.get("is_active") is not None else 1)
 
             if frozen:
