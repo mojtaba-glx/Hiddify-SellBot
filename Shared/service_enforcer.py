@@ -346,6 +346,141 @@ async def _fetch_service_node_usage(
             }
 
 
+async def recover_service_nodes_now(service_id: int) -> Dict[str, Any]:
+    """Probe one UserBot service immediately and thaw only nodes that are truly back."""
+    sid = int(service_id or 0)
+    result: Dict[str, Any] = {
+        "service_id": sid,
+        "checked": 0,
+        "recovered": 0,
+        "still_failed": 0,
+        "nodes": [],
+    }
+    if sid <= 0:
+        result["error"] = "invalid_service_id"
+        return result
+
+    service = userbot_db.get_service_by_id(sid)
+    if not service:
+        result["error"] = "service_not_found"
+        return result
+
+    mappings = _get_or_create_mappings_for_service(service)
+    if not mappings:
+        result["error"] = "no_mappings"
+        return result
+
+    try:
+        all_servers = database.get_servers()
+        servers_map: Dict[int, Dict[str, Any]] = {
+            int(s.get("id") or 0): s
+            for s in all_servers
+            if isinstance(s, dict) and int(s.get("id") or 0) > 0
+        }
+    except Exception:
+        servers_map = {}
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    recovered_keys: set[tuple[int, str]] = set()
+
+    fetch_results = await asyncio.gather(*[
+        _fetch_service_node_usage(
+            service_id=sid,
+            node=node,
+            servers_map=servers_map,
+        )
+        for node in mappings
+    ])
+
+    for node, probe in zip(mappings, fetch_results):
+        server_id = int(node.get("server_id") or 0)
+        user_uuid = str(node.get("panel_user_uuid") or "").strip()
+        title = str(node.get("server_title") or f"سرور #{server_id}").strip()
+        result["checked"] += 1
+
+        if bool(probe.get("ok")):
+            panel_user = probe.get("panel_user") or {}
+            usage = _to_float(panel_user.get("current_usage_GB"), 0.0)
+            days_left = _days_left_from_panel_user(panel_user)
+            userbot_db.update_service_node_runtime(
+                sid,
+                server_id,
+                user_uuid,
+                usage_current=usage,
+                days_left=days_left,
+                frozen=0,
+                fail_count=0,
+                last_ok_at=now_str,
+                frozen_at="",
+                frozen_reason="",
+                deleted=0,
+            )
+            recovered_keys.add((server_id, user_uuid))
+            result["recovered"] += 1
+            result["nodes"].append({
+                "server_id": server_id,
+                "server_title": title,
+                "uuid": user_uuid,
+                "status": "recovered",
+                "usage_current": usage,
+            })
+            continue
+
+        if bool(probe.get("server_missing")):
+            reason = "server_missing"
+        elif bool(probe.get("not_found")):
+            reason = "user_not_found"
+        else:
+            reason = "network_error"
+
+        result["still_failed"] += 1
+        result["nodes"].append({
+            "server_id": server_id,
+            "server_title": title,
+            "uuid": user_uuid,
+            "status": "failed",
+            "reason": reason,
+            "usage_current": _to_float(node.get("usage_current"), 0.0),
+        })
+
+    # Recalculate service usage from the refreshed per-node snapshots.
+    refreshed = userbot_db.get_service_nodes(sid) or []
+    total_usage = sum(_to_float(node.get("usage_current"), 0.0) for node in refreshed)
+
+    min_days_left: Optional[int] = None
+    for node in refreshed:
+        if node.get("days_left") is None:
+            continue
+        try:
+            value = int(node.get("days_left"))
+        except Exception:
+            continue
+        min_days_left = value if min_days_left is None else min(min_days_left, value)
+
+    userbot_db.update_service_runtime(
+        service_id=sid,
+        usage_current=total_usage,
+        days_left=min_days_left,
+    )
+
+    usage_limit = _to_float(service.get("usage_limit"), 0.0)
+    expired_by_usage = usage_limit > 0 and total_usage >= usage_limit
+    expired_by_time = min_days_left is not None and min_days_left < 0
+    can_reactivate = not expired_by_usage and not expired_by_time
+
+    if can_reactivate:
+        for server_id, user_uuid in recovered_keys:
+            try:
+                userbot_db.set_service_node_active(sid, server_id, user_uuid, 1)
+            except Exception:
+                pass
+
+    result["usage_current"] = total_usage
+    result["days_left"] = min_days_left
+    result["reactivated"] = 1 if can_reactivate and recovered_keys else 0
+    return result
+
+
 async def _disable_service_on_all_nodes(
     service_id: int,
     mappings: list[Dict[str, Any]],
