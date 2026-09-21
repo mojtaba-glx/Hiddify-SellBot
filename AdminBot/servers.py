@@ -2302,7 +2302,8 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
 
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")])
 
-    keyboard.append([InlineKeyboardButton("❄️ گزارش کاربران یخ‌زده", callback_data="servers:frozen:1")])\r\n    keyboard.append([InlineKeyboardButton("افزودن سرور➕", callback_data="servers:add")])
+    keyboard.append([InlineKeyboardButton("❄️ گزارش کاربران یخ‌زده", callback_data="servers:frozen:1")])
+    keyboard.append([InlineKeyboardButton("افزودن سرور➕", callback_data="servers:add")])
     return InlineKeyboardMarkup(keyboard)
 
 
