@@ -181,6 +181,10 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
             "get_user_by_uuid",
             new=AsyncMock(side_effect=RuntimeError("not found")),
         ) as get_mock, patch.object(
+            multi_panel,
+            "list_users",
+            new=AsyncMock(side_effect=RuntimeError("list unavailable")),
+        ), patch.object(
             multi_panel.asyncio,
             "sleep",
             new=AsyncMock(),
@@ -189,7 +193,7 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
                 await multi_panel.create_user_with_uuid(server, payload)
 
         create_mock.assert_awaited_once_with(server, payload)
-        self.assertEqual(get_mock.await_count, 2)
+        self.assertEqual(get_mock.await_count, 4)
 
     async def test_cluster_does_not_retry_primary_create_after_timeout_failure(self):
         targets = [{"id": 1, "title": "main"}]
