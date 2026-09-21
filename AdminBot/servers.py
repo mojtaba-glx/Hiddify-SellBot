@@ -2269,7 +2269,8 @@ def _format_node_sync_report(summary: Dict[str, Any]) -> str:
 
 
 def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
-    servers = database.get_servers()
+    servers = database.get_servers() or []
+    child_ids = _get_child_server_ids()
     keyboard: List[List[InlineKeyboardButton]] = []
     for s in servers:
         sid = s.get("id")
