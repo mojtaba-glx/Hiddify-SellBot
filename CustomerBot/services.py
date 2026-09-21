@@ -143,26 +143,14 @@ async def buy_service(
         panel_user = None
         primary_marzban = ""
         for idx, tgt in enumerate(targets):
-            created = None
-            last_exc = None
-            for attempt in (1, 2):
-                try:
-                    created = await multi_panel.create_user_with_uuid(tgt, payload)
-                    last_exc = None
-                    break
-                except Exception as e:
-                    last_exc = e
-                    msg = str(e).lower()
-                    is_transient = any(k in msg for k in ("readerror", "connecterror", "timeout", "timed out", "connection", "temporarily"))
-                    if is_transient and attempt == 1:
-                        logger.warning("Cluster node create_user transient retry server=%s attempt=%s: %s", tgt.get("id"), attempt, e)
-                        await asyncio.sleep(0.7)
-                        continue
-                    break
-            if created is None:
+            try:
+                created = await multi_panel.create_user_with_uuid(tgt, payload)
+            except Exception as e:
+                # Timeout recovery happens inside create_user_with_uuid.
+                # Never issue a second create POST for the same UUID here.
                 raise RuntimeError(
-                    f"cluster user creation failed on server {tgt.get('id')}: {last_exc}"
-                ) from last_exc
+                    f"cluster user creation failed on server {tgt.get('id')}: {e}"
+                ) from e
             created_uuid = str(created.get("uuid") or created.get("id") or "").strip()
             if created_uuid != shared_uuid:
                 raise RuntimeError(
