@@ -103,6 +103,26 @@ class UserBotFrozenReportDbTests(unittest.TestCase):
         summary = userbot_db.get_frozen_nodes_summary()
         self.assertEqual(summary["frozen_nodes"], 0)
 
+    def test_clear_frozen_snapshot_removes_held_usage_only(self):
+        conn = userbot_db._get_conn()
+        try:
+            conn.execute(
+                "UPDATE userbot_service_nodes SET usage_current = 0.012 WHERE service_id = 1"
+            )
+            conn.execute(
+                "UPDATE userbot_services SET usage_current = 0.020 WHERE id = 1"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        removed = userbot_db.clear_frozen_service_nodes(1)
+        self.assertEqual(removed, 1)
+        self.assertEqual(userbot_db.get_frozen_nodes_report(), [])
+        self.assertEqual(userbot_db.get_service_nodes(1), [])
+        service = userbot_db.get_service_by_id(1)
+        self.assertAlmostEqual(float(service["usage_current"]), 0.008)
+
     def test_positive_snapshot_is_reported(self):
         conn = userbot_db._get_conn()
         try:
