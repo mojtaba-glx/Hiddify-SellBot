@@ -2310,9 +2310,7 @@ async def send_servers_list(
     context: ContextTypes.DEFAULT_TYPE,
     message=None,
 ) -> None:
-    servers = database.get_servers()
-    child_ids = _get_child_server_ids()
-    count = sum(1 for s in servers if int((s or {}).get("id") or 0) not in child_ids)
+    servers = database.get_servers() or []
     text = (
         "‏🖥 مدیریت سرورها\n"
         "⬇️ لیست سرور های شما"
