@@ -139,6 +139,14 @@ def init_db() -> None:
             panel_user_id TEXT DEFAULT '',
             marzban_username TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
+            usage_current REAL DEFAULT 0,
+            days_left INTEGER,
+            frozen INTEGER DEFAULT 0,
+            fail_count INTEGER DEFAULT 0,
+            last_ok_at TEXT DEFAULT '',
+            frozen_at TEXT DEFAULT '',
+            frozen_reason TEXT DEFAULT '',
+            deleted INTEGER DEFAULT 0,
             created_at TEXT DEFAULT '',
             updated_at TEXT DEFAULT '',
             UNIQUE(service_id, server_id, panel_user_uuid)
@@ -293,6 +301,25 @@ def _migrate_db():
             cur.execute("ALTER TABLE agent_service_nodes ADD COLUMN marzban_username TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+
+    # runtime/frozen-accounting columns for agent_service_nodes
+    for _col, _ddl in (
+        ("usage_current", "REAL DEFAULT 0"),
+        ("days_left", "INTEGER"),
+        ("frozen", "INTEGER DEFAULT 0"),
+        ("fail_count", "INTEGER DEFAULT 0"),
+        ("last_ok_at", "TEXT DEFAULT ''"),
+        ("frozen_at", "TEXT DEFAULT ''"),
+        ("frozen_reason", "TEXT DEFAULT ''"),
+        ("deleted", "INTEGER DEFAULT 0"),
+    ):
+        try:
+            cur.execute(f"SELECT {_col} FROM agent_service_nodes LIMIT 1")
+        except sqlite3.OperationalError:
+            try:
+                cur.execute(f"ALTER TABLE agent_service_nodes ADD COLUMN {_col} {_ddl}")
+            except sqlite3.OperationalError:
+                pass
 
     # deleted_at ستون برای agent_services (soft-delete)
     try:
@@ -2125,6 +2152,22 @@ def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float 
             (new_days_left, new_usage_limit, now.strftime("%Y-%m-%d %H:%M:%S"),
              new_end_str, operation_key, _now(), service_id),
         )
+    # هر تمدید یک دوره runtime تازه برای حسابداری نودها شروع می‌کند.
+    # مصرف/فریز نودهای حذف‌شده مربوط به دوره قبل است و نباید برای دوره جدید بماند.
+    cur.execute(
+        "DELETE FROM agent_service_nodes WHERE service_id = ? AND COALESCE(deleted,0) = 1",
+        (service_id,),
+    )
+    cur.execute(
+        """
+        UPDATE agent_service_nodes
+        SET usage_current = 0, days_left = NULL, frozen = 0, fail_count = 0,
+            last_ok_at = '', frozen_at = '', frozen_reason = '',
+            is_active = 1, updated_at = ?
+        WHERE service_id = ?
+        """,
+        (_now(), service_id),
+    )
     conn.commit()
     conn.close()
     return True
@@ -2266,7 +2309,7 @@ def add_service_node(
         return dict(row) if row else {}
     except sqlite3.IntegrityError:
         # تکراری — بروزرسانی
-        update_fields = "is_active = 1, panel_user_id = ?, updated_at = ?"
+        update_fields = "is_active = 1, deleted = 0, panel_user_id = ?, updated_at = ?"
         update_params = [panel_user_id, now]
         if marzban_username:
             update_fields += ", marzban_username = ?"
@@ -2320,6 +2363,181 @@ def set_service_nodes_active(service_id: int, is_active: bool) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def update_service_node_runtime(
+    service_id: int,
+    server_id: int,
+    panel_user_uuid: str,
+    *,
+    usage_current: Optional[float] = None,
+    days_left: Optional[int] = None,
+    frozen: Optional[int] = None,
+    fail_count: Optional[int] = None,
+    last_ok_at: Optional[str] = None,
+    frozen_at: Optional[str] = None,
+    frozen_reason: Optional[str] = None,
+    deleted: Optional[int] = None,
+    is_active: Optional[int] = None,
+) -> None:
+    """Persist per-node runtime/frozen accounting for an agency service."""
+    sid = int(service_id or 0)
+    srv = int(server_id or 0)
+    uuid = str(panel_user_uuid or "").strip()
+    if sid <= 0 or srv <= 0 or not uuid:
+        return
+    parts: List[str] = []
+    params: List[Any] = []
+    values = (
+        ("usage_current", usage_current, float),
+        ("days_left", days_left, int),
+        ("frozen", frozen, lambda v: int(bool(v))),
+        ("fail_count", fail_count, int),
+        ("last_ok_at", last_ok_at, str),
+        ("frozen_at", frozen_at, str),
+        ("frozen_reason", frozen_reason, str),
+        ("deleted", deleted, lambda v: int(bool(v))),
+        ("is_active", is_active, lambda v: int(bool(v))),
+    )
+    for col, value, cast in values:
+        if value is None:
+            continue
+        parts.append(f"{col} = ?")
+        params.append(cast(value))
+    if not parts:
+        return
+    parts.append("updated_at = ?")
+    params.append(_now())
+    params.extend([sid, srv, uuid])
+    conn = _get_conn()
+    try:
+        conn.execute(
+            f"UPDATE agent_service_nodes SET {', '.join(parts)} "
+            "WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def hold_deleted_server_nodes(server_id: int) -> List[int]:
+    """Freeze agency-node usage when a server is removed from servers.json."""
+    srv = int(server_id or 0)
+    if srv <= 0:
+        return []
+    now = _now()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE agent_service_nodes
+            SET deleted = 1, frozen = 1, is_active = 0,
+                frozen_at = CASE WHEN COALESCE(frozen_at,'') = '' THEN ? ELSE frozen_at END,
+                frozen_reason = 'server_deleted', updated_at = ?
+            WHERE server_id = ? AND COALESCE(deleted,0) = 0
+            """,
+            (now, now, srv),
+        )
+        rows = conn.execute(
+            "SELECT DISTINCT service_id FROM agent_service_nodes WHERE server_id = ? AND deleted = 1",
+            (srv,),
+        ).fetchall()
+        conn.commit()
+        return [int(r["service_id"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def reset_service_nodes_on_renew(service_id: int) -> None:
+    """Start a fresh agency accounting period after renewal."""
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return
+    now = _now()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM agent_service_nodes WHERE service_id = ? AND COALESCE(deleted,0) = 1",
+            (sid,),
+        )
+        conn.execute(
+            """
+            UPDATE agent_service_nodes
+            SET usage_current = 0, days_left = NULL, frozen = 0, fail_count = 0,
+                last_ok_at = '', frozen_at = '', frozen_reason = '',
+                is_active = 1, updated_at = ?
+            WHERE service_id = ?
+            """,
+            (now, sid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_frozen_nodes_summary() -> Dict[str, int]:
+    """Summary used by admin dashboards/reports."""
+    init_db()
+    conn = _get_conn()
+    try:
+        frozen = int(conn.execute(
+            "SELECT COUNT(*) FROM agent_service_nodes "
+            "WHERE COALESCE(frozen,0)=1 AND COALESCE(deleted,0)=0"
+        ).fetchone()[0] or 0)
+        deleted = int(conn.execute(
+            "SELECT COUNT(*) FROM agent_service_nodes WHERE COALESCE(deleted,0)=1"
+        ).fetchone()[0] or 0)
+        services = int(conn.execute(
+            "SELECT COUNT(DISTINCT service_id) FROM agent_service_nodes "
+            "WHERE COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1"
+        ).fetchone()[0] or 0)
+        usage = float(conn.execute(
+            "SELECT COALESCE(SUM(usage_current),0) FROM agent_service_nodes "
+            "WHERE COALESCE(frozen,0)=1 OR COALESCE(deleted,0)=1"
+        ).fetchone()[0] or 0)
+        return {
+            "frozen_nodes": frozen,
+            "deleted_nodes": deleted,
+            "frozen_services": services,
+            "frozen_usage_gb": usage,
+        }
+    except Exception:
+        return {
+            "frozen_nodes": 0,
+            "deleted_nodes": 0,
+            "frozen_services": 0,
+            "frozen_usage_gb": 0.0,
+        }
+    finally:
+        conn.close()
+
+
+def get_frozen_nodes_report(limit: int = 100) -> List[Dict[str, Any]]:
+    """Detailed frozen/deleted agency-node rows for the admin report."""
+    init_db()
+    lim = max(1, min(int(limit or 100), 500))
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT n.*, s.name AS service_name, s.agent_id, s.customer_id,
+                   s.usage_limit AS service_usage_limit,
+                   a.username AS agent_username, a.full_name AS agent_full_name,
+                   c.username AS customer_username, c.full_name AS customer_full_name
+            FROM agent_service_nodes n
+            JOIN agent_services s ON s.id = n.service_id
+            LEFT JOIN agent_users a ON a.id = s.agent_id
+            LEFT JOIN agent_customers c ON c.id = s.customer_id
+            WHERE COALESCE(n.frozen,0)=1 OR COALESCE(n.deleted,0)=1
+            ORDER BY COALESCE(NULLIF(n.frozen_at,''), n.updated_at, n.created_at) DESC, n.id DESC
+            LIMIT ?
+            """,
+            (lim,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def get_agent_services_for_reminder(agent_id: int) -> List[Dict[str, Any]]:
