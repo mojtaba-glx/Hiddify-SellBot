@@ -162,7 +162,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = (update.message.text or update.message.caption or "").strip()
     from AgentBot.keyboards import (
         BTN_SUBSCRIPTIONS, BTN_WALLET, BTN_PLANS, BTN_CUSTOMER_BOT,
-        BTN_TICKETS, BTN_SETTINGS, BTN_BACK,
+        BTN_TICKETS, BTN_SETTINGS, BTN_BACK, BTN_FINANCE,
     )
     state = context.user_data.get(UD_STATE)
 
