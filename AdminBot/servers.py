@@ -2314,31 +2314,9 @@ async def send_servers_list(
     servers = database.get_servers()
     child_ids = _get_child_server_ids()
     count = sum(1 for s in servers if int((s or {}).get("id") or 0) not in child_ids)
-    # خلاصه یخ‌زدگی برای داشبورد: UserBot + AgentBot
-    try:
-        from Shared import userbot_db as _ub
-        from Shared import agent_db as _ab
-        _ufr = _ub.get_frozen_nodes_summary()
-        _afr = _ab.get_frozen_nodes_summary()
-        _u_frozen = int(_ufr.get("frozen_nodes") or 0)
-        _u_deleted = int(_ufr.get("deleted_nodes") or 0)
-        _a_frozen = int(_afr.get("frozen_nodes") or 0)
-        _a_deleted = int(_afr.get("deleted_nodes") or 0)
-        _total_frozen = _u_frozen + _a_frozen
-        _total_deleted = _u_deleted + _a_deleted
-        if _total_frozen or _total_deleted:
-            _frozen_line = (
-                f"\n❄️ یخ‌زده: {_total_frozen} نود | 🗑 حذف‌شده: {_total_deleted} نود"
-                f"\n👤 کاربران: {_u_frozen + _u_deleted} | 🏢 نمایندگی/مشتری: {_a_frozen + _a_deleted}"
-            )
-        else:
-            _frozen_line = "\n✅ همه نودها فعال"
-    except Exception:
-        _frozen_line = ""
     text = (
         "‏🖥 مدیریت سرورها\n"
         "⬇️ لیست سرور های شما"
-        f"{_frozen_line}"
     )
     kb = build_servers_inline_keyboard()
 
@@ -2419,7 +2397,11 @@ async def send_frozen_nodes_report(
             grouped[key]["latest"] = _sort_key(row)
 
     groups = list(grouped.values())
-    groups.sort(key=lambda g: str(g.get("latest") or ""), reverse=True)
+    user_groups = [g for g in groups if g.get("source") == "userbot"]
+    agent_groups = [g for g in groups if g.get("source") == "agent"]
+    user_groups.sort(key=lambda g: str(g.get("latest") or ""), reverse=True)
+    agent_groups.sort(key=lambda g: str(g.get("latest") or ""), reverse=True)
+    groups = user_groups + agent_groups
 
     page_size = 4
     total_services = len(groups)
@@ -2453,9 +2435,9 @@ async def send_frozen_nodes_report(
         if deleted or reason == "server_deleted":
             return "سرور/نود حذف شده"
         if reason == "user_not_found":
-            return "UUID روی پنل پیدا نشد"
+            return "UUID پس از بررسی لیست کاربران پنل پیدا نشد"
         if reason == "network_error":
-            return "قطعی یا خطای ارتباط با پنل"
+            return "خطای ارتباط با پنل پس از چند تلاش"
         if reason.startswith("renew_pending:"):
             return "تمدید این نود هنوز همگام نشده"
         if reason:
