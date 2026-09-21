@@ -11,7 +11,7 @@ from AgentBot.handlers import (
     subscriptions, wallet, plans, customer_bot, tickets,
     settings_users, settings_orders, settings_transactions, settings_gifts,
     settings_shop, settings_payment, settings_customer_payments, settings_broadcast,
-    settings_forcejoin,
+    settings_forcejoin, finance,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
         "ticket": tickets,
         "broadcast": settings_broadcast,
         "custpay": settings_customer_payments,
+        "finance": finance,
         "set": None,
         "shop": settings_shop,
         "pay": settings_payment,
@@ -178,6 +179,7 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         BTN_PLANS: plans,
         BTN_CUSTOMER_BOT: customer_bot,
         BTN_TICKETS: tickets,
+        BTN_FINANCE: finance,
         BTN_SETTINGS: None,
     }
     if text in menu_map or text in ("❌ لغو", "/cancel"):
