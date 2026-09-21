@@ -555,6 +555,7 @@ async def _run_subscription_reminder_cycle() -> dict:
                     await bot.send_message(
                         chat_id=telegram_id,
                         text=_build_renewal_reminder_message(service_name, days_left=days_left),
+                    reply_markup=_build_renew_button_keyboard(service_id),
                     )
                     sent_days_keys.add(day_key)
                     summary["days_sent"] += 1
@@ -569,6 +570,7 @@ async def _run_subscription_reminder_cycle() -> dict:
                     await bot.send_message(
                         chat_id=telegram_id,
                         text=_build_renewal_reminder_message(service_name, remaining_gb=remaining_bucket),
+                    reply_markup=_build_renew_button_keyboard(service_id),
                     )
                     sent_usage_keys.add(usage_key)
                     summary["usage_sent"] += 1
