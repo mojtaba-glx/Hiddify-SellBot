@@ -2430,6 +2430,19 @@ async def send_frozen_nodes_report(
             return f"{kb_value:.0f} KB"
         return "0"
 
+    def _fmt_time(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "ثبت نشده"
+        try:
+            from zoneinfo import ZoneInfo
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return raw
+
     def _reason_text(raw: Any, deleted: bool) -> str:
         reason = str(raw or "").strip()
         if deleted or reason == "server_deleted":
@@ -2505,13 +2518,21 @@ async def send_frozen_nodes_report(
             sample = group["sample"]
             group_rows = list(group["rows"])
             group_usage = sum(float(r.get("usage_current") or 0.0) for r in group_rows)
-            uuid = str(sample.get("panel_user_uuid") or "").strip()
-            short_uuid = uuid if len(uuid) <= 22 else f"{uuid[:8]}…{uuid[-6:]}"
+            uuids = {
+                str(r.get("panel_user_uuid") or "").strip()
+                for r in group_rows
+                if str(r.get("panel_user_uuid") or "").strip()
+            }
+            shared_uuid = next(iter(uuids)) if len(uuids) == 1 else ""
 
             lines.extend([
                 f"{idx}) <b>{escape(str(group['service_name']))}</b>",
                 f"👤 {_owner_text(sample, source)}",
-                f"🆔 <code>{escape(short_uuid)}</code>",
+                (
+                    f"🆔 <code>{escape(shared_uuid if len(shared_uuid) <= 22 else shared_uuid[:8] + '…' + shared_uuid[-6:])}</code>"
+                    if shared_uuid
+                    else "🆔 UUID: چندگانه / سرویس قدیمی"
+                ),
                 f"📊 مصرف محفوظ این سرویس: <b>{_fmt_usage(group_usage)}</b>",
             ])
 
@@ -2525,13 +2546,20 @@ async def send_frozen_nodes_report(
                 reason_text = _reason_text(row.get("frozen_reason"), deleted)
                 status = "🗑 حذف‌شده" if deleted else "❄️ یخ‌زده"
 
+                node_uuid = str(row.get("panel_user_uuid") or "").strip()
+                short_node_uuid = (
+                    node_uuid
+                    if len(node_uuid) <= 22
+                    else f"{node_uuid[:8]}…{node_uuid[-6:]}"
+                )
                 lines.extend([
                     f"  • 🖥 <b>{escape(server_title)}</b> — {status}",
+                    f"    🆔 <code>{escape(short_node_uuid)}</code>",
                     f"    💾 مصرف نگه‌داشته: {usage_text}",
                     f"    ⚠️ علت: {escape(reason_text)}",
                     f"    ❌ خطاهای متوالی: {fail_count}",
-                    f"    🧊 شروع یخ‌زدگی: {escape(frozen_at) if frozen_at else 'ثبت نشده'}",
-                    f"    🕒 آخرین دریافت موفق: {escape(last_ok) if last_ok else 'ثبت نشده'}",
+                    f"    🧊 شروع یخ‌زدگی: {_fmt_time(frozen_at)} (ایران)",
+                    f"    🕒 آخرین دریافت موفق: {_fmt_time(last_ok)} (ایران)",
                 ])
             lines.append("")
 
