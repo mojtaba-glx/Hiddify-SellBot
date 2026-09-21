@@ -7,6 +7,7 @@ import os
 import sys
 import math
 import socket
+import sqlite3
 import time
 from types import SimpleNamespace
 from pathlib import Path
@@ -89,6 +90,8 @@ DB_PATH = ROOT_DIR / "Shared" / "hiddify_sellbot.db"
 SERVERS_JSON_PATH = ROOT_DIR / "Shared" / "servers.json"
 PLANS_JSON_PATH = ROOT_DIR / "Shared" / "plans.json"
 VERSION_PATH = ROOT_DIR / "VERSION"
+AGENCY_DB_PATH = ROOT_DIR / "Shared" / "agency.db"
+CUSTOMER_DB_PATH = ROOT_DIR / "customer_bot.db"
 
 # Reduce third-party HTTP verbosity to avoid leaking bot tokens in request URLs.
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -128,6 +131,22 @@ def _file_state(path: Path) -> str:
         return f"✅ {size_kb:.1f}KB | {mtime}"
     except Exception as e:
         return f"⚠️ خطا: {e}"
+
+
+def _sqlite_quick_check(path: Path) -> str:
+    """Fast read-only SQLite integrity check for the debug report."""
+    if not path.exists():
+        return "❌ وجود ندارد"
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3)
+        try:
+            row = conn.execute("PRAGMA quick_check").fetchone()
+            result = str(row[0] if row else "").strip()
+            return "✅ integrity OK" if result.lower() == "ok" else f"❌ {result or 'نامشخص'}"
+        finally:
+            conn.close()
+    except Exception as e:
+        return f"⚠️ خطا: {type(e).__name__}: {e}"
 
 
 def _tail_lines(path: Path, limit: int = 200) -> list[str]:
@@ -263,6 +282,43 @@ def _build_debug_report(context: ContextTypes.DEFAULT_TYPE) -> str:
     except Exception as e:
         logger.warning("Debug report db count failed: %s", e)
 
+    agent_total = agent_active = agent_customers = agent_services = 0
+    agent_frozen = agent_failed_nodes = agent_renew_pending = 0
+    customer_bots = customer_bots_active = 0
+    try:
+        from Shared import agent_db
+        agent_db.init_db()
+        conn = sqlite3.connect(str(agent_db.DB_PATH), timeout=5)
+        conn.row_factory = sqlite3.Row
+        try:
+            agent_total = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_users").fetchone()[0])
+            agent_active = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_users WHERE is_active=1").fetchone()[0])
+            agent_customers = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_customers").fetchone()[0])
+            agent_services = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_services").fetchone()[0])
+            agent_frozen = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_service_nodes WHERE frozen=1").fetchone()[0])
+            agent_failed_nodes = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_service_nodes WHERE COALESCE(fail_count,0)>0").fetchone()[0])
+            customer_bots = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_customer_bots").fetchone()[0])
+            customer_bots_active = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_customer_bots WHERE is_active=1").fetchone()[0])
+            cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(agent_service_nodes)").fetchall()}
+            if "renew_pending" in cols:
+                agent_renew_pending = _safe_int(conn.execute("SELECT COUNT(*) FROM agent_service_nodes WHERE renew_pending=1").fetchone()[0])
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("Debug report agent stats failed: %s", e)
+
+    user_frozen = 0
+    try:
+        user_frozen = len(userbot_db.get_frozen_nodes_report(limit=10000) or [])
+    except Exception as e:
+        logger.warning("Debug report UserBot frozen count failed: %s", e)
+
+    db_health = {
+        "hiddify_sellbot.db": _sqlite_quick_check(DB_PATH),
+        "agency.db": _sqlite_quick_check(AGENCY_DB_PATH),
+        "customer_bot.db": _sqlite_quick_check(CUSTOMER_DB_PATH),
+    }
+
     sub_base = ""
     try:
         sub_base = userbot_db.get_managed_sub_base_url() or "خودکار"
@@ -327,6 +383,17 @@ def _build_debug_report(context: ContextTypes.DEFAULT_TYPE) -> str:
         f"- trial_spec: enabled={bool(trial_spec.get('enabled', True))}, usage_gb={trial_spec.get('usage_gb')}, days={trial_spec.get('days')}",
         f"- reminders: enabled={bool(reminder.get('enabled', True))}, usage_gb={reminder.get('usage_gb')}, days={reminder.get('days')}",
         f"- buy/renew: buy={bool(buy_renew.get('enable_buy', True))}, renew={bool(buy_renew.get('enable_renew', True))}",
+        "",
+        "🏢 Reseller / CustomerBot",
+        f"- agents={agent_total} | active={agent_active} | customers={agent_customers} | services={agent_services}",
+        f"- customer_bots={customer_bots} | active={customer_bots_active}",
+        f"- frozen_nodes={agent_frozen} | fail_count_nodes={agent_failed_nodes} | renew_pending={agent_renew_pending}",
+        f"- UserBot frozen_nodes={user_frozen}",
+        "",
+        "🗄 Database Health",
+        f"- hiddify_sellbot.db: {db_health['hiddify_sellbot.db']}",
+        f"- agency.db: {db_health['agency.db']}",
+        f"- customer_bot.db: {db_health['customer_bot.db']}",
         "",
         "⚙️ Jobs",
         f"- {_build_jobs_summary(context)}",
