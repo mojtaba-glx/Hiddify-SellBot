@@ -1831,7 +1831,6 @@ def build_users_search_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("👤جستجو با نام", callback_data="userbot:search:name")],
         [InlineKeyboardButton("✝️جستجو با Telegram ID", callback_data="userbot:search:id")],
-        [InlineKeyboardButton("♻️ اشتراک‌های منقضی‌شده", callback_data="userbot:expired:1")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:users_menu")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -5158,7 +5157,7 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="userbot:noop"))
     if page < total_pages: nav.append(InlineKeyboardButton("▶️", callback_data=f"userbot:expired:{page+1}"))
     rows.append(nav)
-    rows += [[InlineKeyboardButton("🗑 حذف همه کاربران منقضی‌شده", callback_data="userbot:expired:bulk:0")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز", callback_data="userbot:expired:bulk:3")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز", callback_data="userbot:expired:bulk:7")], [InlineKeyboardButton("🔙 بازگشت", callback_data="userbot:users_search_menu")]]
+    rows += [[InlineKeyboardButton("🗑 حذف همه کاربران منقضی‌شده", callback_data="userbot:expired:bulk:0")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز", callback_data="userbot:expired:bulk:3")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز", callback_data="userbot:expired:bulk:7")], [InlineKeyboardButton("🔙 بازگشت", callback_data="searchmenu:back")]]
     text = f"♻️ اشتراک‌های منقضی‌شده\nتعداد: {total}\nصفحه: {page}/{total_pages}"
     kb = InlineKeyboardMarkup(rows)
     if message:
