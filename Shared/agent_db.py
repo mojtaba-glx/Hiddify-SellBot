@@ -2048,26 +2048,7 @@ def get_all_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
                 pass
             if days == 0:
                 if expired_days is None and not volume_expired:
-                    # رکوردهای قدیمیِ بدون هیچ تاریخ معتبر را مخفی نکن:
-                    # این‌ها معمولاً داده‌های legacy/orphan هستند و باید ادمین
-                    # بتواند آن‌ها را دستی از دیتابیس پاک کند. سرویس تازه و
-                    # شروع‌نشده تا ۷ روز همچنان از لیست منقضی‌ها دور می‌ماند.
-                    created_raw = str(d.get("created_at") or "").strip()
-                    created_dt = None
-                    if created_raw:
-                        try:
-                            created_dt = datetime.strptime(created_raw[:19], "%Y-%m-%d %H:%M:%S")
-                        except Exception:
-                            pass
-                    is_old_unknown = bool(
-                        not end_raw
-                        and not str(d.get("start_date") or "").strip()
-                        and created_dt is not None
-                        and (now - created_dt).total_seconds() >= 7 * 86400
-                    )
-                    if not is_old_unknown:
-                        continue
-                    d["_cleanup_only"] = True
+                    continue
             elif expired_days is None or expired_days < days:
                 continue
             d["_expired_days"] = expired_days
@@ -2076,6 +2057,50 @@ def get_all_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+
+
+def get_old_unstarted_services(min_age_days: int = 7) -> List[Dict[str, Any]]:
+    """سرویس‌های نمایندگی/مشتری که هنوز start_date ندارند و قدیمی‌اند.
+
+    رکوردهای legacy که created_at ندارند نیز برای بررسی دستی برگردانده می‌شوند.
+    این تابع فقط برای بررسی ادمین است و هیچ رکوردی را خودکار حذف نمی‌کند.
+    """
+    init_db()
+    age_days = max(1, int(min_age_days or 7))
+    now = _utcnow_naive()
+    conn = _get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT s.*, a.full_name AS agent_full_name, a.username AS agent_username,
+                   c.full_name AS customer_full_name, c.username AS customer_username,
+                   c.telegram_id AS customer_telegram_id
+            FROM agent_services s
+            LEFT JOIN agent_users a ON a.id=s.agent_id
+            LEFT JOIN agent_customers c ON c.id=s.customer_id
+            WHERE (s.deleted_at IS NULL OR s.deleted_at='')
+              AND (s.start_date IS NULL OR TRIM(s.start_date)='')
+            ORDER BY s.id DESC
+        """).fetchall()
+        out = []
+        for row in rows:
+            d = dict(row)
+            created_raw = str(d.get("created_at") or "").strip()
+            if not created_raw:
+                d["_review_reason"] = "legacy_no_created_at"
+                out.append(d)
+                continue
+            try:
+                created_dt = datetime.strptime(created_raw[:19], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                d["_review_reason"] = "legacy_bad_created_at"
+                out.append(d)
+                continue
+            if (now - created_dt).total_seconds() >= age_days * 86400:
+                d["_review_reason"] = "old_unstarted"
+                out.append(d)
+        return out
+    finally:
+        conn.close()
 
 def hard_delete_service_by_uuid(panel_user_uuid: str) -> int:
     """حذف فوری رکورد سرویس نمایندگی و نود/پروب‌هایش؛ سوابق مالی و مشتری حفظ می‌شوند."""
