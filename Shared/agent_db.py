@@ -2048,7 +2048,26 @@ def get_all_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
                 pass
             if days == 0:
                 if expired_days is None and not volume_expired:
-                    continue
+                    # رکوردهای قدیمیِ بدون هیچ تاریخ معتبر را مخفی نکن:
+                    # این‌ها معمولاً داده‌های legacy/orphan هستند و باید ادمین
+                    # بتواند آن‌ها را دستی از دیتابیس پاک کند. سرویس تازه و
+                    # شروع‌نشده تا ۷ روز همچنان از لیست منقضی‌ها دور می‌ماند.
+                    created_raw = str(d.get("created_at") or "").strip()
+                    created_dt = None
+                    if created_raw:
+                        try:
+                            created_dt = datetime.strptime(created_raw[:19], "%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
+                    is_old_unknown = bool(
+                        not end_raw
+                        and not str(d.get("start_date") or "").strip()
+                        and created_dt is not None
+                        and (now - created_dt).total_seconds() >= 7 * 86400
+                    )
+                    if not is_old_unknown:
+                        continue
+                    d["_cleanup_only"] = True
             elif expired_days is None or expired_days < days:
                 continue
             d["_expired_days"] = expired_days
