@@ -2026,13 +2026,18 @@ def get_all_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
                     expired_days = (now - end_dt).days
                 except Exception:
                     pass
-            if expired_days is None:
+            # end_date آینده یعنی سرویس هنوز منقضی نشده است.
+            # در سرویس‌های نمایندگی که هنوز شروع نشده‌اند days_left=0
+            # به معنی «زمان نامشخص/شروع‌نشده» است، نه انقضا.
+            if expired_days is not None and expired_days < 0:
+                expired_days = None
+            if expired_days is None and not end_raw:
                 dl = d.get("days_left")
                 try:
                     dl = int(dl) if dl is not None else None
                 except Exception:
                     dl = None
-                if dl is not None and dl <= 0:
+                if dl is not None and dl < 0:
                     expired_days = abs(dl)
             volume_expired = False
             try:
