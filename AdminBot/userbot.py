@@ -5227,7 +5227,7 @@ async def send_stale_zero_review_page(page: int, chat_id: int, context: ContextT
     if page>1: nav.append(InlineKeyboardButton("◀️",callback_data=f"userbot:stalezero:{page-1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
     if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:stalezero:{page+1}"))
-    rows.append(nav); rows.append([InlineKeyboardButton("🔙 بازگشت به منقضی‌شده‌ها",callback_data="userbot:expired:1")])
+    rows.append(nav); rows.append([InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:review_old")])
     text=f"🔎 بررسی UserBot روز صفرِ مشکوک\n\nاین بخش فقط رکوردهای day=0 با نود غیرفعال/ناموفق را برای بررسی دستی نشان می‌دهد و چیزی را خودکار حذف نمی‌کند.\n\nتعداد: {total}\nصفحه: {page}/{total_pages}"
     kb=InlineKeyboardMarkup(rows)
     if message:
@@ -5250,7 +5250,7 @@ async def send_unstarted_review_page(page: int, chat_id: int, context: ContextTy
     if page>1: nav.append(InlineKeyboardButton("◀️",callback_data=f"userbot:unstarted:{page-1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
     if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:unstarted:{page+1}"))
-    rows.append(nav); rows.append([InlineKeyboardButton("🔙 بازگشت به منقضی‌شده‌ها",callback_data="userbot:expired:1")])
+    rows.append(nav); rows.append([InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:review_old")])
     text=f"🔎 بررسی اشتراک‌های قدیمیِ شروع‌نشده\n\nاین بخش فقط برای بررسی دستی است و چیزی را خودکار حذف نمی‌کند.\nرکوردهای بدون تاریخ قدیمی (Legacy) هم اینجا نمایش داده می‌شوند.\n\nتعداد: {total}\nصفحه: {page}/{total_pages}"
     kb=InlineKeyboardMarkup(rows)
     if message:
