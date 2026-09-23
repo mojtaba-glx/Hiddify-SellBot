@@ -5150,7 +5150,7 @@ def _all_expired_items(days: int = 0) -> List[Dict[str, Any]]:
         if not _is_locally_deleted_service(s):
             d = dict(s); d["_source"] = "user"; items.append(d)
     for s in _agn.get_all_expired_services(days):
-        d = dict(s); d["_source"] = "agent"; items.append(d)
+        d = dict(s); d["_source"] = "stale" if d.get("_cleanup_only") else "agent"; items.append(d)
     return items
 
 
@@ -5192,7 +5192,7 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     items=services[(page-1)*page_size:page*page_size]; rows=[]; buttons=[]
     uc=sum(1 for s in services if s["_source"]=="user"); ac=total-uc
     for svc in items:
-        if svc["_source"]=="agent":
+        if svc["_source"] in {"agent","stale"}:
             profile=str(svc.get("customer_full_name") or svc.get("customer_username") or svc.get("agent_full_name") or svc.get("agent_username") or "").strip(); icon="🤝"
         else:
             profile=str(svc.get("full_name") or svc.get("username") or "").strip(); icon="🔴"
@@ -5215,7 +5215,7 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
 
 
 async def send_expired_service_detail(source: str, service_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    if source=="agent":
+    if source in {"agent","stale"}:
         from Shared import agent_db as _agn
         svc=_agn.get_service_by_id(service_id); text=await _build_agent_expired_detail(svc) if svc else ""
     else:
@@ -5234,6 +5234,9 @@ async def _delete_expired_service(service: Dict[str, Any], source: str="user") -
     from AdminBot import servers as server_ops
     from Shared import agent_db as _agn
     service_id=int(service.get("id") or 0)
+    if source=="stale":
+        # رکورد legacy/orphan فقط از دیتابیس سرویس پاک می‌شود؛ سوابق مالی و پروفایل حفظ می‌شوند.
+        return (bool(_agn.delete_service(service_id)), []) if service_id > 0 else (False, ["شناسه سرویس نامعتبر است"])
     target_sid=int(service.get("server_id") or 0) if source=="agent" else _service_primary_target(service)[0]
     target_uuid=str(service.get("panel_user_uuid") or "").strip() if source=="agent" else _service_primary_target(service)[1]
     if service_id<=0 or target_sid<=0 or not target_uuid: return False,["شناسه پنل/UUID پیدا نشد"]
@@ -8749,9 +8752,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             source,service_id,page=parts[3],int(parts[4]),int(parts[5]); await query.answer()
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، حذف شود",callback_data=f"userbot:expired:delete_yes:{source}:{service_id}:{page}"),InlineKeyboardButton("لغو ❌",callback_data=f"userbot:expired:detail:{source}:{service_id}:{page}")]])
             await msg.edit_text("❓ این اشتراک از سرور اصلی، همه نودها و دیتابیس سرویس حذف شود؟\nسابقه سفارش‌ها، تراکنش‌ها، کیف پول و پروفایل کاربر/نماینده باقی می‌ماند.",reply_markup=kb); return
-        if action=="delete_yes" and len(parts)>=7:
+        if action=="delete_yes" and len(parts)>=6:
             source,service_id,page=parts[3],int(parts[4]),int(parts[5])
-            if source=="agent":
+            if source in {"agent","stale"}:
                 from Shared import agent_db as _agn
                 svc=_agn.get_service_by_id(service_id)
             else: svc=userbot_db.get_service_by_id(service_id)
