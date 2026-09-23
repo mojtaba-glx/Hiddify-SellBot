@@ -5205,7 +5205,7 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
     if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:expired:{page+1}"))
     rows.append(nav)
-    rows += [[InlineKeyboardButton("🔎 بررسی UserBot روز صفرِ مشکوک",callback_data="userbot:stalezero:1")],[InlineKeyboardButton("🔎 بررسی اشتراک‌های قدیمیِ شروع‌نشده",callback_data="userbot:unstarted:1")],[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
+    rows += [[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
     text=f"♻️ اشتراک‌های منقضی‌شده\n👤 کاربران اصلی: {uc} | 🤝 نمایندگی/مشتری: {ac}\nتعداد کل: {total}\nصفحه: {page}/{total_pages}"
     kb=InlineKeyboardMarkup(rows)
     if message:
