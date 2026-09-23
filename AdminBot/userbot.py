@@ -5238,7 +5238,16 @@ async def _delete_expired_service(service: Dict[str, Any], source: str="user") -
     target_uuid=str(service.get("panel_user_uuid") or "").strip() if source=="agent" else _service_primary_target(service)[1]
     if service_id<=0 or target_sid<=0 or not target_uuid: return False,["شناسه پنل/UUID پیدا نشد"]
     deleted,failed=await server_ops._delete_user_across_related_servers(target_sid,target_uuid)
-    if not deleted: return False,failed or ["حذف روی هیچ سروری تایید نشد"]
+    if not deleted:
+        # رکوردهای قدیمی ممکن است فقط در DB مانده باشند و کاربر پنل
+        # قبلاً حذف شده باشد. 404/410 یعنی چیزی در پنل باقی نمانده است.
+        missing_only = bool(failed) and all(
+            ("HTTP 404" in str(err) or "HTTP 410" in str(err))
+            for err in failed
+        )
+        if not missing_only:
+            return False,failed or ["حذف روی هیچ سروری تایید نشد"]
+        failed=[]
     if source=="agent": _agn.delete_service(service_id)
     else:
         userbot_db.delete_service(service_id)
