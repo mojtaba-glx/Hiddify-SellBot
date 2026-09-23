@@ -6663,7 +6663,12 @@ async def handle_server_inline_callback(
             return
 
         if action == "expired":
-            await send_expired_users_list(chat_id, context, message=msg)
+            # سازگاری با دکمه قدیمی؛ به لیست پروفایلی جدید هدایت می‌شود.
+            await handle_userbot_callback(update, context)
+            return
+
+        if action == "back":
+            await send_search_menu(chat_id, context, message=msg)
             return
 
         if action == "back_main":
