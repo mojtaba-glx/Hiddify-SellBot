@@ -1995,6 +1995,84 @@ def get_all_active_services() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+
+def get_all_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
+    """همه سرویس‌های منقضی نمایندگی/مشتری که هنوز حذف نشده‌اند."""
+    init_db()
+    days = max(0, int(min_days_expired or 0))
+    conn = _get_conn()
+    try:
+        now = _utcnow_naive()
+        rows = conn.execute(
+            """
+            SELECT s.*, a.full_name AS agent_full_name, a.username AS agent_username,
+                   c.full_name AS customer_full_name, c.username AS customer_username,
+                   c.telegram_id AS customer_telegram_id
+            FROM agent_services s
+            LEFT JOIN agent_users a ON a.id=s.agent_id
+            LEFT JOIN agent_customers c ON c.id=s.customer_id
+            WHERE (s.deleted_at IS NULL OR s.deleted_at='')
+            ORDER BY s.id DESC
+            """
+        ).fetchall()
+        out = []
+        for row in rows:
+            d = dict(row)
+            expired_days = None
+            end_raw = str(d.get("end_date") or "").strip()
+            if end_raw:
+                try:
+                    end_dt = datetime.strptime(end_raw[:19], "%Y-%m-%d %H:%M:%S")
+                    expired_days = (now - end_dt).days
+                except Exception:
+                    pass
+            if expired_days is None:
+                dl = d.get("days_left")
+                try:
+                    dl = int(dl) if dl is not None else None
+                except Exception:
+                    dl = None
+                if dl is not None and dl <= 0:
+                    expired_days = abs(dl)
+            volume_expired = False
+            try:
+                limit = float(d.get("usage_limit") or 0)
+                used = float(d.get("usage_current") or 0)
+                volume_expired = limit > 0 and used >= limit
+            except Exception:
+                pass
+            if days == 0:
+                if expired_days is None and not volume_expired:
+                    continue
+            elif expired_days is None or expired_days < days:
+                continue
+            d["_expired_days"] = expired_days
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def hard_delete_service_by_uuid(panel_user_uuid: str) -> int:
+    """حذف فوری رکورد سرویس نمایندگی و نود/پروب‌هایش؛ سوابق مالی و مشتری حفظ می‌شوند."""
+    init_db()
+    uuid = str(panel_user_uuid or "").strip()
+    if not uuid:
+        return 0
+    conn = _get_conn()
+    try:
+        rows = conn.execute("SELECT id FROM agent_services WHERE panel_user_uuid=?", (uuid,)).fetchall()
+        ids = [int(r["id"]) for r in rows]
+        for sid in ids:
+            conn.execute("DELETE FROM agent_service_nodes WHERE service_id=?", (sid,))
+            conn.execute("DELETE FROM agent_service_probe WHERE service_id=?", (sid,))
+            conn.execute("DELETE FROM agent_services WHERE id=?", (sid,))
+        conn.commit()
+        return len(ids)
+    finally:
+        conn.close()
+
+
 def get_expired_services_by_agent(agent_id: int, page: int = 1, page_size: int = 20) -> Tuple[List[Dict[str, Any]], int]:
     """لیست سرویس‌های منقضی شده یک نماینده با صفحه‌بندی."""
     init_db()
