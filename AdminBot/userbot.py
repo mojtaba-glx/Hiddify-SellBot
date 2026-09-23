@@ -1831,6 +1831,7 @@ def build_users_search_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("👤جستجو با نام", callback_data="userbot:search:name")],
         [InlineKeyboardButton("✝️جستجو با Telegram ID", callback_data="userbot:search:id")],
+        [InlineKeyboardButton("♻️ اشتراک‌های منقضی‌شده", callback_data="userbot:expired:1")],
         [InlineKeyboardButton("🔙بازگشت", callback_data="userbot:users_menu")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -5093,6 +5094,104 @@ async def send_users_page(page: int, chat_id: int, context: ContextTypes.DEFAULT
             await context.bot.send_message(chat_id, text, reply_markup=kb)
     else:
         await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
+    """جزئیات سرویس منقضی با جمع زنده مصرف و آخرین اتصال همه نودها."""
+    svc = dict(service or {})
+    total_usage = 0.0
+    live_usage_seen = False
+    latest_dt = None
+    node_lines: List[str] = []
+    titles: List[str] = []
+    for sid, uuid in _service_panel_targets(svc):
+        server = database.get_server_by_id(int(sid))
+        title = str((server or {}).get("name") or (server or {}).get("title") or f"سرور #{sid}")
+        if title not in titles:
+            titles.append(title)
+        usage = None
+        status = "⚠️ نامشخص"
+        try:
+            panel_user = await asyncio.wait_for(hiddify_api.get_user_by_uuid(server, uuid), timeout=6)
+            if isinstance(panel_user, dict):
+                usage = _to_float(panel_user.get("current_usage_GB"))
+                if usage is None:
+                    usage = _to_float(panel_user.get("usage_current"))
+                if usage is not None:
+                    total_usage += usage
+                    live_usage_seen = True
+                dt = _parse_last_online_dt(panel_user.get("last_online") or panel_user.get("last_online_at"))
+                if dt and (latest_dt is None or dt > latest_dt):
+                    latest_dt = dt
+                status = "🔴 منقضی/غیرفعال" if _panel_user_is_expired_or_inactive(panel_user) else "🟢 فعال"
+        except hiddify_api.HiddifyApiError as e:
+            status = "🗑 حذف‌شده" if ("HTTP 404" in str(e) or "HTTP 410" in str(e)) else "⚠️ خطای پنل"
+        except Exception:
+            status = "⚠️ عدم دسترسی"
+        node_lines.append(f"  • {title}: {status} ({f'{usage:.2f}GB' if usage is not None else '—'})")
+    if not live_usage_seen:
+        total_usage = _to_float(svc.get("usage_current")) or 0.0
+    limit = _to_float(svc.get("usage_limit"))
+    usage_line = f"📊مصرف: {total_usage:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)" if limit and limit > 0 else f"📊مصرف: {total_usage:.2f} گیگابایت (مجموع سرورها)"
+    last_line = _relative_last_online(latest_dt.strftime("%Y-%m-%d %H:%M:%S")) if latest_dt else _service_last_online_line(svc.get("last_online"))
+    note = _service_public_note_text(svc)
+    if note == "-": note = _synthetic_hiddify_note(svc)
+    name = str(svc.get("name") or "اشتراک").strip()
+    server_title = " + ".join(titles) if titles else _format_server_location_title(_resolve_all_server_titles(svc, default="سرور"))
+    lines = [f"👤 کاربر:  {name}", "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖", f"⬖ سرور:  {server_title}", usage_line, "📆انقضا: منقضی/غیرفعال در پنل", last_line, f"📝یادداشت: {_display_safe_note(note) or '—'}"]
+    if node_lines:
+        lines.append("❄️ نودها:"); lines.extend(node_lines)
+    return "\n".join(lines)
+
+
+async def send_expired_services_page(page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    services = [s for s in userbot_db.get_expired_services(0) if not _is_locally_deleted_service(s)]
+    page_size = 15; total = len(services); total_pages = max(1, math.ceil(total / page_size)); page = min(max(1, int(page or 1)), total_pages)
+    items = services[(page - 1) * page_size:page * page_size]
+    rows = []
+    for svc in items:
+        profile = str(svc.get("full_name") or svc.get("username") or "").strip()
+        label = profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
+        rows.append([InlineKeyboardButton(f"🔴 {label}", callback_data=f"userbot:expired:detail:{svc['id']}:{page}")])
+    nav = []
+    if page > 1: nav.append(InlineKeyboardButton("◀️", callback_data=f"userbot:expired:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="userbot:noop"))
+    if page < total_pages: nav.append(InlineKeyboardButton("▶️", callback_data=f"userbot:expired:{page+1}"))
+    rows.append(nav)
+    rows += [[InlineKeyboardButton("🗑 حذف همه کاربران منقضی‌شده", callback_data="userbot:expired:bulk:0")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز", callback_data="userbot:expired:bulk:3")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز", callback_data="userbot:expired:bulk:7")], [InlineKeyboardButton("🔙 بازگشت", callback_data="userbot:users_search_menu")]]
+    text = f"♻️ اشتراک‌های منقضی‌شده\nتعداد: {total}\nصفحه: {page}/{total_pages}"
+    kb = InlineKeyboardMarkup(rows)
+    if message:
+        try: await message.edit_text(text, reply_markup=kb); return
+        except BadRequest: pass
+    await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_expired_service_detail(service_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    svc = userbot_db.get_service_by_id(service_id)
+    if not svc:
+        if message: await message.edit_text("❌ اشتراک یافت نشد.")
+        return
+    text = await _build_expired_service_live_detail(svc)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف کاربر", callback_data=f"userbot:expired:delete:{service_id}:{page}")], [InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:expired:{page}")]])
+    if message:
+        try: await message.edit_text(text, reply_markup=kb); return
+        except BadRequest: pass
+    await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def _delete_expired_service(service: Dict[str, Any]) -> tuple[bool, List[str]]:
+    from AdminBot import servers as server_ops
+    service_id = int(service.get("id") or 0); target_server_id, target_user_uuid = _service_primary_target(service)
+    if service_id <= 0 or target_server_id <= 0 or not target_user_uuid: return False, ["شناسه پنل/UUID پیدا نشد"]
+    deleted_server_ids, failed_servers = await server_ops._delete_user_across_related_servers(target_server_id, target_user_uuid)
+    if not deleted_server_ids: return False, failed_servers or ["حذف روی هیچ سروری تایید نشد"]
+    userbot_db.delete_service(service_id)
+    try:
+        from Shared import agent_db as _agn
+        _agn.soft_delete_service_by_uuid(target_user_uuid, target_server_id)
+    except Exception: pass
+    return True, failed_servers
 
 
 async def send_user_profile(
@@ -8579,6 +8678,38 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             edit=True,
         )
         return
+
+    # --- اشتراک‌های منقضی‌شده ---
+    if data.startswith("userbot:expired:"):
+        parts = data.split(":"); action = parts[2] if len(parts) > 2 else "1"
+        if action == "detail" and len(parts) >= 5:
+            await query.answer(); await send_expired_service_detail(int(parts[3]), int(parts[4]), cid, context, message=msg); return
+        if action == "delete" and len(parts) >= 5:
+            service_id, page = int(parts[3]), int(parts[4]); await query.answer()
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، حذف شود", callback_data=f"userbot:expired:delete_yes:{service_id}:{page}"), InlineKeyboardButton("لغو ❌", callback_data=f"userbot:expired:detail:{service_id}:{page}")]])
+            await msg.edit_text("❓ این اشتراک از سرور اصلی، همه نودها و دیتابیس سرویس حذف شود؟\nسابقه سفارش‌ها، تراکنش‌ها، کیف پول و پروفایل کاربر باقی می‌ماند.", reply_markup=kb); return
+        if action == "delete_yes" and len(parts) >= 5:
+            service_id, page = int(parts[3]), int(parts[4]); svc = userbot_db.get_service_by_id(service_id)
+            if not svc: await query.answer("❌ اشتراک یافت نشد.", show_alert=True); return
+            ok, failed = await _delete_expired_service(svc)
+            if ok: await query.answer("✅ اشتراک حذف شد.", show_alert=True); await send_expired_services_page(page, cid, context, message=msg)
+            else: await query.answer("❌ حذف کامل انجام نشد.", show_alert=True); await msg.edit_text("❌ حذف اشتراک انجام نشد:\n" + "\n".join(failed[:5]))
+            return
+        if action == "bulk" and len(parts) >= 4:
+            days = max(0, int(parts[3])); await query.answer(); count = len(userbot_db.get_expired_services(days))
+            title = "همه اشتراک‌های منقضی‌شده" if days == 0 else f"اشتراک‌های منقضی‌شده بیش از {days} روز"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید حذف", callback_data=f"userbot:expired:bulk_yes:{days}"), InlineKeyboardButton("لغو ❌", callback_data="userbot:expired:1")]])
+            await msg.edit_text(f"⚠️ حذف گروهی {title}\nتعداد فعلی: {count}\n\nفقط اشتراک‌ها از پنل‌ها و دیتابیس سرویس حذف می‌شوند؛ پروفایل کاربران، سفارش‌ها، تراکنش‌ها و کیف پول دست‌نخورده می‌مانند.", reply_markup=kb); return
+        if action == "bulk_yes" and len(parts) >= 4:
+            days = max(0, int(parts[3])); await query.answer("⏳ حذف گروهی شروع شد..."); deleted = 0; failed_count = 0
+            for svc in userbot_db.get_expired_services(days):
+                ok, _failed = await _delete_expired_service(svc)
+                if ok: deleted += 1
+                else: failed_count += 1
+            await msg.edit_text(f"✅ عملیات حذف گروهی تمام شد.\n🗑 حذف‌شده: {deleted}\n⚠️ حذف‌نشده/خطادار: {failed_count}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("♻️ بازگشت به منقضی‌شده‌ها", callback_data="userbot:expired:1")]])); return
+        try: page = max(1, int(action))
+        except Exception: page = 1
+        await query.answer(); await send_expired_services_page(page, cid, context, message=msg); return
 
     # --- 2. مدیریت کاربران (Users) ---
     if data == "userbot:users_menu":
