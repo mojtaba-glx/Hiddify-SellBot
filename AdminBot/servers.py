@@ -6662,8 +6662,9 @@ async def handle_server_inline_callback(
             return
 
         if action == "expired":
-            # سازگاری با دکمه قدیمی؛ به لیست پروفایلی جدید هدایت می‌شود.
-            await handle_userbot_callback(update, context)
+            # قابلیت قدیمی «لیست کاربران منقضی شده» مستقل از بخش پروفایلی جدید باقی می‌ماند.
+            await query.answer()
+            await send_expired_users_list(chat_id, context, message=msg)
             return
 
         if action == "back":
