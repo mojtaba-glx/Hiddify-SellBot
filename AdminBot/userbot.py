@@ -5158,6 +5158,13 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
         max_chars = 10
         if len(label) > max_chars:
             label = label[:max_chars].rstrip()
+        # اگر نام فقط فاصله/نویسه‌های نامرئی یا کاراکترهای بی‌عرض باشد،
+        # تلگرام ممکن است دکمه را فقط به صورت «...» رندر کند. در این حالت
+        # از نام خود اشتراک به عنوان عنوان قابل‌مشاهده استفاده می‌کنیم.
+        visible_label = "".join(ch for ch in label if ch.isalnum() or ("\u0600" <= ch <= "\u06ff"))
+        if not visible_label:
+            fallback = str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
+            label = fallback[:max_chars].rstrip()
         user_buttons.append(InlineKeyboardButton(f"🔴 {label}", callback_data=f"userbot:expired:detail:{svc['id']}:{page}"))
     # پروفایل‌های منقضی مثل لیست قدیمی، سه‌تایی کنار هم نمایش داده شوند.
     for i in range(0, len(user_buttons), 3):
