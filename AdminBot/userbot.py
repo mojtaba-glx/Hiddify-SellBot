@@ -5148,10 +5148,14 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     page_size = 15; total = len(services); total_pages = max(1, math.ceil(total / page_size)); page = min(max(1, int(page or 1)), total_pages)
     items = services[(page - 1) * page_size:page * page_size]
     rows = []
+    user_buttons: List[InlineKeyboardButton] = []
     for svc in items:
         profile = str(svc.get("full_name") or svc.get("username") or "").strip()
         label = profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
-        rows.append([InlineKeyboardButton(f"🔴 {label}", callback_data=f"userbot:expired:detail:{svc['id']}:{page}")])
+        user_buttons.append(InlineKeyboardButton(f"🔴 {label}", callback_data=f"userbot:expired:detail:{svc['id']}:{page}"))
+    # پروفایل‌های منقضی مثل لیست قدیمی، سه‌تایی کنار هم نمایش داده شوند.
+    for i in range(0, len(user_buttons), 3):
+        rows.append(list(reversed(user_buttons[i:i + 3])))
     nav = []
     if page > 1: nav.append(InlineKeyboardButton("◀️", callback_data=f"userbot:expired:{page-1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="userbot:noop"))
