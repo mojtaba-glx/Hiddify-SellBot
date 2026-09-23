@@ -5302,30 +5302,34 @@ async def _delete_expired_service(service: Dict[str, Any], source: str="user") -
     target_uuid=str(service.get("panel_user_uuid") or "").strip() if source=="agent" else _service_primary_target(service)[1]
     if service_id<=0 or target_sid<=0 or not target_uuid: return False,["شناسه پنل/UUID پیدا نشد"]
     deleted,failed=await server_ops._delete_user_across_related_servers(target_sid,target_uuid)
-    if not deleted:
-        # رکوردهای قدیمی/تستی ممکن است فقط در DB مانده باشند و کاربر پنل
-        # قبلاً حذف شده باشد. بعضی adapterها برای «کاربر پیدا نشد» به‌جای
-        # HTTP 404/410 متن خطا برمی‌گردانند؛ این حالت نیز حذف‌شده محسوب می‌شود.
-        # خطاهای اتصال/timeout عمداً اینجا پذیرفته نمی‌شوند تا در قطعی پنل
-        # رکورد محلی اشتباهی پاک نشود.
-        missing_markers = (
-            "http 404",
-            "http 410",
-            "not found",
-            "user not found",
-            "does not exist",
-            "no such user",
-            "یافت نشد",
-            "پیدا نشد",
-            "وجود ندارد",
-        )
-        missing_only = bool(failed) and all(
-            any(marker in str(err).strip().lower() for marker in missing_markers)
-            for err in failed
-        )
-        if not missing_only:
-            return False,failed or ["حذف روی هیچ سروری تایید نشد"]
-        failed=[]
+
+    # حذف DB فقط وقتی مجاز است که تمام مقصدهای مرتبط تعیین تکلیف شده باشند:
+    # یا حذف موفق، یا پاسخ صریح «کاربر وجود ندارد». اگر حتی یک نود timeout/
+    # connection/API error بدهد، رکورد سرویس نگه داشته می‌شود تا حذف دوباره
+    # قابل انجام باشد و کاربر یتیم روی نود باقی نماند.
+    missing_markers = (
+        "http 404",
+        "http 410",
+        "not found",
+        "user not found",
+        "does not exist",
+        "no such user",
+        "یافت نشد",
+        "پیدا نشد",
+        "وجود ندارد",
+    )
+    unresolved_failed = [
+        str(err) for err in (failed or [])
+        if not any(marker in str(err).strip().lower() for marker in missing_markers)
+    ]
+    if unresolved_failed:
+        return False, unresolved_failed
+
+    if not deleted and not failed:
+        return False, ["حذف روی هیچ سرور یا نودی تایید نشد"]
+
+    # failedهایی که باقی مانده‌اند همگی «وجود ندارد» هستند و از نظر حذف امن‌اند.
+    failed=[]
     if source=="agent": _agn.delete_service(service_id)
     else:
         userbot_db.delete_service(service_id)
