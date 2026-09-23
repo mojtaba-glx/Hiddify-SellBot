@@ -4589,32 +4589,15 @@ async def send_user_edit_menu(
 # ===============================
 
 def build_search_menu_keyboard() -> InlineKeyboardMarkup:
+    # سه ابزار اصلی جستجو در یک ردیف؛ بخش منقضی‌ها از لیست پروفایلی جدید استفاده می‌کند.
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    "🔍 جستجوی هوشمند کاربر",
-                    callback_data="searchmenu:smart",
-                )
+                InlineKeyboardButton("🔍 جستجوی هوشمند", callback_data="searchmenu:smart"),
+                InlineKeyboardButton("📊 پیگیری اشتراک", callback_data="userbot:subs_menu"),
+                InlineKeyboardButton("⚠️ منقضی‌شده‌ها", callback_data="userbot:expired:1"),
             ],
-            [
-                InlineKeyboardButton(
-                    "📊پیگیری اشتراک",
-                    callback_data="userbot:subs_menu",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "⚠️ لیست کاربران منقضی شده",
-                    callback_data="searchmenu:expired",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "بازگشت🔙",
-                    callback_data="searchmenu:back_main",
-                )
-            ],
+            [InlineKeyboardButton("بازگشت🔙", callback_data="searchmenu:back_main")],
         ]
     )
 
