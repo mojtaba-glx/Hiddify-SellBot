@@ -2342,8 +2342,11 @@ def get_services_for_user(user_id: int) -> List[Dict[str, Any]]:
 def get_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
     """Return expired UserBot services without touching orders/payments/history.
 
-    min_days_expired=0 -> all expired (days_left <= 0)
-    min_days_expired=3 -> expired at least 3 days ago (days_left <= -3)
+    min_days_expired=0 -> all fully expired (days_left < 0)
+    min_days_expired=3 -> expired at least 3 full days ago (days_left <= -3)
+
+    days_left=0 means the service is on its last/current day and must NOT be
+    treated as expired until the panel/bot actually closes it.
     """
     init_db()
     conn = _get_conn()
@@ -2356,7 +2359,7 @@ def get_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
                 SELECT s.*, u.telegram_id, u.username, u.full_name
                 FROM userbot_services s
                 LEFT JOIN userbot_users u ON u.id = s.user_id
-                WHERE (s.days_left IS NOT NULL AND s.days_left <= 0)
+                WHERE (s.days_left IS NOT NULL AND s.days_left < 0)
                    OR (COALESCE(s.usage_limit, 0) > 0
                        AND COALESCE(s.usage_current, 0) >= COALESCE(s.usage_limit, 0))
                 ORDER BY COALESCE(s.days_left, 0) ASC, s.id DESC
