@@ -2381,6 +2381,37 @@ def get_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
         conn.close()
 
 
+
+def get_stale_zero_day_services() -> List[Dict[str, Any]]:
+    """Return legacy UserBot services stuck at day 0 whose mapped node is inactive.
+
+    This is a manual-review list only. Normal day-0 services remain excluded
+    from the expired list.
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT DISTINCT s.*, u.telegram_id, u.username, u.full_name
+            FROM userbot_services s
+            LEFT JOIN userbot_users u ON u.id = s.user_id
+            JOIN userbot_service_nodes n ON n.service_id = s.id
+            WHERE COALESCE(s.days_left, 0) = 0
+              AND COALESCE(n.is_active, 0) = 0
+              AND COALESCE(n.deleted, 0) = 0
+              AND (
+                    COALESCE(n.fail_count, 0) >= 3
+                    OR (n.last_ok_at IS NULL AND s.last_online IS NOT NULL)
+                  )
+            ORDER BY s.id DESC
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
 def get_service_by_id(service_id: int) -> Optional[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
