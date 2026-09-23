@@ -2350,16 +2350,29 @@ def get_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
     cur = conn.cursor()
     threshold = -max(0, int(min_days_expired or 0))
     try:
-        cur.execute(
-            """
-            SELECT s.*, u.telegram_id, u.username, u.full_name
-            FROM userbot_services s
-            LEFT JOIN userbot_users u ON u.id = s.user_id
-            WHERE COALESCE(s.days_left, 0) <= ?
-            ORDER BY COALESCE(s.days_left, 0) ASC, s.id DESC
-            """,
-            (threshold,),
-        )
+        if int(min_days_expired or 0) <= 0:
+            cur.execute(
+                """
+                SELECT s.*, u.telegram_id, u.username, u.full_name
+                FROM userbot_services s
+                LEFT JOIN userbot_users u ON u.id = s.user_id
+                WHERE (s.days_left IS NOT NULL AND s.days_left <= 0)
+                   OR (COALESCE(s.usage_limit, 0) > 0
+                       AND COALESCE(s.usage_current, 0) >= COALESCE(s.usage_limit, 0))
+                ORDER BY COALESCE(s.days_left, 0) ASC, s.id DESC
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT s.*, u.telegram_id, u.username, u.full_name
+                FROM userbot_services s
+                LEFT JOIN userbot_users u ON u.id = s.user_id
+                WHERE s.days_left IS NOT NULL AND s.days_left <= ?
+                ORDER BY s.days_left ASC, s.id DESC
+                """,
+                (threshold,),
+            )
         return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
