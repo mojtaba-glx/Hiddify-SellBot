@@ -5150,7 +5150,7 @@ def _all_expired_items(days: int = 0) -> List[Dict[str, Any]]:
         if not _is_locally_deleted_service(s):
             d = dict(s); d["_source"] = "user"; items.append(d)
     for s in _agn.get_all_expired_services(days):
-        d = dict(s); d["_source"] = "stale" if d.get("_cleanup_only") else "agent"; items.append(d)
+        d = dict(s); d["_source"] = "agent"; items.append(d)
     return items
 
 
@@ -5205,13 +5205,52 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
     if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:expired:{page+1}"))
     rows.append(nav)
-    rows += [[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
+    rows += [[InlineKeyboardButton("🔎 بررسی اشتراک‌های قدیمیِ شروع‌نشده",callback_data="userbot:unstarted:1")],[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
     text=f"♻️ اشتراک‌های منقضی‌شده\n👤 کاربران اصلی: {uc} | 🤝 نمایندگی/مشتری: {ac}\nتعداد کل: {total}\nصفحه: {page}/{total_pages}"
     kb=InlineKeyboardMarkup(rows)
     if message:
         try: await message.edit_text(text,reply_markup=kb); return
         except BadRequest: pass
     await context.bot.send_message(chat_id,text,reply_markup=kb)
+
+
+async def send_unstarted_review_page(page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    from Shared import agent_db as _agn
+    services = _agn.get_old_unstarted_services(7)
+    page_size=15; total=len(services); total_pages=max(1,math.ceil(total/page_size)); page=min(max(1,int(page or 1)),total_pages)
+    rows=[]; buttons=[]
+    for svc in services[(page-1)*page_size:page*page_size]:
+        profile=str(svc.get("customer_full_name") or svc.get("customer_username") or svc.get("agent_full_name") or svc.get("agent_username") or "").strip()
+        label=(profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip())[:14].rstrip()
+        buttons.append(InlineKeyboardButton(f"🟡 {label}",callback_data=f"userbot:unstarted:detail:{svc['id']}:{page}"))
+    for i in range(0,len(buttons),2): rows.append(list(reversed(buttons[i:i+2])))
+    nav=[]
+    if page>1: nav.append(InlineKeyboardButton("◀️",callback_data=f"userbot:unstarted:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
+    if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:unstarted:{page+1}"))
+    rows.append(nav); rows.append([InlineKeyboardButton("🔙 بازگشت به منقضی‌شده‌ها",callback_data="userbot:expired:1")])
+    text=f"🔎 بررسی اشتراک‌های قدیمیِ شروع‌نشده\n\nاین بخش فقط برای بررسی دستی است و چیزی را خودکار حذف نمی‌کند.\nرکوردهای بدون تاریخ قدیمی (Legacy) هم اینجا نمایش داده می‌شوند.\n\nتعداد: {total}\nصفحه: {page}/{total_pages}"
+    kb=InlineKeyboardMarkup(rows)
+    if message:
+        try: await message.edit_text(text,reply_markup=kb); return
+        except BadRequest: pass
+    await context.bot.send_message(chat_id,text,reply_markup=kb)
+
+
+async def send_unstarted_review_detail(service_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    from Shared import agent_db as _agn
+    svc=_agn.get_service_by_id(service_id)
+    if not svc:
+        if message: await message.edit_text("❌ رکورد یافت نشد.")
+        return
+    live=await _build_agent_expired_detail(svc)
+    reason="رکورد قدیمی بدون created_at" if not str(svc.get("created_at") or "").strip() else "بیش از ۷ روز ساخته شده و هنوز start_date ندارد"
+    text=f"🔎 <b>بررسی اشتراک شروع‌نشده</b>\n⚠️ دلیل بررسی: {reason}\n\n{live}\n\nحذف فقط با تأیید دستی شما انجام می‌شود."
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف این رکورد",callback_data=f"userbot:unstarted:delete:{service_id}:{page}")],[InlineKeyboardButton("🔙 بازگشت",callback_data=f"userbot:unstarted:{page}")]])
+    if message:
+        try: await message.edit_text(text,reply_markup=kb,parse_mode="HTML"); return
+        except BadRequest: pass
+    await context.bot.send_message(chat_id,text,reply_markup=kb,parse_mode="HTML")
 
 
 async def send_expired_service_detail(source: str, service_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
@@ -8742,6 +8781,26 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             edit=True,
         )
         return
+
+    # --- بررسی دستی اشتراک‌های قدیمی که هنوز شروع نشده‌اند ---
+    if data.startswith("userbot:unstarted:"):
+        parts=data.split(":"); action=parts[2] if len(parts)>2 else "1"
+        if action=="detail" and len(parts)>=5:
+            await query.answer(); await send_unstarted_review_detail(int(parts[3]),int(parts[4]),cid,context,message=msg); return
+        if action=="delete" and len(parts)>=5:
+            service_id,page=int(parts[3]),int(parts[4]); await query.answer()
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، حذف شود",callback_data=f"userbot:unstarted:delete_yes:{service_id}:{page}"),InlineKeyboardButton("لغو ❌",callback_data=f"userbot:unstarted:detail:{service_id}:{page}")]])
+            await msg.edit_text("⚠️ این مورد فقط پس از تأیید شما حذف می‌شود. اگر روی پنل هنوز وجود داشته باشد، قبل از حذف وضعیت آن را از جزئیات بررسی کنید.\n\nرکورد سرویس و وابستگی‌های دیتابیسی آن پاک شود؟",reply_markup=kb); return
+        if action=="delete_yes" and len(parts)>=5:
+            from Shared import agent_db as _agn
+            service_id,page=int(parts[3]),int(parts[4]); svc=_agn.get_service_by_id(service_id)
+            if not svc: await query.answer("❌ رکورد یافت نشد.",show_alert=True); return
+            ok=bool(_agn.delete_service(service_id))
+            await query.answer("✅ از دیتابیس پاک شد." if ok else "❌ حذف انجام نشد.",show_alert=True)
+            await send_unstarted_review_page(page,cid,context,message=msg); return
+        try: page=max(1,int(action))
+        except Exception: page=1
+        await query.answer(); await send_unstarted_review_page(page,cid,context,message=msg); return
 
     # --- اشتراک‌های منقضی‌شده ---
     if data.startswith("userbot:expired:"):
