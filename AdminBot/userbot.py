@@ -5143,71 +5143,107 @@ async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _all_expired_items(days: int = 0) -> List[Dict[str, Any]]:
+    from Shared import agent_db as _agn
+    items = []
+    for s in userbot_db.get_expired_services(days):
+        if not _is_locally_deleted_service(s):
+            d = dict(s); d["_source"] = "user"; items.append(d)
+    for s in _agn.get_all_expired_services(days):
+        d = dict(s); d["_source"] = "agent"; items.append(d)
+    return items
+
+
+async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
+    from Shared import agent_db as _agn
+    nodes = _agn.get_service_nodes(int(svc.get("id") or 0))
+    targets=[]; uuid=str(svc.get("panel_user_uuid") or "").strip()
+    if int(svc.get("server_id") or 0)>0 and uuid: targets.append((int(svc["server_id"]),uuid))
+    for n in nodes:
+        pair=(int(n.get("server_id") or 0),str(n.get("panel_user_uuid") or "").strip())
+        if pair[0]>0 and pair[1] and pair not in targets: targets.append(pair)
+    total=0.0; latest=None; node_lines=[]; titles=[]
+    for sid,uid in targets:
+        server=database.get_server_by_id(sid); title=str((server or {}).get("name") or (server or {}).get("title") or f"سرور #{sid}")
+        if title not in titles: titles.append(title)
+        usage=None; status="⚠️ نامشخص"
+        try:
+            pu=await asyncio.wait_for(hiddify_api.get_user_by_uuid(server,uid),timeout=6)
+            if isinstance(pu,dict):
+                usage=_to_float(pu.get("current_usage_GB")); usage=usage if usage is not None else _to_float(pu.get("usage_current"))
+                total += usage or 0.0
+                dt=_parse_last_online_dt(pu.get("last_online") or pu.get("last_online_at"))
+                if dt and (latest is None or dt>latest): latest=dt
+                status="🔴 منقضی/غیرفعال" if _panel_user_is_expired_or_inactive(pu) else "🟢 فعال"
+        except hiddify_api.HiddifyApiError as e:
+            status="🗑 حذف‌شده" if ("HTTP 404" in str(e) or "HTTP 410" in str(e)) else "⚠️ خطای پنل"
+        except Exception: status="⚠️ عدم دسترسی"
+        node_lines.append(f"  • {title}: {status} ({f'{usage:.2f}GB' if usage is not None else '—'})")
+    owner=str(svc.get("customer_full_name") or svc.get("customer_username") or svc.get("agent_full_name") or svc.get("agent_username") or svc.get("name") or "نمایندگی").strip()
+    kind="مشتری نماینده" if svc.get("customer_id") else "نماینده"; limit=_to_float(svc.get("usage_limit")) or 0.0
+    last=_relative_last_online(latest.strftime("%Y-%m-%d %H:%M:%S")) if latest else "📶آخرین اتصال: نامشخص"
+    lines=[f"👤 کاربر:  {owner}",f"🤝 منبع: {kind}","❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",f"⬖ سرور:  {' + '.join(titles) if titles else svc.get('server_title') or 'سرور'}",f"📊مصرف: {total:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)","📆انقضا: منقضی/غیرفعال در پنل",last,f"📝نام اشتراک: {svc.get('name') or '—'}"]
+    if node_lines: lines += ["❄️ نودها:"] + node_lines
+    return "\n".join(lines)
+
+
 async def send_expired_services_page(page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    services = [s for s in userbot_db.get_expired_services(0) if not _is_locally_deleted_service(s)]
-    page_size = 15; total = len(services); total_pages = max(1, math.ceil(total / page_size)); page = min(max(1, int(page or 1)), total_pages)
-    items = services[(page - 1) * page_size:page * page_size]
-    rows = []
-    user_buttons: List[InlineKeyboardButton] = []
+    services=_all_expired_items(0); page_size=15; total=len(services); total_pages=max(1,math.ceil(total/page_size)); page=min(max(1,int(page or 1)),total_pages)
+    items=services[(page-1)*page_size:page*page_size]; rows=[]; buttons=[]
+    uc=sum(1 for s in services if s["_source"]=="user"); ac=total-uc
     for svc in items:
-        profile = str(svc.get("full_name") or svc.get("username") or "").strip()
-        label = profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
-        # برای جدول سه‌ستونه نام‌های بلند را خودمان کوتاه می‌کنیم تا تلگرام فقط «...» نشان ندهد.
-        # اندازه و ظاهر دکمه‌ها مثل نسخه اولیه باقی بماند؛ فقط نام‌های خیلی بلند
-        # قبل از رسیدن به محدودیت نمایشی تلگرام کمی کوتاه شوند.
-        max_chars = 10
-        if len(label) > max_chars:
-            label = label[:max_chars].rstrip()
-        # اگر نام فقط فاصله/نویسه‌های نامرئی یا کاراکترهای بی‌عرض باشد،
-        # تلگرام ممکن است دکمه را فقط به صورت «...» رندر کند. در این حالت
-        # از نام خود اشتراک به عنوان عنوان قابل‌مشاهده استفاده می‌کنیم.
-        visible_label = "".join(ch for ch in label if ch.isalnum() or ("\u0600" <= ch <= "\u06ff"))
-        if not visible_label:
-            fallback = str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
-            label = fallback[:max_chars].rstrip()
-        user_buttons.append(InlineKeyboardButton(f"🔴 {label}", callback_data=f"userbot:expired:detail:{svc['id']}:{page}"))
-    # پروفایل‌های منقضی مثل لیست قدیمی، سه‌تایی کنار هم نمایش داده شوند.
-    for i in range(0, len(user_buttons), 3):
-        rows.append(list(reversed(user_buttons[i:i + 3])))
-    nav = []
-    if page > 1: nav.append(InlineKeyboardButton("◀️", callback_data=f"userbot:expired:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="userbot:noop"))
-    if page < total_pages: nav.append(InlineKeyboardButton("▶️", callback_data=f"userbot:expired:{page+1}"))
+        if svc["_source"]=="agent":
+            profile=str(svc.get("customer_full_name") or svc.get("customer_username") or svc.get("agent_full_name") or svc.get("agent_username") or "").strip(); icon="🤝"
+        else:
+            profile=str(svc.get("full_name") or svc.get("username") or "").strip(); icon="🔴"
+        label=(profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip())[:10].rstrip()
+        if not "".join(ch for ch in label if ch.isalnum() or ("\u0600"<=ch<="\u06ff")): label=str(svc.get("name") or f"اشتراک #{svc.get('id')}")[:10].rstrip()
+        buttons.append(InlineKeyboardButton(f"{icon} {label}",callback_data=f"userbot:expired:detail:{svc['_source']}:{svc['id']}:{page}"))
+    for i in range(0,len(buttons),3): rows.append(list(reversed(buttons[i:i+3])))
+    nav=[]
+    if page>1: nav.append(InlineKeyboardButton("◀️",callback_data=f"userbot:expired:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
+    if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:expired:{page+1}"))
     rows.append(nav)
-    rows += [[InlineKeyboardButton("🗑 حذف همه کاربران منقضی‌شده", callback_data="userbot:expired:bulk:0")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز", callback_data="userbot:expired:bulk:3")], [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز", callback_data="userbot:expired:bulk:7")], [InlineKeyboardButton("🔙 بازگشت", callback_data="searchmenu:back")]]
-    text = f"♻️ اشتراک‌های منقضی‌شده\nتعداد: {total}\nصفحه: {page}/{total_pages}"
-    kb = InlineKeyboardMarkup(rows)
+    rows += [[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
+    text=f"♻️ اشتراک‌های منقضی‌شده\n👤 کاربران اصلی: {uc} | 🤝 نمایندگی/مشتری: {ac}\nتعداد کل: {total}\nصفحه: {page}/{total_pages}"
+    kb=InlineKeyboardMarkup(rows)
     if message:
-        try: await message.edit_text(text, reply_markup=kb); return
+        try: await message.edit_text(text,reply_markup=kb); return
         except BadRequest: pass
-    await context.bot.send_message(chat_id, text, reply_markup=kb)
+    await context.bot.send_message(chat_id,text,reply_markup=kb)
 
 
-async def send_expired_service_detail(service_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    svc = userbot_db.get_service_by_id(service_id)
+async def send_expired_service_detail(source: str, service_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    if source=="agent":
+        from Shared import agent_db as _agn
+        svc=_agn.get_service_by_id(service_id); text=await _build_agent_expired_detail(svc) if svc else ""
+    else:
+        svc=userbot_db.get_service_by_id(service_id); text=await _build_expired_service_live_detail(svc) if svc else ""
     if not svc:
         if message: await message.edit_text("❌ اشتراک یافت نشد.")
         return
-    text = await _build_expired_service_live_detail(svc)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف کاربر", callback_data=f"userbot:expired:delete:{service_id}:{page}")], [InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:expired:{page}")]])
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 حذف اشتراک",callback_data=f"userbot:expired:delete:{source}:{service_id}:{page}")],[InlineKeyboardButton("🔙 بازگشت",callback_data=f"userbot:expired:{page}")]])
     if message:
-        try: await message.edit_text(text, reply_markup=kb); return
+        try: await message.edit_text(text,reply_markup=kb); return
         except BadRequest: pass
-    await context.bot.send_message(chat_id, text, reply_markup=kb)
+    await context.bot.send_message(chat_id,text,reply_markup=kb)
 
 
-async def _delete_expired_service(service: Dict[str, Any]) -> tuple[bool, List[str]]:
+async def _delete_expired_service(service: Dict[str, Any], source: str="user") -> tuple[bool,List[str]]:
     from AdminBot import servers as server_ops
-    service_id = int(service.get("id") or 0); target_server_id, target_user_uuid = _service_primary_target(service)
-    if service_id <= 0 or target_server_id <= 0 or not target_user_uuid: return False, ["شناسه پنل/UUID پیدا نشد"]
-    deleted_server_ids, failed_servers = await server_ops._delete_user_across_related_servers(target_server_id, target_user_uuid)
-    if not deleted_server_ids: return False, failed_servers or ["حذف روی هیچ سروری تایید نشد"]
-    userbot_db.delete_service(service_id)
-    try:
-        from Shared import agent_db as _agn
-        _agn.soft_delete_service_by_uuid(target_user_uuid, target_server_id)
-    except Exception: pass
-    return True, failed_servers
+    from Shared import agent_db as _agn
+    service_id=int(service.get("id") or 0)
+    target_sid=int(service.get("server_id") or 0) if source=="agent" else _service_primary_target(service)[0]
+    target_uuid=str(service.get("panel_user_uuid") or "").strip() if source=="agent" else _service_primary_target(service)[1]
+    if service_id<=0 or target_sid<=0 or not target_uuid: return False,["شناسه پنل/UUID پیدا نشد"]
+    deleted,failed=await server_ops._delete_user_across_related_servers(target_sid,target_uuid)
+    if not deleted: return False,failed or ["حذف روی هیچ سروری تایید نشد"]
+    if source=="agent": _agn.delete_service(service_id)
+    else:
+        userbot_db.delete_service(service_id)
+        _agn.hard_delete_service_by_uuid(target_uuid)
+    return True,failed
 
 
 async def send_user_profile(
@@ -8697,35 +8733,39 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
 
     # --- اشتراک‌های منقضی‌شده ---
     if data.startswith("userbot:expired:"):
-        parts = data.split(":"); action = parts[2] if len(parts) > 2 else "1"
-        if action == "detail" and len(parts) >= 5:
-            await query.answer(); await send_expired_service_detail(int(parts[3]), int(parts[4]), cid, context, message=msg); return
-        if action == "delete" and len(parts) >= 5:
-            service_id, page = int(parts[3]), int(parts[4]); await query.answer()
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، حذف شود", callback_data=f"userbot:expired:delete_yes:{service_id}:{page}"), InlineKeyboardButton("لغو ❌", callback_data=f"userbot:expired:detail:{service_id}:{page}")]])
-            await msg.edit_text("❓ این اشتراک از سرور اصلی، همه نودها و دیتابیس سرویس حذف شود؟\nسابقه سفارش‌ها، تراکنش‌ها، کیف پول و پروفایل کاربر باقی می‌ماند.", reply_markup=kb); return
-        if action == "delete_yes" and len(parts) >= 5:
-            service_id, page = int(parts[3]), int(parts[4]); svc = userbot_db.get_service_by_id(service_id)
-            if not svc: await query.answer("❌ اشتراک یافت نشد.", show_alert=True); return
-            ok, failed = await _delete_expired_service(svc)
-            if ok: await query.answer("✅ اشتراک حذف شد.", show_alert=True); await send_expired_services_page(page, cid, context, message=msg)
-            else: await query.answer("❌ حذف کامل انجام نشد.", show_alert=True); await msg.edit_text("❌ حذف اشتراک انجام نشد:\n" + "\n".join(failed[:5]))
+        parts=data.split(":"); action=parts[2] if len(parts)>2 else "1"
+        if action=="detail" and len(parts)>=6:
+            await query.answer(); await send_expired_service_detail(parts[3],int(parts[4]),int(parts[5]),cid,context,message=msg); return
+        if action=="delete" and len(parts)>=6:
+            source,service_id,page=parts[3],int(parts[4]),int(parts[5]); await query.answer()
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، حذف شود",callback_data=f"userbot:expired:delete_yes:{source}:{service_id}:{page}"),InlineKeyboardButton("لغو ❌",callback_data=f"userbot:expired:detail:{source}:{service_id}:{page}")]])
+            await msg.edit_text("❓ این اشتراک از سرور اصلی، همه نودها و دیتابیس سرویس حذف شود؟\nسابقه سفارش‌ها، تراکنش‌ها، کیف پول و پروفایل کاربر/نماینده باقی می‌ماند.",reply_markup=kb); return
+        if action=="delete_yes" and len(parts)>=7:
+            source,service_id,page=parts[3],int(parts[4]),int(parts[5])
+            if source=="agent":
+                from Shared import agent_db as _agn
+                svc=_agn.get_service_by_id(service_id)
+            else: svc=userbot_db.get_service_by_id(service_id)
+            if not svc: await query.answer("❌ اشتراک یافت نشد.",show_alert=True); return
+            ok,failed=await _delete_expired_service(svc,source)
+            if ok: await query.answer("✅ اشتراک حذف شد.",show_alert=True); await send_expired_services_page(page,cid,context,message=msg)
+            else: await query.answer("❌ حذف کامل انجام نشد.",show_alert=True); await msg.edit_text("❌ حذف اشتراک انجام نشد:\n"+"\n".join(failed[:5]))
             return
-        if action == "bulk" and len(parts) >= 4:
-            days = max(0, int(parts[3])); await query.answer(); count = len(userbot_db.get_expired_services(days))
-            title = "همه اشتراک‌های منقضی‌شده" if days == 0 else f"اشتراک‌های منقضی‌شده بیش از {days} روز"
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید حذف", callback_data=f"userbot:expired:bulk_yes:{days}"), InlineKeyboardButton("لغو ❌", callback_data="userbot:expired:1")]])
-            await msg.edit_text(f"⚠️ حذف گروهی {title}\nتعداد فعلی: {count}\n\nفقط اشتراک‌ها از پنل‌ها و دیتابیس سرویس حذف می‌شوند؛ پروفایل کاربران، سفارش‌ها، تراکنش‌ها و کیف پول دست‌نخورده می‌مانند.", reply_markup=kb); return
-        if action == "bulk_yes" and len(parts) >= 4:
-            days = max(0, int(parts[3])); await query.answer("⏳ حذف گروهی شروع شد..."); deleted = 0; failed_count = 0
-            for svc in userbot_db.get_expired_services(days):
-                ok, _failed = await _delete_expired_service(svc)
-                if ok: deleted += 1
-                else: failed_count += 1
-            await msg.edit_text(f"✅ عملیات حذف گروهی تمام شد.\n🗑 حذف‌شده: {deleted}\n⚠️ حذف‌نشده/خطادار: {failed_count}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("♻️ بازگشت به منقضی‌شده‌ها", callback_data="userbot:expired:1")]])); return
-        try: page = max(1, int(action))
-        except Exception: page = 1
-        await query.answer(); await send_expired_services_page(page, cid, context, message=msg); return
+        if action=="bulk" and len(parts)>=4:
+            days=max(0,int(parts[3])); await query.answer(); count=len(_all_expired_items(days))
+            title="همه اشتراک‌های منقضی‌شده" if days==0 else f"اشتراک‌های منقضی‌شده بیش از {days} روز"
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید حذف",callback_data=f"userbot:expired:bulk_yes:{days}"),InlineKeyboardButton("لغو ❌",callback_data="userbot:expired:1")]])
+            await msg.edit_text(f"⚠️ حذف گروهی {title}\nتعداد فعلی: {count}\n\nشامل کاربران اصلی و نمایندگی‌هاست. فقط سرویس و نودهای آن حذف می‌شود؛ پروفایل‌ها، سفارش‌ها، تراکنش‌ها و کیف پول باقی می‌مانند.",reply_markup=kb); return
+        if action=="bulk_yes" and len(parts)>=4:
+            days=max(0,int(parts[3])); await query.answer("⏳ حذف گروهی شروع شد..."); deleted=failed_count=0
+            for svc in _all_expired_items(days):
+                ok,_=await _delete_expired_service(svc,svc.get("_source","user"))
+                if ok: deleted+=1
+                else: failed_count+=1
+            await msg.edit_text(f"✅ عملیات حذف گروهی تمام شد.\n🗑 حذف‌شده: {deleted}\n⚠️ حذف‌نشده/خطادار: {failed_count}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("♻️ بازگشت به منقضی‌شده‌ها",callback_data="userbot:expired:1")]])); return
+        try: page=max(1,int(action))
+        except Exception: page=1
+        await query.answer(); await send_expired_services_page(page,cid,context,message=msg); return
 
     # --- 2. مدیریت کاربران (Users) ---
     if data == "userbot:users_menu":
