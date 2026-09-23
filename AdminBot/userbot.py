@@ -5228,7 +5228,7 @@ async def send_stale_zero_review_page(page: int, chat_id: int, context: ContextT
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
     if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:stalezero:{page+1}"))
     rows.append(nav); rows.append([InlineKeyboardButton("🔙 بازگشت به منقضی‌شده‌ها",callback_data="userbot:expired:1")])
-    text=f"🔎 بررسی UserBot روز صفرِ مشکوک\\n\\nاین بخش فقط رکوردهای day=0 با نود غیرفعال/ناموفق را برای بررسی دستی نشان می‌دهد و چیزی را خودکار حذف نمی‌کند.\\n\\nتعداد: {total}\\nصفحه: {page}/{total_pages}"
+    text=f"🔎 بررسی UserBot روز صفرِ مشکوک\n\nاین بخش فقط رکوردهای day=0 با نود غیرفعال/ناموفق را برای بررسی دستی نشان می‌دهد و چیزی را خودکار حذف نمی‌کند.\n\nتعداد: {total}\nصفحه: {page}/{total_pages}"
     kb=InlineKeyboardMarkup(rows)
     if message:
         try: await message.edit_text(text,reply_markup=kb); return
