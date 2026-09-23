@@ -5205,8 +5205,30 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
     if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:expired:{page+1}"))
     rows.append(nav)
-    rows += [[InlineKeyboardButton("🔎 بررسی اشتراک‌های قدیمیِ شروع‌نشده",callback_data="userbot:unstarted:1")],[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
+    rows += [[InlineKeyboardButton("🔎 بررسی UserBot روز صفرِ مشکوک",callback_data="userbot:stalezero:1")],[InlineKeyboardButton("🔎 بررسی اشتراک‌های قدیمیِ شروع‌نشده",callback_data="userbot:unstarted:1")],[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
     text=f"♻️ اشتراک‌های منقضی‌شده\n👤 کاربران اصلی: {uc} | 🤝 نمایندگی/مشتری: {ac}\nتعداد کل: {total}\nصفحه: {page}/{total_pages}"
+    kb=InlineKeyboardMarkup(rows)
+    if message:
+        try: await message.edit_text(text,reply_markup=kb); return
+        except BadRequest: pass
+    await context.bot.send_message(chat_id,text,reply_markup=kb)
+
+
+
+async def send_stale_zero_review_page(page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    services = userbot_db.get_stale_zero_day_services()
+    page_size=15; total=len(services); total_pages=max(1,math.ceil(total/page_size)); page=min(max(1,int(page or 1)),total_pages)
+    rows=[]; buttons=[]
+    for svc in services[(page-1)*page_size:page*page_size]:
+        label=str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()[:14]
+        buttons.append(InlineKeyboardButton(f"🟠 {label}",callback_data=f"userbot:expired:detail:user:{svc['id']}:{page}"))
+    for i in range(0,len(buttons),2): rows.append(list(reversed(buttons[i:i+2])))
+    nav=[]
+    if page>1: nav.append(InlineKeyboardButton("◀️",callback_data=f"userbot:stalezero:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
+    if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:stalezero:{page+1}"))
+    rows.append(nav); rows.append([InlineKeyboardButton("🔙 بازگشت به منقضی‌شده‌ها",callback_data="userbot:expired:1")])
+    text=f"🔎 بررسی UserBot روز صفرِ مشکوک\\n\\nاین بخش فقط رکوردهای day=0 با نود غیرفعال/ناموفق را برای بررسی دستی نشان می‌دهد و چیزی را خودکار حذف نمی‌کند.\\n\\nتعداد: {total}\\nصفحه: {page}/{total_pages}"
     kb=InlineKeyboardMarkup(rows)
     if message:
         try: await message.edit_text(text,reply_markup=kb); return
@@ -8797,6 +8819,13 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     # --- بررسی دستی اشتراک‌های قدیمی که هنوز شروع نشده‌اند ---
+    if data.startswith("userbot:stalezero:"):
+        await query.answer()
+        try: page=int(data.split(":")[2])
+        except Exception: page=1
+        await send_stale_zero_review_page(page,cid,context,message=msg)
+        return
+
     if data.startswith("userbot:unstarted:"):
         parts=data.split(":"); action=parts[2] if len(parts)>2 else "1"
         if action=="detail" and len(parts)>=5:
