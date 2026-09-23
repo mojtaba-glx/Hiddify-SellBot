@@ -4596,6 +4596,7 @@ def build_search_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📊پیگیری اشتراک", callback_data="userbot:subs_menu")],
             [InlineKeyboardButton("⚠️ لیست کاربران منقضی شده", callback_data="searchmenu:expired")],
             [InlineKeyboardButton("♻️ اشتراک‌های منقضی‌شده", callback_data="userbot:expired:1")],
+            [InlineKeyboardButton("🧹 بررسی رکوردهای مشکوک/قدیمی", callback_data="searchmenu:review_old")],
             [InlineKeyboardButton("بازگشت🔙", callback_data="searchmenu:back_main")],
         ]
     )
@@ -6659,6 +6660,11 @@ async def handle_server_inline_callback(
                 "نام کاربر، UUID یا لینک کانفیگ را ارسال کنید.",
                 reply_markup=cancel_keyboard(),
             )
+            return
+
+        if action == "review_old":
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🟠 UserBot روز صفرِ مشکوک", callback_data="userbot:stalezero:1")],[InlineKeyboardButton("🟡 اشتراک‌های قدیمیِ شروع‌نشده", callback_data="userbot:unstarted:1")],[InlineKeyboardButton("🔙 بازگشت", callback_data="searchmenu:back")]])
+            await msg.edit_text("🧹 بررسی رکوردهای مشکوک/قدیمی\n\nاین بخش فقط برای بررسی دستی است و چیزی را خودکار حذف نمی‌کند.", reply_markup=kb)
             return
 
         if action == "expired":
