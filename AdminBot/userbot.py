@@ -5152,6 +5152,10 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     for svc in items:
         profile = str(svc.get("full_name") or svc.get("username") or "").strip()
         label = profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
+        # برای جدول سه‌ستونه نام‌های بلند را خودمان کوتاه می‌کنیم تا تلگرام فقط «...» نشان ندهد.
+        max_chars = 10
+        if len(label) > max_chars:
+            label = label[:max_chars].rstrip() + "…"
         user_buttons.append(InlineKeyboardButton(f"🔴 {label}", callback_data=f"userbot:expired:detail:{svc['id']}:{page}"))
     # پروفایل‌های منقضی مثل لیست قدیمی، سه‌تایی کنار هم نمایش داده شوند.
     for i in range(0, len(user_buttons), 3):
