@@ -31,7 +31,12 @@ def _load_db() -> Dict[str, Any]:
             # نکن نوشتن بعدی بازنویسیِ بی‌صدا کل دیتا را پاک کند
             try:
                 import time as _t
-                backup = f"{DB_PATH}.corrupt-{_t.strftime('%Y%m%d-%H%M%S')}"
+                from pathlib import Path as _Path
+                # بکاپ‌های بازیابی را خارج از Shared نگه می‌داریم تا git/update
+                # آن‌ها را به‌عنوان تغییر محلی سورس تشخیص ندهد.
+                backup_dir = _Path(__file__).resolve().parent.parent / "backups"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                backup = backup_dir / f"{_Path(DB_PATH).name}.corrupt-{_t.strftime('%Y%m%d-%H%M%S')}"
                 with open(DB_PATH, "rb") as src, open(backup, "wb") as dst:
                     dst.write(src.read())
             except Exception:
