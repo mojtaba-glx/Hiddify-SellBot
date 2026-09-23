@@ -47,6 +47,7 @@ from AdminBot.servers import (  # noqa: E402
 )
 from AdminBot.keyboards import admin_main_keyboard  # noqa: E402
 from AdminBot.userbot import handle_ticket_screenshot_start, run_userbot_auto_backup_job  # noqa: E402
+from AdminBot.channel_posts import handle_channel_message, handle_channel_callback  # noqa: E402
 from Shared import service_enforcer  # noqa: E402
 from Shared import node_ops  # noqa: E402
 from Shared import server_health  # noqa: E402
@@ -1092,10 +1093,17 @@ def main() -> None:
     application.add_handler(CommandHandler("nodes_health", nodes_health))
     application.add_handler(CommandHandler("daily_report", daily_report_now))
 
+    # مدیریت پست کانال در گروه -1 اجرا می‌شود تا فقط هنگام فعال بودن این جریان،
+    # پیام را قبل از روتر عمومی ادمین مصرف کند. ویدئو نیز اینجا پشتیبانی می‌شود.
+    application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_channel_message), group=-1)
+
     # همه‌ی پیام‌های متنی — داخل AdminBot/servers.py
     application.add_handler(
         MessageHandler((filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, handle_admin_menu)
     )
+
+    # callbackهای مدیریت کانال قبل از روتر عمومی ثبت می‌شوند.
+    application.add_handler(CallbackQueryHandler(handle_channel_callback, pattern=r"^channelpost:"))
 
     # همه‌ی دکمه‌های inline — داخل AdminBot/servers.py
     application.add_handler(CallbackQueryHandler(admin_inline_handler))
