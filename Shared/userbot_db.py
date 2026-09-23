@@ -2339,6 +2339,32 @@ def get_services_for_user(user_id: int) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
+    """Return expired UserBot services without touching orders/payments/history.
+
+    min_days_expired=0 -> all expired (days_left <= 0)
+    min_days_expired=3 -> expired at least 3 days ago (days_left <= -3)
+    """
+    init_db()
+    conn = _get_conn()
+    cur = conn.cursor()
+    threshold = -max(0, int(min_days_expired or 0))
+    try:
+        cur.execute(
+            """
+            SELECT s.*, u.telegram_id, u.username, u.full_name
+            FROM userbot_services s
+            LEFT JOIN userbot_users u ON u.id = s.user_id
+            WHERE COALESCE(s.days_left, 0) <= ?
+            ORDER BY COALESCE(s.days_left, 0) ASC, s.id DESC
+            """,
+            (threshold,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_service_by_id(service_id: int) -> Optional[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
