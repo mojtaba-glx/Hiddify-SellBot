@@ -493,42 +493,49 @@ async def _online_client_map(
                 return dict(cached[1])
 
         rows: List[Dict[str, Any]] = []
-        # Preferred endpoint: authoritative combined online overview.
+        got_online_snapshot = False
+
+        # Preferred endpoint: authoritative combined online overview. An empty
+        # singbox list is a valid "nobody online" result and must not trigger
+        # two more fallback requests.
         try:
             data = await _request_json("GET", "/api/online-users", server)
-            raw = data.get("singbox") if isinstance(data, dict) else []
+            raw = data.get("singbox") if isinstance(data, dict) else None
             if isinstance(raw, list):
                 rows = [dict(x) for x in raw if isinstance(x, dict)]
+                got_online_snapshot = True
         except Exception:
-            rows = []
+            pass
 
         # Fallback for older builds: realtime per-client online status.
-        if not rows:
+        if not got_online_snapshot:
             try:
                 data = await _request_json(
                     "GET", "/api/traffic/singbox/realtime", server
                 )
-                raw = data.get("clients") if isinstance(data, dict) else []
+                raw = data.get("clients") if isinstance(data, dict) else None
                 if isinstance(raw, list):
                     rows = [
                         dict(x)
                         for x in raw
                         if isinstance(x, dict) and bool(x.get("isOnline"))
                     ]
+                    got_online_snapshot = True
             except Exception:
-                rows = []
+                pass
 
         # Last fallback: dedicated online list.
-        if not rows:
+        if not got_online_snapshot:
             try:
                 data = await _request_json(
                     "GET", "/api/traffic/singbox/online", server
                 )
-                raw = data.get("users") if isinstance(data, dict) else []
+                raw = data.get("users") if isinstance(data, dict) else None
                 if isinstance(raw, list):
                     rows = [dict(x) for x in raw if isinstance(x, dict)]
+                    got_online_snapshot = True
             except Exception:
-                rows = []
+                pass
 
         result: Dict[str, Dict[str, Any]] = {}
         for row in rows:
