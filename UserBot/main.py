@@ -2879,6 +2879,14 @@ def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
                 return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
     except Exception:
         pass
+    # X-NET exposes a native public subscription URL and does not use
+    # Hiddify's user_proxy_path/all.txt layout.
+    try:
+        from Shared import xnet_api
+        if xnet_api.is_xnet_server(server):
+            return xnet_api.get_subscription_url(server, user_uuid)
+    except Exception:
+        pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
@@ -2933,6 +2941,12 @@ def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
             sub_path = xui_api._sub_path(server)
             if origin and sub_path:
                 return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
+    except Exception:
+        pass
+    try:
+        from Shared import xnet_api
+        if xnet_api.is_xnet_server(server):
+            return xnet_api.get_subscription_url(server, user_uuid)
     except Exception:
         pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
@@ -3043,6 +3057,21 @@ def _get_service_node_base_urls(service: dict) -> list[str]:
             if base:
                 out.append(base)
     return out
+
+
+def _is_native_subscription_url(value: Any) -> bool:
+    """True when the URL itself is the complete panel subscription endpoint."""
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        path = (urlparse(raw).path or "").lower()
+    except Exception:
+        path = raw.lower()
+    # X-NET: /api/v1/sub/{uuid}
+    # X-UI:  /sub/{token} (or a custom configured sub path handled below
+    #         through panel-type detection in the caller).
+    return "/api/v1/sub/" in path
 
 
 def _sanitize_config_text(value: Any) -> str:
