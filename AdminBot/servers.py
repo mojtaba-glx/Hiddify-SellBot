@@ -9484,6 +9484,7 @@ async def send_server_status_detail(chat_id: int, context: ContextTypes.DEFAULT_
     # so both panel types keep the same display contract.
     panel_type = str(server.get("panel_type") or "").strip().lower()
     is_xui = panel_type in {"xui", "x-ui"}
+    is_xnet = panel_type in {"xnet", "x-net"}
     if is_xui:
         gib = float(1024 ** 3)
         ram_u = float(ram_u or 0) / gib
@@ -9545,8 +9546,8 @@ async def send_server_status_detail(chat_id: int, context: ContextTypes.DEFAULT_
         f"Total Users: {u_total} User\n"
         f"Usage (Today): {usage_today:.2f} GB\n"
         f"Online (Now): {u_online_now} User\n"
-        f"Now Network Received: {net_now_recv_mb:.2f} MB\n"
-        f"Now Network Sent: {net_now_sent_mb:.2f} MB\n"
+        f"Now Network Received: {net_now_recv_mb:.2f} {'MB/s' if is_xnet else 'MB'}\n"
+        f"Now Network Sent: {net_now_sent_mb:.2f} {'MB/s' if is_xnet else 'MB'}\n"
         f"Online (Today): {u_active_today} User\n"
         f"Online(30 Days): {u_active_30} User\n"
         f"Usage(30 Days): {usage_30:.2f} GB\n"
