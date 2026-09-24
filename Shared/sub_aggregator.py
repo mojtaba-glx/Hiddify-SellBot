@@ -19,6 +19,7 @@ ALLOWED_CONFIG_SCHEMES = (
     "hysteria://",
     "hysteria2://",
     "hy2://",
+    "anytls://",
     "wireguard://",
 )
 STATUS_CONFIG_ENABLED_ENV = "SUB_STATUS_CONFIG_ENABLED"
@@ -700,7 +701,7 @@ def _dedup_key_for_line(line: str) -> str:
             b64 += "=" * (-len(b64) % 4)
             data = _json.loads(base64.b64decode(b64).decode())
             return f"vmess:{data.get('id') or ''}@{data.get('add') or ''}:{data.get('port') or ''}:{data.get('net') or data.get('type') or ''}".lower()
-        # برای بقیه: vless, trojan, hysteria2, ss, tuic
+        # برای بقیه: vless, trojan, hysteria2, anytls, ss, tuic
         # uuid/host/port/type را بیرون بکش
         # vless://uuid@host:port?....
         # trojan://pass@host:port#...
@@ -721,7 +722,7 @@ def _dedup_key_for_line(line: str) -> str:
                 after_at = rest.split("@", 1)[1]
                 # host:port تا ? یا # یا /
                 hostport = after_at.split("?")[0].split("#")[0].split("/")[0]
-                # uuid برای vless/trojan/hysteria
+                # uuid/credential برای vless/trojan/hysteria/anytls
                 uuid = before_at.split("?")[0].split("#")[0].split("/")[0]
                 # برای ss، before_at base64 است، uuid واقعی داخلش است
                 if scheme == "ss":
