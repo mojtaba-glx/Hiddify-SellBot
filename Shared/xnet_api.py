@@ -1345,52 +1345,55 @@ def _analytics_period_stats(data: Dict[str, Any]) -> Optional[Tuple[int, int]]:
     if not has_period_fields:
         return None
 
-    if "periodTotal" in data:
-        period_bytes = max(0, _to_int(data.get("periodTotal"), 0))
-    elif "periodUpload" in data or "periodDownload" in data:
-        period_bytes = max(
-            0,
-            _to_int(data.get("periodUpload"), 0)
-            + _to_int(data.get("periodDownload"), 0),
+    consumer_period_supported = any(
+        isinstance(row, dict)
+        and any(
+            key in row for key in ("periodTotal", "periodUpload", "periodDownload")
         )
-    else:
-        period_bytes = 0
+        for row in consumers
+    )
+
+    period_bytes = 0
+    active_ids: set[str] = set()
+    if consumer_period_supported:
+        # Analytics can include SSH accounts too. SellBot's X-NET server status
+        # is VPN/sing-box oriented, so only VPN consumers belong in these totals.
         for row in consumers:
             if not isinstance(row, dict):
                 continue
+            kind = str(row.get("kind") or "vpn").strip().lower()
+            if kind == "ssh":
+                continue
             if "periodTotal" in row:
-                period_bytes += max(0, _to_int(row.get("periodTotal"), 0))
+                used = max(0, _to_int(row.get("periodTotal"), 0))
             else:
-                period_bytes += max(
+                used = max(
                     0,
                     _to_int(row.get("periodUpload"), 0)
                     + _to_int(row.get("periodDownload"), 0),
                 )
-
-    active_ids: set[str] = set()
-    for row in consumers:
-        if not isinstance(row, dict):
-            continue
-        kind = str(row.get("kind") or "vpn").strip().lower()
-        if kind == "ssh":
-            continue
-        if "periodTotal" in row:
-            used = _to_int(row.get("periodTotal"), 0)
+            period_bytes += used
+            if used <= 0:
+                continue
+            identity = str(
+                row.get("clientId")
+                or row.get("client_id")
+                or row.get("uuid")
+                or row.get("username")
+                or ""
+            ).strip()
+            if identity:
+                active_ids.add(identity)
+    else:
+        # Older builds may expose only top-level period totals.
+        if "periodTotal" in data:
+            period_bytes = max(0, _to_int(data.get("periodTotal"), 0))
         else:
-            used = _to_int(row.get("periodUpload"), 0) + _to_int(
-                row.get("periodDownload"), 0
+            period_bytes = max(
+                0,
+                _to_int(data.get("periodUpload"), 0)
+                + _to_int(data.get("periodDownload"), 0),
             )
-        if used <= 0:
-            continue
-        identity = str(
-            row.get("clientId")
-            or row.get("client_id")
-            or row.get("uuid")
-            or row.get("username")
-            or ""
-        ).strip()
-        if identity:
-            active_ids.add(identity)
 
     return max(0, period_bytes), len(active_ids)
 
@@ -1454,13 +1457,11 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             return {}
 
-    today_analytics, month_analytics, realtime_net = await asyncio.gather(
-        _safe_analytics(today_start),
+    month_analytics, realtime_net = await asyncio.gather(
         _safe_analytics(month_start),
         _get_realtime_network_mb(server),
     )
 
-    today_period = _analytics_period_stats(today_analytics)
     month_period = _analytics_period_stats(month_analytics)
 
     ram = metrics.get("ramUsage") if isinstance(metrics.get("ramUsage"), dict) else {}
@@ -1487,9 +1488,34 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     )
     users_online = max(current_online, users_online)
 
-    today_users = today_period[1] if today_period is not None else 0
-    month_users = month_period[1] if month_period is not None else 0
-    # A user who is online now has, by definition, been active today/month.
+    today_users = 0
+    month_users = 0
+    for user in users:
+        if not isinstance(user, dict):
+            continue
+        is_online = (
+            str(user.get("_user_list_status") or "").strip().lower() == "online"
+        )
+        last_seen = _parse_dt(
+            user.get("last_online")
+            or user.get("lastConnectionAt")
+            or user.get("last_seen")
+        )
+        if is_online:
+            today_users += 1
+            month_users += 1
+            continue
+        if last_seen is None:
+            continue
+        if today_start <= last_seen <= now + timedelta(minutes=5):
+            today_users += 1
+        if month_start <= last_seen <= now + timedelta(minutes=5):
+            month_users += 1
+
+    # Analytics is a useful fallback when an older client row has no
+    # lastConnectionAt/session timestamp. Never let it reduce presence counts.
+    if month_period is not None:
+        month_users = max(month_users, month_period[1])
     today_users = max(today_users, users_online)
     month_users = max(month_users, users_online)
 
