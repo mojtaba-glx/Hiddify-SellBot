@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from Shared import agent_db, database as shared_db
@@ -34,11 +34,22 @@ from AgentBot.services.subscription_service import (
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
 from Shared.qr_utils import make_qr_image
+from Shared.tg_button_styles import inline_button as IButton
 
 logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 8
 _UD_CREATE_OPERATION = "create_service_operation"
+
+
+def _wallet_charge_keyboard(back_callback: str = "agbot:subs:back") -> InlineKeyboardMarkup:
+    """Shortcut from insufficient-balance errors to the existing wallet flow."""
+    rows = [
+        [IButton("💳 شارژ کیف پول", callback_data="agbot:wallet:create")],
+    ]
+    if back_callback:
+        rows.append([IButton("🔙 بازگشت", callback_data=back_callback)])
+    return InlineKeyboardMarkup(rows)
 
 
 def _calc_dynamic_price(agent_id: int, server_id: int, gb: int, months: int):
@@ -1097,8 +1108,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if not updated:
                 try:
                     await query.edit_message_text(
-                        "❌ موجودی کیف پول کافی نیست.\nلطفاً ابتدا کیف پول خود را شارژ کنید.",
-                        reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0))),
+                        "❌ موجودی کیف پول کافی نیست.\n"
+                        "لطفاً ابتدا کیف پول خود را شارژ کنید.",
+                        reply_markup=_wallet_charge_keyboard(
+                            back_callback=f"agbot:subs:detail:{svc_id}"
+                        ),
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1549,8 +1563,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await update.message.reply_text(
                 "❌ موجودی کیف پول کافی نیست.\n\n"
                 f"💰 موجودی: {_fmt_toman(exc.balance)} تومان\n"
-                f"🧾 مبلغ لازم: {_fmt_toman(exc.required)} تومان",
-                reply_markup=cancel_keyboard(),
+                f"🧾 مبلغ لازم: {_fmt_toman(exc.required)} تومان\n\n"
+                "برای ادامه، کیف پول خود را شارژ کنید:",
+                reply_markup=_wallet_charge_keyboard(),
             )
             return True
         except SubscriptionCreationError as exc:
