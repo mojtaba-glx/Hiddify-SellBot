@@ -31,6 +31,13 @@ def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
                 return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
     except Exception:
         pass
+    # X-NET: public subscription endpoint is native and requires no admin JWT.
+    try:
+        from Shared import xnet_api
+        if xnet_api.is_xnet_server(server):
+            return xnet_api.get_subscription_url(server, user_uuid)
+    except Exception:
+        pass
     panel_url = str(server.get("panel_url") or "").rstrip("/")
     user_proxy = str(server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
