@@ -445,6 +445,10 @@ EDIT_SERVER_XUI_PASSWORD = "edit_server_xui_password"
 EDIT_SERVER_XUI_TOKEN = "edit_server_xui_token"
 EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
 EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
+EDIT_SERVER_XNET_USERNAME = "edit_server_xnet_username"
+EDIT_SERVER_XNET_PASSWORD = "edit_server_xnet_password"
+EDIT_SERVER_XNET_SUB_DOMAIN = "edit_server_xnet_sub_domain"
+EDIT_SERVER_XNET_INBOUND = "edit_server_xnet_inbound"
 
 # افزودن کاربر
 ADD_USER_NAME = "add_user_name"
@@ -3238,10 +3242,14 @@ def build_server_detail_text(
         except Exception:
             plans_count = 0
     priority = int(server.get("priority") or 0)
-    is_xui = str(server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    panel_type = str(server.get("panel_type") or "").strip().lower()
+    is_xui = panel_type in {"xui", "x-ui"}
+    is_xnet = panel_type in {"xnet", "x-net"}
     if is_xui:
         version_text = "X-UI"
-        # برای X-UI آدرس پنل خودش لینک است (شامل base path)
+        admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
+    elif is_xnet:
+        version_text = "X-NET"
         admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
     else:
         version_text = SERVER_DISPLAY_VERSION or f"V{int(server.get('version') or 11)}"
@@ -3283,6 +3291,30 @@ def build_server_detail_text(
             f"📋 تعداد پلن ها: {plans_count}\n"
             f"🟩 اولویت: {priority}\n"
             f"📦 پنل: {escape(version_text)}{xui_info}"
+        )
+
+    if is_xnet:
+        xnet_info = ""
+        try:
+            xnet_user = str(server.get("xnet_username") or "admin").strip()
+            if xnet_user:
+                xnet_info += f"\n👤 یوزر پنل: {escape(xnet_user)}"
+            inbound_info = str(server.get("xnet_inbound_id") or "").strip()
+            if inbound_info == "0":
+                xnet_info += "\n🧩 اینباند: همه (0)"
+            elif inbound_info:
+                xnet_info += f"\n🧩 اینباند: {escape(inbound_info)}"
+            else:
+                xnet_info += "\n🧩 اینباند: خودکار (اولین فعال)"
+        except Exception:
+            pass
+        return (
+            f"{title_line}\n"
+            "❖ • -------------------------- • ❖\n"
+            f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
+            f"📋 تعداد پلن ها: {plans_count}\n"
+            f"🟩 اولویت: {priority}\n"
+            f"📦 پنل: {escape(version_text)}{xnet_info}"
         )
 
     return (
@@ -5543,6 +5575,39 @@ async def handle_edit_server_flow(
             return
         updates["priority"] = priority
         msg_ok = "✅ اولویت سرور بروزرسانی شد."
+    elif state == EDIT_SERVER_XNET_USERNAME:
+        updates["xnet_username"] = text.strip() or "admin"
+        msg_ok = "✅ نام کاربری پنل X-NET بروزرسانی شد."
+    elif state == EDIT_SERVER_XNET_PASSWORD:
+        updates["xnet_password"] = text
+        msg_ok = "✅ رمز پنل X-NET بروزرسانی شد."
+    elif state == EDIT_SERVER_XNET_SUB_DOMAIN:
+        sub = text.strip()
+        if sub in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            updates["xnet_sub_domain"] = ""
+            msg_ok = "✅ دامنه ساب X-NET پاک شد (از آدرس پنل استفاده می‌شود)."
+        else:
+            sub = sub.rstrip("/")
+            if not sub.startswith(("http://", "https://")):
+                sub = "https://" + sub
+            updates["xnet_sub_domain"] = sub
+            msg_ok = "✅ دامنه ساب X-NET بروزرسانی شد."
+    elif state == EDIT_SERVER_XNET_INBOUND:
+        raw = text.strip()
+        if raw in {"skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            updates["xnet_inbound_id"] = ""
+            msg_ok = "✅ اینباند X-NET روی حالت خودکار تنظیم شد."
+        elif raw == "0":
+            updates["xnet_inbound_id"] = "0"
+            msg_ok = "✅ همه Inboundهای فعال X-NET انتخاب شدند."
+        else:
+            normalized = raw.replace("،", ",").replace(" ", ",")
+            parts = [p.strip() for p in normalized.split(",") if p.strip()]
+            if not parts:
+                await message.reply_text("❌ شناسه Inbound نامعتبر است.", reply_markup=cancel_keyboard())
+                return
+            updates["xnet_inbound_id"] = ",".join(parts)
+            msg_ok = f"✅ Inboundهای X-NET روی {','.join(parts)} تنظیم شد."
     elif state == EDIT_SERVER_XUI_USERNAME:
         updates["xui_username"] = text.strip()
         msg_ok = "✅ نام کاربری پنل X-UI بروزرسانی شد."
@@ -5643,7 +5708,9 @@ async def send_server_edit_menu(
 
     text = await build_server_detail_text_live(server)
 
-    is_xui = str(server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    panel_type = str(server.get("panel_type") or "").strip().lower()
+    is_xui = panel_type in {"xui", "x-ui"}
+    is_xnet = panel_type in {"xnet", "x-net"}
     if is_xui:
         kb = InlineKeyboardMarkup(
             [
@@ -5655,6 +5722,22 @@ async def send_server_edit_menu(
                 [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xui_sub_domain")],
                 [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xui_inbound")],
                 [InlineKeyboardButton("🔢ویرایش اولویت ترتیب", callback_data=f"seredit:{server_id}:priority")],
+                [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
+                [InlineKeyboardButton("🔙بازگشت", callback_data=f"server:{server_id}")],
+            ]
+        )
+    elif is_xnet:
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("📌ویرایش عنوان", callback_data=f"seredit:{server_id}:title")],
+                [InlineKeyboardButton("🌐ویرایش آدرس پنل", callback_data=f"seredit:{server_id}:panel_url")],
+                [InlineKeyboardButton("👤ویرایش نام کاربری پنل", callback_data=f"seredit:{server_id}:xnet_username")],
+                [InlineKeyboardButton("🔑ویرایش رمز پنل", callback_data=f"seredit:{server_id}:xnet_password")],
+                [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xnet_sub_domain")],
+                [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xnet_inbound")],
+                [InlineKeyboardButton("🗿ویرایش محدودیت کاربر", callback_data=f"seredit:{server_id}:limit")],
+                [InlineKeyboardButton("🔢ویرایش اولویت ترتیب", callback_data=f"seredit:{server_id}:priority")],
+                [InlineKeyboardButton("🧪تست اتصال", callback_data=f"seredit:{server_id}:test")],
                 [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
                 [InlineKeyboardButton("🔙بازگشت", callback_data=f"server:{server_id}")],
             ]
@@ -7795,6 +7878,58 @@ async def handle_server_inline_callback(
             set_server_state(EDIT_SERVER_USER_PROXY)
             await msg.edit_text(
                 "🔑 لطفاً کد مسیر جدید کاربران را وارد کنید (User Proxy Path):",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xnet_username":
+            set_server_state(EDIT_SERVER_XNET_USERNAME)
+            await msg.edit_text(
+                "👤 نام کاربری جدید ادمین X-NET را وارد کنید:",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xnet_password":
+            set_server_state(EDIT_SERVER_XNET_PASSWORD)
+            await msg.edit_text(
+                "🔑 رمز جدید ادمین X-NET را وارد کنید:",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xnet_sub_domain":
+            set_server_state(EDIT_SERVER_XNET_SUB_DOMAIN)
+            await msg.edit_text(
+                "🌐 دامنه عمومی ساب X-NET را وارد کنید.\n"
+                "مثال: sub.example.com\n"
+                "برای استفاده از آدرس خود پنل، 0 یا skip بفرستید.",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xnet_inbound":
+            set_server_state(EDIT_SERVER_XNET_INBOUND)
+            server_now = database.get_server_by_id(server_id) or {}
+            try:
+                inbound_rows = await xnet_api.get_inbounds(server_now)
+                lines = []
+                for ib in (inbound_rows or [])[:20]:
+                    iid = str(ib.get("id") or "").strip()
+                    if not iid:
+                        continue
+                    lines.append(
+                        f"{'✅' if bool(ib.get('enabled', True)) else '⛔'} {iid} | "
+                        f"{str(ib.get('protocol') or '-')} | "
+                        f"{str(ib.get('remark') or ib.get('name') or '-')}"
+                    )
+                available = "\n".join(lines) or "Inboundی پیدا نشد."
+            except Exception as exc:
+                available = f"دریافت لیست ناموفق بود: {str(exc)[:250]}"
+            await msg.edit_text(
+                "🧩 Inboundهای X-NET:\n\n"
+                f"{available}\n\n"
+                "شناسه جدید را بفرستید. 0=همه، skip=اولین فعال، چند شناسه با کاما.",
                 reply_markup=cancel_kb,
             )
             return
