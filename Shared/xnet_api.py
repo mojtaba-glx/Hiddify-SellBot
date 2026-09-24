@@ -33,6 +33,19 @@ _TOKEN_LOCK = asyncio.Lock()
 _DEFAULT_TOKEN_TTL = 15 * 60
 _GB = 1024 ** 3
 
+# X-NET online endpoints are live data. Keep only a very short cache so bulk
+# Agent/Admin views do not hit /api/online-users once per subscriber.
+_ONLINE_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Dict[str, Any]]]] = {}
+_ONLINE_CACHE_LOCK = asyncio.Lock()
+_ONLINE_CACHE_TTL = 5.0
+
+# Session-history fallback is used only when X-NET's client object has no
+# lastConnectionAt. A short cache prevents repeated detail/status views from
+# issuing the same per-client history request over and over.
+_LAST_SEEN_CACHE: Dict[Tuple[str, str, str], Tuple[float, Optional[str]]] = {}
+_LAST_SEEN_CACHE_LOCK = asyncio.Lock()
+_LAST_SEEN_CACHE_TTL = 30.0
+
 
 def is_xnet_server(server: Dict[str, Any]) -> bool:
     return str((server or {}).get("panel_type") or "").strip().lower() in {
@@ -360,6 +373,9 @@ def _normalize_client(
     server: Dict[str, Any],
     *,
     used_bytes: Optional[int] = None,
+    online: Optional[bool] = None,
+    last_online: Optional[str] = None,
+    active_sessions: Optional[int] = None,
 ) -> Dict[str, Any]:
     user_uuid = _client_uuid(client)
     traffic_used = (
@@ -375,6 +391,36 @@ def _normalize_client(
         days_left = max(0, (expiry.date() - now.date()).days)
     status = _client_status(client)
     active = status not in {"disabled", "inactive", "expired", "blocked"}
+
+    # X-NET keeps the durable last connection timestamp on the client model.
+    # Accept a few historical field names for compatibility with older builds.
+    if not last_online:
+        for key in (
+            "lastConnectionAt",
+            "last_connection_at",
+            "lastOnline",
+            "last_online",
+            "lastSeen",
+            "last_seen",
+        ):
+            dt = _parse_dt(client.get(key))
+            if dt is not None:
+                last_online = dt.isoformat().replace("+00:00", "Z")
+                break
+
+    if online is None:
+        try:
+            online = _to_int(client.get("activeSessions"), 0) > 0
+        except Exception:
+            online = False
+    if online:
+        # For an actively connected client, "last online" is effectively now.
+        # Keep the explicit online flag authoritative; the timestamp is for
+        # relative-time consumers that only know about last_online.
+        last_online = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    if active_sessions is None:
+        active_sessions = _to_int(client.get("activeSessions"), 0)
 
     return {
         "uuid": user_uuid,
@@ -419,8 +465,197 @@ def _normalize_client(
         "protocol": str(inbound.get("protocol") or "").strip().lower(),
         "port": _to_int(inbound.get("port"), 0),
         "server_id": (server or {}).get("id"),
+        "last_online": last_online,
+        "lastConnectionAt": last_online,
+        "activeSessions": max(0, _to_int(active_sessions, 0)),
+        "_user_list_status": "online" if bool(online) else "offline",
         "_source": "xnet",
     }
+
+
+async def _online_client_map(
+    server: Dict[str, Any],
+    *,
+    force: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+    """Return currently-online X-NET sing-box clients keyed by client id."""
+    key = _cache_key(server)
+    now = time.monotonic()
+    if not force:
+        cached = _ONLINE_CACHE.get(key)
+        if cached and cached[0] > now:
+            return dict(cached[1])
+
+    async with _ONLINE_CACHE_LOCK:
+        if not force:
+            cached = _ONLINE_CACHE.get(key)
+            if cached and cached[0] > time.monotonic():
+                return dict(cached[1])
+
+        rows: List[Dict[str, Any]] = []
+        # Preferred endpoint: authoritative combined online overview.
+        try:
+            data = await _request_json("GET", "/api/online-users", server)
+            raw = data.get("singbox") if isinstance(data, dict) else []
+            if isinstance(raw, list):
+                rows = [dict(x) for x in raw if isinstance(x, dict)]
+        except Exception:
+            rows = []
+
+        # Fallback for older builds: realtime per-client online status.
+        if not rows:
+            try:
+                data = await _request_json(
+                    "GET", "/api/traffic/singbox/realtime", server
+                )
+                raw = data.get("clients") if isinstance(data, dict) else []
+                if isinstance(raw, list):
+                    rows = [
+                        dict(x)
+                        for x in raw
+                        if isinstance(x, dict) and bool(x.get("isOnline"))
+                    ]
+            except Exception:
+                rows = []
+
+        # Last fallback: dedicated online list.
+        if not rows:
+            try:
+                data = await _request_json(
+                    "GET", "/api/traffic/singbox/online", server
+                )
+                raw = data.get("users") if isinstance(data, dict) else []
+                if isinstance(raw, list):
+                    rows = [dict(x) for x in raw if isinstance(x, dict)]
+            except Exception:
+                rows = []
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            cid = str(
+                row.get("clientId")
+                or row.get("client_id")
+                or row.get("id")
+                or ""
+            ).strip()
+            if cid:
+                result[cid] = row
+
+        _ONLINE_CACHE[key] = (
+            time.monotonic() + _ONLINE_CACHE_TTL,
+            dict(result),
+        )
+        return result
+
+
+def _latest_client_last_online(client: Dict[str, Any]) -> Optional[str]:
+    latest: Optional[datetime] = None
+    for key in (
+        "lastConnectionAt",
+        "last_connection_at",
+        "lastOnline",
+        "last_online",
+        "lastSeen",
+        "last_seen",
+    ):
+        dt = _parse_dt(client.get(key))
+        if dt is not None and (latest is None or dt > latest):
+            latest = dt
+    if latest is None:
+        return None
+    return latest.isoformat().replace("+00:00", "Z")
+
+
+async def _last_seen_from_sessions(
+    server: Dict[str, Any],
+    client_id: str,
+) -> Optional[str]:
+    """Read latest presence timestamp for one client from session history."""
+    cid = str(client_id or "").strip()
+    if not cid:
+        return None
+    cache_key = (*_cache_key(server), cid)
+    now = time.monotonic()
+    cached = _LAST_SEEN_CACHE.get(cache_key)
+    if cached and cached[0] > now:
+        return cached[1]
+
+    try:
+        data = await _request_json(
+            "GET",
+            f"/api/traffic/singbox/clients/{cid}/sessions",
+            server,
+        )
+    except Exception:
+        data = {}
+
+    rows = data.get("sessions") if isinstance(data, dict) else []
+    latest: Optional[datetime] = None
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for key in (
+                "lastSeen",
+                "last_seen",
+                "endTime",
+                "end_time",
+                "startTime",
+                "start_time",
+            ):
+                dt = _parse_dt(row.get(key))
+                if dt is not None and (latest is None or dt > latest):
+                    latest = dt
+
+    value = (
+        latest.isoformat().replace("+00:00", "Z")
+        if latest is not None
+        else None
+    )
+    async with _LAST_SEEN_CACHE_LOCK:
+        _LAST_SEEN_CACHE[cache_key] = (
+            time.monotonic() + _LAST_SEEN_CACHE_TTL,
+            value,
+        )
+    return value
+
+
+def _runtime_for_pairs(
+    pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]],
+    online_map: Dict[str, Dict[str, Any]],
+) -> Tuple[bool, Optional[str], int]:
+    online = False
+    latest: Optional[datetime] = None
+    sessions = 0
+
+    for _inbound, client in pairs:
+        cid = str(client.get("id") or "").strip()
+        online_row = online_map.get(cid) if cid else None
+        if online_row is not None:
+            online = True
+            # /api/online-users exposes device count while realtime can expose
+            # one row per connected client. Either way keep a non-zero signal.
+            row_sessions = _to_int(
+                online_row.get("sessions", online_row.get("devices", 1)), 1
+            )
+            sessions += max(1, row_sessions)
+        else:
+            sessions += max(0, _to_int(client.get("activeSessions"), 0))
+            if _to_int(client.get("activeSessions"), 0) > 0:
+                online = True
+
+        candidate = _parse_dt(_latest_client_last_online(client))
+        if candidate is not None and (latest is None or candidate > latest):
+            latest = candidate
+
+    if online:
+        latest = datetime.now(timezone.utc)
+
+    return (
+        online,
+        latest.isoformat().replace("+00:00", "Z") if latest is not None else None,
+        sessions,
+    )
 
 
 async def ping(server: Dict[str, Any]) -> Dict[str, Any]:
@@ -467,7 +702,10 @@ def _find_client_records(
 
 
 async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
-    inbounds = await get_inbounds(server)
+    inbounds, online_map = await asyncio.gather(
+        get_inbounds(server),
+        _online_client_map(server),
+    )
     groups: Dict[str, List[Tuple[Dict[str, Any], Dict[str, Any]]]] = {}
     order: List[str] = []
 
@@ -500,7 +738,20 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
                 continue
             seen_client_ids.add(dedup_key)
             used += _to_int(row.get("trafficUsedBytes"), 0)
-        out.append(_normalize_client(client, inbound, server, used_bytes=used))
+        online, last_online, active_sessions = _runtime_for_pairs(
+            pairs, online_map
+        )
+        out.append(
+            _normalize_client(
+                client,
+                inbound,
+                server,
+                used_bytes=used,
+                online=online,
+                last_online=last_online,
+                active_sessions=active_sessions,
+            )
+        )
     return out
 
 
@@ -512,7 +763,10 @@ async def get_user_by_uuid(
     if not wanted:
         raise XnetApiError("UUID کاربر X-NET خالی است.")
 
-    inbounds = await get_inbounds(server)
+    inbounds, online_map = await asyncio.gather(
+        get_inbounds(server),
+        _online_client_map(server),
+    )
     pairs = _find_client_records(inbounds, wanted)
     if not pairs:
         raise XnetApiError(f"X-NET subscriber not found (uuid={wanted})")
@@ -527,7 +781,39 @@ async def get_user_by_uuid(
             continue
         seen_client_ids.add(dedup_key)
         used += _to_int(row.get("trafficUsedBytes"), 0)
-    return _normalize_client(client, inbound, server, used_bytes=used)
+
+    online, last_online, active_sessions = _runtime_for_pairs(
+        pairs, online_map
+    )
+
+    # The list/inbound model normally already carries lastConnectionAt. For
+    # older X-NET builds that do not, a single-user detail request falls back
+    # to the client's session history so "X دقیقه پیش" still works.
+    if not online and not last_online:
+        history_values = await asyncio.gather(
+            *[
+                _last_seen_from_sessions(server, cid)
+                for cid in sorted(seen_client_ids)
+                if cid and not cid.startswith("row-")
+            ]
+        )
+        latest_hist: Optional[datetime] = None
+        for value in history_values:
+            dt = _parse_dt(value)
+            if dt is not None and (latest_hist is None or dt > latest_hist):
+                latest_hist = dt
+        if latest_hist is not None:
+            last_online = latest_hist.isoformat().replace("+00:00", "Z")
+
+    return _normalize_client(
+        client,
+        inbound,
+        server,
+        used_bytes=used,
+        online=online,
+        last_online=last_online,
+        active_sessions=active_sessions,
+    )
 
 
 async def create_user(
