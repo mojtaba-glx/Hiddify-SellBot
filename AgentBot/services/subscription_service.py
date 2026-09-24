@@ -17,6 +17,13 @@ from AgentBot.database import create_order as db_create_order
 logger = logging.getLogger(__name__)
 
 
+class WholesalePricingNotConfiguredError(RuntimeError):
+    """Raised when AdminBot has not activated a usable wholesale tariff."""
+
+    def __init__(self):
+        super().__init__("agent wholesale pricing is not configured")
+
+
 class InsufficientWalletError(RuntimeError):
     """Raised when an agent cannot pay for a new subscription."""
 
@@ -190,9 +197,24 @@ async def create_subscription(
     if not server:
         return None
 
+    if not agent_db.is_wholesale_pricing_configured(agent_id):
+        error = WholesalePricingNotConfiguredError()
+        if raise_on_error:
+            raise error
+        return None
+
     days = int(plan.get("days", 30))
     gb = float(plan.get("gb", 0))
-    wholesale = int(plan.get("wholesale_price", 0))
+    # Financial authority lives on the server. Never trust wholesale values
+    # cached in Telegram state/callback data.
+    wholesale = int(
+        agent_db.calculate_wholesale_price(agent_id, gb, days, server_id) or 0
+    )
+    if wholesale <= 0:
+        error = WholesalePricingNotConfiguredError()
+        if raise_on_error:
+            raise error
+        return None
     sale = int(plan.get("sale_price", 0))
 
     targets = _get_cluster_servers(server_id)
@@ -412,9 +434,12 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return None
-    if not get_server_by_id(int(svc.get("server_id") or 0)):
+    server_id = int(svc.get("server_id") or 0)
+    if not get_server_by_id(server_id):
         logger.error("Cannot renew service %s: primary server is missing", service_id)
         return None
+    if not agent_db.is_wholesale_pricing_configured(agent_id):
+        raise WholesalePricingNotConfiguredError()
 
     if volume_mode is None or time_mode is None:
         admin_volume, admin_time, _ = get_admin_renew_policy()
@@ -429,11 +454,17 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     wholesale = int(svc.get("wholesale_price", 0))
     cost = 0
     if extra_days > 0:
-        if override_cost is not None:
-            cost = int(override_cost)
-        else:
-            original_days = int(svc.get("days_left", 30)) or 30
-            cost = int(wholesale * extra_days / original_days) if original_days > 0 else wholesale
+        cost = int(
+            agent_db.calculate_wholesale_price(
+                agent_id,
+                float(extra_gb or 0),
+                int(extra_days or 0),
+                server_id,
+            )
+            or 0
+        )
+        if cost <= 0:
+            raise WholesalePricingNotConfiguredError()
         ok, _ = agent_db.deduct_wallet(agent_id, cost, description=f"\u062a\u0645\u062f\u06cc\u062f \u0633\u0631\u0648\u06cc\u0633: {svc.get('name', '')}", service_id=service_id)
         if not ok:
             return None
