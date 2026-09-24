@@ -759,6 +759,26 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
                 active_sessions=active_sessions,
             )
         )
+
+    # Main X-NET servers get a durable recovery snapshot automatically whenever
+    # their user list is read. Child-node X-NET servers intentionally skip this:
+    # the primary Hiddify service remains their recovery source.
+    try:
+        server_id = int((server or {}).get("id") or 0)
+        if server_id > 0:
+            from Shared import database as _database, userbot_db as _userbot_db
+            main_ids = {
+                int((row or {}).get("id") or 0)
+                for row in (_database.get_main_servers() or [])
+            }
+            if server_id in main_ids:
+                _userbot_db.upsert_xnet_guard_snapshot_users(server_id, out)
+    except Exception as exc:
+        logger.warning(
+            "X-NET guard snapshot save skipped server_id=%s: %s",
+            (server or {}).get("id"),
+            exc,
+        )
     return out
 
 
