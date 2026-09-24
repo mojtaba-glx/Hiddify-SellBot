@@ -5030,7 +5030,7 @@ async def handle_add_server_flow(
         elif panel_type in {"xnet", "x-net"}:
             await message.reply_text(
                 "🌐 آدرس اصلی پنل X-NET را وارد کنید (بدون مسیر مخفی رابط وب):\n"
-                "مثال: http://31.56.48.96:8080 یا https://xnet.example.com",
+                "مثال: http://1.2.3.4:8080 یا https://xnet.example.com",
                 reply_markup=cancel_keyboard(),
             )
         else:
