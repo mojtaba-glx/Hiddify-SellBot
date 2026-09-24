@@ -495,7 +495,7 @@ async def _panel_user_status(svc) -> Optional[str]:
 
 async def _fetch_services_with_status(agent_id: int):
     """همه اشتراک‌های نماینده (از دیتابیس خودش) + بررسی وجود/وضعیت روی سرور.
-    برمی‌گرداند: (items: List[(svc, status)], online, offline, expired)."""
+    برمی‌گرداند: (items, online, offline, inactive, expired)."""
     all_services, _ = agent_db.get_services_by_agent(agent_id, page=1, page_size=1000)
     sem = asyncio.Semaphore(8)
 
@@ -518,7 +518,7 @@ async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     if page < 1:
         page = 1
 
-    items, online_cnt, offline_cnt, expired_cnt = await _fetch_services_with_status(agent_id)
+    items, online_cnt, offline_cnt, inactive_cnt, expired_cnt = await _fetch_services_with_status(agent_id)
     total = len(items)
 
     LIST_PAGE_SIZE = 18
@@ -608,7 +608,7 @@ async def _send_name_search_results(update: Update, context: ContextTypes.DEFAUL
             from AgentBot.keyboards import _ikb, BTN_BACK
             from Shared.tg_button_styles import inline_button as IButton
 
-            STATUS_ICON = {"online": "🔵", "offline": "🟡", "expired": "🔴"}
+            STATUS_ICON = {"online": "🔵", "offline": "🟡", "inactive": "⚫", "expired": "🔴"}
             rows = []
             row = []
             for s, st in page_items:
@@ -958,7 +958,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("⏳ در حال حذف کاربران منقضی... لطفاً صبر کنید.", parse_mode="HTML")
         except Exception:
             pass
-        items, _, _, _ = await _fetch_services_with_status(agent_id)
+        items, _, _, _, _ = await _fetch_services_with_status(agent_id)
         expired_items = [(s, st) for s, st in items if st == "expired"]
         ok = 0
         fail = 0
