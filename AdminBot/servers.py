@@ -3456,9 +3456,15 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
         panel_type = str((srv or {}).get("panel_type") or "").strip().lower()
         is_xui = panel_type in {"xui", "x-ui"}
         is_xnet = panel_type in {"xnet", "x-net"}
+        main_ids = {
+            int((row or {}).get("id") or 0)
+            for row in (database.get_main_servers() or [])
+        }
+        is_main_xnet = is_xnet and int(server_id or 0) in main_ids
     except Exception:
         is_xui = False
         is_xnet = False
+        is_main_xnet = False
     keyboard = [
         [InlineKeyboardButton("👤لیست کاربران", callback_data=f"server:{server_id}:users")],
         [InlineKeyboardButton("🛡️عملیات کاربری", callback_data=f"server:{server_id}:user_ops")],
@@ -3474,6 +3480,8 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
         keyboard.insert(4, [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:create_inbound_from_link")])
     if is_xui or is_xnet:
         keyboard.insert(5, [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{server_id}:sync_inbounds")])
+    if is_main_xnet:
+        keyboard.insert(6, [InlineKeyboardButton("🛡️ محافظ X-NET", callback_data=f"xnetguard:{server_id}:menu")])
     keyboard.append([InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -6970,6 +6978,12 @@ async def handle_server_inline_callback(
 
     if data == "noop":
         await query.answer()
+        return
+
+    # ------ محافظ X-NET (فقط سرور اصلی، نه نود) ------
+    if data.startswith("xnetguard:"):
+        from AdminBot.xnet_guard import handle_xnet_guard_callback
+        await handle_xnet_guard_callback(update, context)
         return
 
     # ------ دکمه‌های مربوط به نودها ------
