@@ -7898,8 +7898,16 @@ async def handle_server_inline_callback(
 
         if field == "panel_url":
             set_server_state(EDIT_SERVER_PANEL_URL)
+            panel_type = str(server.get("panel_type") or "").strip().lower()
+            if panel_type in {"xnet", "x-net"}:
+                prompt = (
+                    "🌐 لطفاً آدرس جدید پنل X-NET را وارد کنید:\n"
+                    "مثال: http://1.2.3.4:8080 یا https://site.example.com:8080"
+                )
+            else:
+                prompt = "🌐 لطفاً آدرس جدید پنل را وارد کنید:\nمثال: https://site.example.com"
             await msg.edit_text(
-                "🌐 لطفاً آدرس جدید پنل را وارد کنید:\nمثال: https://site.example.com",
+                prompt,
                 reply_markup=cancel_kb,
             )
             return
