@@ -708,6 +708,30 @@ def _find_client_records(
     return result
 
 
+def _persist_main_guard_snapshot(
+    server: Dict[str, Any],
+    users: List[Dict[str, Any]],
+) -> None:
+    """Best-effort durable snapshot for main X-NET servers only."""
+    try:
+        server_id = int((server or {}).get("id") or 0)
+        if server_id <= 0:
+            return
+        from Shared import database as _database, userbot_db as _userbot_db
+        main_ids = {
+            int((row or {}).get("id") or 0)
+            for row in (_database.get_main_servers() or [])
+        }
+        if server_id in main_ids:
+            _userbot_db.upsert_xnet_guard_snapshot_users(server_id, users)
+    except Exception as exc:
+        logger.warning(
+            "X-NET guard snapshot save skipped server_id=%s: %s",
+            (server or {}).get("id"),
+            exc,
+        )
+
+
 async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     inbounds, online_map = await asyncio.gather(
         get_inbounds(server),
@@ -761,24 +785,8 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
 
     # Main X-NET servers get a durable recovery snapshot automatically whenever
-    # their user list is read. Child-node X-NET servers intentionally skip this:
-    # the primary Hiddify service remains their recovery source.
-    try:
-        server_id = int((server or {}).get("id") or 0)
-        if server_id > 0:
-            from Shared import database as _database, userbot_db as _userbot_db
-            main_ids = {
-                int((row or {}).get("id") or 0)
-                for row in (_database.get_main_servers() or [])
-            }
-            if server_id in main_ids:
-                _userbot_db.upsert_xnet_guard_snapshot_users(server_id, out)
-    except Exception as exc:
-        logger.warning(
-            "X-NET guard snapshot save skipped server_id=%s: %s",
-            (server or {}).get("id"),
-            exc,
-        )
+    # their user list is read. Child-node X-NET servers intentionally skip this.
+    _persist_main_guard_snapshot(server, out)
     return out
 
 
@@ -908,7 +916,9 @@ async def create_user(
     # Always verify by the UUID requested by SellBot; this is what protects
     # cluster UUID consistency when main + child servers are provisioned.
     try:
-        return await get_user_by_uuid(server, user_uuid)
+        result = await get_user_by_uuid(server, user_uuid)
+        _persist_main_guard_snapshot(server, [result])
+        return result
     except Exception:
         fallback = dict(client_body)
         fallback.update(created)
@@ -917,7 +927,9 @@ async def create_user(
             (i for i in inbounds if str(i.get("id") or "") == target_ids[0]),
             {},
         )
-        return _normalize_client(fallback, inbound, server)
+        result = _normalize_client(fallback, inbound, server)
+        _persist_main_guard_snapshot(server, [result])
+        return result
 
 
 def _client_update_body(
@@ -1037,7 +1049,9 @@ async def patch_user(
             # callers can retry/reset separately.
             pass
 
-    return await get_user_by_uuid(server, new_uuid)
+    result = await get_user_by_uuid(server, new_uuid)
+    _persist_main_guard_snapshot(server, [result])
+    return result
 
 
 async def sync_users_to_inbounds(server: Dict[str, Any]) -> Dict[str, Any]:
