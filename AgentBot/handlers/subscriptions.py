@@ -29,6 +29,7 @@ from AgentBot.services.subscription_service import (
     disable_subscription, enable_subscription, delete_subscription,
     change_subscription_link, get_subs_link_settings, get_sub_link_for_type,
     rename_service_on_panels, InsufficientWalletError, SubscriptionCreationError,
+    WholesalePricingNotConfiguredError,
     format_service_expiry,
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
@@ -1076,10 +1077,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             vol_mode = context.user_data.get("rewiz_vol_mode") or "reset"
             time_mode = context.user_data.get("rewiz_time_mode") or "reset"
             days = months * 30
-            updated = await renew_subscription(
-                agent_id, svc_id, days, extra_gb=float(gb),
-                override_cost=wholesale, volume_mode=vol_mode, time_mode=time_mode,
-            )
+            try:
+                updated = await renew_subscription(
+                    agent_id, svc_id, days, extra_gb=float(gb),
+                    override_cost=wholesale, volume_mode=vol_mode, time_mode=time_mode,
+                )
+            except WholesalePricingNotConfiguredError:
+                try:
+                    await query.edit_message_text(
+                        "❌ تعرفه خرید برای نمایندگی شما توسط ادمین تنظیم نشده است.\n\n"
+                        "لطفاً برای فعال‌سازی خرید و تمدید با پشتیبانی/ادمین تماس بگیرید.",
+                        reply_markup=service_detail_keyboard(
+                            svc_id, bool(int(svc.get("is_active", 0) or 0))
+                        ),
+                    )
+                except Exception:
+                    pass
+                return
             if not updated:
                 try:
                     await query.edit_message_text(
@@ -1524,6 +1538,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 operation_key=operation_key,
                 raise_on_error=True,
             )
+        except WholesalePricingNotConfiguredError:
+            await update.message.reply_text(
+                "❌ تعرفه خرید برای نمایندگی شما توسط ادمین تنظیم نشده است.\n\n"
+                "لطفاً برای فعال‌سازی خرید و تمدید با پشتیبانی/ادمین تماس بگیرید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return True
         except InsufficientWalletError as exc:
             await update.message.reply_text(
                 "❌ موجودی کیف پول کافی نیست.\n\n"
