@@ -324,6 +324,7 @@ def init_db() -> None:
             username TEXT DEFAULT '',
             usage_limit_gb REAL DEFAULT 0,
             usage_current_gb REAL DEFAULT 0,
+            recovery_base_gb REAL DEFAULT 0,
             expire_date TEXT DEFAULT '',
             status TEXT DEFAULT 'active',
             is_active INTEGER DEFAULT 1,
@@ -339,6 +340,17 @@ def init_db() -> None:
         "CREATE INDEX IF NOT EXISTS idx_xnet_guard_server "
         "ON xnet_guard_snapshots(server_id)"
     )
+
+    try:
+        cur.execute("SELECT recovery_base_gb FROM xnet_guard_snapshots LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute(
+                "ALTER TABLE xnet_guard_snapshots "
+                "ADD COLUMN recovery_base_gb REAL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
 
     cur.execute(
         """
@@ -2493,18 +2505,39 @@ def upsert_xnet_guard_snapshot_users(
             comment = str(user.get("comment") or "").strip()
 
             existing = cur.execute(
-                "SELECT usage_limit_gb, usage_current_gb, expire_date "
+                "SELECT usage_limit_gb, usage_current_gb, recovery_base_gb, expire_date "
                 "FROM xnet_guard_snapshots WHERE server_id = ? AND user_uuid = ?",
                 (sid, uuid),
             ).fetchone()
+            recovery_base_gb = 0.0
             if existing:
                 old_exp = _xnet_guard_parse_dt(existing["expire_date"])
                 new_exp = _xnet_guard_parse_dt(expire_date)
                 renewed = bool(old_exp and new_exp and new_exp > old_exp)
-                if not renewed:
+                if renewed:
+                    recovery_base_gb = 0.0
+                else:
                     try:
-                        used_gb = max(used_gb, float(existing["usage_current_gb"] or 0))
-                        limit_gb = max(limit_gb, float(existing["usage_limit_gb"] or 0))
+                        recovery_base_gb = max(
+                            float(existing["recovery_base_gb"] or 0.0), 0.0
+                        )
+                        # After a Guard restore X-NET starts its traffic counter
+                        # from zero. Add the preserved baseline to new live
+                        # usage so a second failure cannot give traffic back.
+                        if recovery_base_gb > 0:
+                            used_gb = max(
+                                float(existing["usage_current_gb"] or 0.0),
+                                recovery_base_gb + used_gb,
+                            )
+                        else:
+                            used_gb = max(
+                                used_gb,
+                                float(existing["usage_current_gb"] or 0.0),
+                            )
+                        limit_gb = max(
+                            limit_gb,
+                            float(existing["usage_limit_gb"] or 0.0),
+                        )
                     except Exception:
                         pass
 
@@ -2526,13 +2559,14 @@ def upsert_xnet_guard_snapshot_users(
                 """
                 INSERT INTO xnet_guard_snapshots (
                     server_id, user_uuid, username, usage_limit_gb,
-                    usage_current_gb, expire_date, status, is_active,
-                    comment, snapshot_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    usage_current_gb, recovery_base_gb, expire_date, status,
+                    is_active, comment, snapshot_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(server_id, user_uuid) DO UPDATE SET
                     username=excluded.username,
                     usage_limit_gb=excluded.usage_limit_gb,
                     usage_current_gb=excluded.usage_current_gb,
+                    recovery_base_gb=excluded.recovery_base_gb,
                     expire_date=excluded.expire_date,
                     status=excluded.status,
                     is_active=excluded.is_active,
@@ -2541,8 +2575,8 @@ def upsert_xnet_guard_snapshot_users(
                     updated_at=excluded.updated_at
                 """,
                 (
-                    sid, uuid, username, limit_gb, used_gb, expire_date,
-                    status, active, comment,
+                    sid, uuid, username, limit_gb, used_gb,
+                    recovery_base_gb, expire_date, status, active, comment,
                     json.dumps(snapshot, ensure_ascii=False),
                     now, now,
                 ),
@@ -2550,6 +2584,39 @@ def upsert_xnet_guard_snapshot_users(
             saved += 1
         conn.commit()
         return saved
+    finally:
+        conn.close()
+
+
+def set_xnet_guard_recovery_base(
+    server_id: int,
+    user_uuid: str,
+    baseline_gb: float,
+) -> None:
+    """Mark that X-NET's live counter restarted after Guard recovery."""
+    init_db()
+    sid = int(server_id or 0)
+    uuid = str(user_uuid or "").strip()
+    if sid <= 0 or not uuid:
+        return
+    try:
+        baseline = max(float(baseline_gb or 0.0), 0.0)
+    except Exception:
+        baseline = 0.0
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """
+            UPDATE xnet_guard_snapshots
+            SET recovery_base_gb = ?,
+                usage_current_gb = MAX(COALESCE(usage_current_gb,0), ?),
+                updated_at = ?
+            WHERE server_id = ? AND user_uuid = ?
+            """,
+            (baseline, baseline, now, sid, uuid),
+        )
+        conn.commit()
     finally:
         conn.close()
 
