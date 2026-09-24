@@ -5230,26 +5230,31 @@ async def _send_config_and_qr_after_delivery(
     config_items: list[tuple[str, str]] = []
     if base_urls:
         base_url = base_urls[0]
-        # Detect X-UI: base_url is already the full sub URL ( .../sub/{uuid} )
-        is_xui = False
+        # X-UI and X-NET return a complete native subscription URL.
+        # Do not append Hiddify's /all.txt path to those URLs.
+        is_native_subscription = _is_native_subscription_url(base_url)
         try:
             from Shared import xui_api as _xui_check
-            # Find the server for this base_url to detect X-UI
-            # Quick heuristic: if base_url contains /sub/ and service server is X-UI
+            from Shared import xnet_api as _xnet_check
             sid_tmp = int(service.get("server_id") or 0)
             srv_tmp = database.get_server_by_id(sid_tmp) if sid_tmp else None
-            if srv_tmp and _xui_check.is_xui_server(srv_tmp):
-                is_xui = True
-            elif "/sub/" in base_url:
-                # Fallback: if any mapping server is X-UI
-                for m in (userbot_db.get_service_nodes(service_id) if service_id else []):
+            if srv_tmp and (
+                _xui_check.is_xui_server(srv_tmp)
+                or _xnet_check.is_xnet_server(srv_tmp)
+            ):
+                is_native_subscription = True
+            elif service_id:
+                for m in userbot_db.get_service_nodes(service_id) or []:
                     s = database.get_server_by_id(int(m.get("server_id") or 0))
-                    if s and _xui_check.is_xui_server(s):
-                        is_xui = True
+                    if s and (
+                        _xui_check.is_xui_server(s)
+                        or _xnet_check.is_xnet_server(s)
+                    ):
+                        is_native_subscription = True
                         break
         except Exception:
-            is_xui = False
-        if is_xui:
+            pass
+        if is_native_subscription:
             if settings.get("show_sub_link", True):
                 config_items.append(("🔗 لینک اشتراک:", base_url))
             if settings.get("show_sub_link_b64", False):
@@ -7422,13 +7427,28 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             base_url = base_urls[0]
+            native_subscription = _is_native_subscription_url(base_url)
+            try:
+                from Shared import xui_api as _xui_status_check
+                from Shared import xnet_api as _xnet_status_check
+                sid_tmp = int(service.get("server_id") or 0)
+                srv_tmp = database.get_server_by_id(sid_tmp) if sid_tmp else None
+                if srv_tmp and (
+                    _xui_status_check.is_xui_server(srv_tmp)
+                    or _xnet_status_check.is_xnet_server(srv_tmp)
+                ):
+                    native_subscription = True
+            except Exception:
+                pass
 
             config_items = []
             if action == "sub_link":
                 if not settings.get("show_sub_link", True):
                     await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک خاموش است.", reply_markup=_main_menu_keyboard())
                     return
-                config_items.append(("🔗 لینک اشتراک:", f"{base_url}/all.txt"))
+                config_items.append(
+                    ("🔗 لینک اشتراک:", base_url if native_subscription else f"{base_url}/all.txt")
+                )
             elif action == "auto_sub":
                 if not settings.get("show_auto_sub_link", False):
                     await context.bot.send_message(chat_id=user_id, text="❌ نمایش اشتراک خودکار خاموش است.", reply_markup=_main_menu_keyboard())
@@ -7438,7 +7458,11 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not settings.get("show_sub_link_b64", False):
                     await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک b64 خاموش است.", reply_markup=_main_menu_keyboard())
                     return
-                config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
+                if native_subscription:
+                    sep = "&" if "?" in base_url else "?"
+                    config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}{sep}base64=1"))
+                else:
+                    config_items.append(("🔐 لینک اشتراک b64:", f"{base_url}/all.txt?base64=1"))
             elif action == "multi":
                 if not settings.get("show_multi_server", False):
                     await context.bot.send_message(chat_id=user_id, text="❌ نمایش لینک اشتراک هوشمند خاموش است.", reply_markup=_main_menu_keyboard())
