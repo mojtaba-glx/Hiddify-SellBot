@@ -3472,7 +3472,7 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
     ]
     if is_xui or is_xnet:
         keyboard.insert(4, [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:create_inbound_from_link")])
-    if is_xui:
+    if is_xui or is_xnet:
         keyboard.insert(5, [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{server_id}:sync_inbounds")])
     keyboard.append([InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
@@ -9113,25 +9113,30 @@ async def handle_server_inline_callback(
 
         if action == "sync_inbounds":
             server = database.get_server_by_id(server_id)
-            if not server or str(server.get("panel_type") or "").strip().lower() not in {"xui", "x-ui"}:
-                await msg.edit_text("❌ این قابلیت فقط برای پنل X-UI است.")
+            panel_type = str((server or {}).get("panel_type") or "").strip().lower()
+            if not server or panel_type not in {"xui", "x-ui", "xnet", "x-net"}:
+                await msg.edit_text("❌ این قابلیت برای پنل‌های X-UI و X-NET است.")
                 return
             await msg.edit_text("⏳ در حال همگام‌سازی یوزرها روی همه اینباندها...")
             try:
-                from Shared import xui_api
+                if panel_type in {"xnet", "x-net"}:
+                    from Shared import xnet_api as inbound_sync_api
+                else:
+                    from Shared import xui_api as inbound_sync_api
 
-                result = await xui_api.sync_users_to_inbounds(server)
+                result = await inbound_sync_api.sync_users_to_inbounds(server)
                 if result.get("ok"):
                     errs = result.get("errors") or []
                     err_txt = ""
                     if errs:
                         err_txt = f"\n❌ خطاها ({len(errs)}):\n" + "\n".join(errs[:3])
+                    created_label = "اتصال اضافه شد" if panel_type in {"xnet", "x-net"} else "ساخته شد"
                     await msg.edit_text(
                         f"✅ همگام‌سازی انجام شد.\n\n"
                         f"👥 کل یوزرها: {result.get('total_users')}\n"
                         f"🧩 اینباندهای هدف: {result.get('target_inbounds')}\n"
-                        f"➕ ساخته شد: {result.get('created')}\n"
-                        f"⏭ از قبل بود: {result.get('skipped')}{err_txt}",
+                        f"➕ {created_label}: {result.get('created')}\n"
+                        f"⏭ از قبل کامل بود: {result.get('skipped')}{err_txt}",
                         reply_markup=InlineKeyboardMarkup(
                             [[InlineKeyboardButton("🔙 بازگشت", callback_data=f"server:{server_id}")]]
                         ),
