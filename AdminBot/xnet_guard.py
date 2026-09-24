@@ -271,6 +271,10 @@ async def _recover_missing(server: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             await xnet_api.create_user(server, create_payload)
+            # X-NET starts the new client's traffic counter from zero. Keep the
+            # already-consumed amount as a recovery baseline so future
+            # snapshots become baseline + new live usage, not zero-based.
+            userbot_db.set_xnet_guard_recovery_base(server_id, uuid, used)
             restored += 1
             preserved_gb += used
         except Exception as exc:
