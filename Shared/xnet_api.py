@@ -1302,19 +1302,166 @@ async def get_traffic_summary(server: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+async def _get_traffic_analytics(
+    server: Dict[str, Any],
+    *,
+    start: datetime,
+    end: datetime,
+) -> Dict[str, Any]:
+    params = {
+        "from": start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "to": end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    data = await _request_json(
+        "GET",
+        "/api/traffic/singbox/analytics",
+        server,
+        params=params,
+    )
+    return data if isinstance(data, dict) else {}
+
+
+def _analytics_period_stats(data: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """Return (period_bytes, unique_vpn_clients) when window fields are supported."""
+    if not isinstance(data, dict):
+        return None
+
+    consumers = data.get("consumers")
+    if not isinstance(consumers, list):
+        consumers = []
+
+    has_period_fields = any(
+        key in data for key in ("windowHasData", "periodTotal", "periodUpload", "periodDownload")
+    )
+    if not has_period_fields:
+        has_period_fields = any(
+            isinstance(row, dict)
+            and any(
+                key in row
+                for key in ("periodTotal", "periodUpload", "periodDownload")
+            )
+            for row in consumers
+        )
+    if not has_period_fields:
+        return None
+
+    if "periodTotal" in data:
+        period_bytes = max(0, _to_int(data.get("periodTotal"), 0))
+    elif "periodUpload" in data or "periodDownload" in data:
+        period_bytes = max(
+            0,
+            _to_int(data.get("periodUpload"), 0)
+            + _to_int(data.get("periodDownload"), 0),
+        )
+    else:
+        period_bytes = 0
+        for row in consumers:
+            if not isinstance(row, dict):
+                continue
+            if "periodTotal" in row:
+                period_bytes += max(0, _to_int(row.get("periodTotal"), 0))
+            else:
+                period_bytes += max(
+                    0,
+                    _to_int(row.get("periodUpload"), 0)
+                    + _to_int(row.get("periodDownload"), 0),
+                )
+
+    active_ids: set[str] = set()
+    for row in consumers:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("kind") or "vpn").strip().lower()
+        if kind == "ssh":
+            continue
+        if "periodTotal" in row:
+            used = _to_int(row.get("periodTotal"), 0)
+        else:
+            used = _to_int(row.get("periodUpload"), 0) + _to_int(
+                row.get("periodDownload"), 0
+            )
+        if used <= 0:
+            continue
+        identity = str(
+            row.get("clientId")
+            or row.get("client_id")
+            or row.get("uuid")
+            or row.get("username")
+            or ""
+        ).strip()
+        if identity:
+            active_ids.add(identity)
+
+    return max(0, period_bytes), len(active_ids)
+
+
+async def _get_realtime_network_mb(server: Dict[str, Any]) -> Tuple[float, float]:
+    """Return current (download_mb_s, upload_mb_s) using X-NET live metrics."""
+    try:
+        tick = await _request_json("GET", "/api/metrics/tick", server)
+        if isinstance(tick, dict) and isinstance(tick.get("networkTraffic"), dict):
+            net = tick.get("networkTraffic") or {}
+            # X-NET frontend exposes these values directly as MB/s.
+            return (
+                max(0.0, _to_float(net.get("down"), 0.0)),
+                max(0.0, _to_float(net.get("up"), 0.0)),
+            )
+    except Exception:
+        pass
+
+    # Compatibility fallback: realtime rates are bytes/s per client.
+    try:
+        live = await _request_json("GET", "/api/traffic/singbox/realtime", server)
+        clients = live.get("clients") if isinstance(live, dict) else []
+        if not isinstance(clients, list):
+            clients = []
+        upload_rate = 0.0
+        download_rate = 0.0
+        for row in clients:
+            if not isinstance(row, dict):
+                continue
+            upload_rate += max(0.0, _to_float(row.get("uploadRate"), 0.0))
+            download_rate += max(0.0, _to_float(row.get("downloadRate"), 0.0))
+        mib = float(1024 ** 2)
+        return round(download_rate / mib, 3), round(upload_rate / mib, 3)
+    except Exception:
+        return 0.0, 0.0
+
+
 async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
-    """Return X-NET metrics in the legacy SellBot server-stats shape."""
+    """Return real X-NET system, traffic, presence and realtime network stats."""
     users = await list_users(server)
+
     try:
         metrics = await _request_json("GET", "/api/metrics", server)
         if not isinstance(metrics, dict):
             metrics = {}
     except Exception:
         metrics = {}
+
     try:
         traffic = await get_traffic_summary(server)
     except Exception:
         traffic = {}
+
+    now = datetime.now(timezone.utc)
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    month_start = now - timedelta(days=30)
+
+    async def _safe_analytics(start: datetime) -> Dict[str, Any]:
+        try:
+            return await _get_traffic_analytics(server, start=start, end=now)
+        except Exception:
+            return {}
+
+    today_analytics, month_analytics, realtime_net = await asyncio.gather(
+        _safe_analytics(today_start),
+        _safe_analytics(month_start),
+        _get_realtime_network_mb(server),
+    )
+
+    today_period = _analytics_period_stats(today_analytics)
+    month_period = _analytics_period_stats(month_analytics)
 
     ram = metrics.get("ramUsage") if isinstance(metrics.get("ramUsage"), dict) else {}
     storage = (
@@ -1328,6 +1475,32 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     today_upload = _to_int(traffic.get("todayUpload"), 0)
     today_download = _to_int(traffic.get("todayDownload"), 0)
 
+    current_online = sum(
+        1
+        for user in users
+        if isinstance(user, dict)
+        and str(user.get("_user_list_status") or "").strip().lower() == "online"
+    )
+    users_online = _to_int(
+        metrics.get("onlineUsersCount", traffic.get("activeClients")),
+        current_online,
+    )
+    users_online = max(current_online, users_online)
+
+    today_users = today_period[1] if today_period is not None else 0
+    month_users = month_period[1] if month_period is not None else 0
+    # A user who is online now has, by definition, been active today/month.
+    today_users = max(today_users, users_online)
+    month_users = max(month_users, users_online)
+
+    if month_period is not None:
+        usage_30days_gb = round(month_period[0] / _GB, 3)
+    else:
+        # Older X-NET builds did not expose period* analytics fields.
+        usage_30days_gb = round((total_upload + total_download) / _GB, 3)
+
+    recv_mb_s, sent_mb_s = realtime_net
+
     return {
         "cpu_percent": _to_float(metrics.get("cpuUsage"), 0.0),
         "cpu_cores": _to_int(metrics.get("cpuCores"), 1),
@@ -1336,17 +1509,15 @@ async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
         "disk_used": _to_float(storage.get("used"), 0.0),
         "disk_total": max(_to_float(storage.get("total"), 1.0), 1.0),
         "users_total": len(users),
-        "users_online": _to_int(
-            metrics.get("onlineUsersCount", traffic.get("activeClients")), 0
-        ),
-        "users_today": 0,
-        "users_month": 0,
+        "users_online": users_online,
+        "users_today": today_users,
+        "users_month": month_users,
         "usage_today_gb": round((today_upload + today_download) / _GB, 3),
-        "usage_30days_gb": round((total_upload + total_download) / _GB, 3),
+        "usage_30days_gb": usage_30days_gb,
         "traffic_dl": round(total_download / _GB, 3),
         "traffic_ul": round(total_upload / _GB, 3),
-        "now_net_recv_mb": 0.0,
-        "now_net_sent_mb": 0.0,
+        "now_net_recv_mb": recv_mb_s,
+        "now_net_sent_mb": sent_mb_s,
         "singbox_status": str(metrics.get("singBoxStatus") or ""),
         "_source": "xnet",
     }
