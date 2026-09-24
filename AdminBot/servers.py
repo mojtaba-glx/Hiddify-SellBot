@@ -476,9 +476,20 @@ SEARCH_SMART_INPUT = "search_smart_input"
 def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
     if not dt_str:
         return None
+    raw = str(dt_str).strip()
+    # X-NET uses RFC3339/UTC timestamps (e.g. ...Z). Convert aware values to
+    # local naive time because the legacy AdminBot relative-time code compares
+    # against datetime.now() in the server's local timezone.
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except ValueError:
+        pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(dt_str, fmt)
+            return datetime.strptime(raw, fmt)
         except ValueError:
             continue
     return None
@@ -935,9 +946,12 @@ def classify_user_status(user: Dict[str, Any]) -> str:
     - online اگر last_online در بازه زمانی آنلاین باشد یا _user_list_status == online (برای X-UI)
     - offline در غیر این صورت
     """
-    # 1) اگر کاربر غیرفعال باشد، منقضی در نظر گرفته می‌شود.
+    # 1) X-NET وضعیت disabled را مستقل از انقضا نگه می‌دارد.
+    # برای پنل‌های قدیمی رفتار قبلی حفظ می‌شود تا منطق موجود تغییر نکند.
     is_active = _to_bool(user.get("is_active"))
     if is_active is False:
+        if str((user or {}).get("_source") or "").strip().lower() == "xnet":
+            return "inactive"
         return "expired"
 
     # 1.5) برای X-UI، اگر پنل مستقیماً آنلاین بودن را گزارش کرده، همان را بپذیر
@@ -973,6 +987,14 @@ def classify_user_status(user: Dict[str, Any]) -> str:
     ):
         return "expired"
 
+    # X-NET یک endpoint زنده برای online/offline دارد. وقتی صراحتاً
+    # offline گزارش شده، timestamp چند دقیقه قبل نباید دوباره کاربر را online کند.
+    if (
+        str((user or {}).get("_source") or "").strip().lower() == "xnet"
+        and str(user.get("_user_list_status") or "").strip().lower() == "offline"
+    ):
+        return "offline"
+
     last_online_dt = _parse_dt(user.get("last_online"))
     if last_online_dt:
         try:
@@ -984,8 +1006,8 @@ def classify_user_status(user: Dict[str, Any]) -> str:
 
             # برای X-UI (Sanaei/Alireza) آنلاین فقط لحظه‌ای است (90 ثانیه) تا
             # بعد 5 دقیقه "5 دقیقه پیش" نشان دهد، نه "آنلاین"
-            is_xui = str((user or {}).get("_source") or "").strip().lower() == "xui"
-            window = 90 if is_xui else ONLINE_WINDOW_SECONDS
+            source = str((user or {}).get("_source") or "").strip().lower()
+            window = 90 if source in {"xui", "xnet"} else ONLINE_WINDOW_SECONDS
             # اگر زمان last_online کمی جلوتر از now باشد (تا ۲ دقیقه)
             # یا تا window قبل باشد → آنلاین حسابش می‌کنیم
             if -CLOCK_SKEW_TOLERANCE <= seconds <= window:
@@ -1005,17 +1027,17 @@ def _last_online_line(user_data: Dict[str, Any]) -> str:
 
     last_dt = _parse_dt(user_data.get("last_online"))
     if not last_dt:
-        # X-UI: when offline, panel doesn't provide last_online
-        if str((user_data or {}).get("_source") or "").strip().lower() == "xui":
-            # show offline instead of نامشخص for X-UI, more accurate
+        # X-UI/X-NET: when offline and no historical timestamp exists, show
+        # آفلاین instead of a misleading "نامشخص".
+        if str((user_data or {}).get("_source") or "").strip().lower() in {"xui", "xnet"}:
             if classify_user_status(user_data) == "offline":
                 return "📶آخرین اتصال: آفلاین"
         return "📶آخرین اتصال: نامشخص"
 
     delta = datetime.now() - last_dt
     seconds_total = delta.total_seconds()
-    is_xui = str((user_data or {}).get("_source") or "").strip().lower() == "xui"
-    window = 90 if is_xui else ONLINE_WINDOW_SECONDS
+    source = str((user_data or {}).get("_source") or "").strip().lower()
+    window = 90 if source in {"xui", "xnet"} else ONLINE_WINDOW_SECONDS
     if -CLOCK_SKEW_TOLERANCE <= seconds_total <= window:
         return "📶آخرین اتصال: آنلاین"
 
@@ -3701,7 +3723,7 @@ async def send_user_list(
         frozen_uuids = set()
 
     total_users = len(users)
-    online_users = offline_users = expired_users = 0
+    online_users = offline_users = inactive_users = expired_users = 0
     items: List[tuple[str, str, str]] = []
     fetched_at = datetime.now().timestamp()
     user_snapshot: Dict[str, Dict[str, Any]] = {}
@@ -3712,6 +3734,8 @@ async def send_user_list(
         status = classify_user_status(u)
         if status == "online":
             online_users += 1
+        elif status == "inactive":
+            inactive_users += 1
         elif status == "expired":
             expired_users += 1
         else:
@@ -3732,6 +3756,7 @@ async def send_user_list(
             f"👥 تعداد کاربران: {total_users}\n"
             f"🔵 آنلاین: {online_users}\n"
             f"🟡 آفلاین: {offline_users}\n"
+            f"⚫ غیرفعال: {inactive_users}\n"
             f"🔴 منقضی شده: {expired_users}"
         )
         kb = InlineKeyboardMarkup(
@@ -3759,6 +3784,8 @@ async def send_user_list(
     for name, status, user_uuid in page_items:
         if status == "online":
             emoji = "🔵"
+        elif status == "inactive":
+            emoji = "⚫"
         elif status == "expired":
             emoji = "🔴"
         else:
@@ -3814,6 +3841,7 @@ async def send_user_list(
         f"👥 تعداد کاربران: {total_users}\n"
         f"🔵 آنلاین: {online_users}\n"
         f"🟡 آفلاین: {offline_users}\n"
+        f"⚫ غیرفعال: {inactive_users}\n"
         f"🔴 منقضی شده: {expired_users}\n"
         f"❄️ یخ‌زده (نود قطع): {frozen_users}"
         f"{extra}"
@@ -3862,6 +3890,13 @@ def build_user_detail_text(
         expire_line = f"📆انقضا: {days_left} روز دیگر"
 
     last_online_line = _last_online_line(user_data)
+    account_status = classify_user_status(user_data)
+    if account_status == "inactive":
+        status_line = "⚫وضعیت حساب: غیرفعال"
+    elif account_status == "expired":
+        status_line = "🔴وضعیت حساب: منقضی"
+    else:
+        status_line = "🟢وضعیت حساب: فعال"
 
     header_line = f"👤 کاربر:  {name}"
     sep_line = "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"
@@ -3873,6 +3908,7 @@ def build_user_detail_text(
         server_line,
         usage_line,
         expire_line,
+        status_line,
         last_online_line,
         f"📝یادداشت: {comment}",
     ]
@@ -3918,6 +3954,13 @@ def build_user_detail_html_text(
         expire_line = f"📆انقضا: {days_left} روز دیگر"
 
     last_online_line = _last_online_line(user_data)
+    account_status = classify_user_status(user_data)
+    if account_status == "inactive":
+        status_line = "⚫وضعیت حساب: غیرفعال"
+    elif account_status == "expired":
+        status_line = "🔴وضعیت حساب: منقضی"
+    else:
+        status_line = "🟢وضعیت حساب: فعال"
 
     safe_name = escape(str(name))
     if user_name_link:
@@ -3932,6 +3975,7 @@ def build_user_detail_html_text(
         f"⬖ سرور:  {escape(str(server_title))}",
         escape(usage_line),
         escape(expire_line),
+        escape(status_line),
         escape(last_online_line),
         f"📝یادداشت: {escape(comment)}",
     ]
