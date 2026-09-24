@@ -39,6 +39,10 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         ]
         with patch.object(
             xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api, "_online_client_map", new=AsyncMock(return_value={})
+        ), patch.object(
+            xnet_api, "_last_seen_from_sessions", new=AsyncMock(return_value=None)
         ):
             user = await xnet_api.get_user_by_uuid(self.server, "abc-def")
         self.assertEqual(user["name"], "demo")
@@ -137,9 +141,143 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         ]
         with patch.object(
             xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api, "_online_client_map", new=AsyncMock(return_value={})
+        ), patch.object(
+            xnet_api, "_last_seen_from_sessions", new=AsyncMock(return_value=None)
         ):
             user = await xnet_api.get_user_by_uuid(self.server, uid)
         self.assertEqual(user["current_usage_GB"], 3.0)
+
+    async def test_list_users_marks_online_from_xnet_live_endpoint(self):
+        inbounds = [
+            {
+                "id": "in-1",
+                "protocol": "VLESS",
+                "port": 443,
+                "clients": [
+                    {
+                        "id": "c-live",
+                        "uuid": "live-uuid",
+                        "username": "live-user",
+                        "status": "active",
+                        "trafficLimitBytes": 5 * 1024**3,
+                        "trafficUsedBytes": 1024,
+                    }
+                ],
+            }
+        ]
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api,
+            "_online_client_map",
+            new=AsyncMock(return_value={
+                "c-live": {
+                    "clientId": "c-live",
+                    "username": "live-user",
+                    "devices": 2,
+                }
+            }),
+        ):
+            users = await xnet_api.list_users(self.server)
+
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0]["_user_list_status"], "online")
+        self.assertEqual(users[0]["activeSessions"], 2)
+        self.assertTrue(users[0]["last_online"])
+
+    async def test_get_user_by_uuid_uses_last_connection_at_when_offline(self):
+        inbounds = [
+            {
+                "id": "in-1",
+                "protocol": "VLESS",
+                "port": 443,
+                "clients": [
+                    {
+                        "id": "c-offline",
+                        "uuid": "offline-uuid",
+                        "username": "offline-user",
+                        "status": "active",
+                        "trafficLimitBytes": 5 * 1024**3,
+                        "trafficUsedBytes": 1024,
+                        "lastConnectionAt": "2026-09-24T10:15:00Z",
+                    }
+                ],
+            }
+        ]
+        history = AsyncMock(return_value=None)
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api, "_online_client_map", new=AsyncMock(return_value={})
+        ), patch.object(
+            xnet_api, "_last_seen_from_sessions", new=history
+        ):
+            user = await xnet_api.get_user_by_uuid(self.server, "offline-uuid")
+
+        self.assertEqual(user["_user_list_status"], "offline")
+        self.assertEqual(user["last_online"], "2026-09-24T10:15:00Z")
+        history.assert_not_awaited()
+
+    async def test_get_user_by_uuid_falls_back_to_session_history(self):
+        inbounds = [
+            {
+                "id": "in-1",
+                "protocol": "VLESS",
+                "port": 443,
+                "clients": [
+                    {
+                        "id": "c-history",
+                        "uuid": "history-uuid",
+                        "username": "history-user",
+                        "status": "active",
+                    }
+                ],
+            }
+        ]
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api, "_online_client_map", new=AsyncMock(return_value={})
+        ), patch.object(
+            xnet_api,
+            "_last_seen_from_sessions",
+            new=AsyncMock(return_value="2026-09-24T10:12:00Z"),
+        ):
+            user = await xnet_api.get_user_by_uuid(self.server, "history-uuid")
+
+        self.assertEqual(user["_user_list_status"], "offline")
+        self.assertEqual(user["last_online"], "2026-09-24T10:12:00Z")
+
+    async def test_disabled_xnet_user_is_exposed_as_inactive_account(self):
+        inbounds = [
+            {
+                "id": "in-1",
+                "protocol": "VLESS",
+                "port": 443,
+                "clients": [
+                    {
+                        "id": "c-disabled",
+                        "uuid": "disabled-uuid",
+                        "username": "disabled-user",
+                        "status": "disabled",
+                    }
+                ],
+            }
+        ]
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api, "_online_client_map", new=AsyncMock(return_value={})
+        ), patch.object(
+            xnet_api, "_last_seen_from_sessions", new=AsyncMock(return_value=None)
+        ):
+            user = await xnet_api.get_user_by_uuid(self.server, "disabled-uuid")
+
+        self.assertFalse(user["is_active"])
+        self.assertEqual(user["status"], "disabled")
+        self.assertEqual(user["_user_list_status"], "offline")
 
     def test_public_subscription_url_can_use_custom_domain(self):
         server = dict(self.server)
