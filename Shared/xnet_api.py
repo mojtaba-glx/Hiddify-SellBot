@@ -490,7 +490,15 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     for key in order:
         pairs = groups[key]
         inbound, client = pairs[0]
-        used = sum(_to_int(c.get("trafficUsedBytes"), 0) for _, c in pairs)
+        seen_client_ids: set[str] = set()
+        used = 0
+        for _, row in pairs:
+            cid = str(row.get("id") or "").strip()
+            dedup_key = cid or f"row-{id(row)}"
+            if dedup_key in seen_client_ids:
+                continue
+            seen_client_ids.add(dedup_key)
+            used += _to_int(row.get("trafficUsedBytes"), 0)
         out.append(_normalize_client(client, inbound, server, used_bytes=used))
     return out
 
@@ -509,7 +517,15 @@ async def get_user_by_uuid(
         raise XnetApiError(f"X-NET subscriber not found (uuid={wanted})")
 
     inbound, client = pairs[0]
-    used = sum(_to_int(c.get("trafficUsedBytes"), 0) for _, c in pairs)
+    seen_client_ids: set[str] = set()
+    used = 0
+    for _, row in pairs:
+        cid = str(row.get("id") or "").strip()
+        dedup_key = cid or f"row-{id(row)}"
+        if dedup_key in seen_client_ids:
+            continue
+        seen_client_ids.add(dedup_key)
+        used += _to_int(row.get("trafficUsedBytes"), 0)
     return _normalize_client(client, inbound, server, used_bytes=used)
 
 
@@ -679,11 +695,13 @@ async def patch_user(
 
     new_uuid = str(payload.get("uuid") or "").strip() or old_uuid
     updated_any = False
+    seen_client_ids: set[str] = set()
     for inbound, client in pairs:
         inbound_id = str(inbound.get("id") or "").strip()
         client_id = str(client.get("id") or "").strip()
-        if not inbound_id or not client_id:
+        if not inbound_id or not client_id or client_id in seen_client_ids:
             continue
+        seen_client_ids.add(client_id)
         body = _client_update_body(client, payload)
         await _request_json(
             "PUT",
@@ -718,11 +736,13 @@ async def reset_user_traffic(
         raise XnetApiError(f"X-NET subscriber not found (uuid={user_uuid})")
 
     count = 0
+    seen_client_ids: set[str] = set()
     for inbound, client in pairs:
         iid = str(inbound.get("id") or "").strip()
         cid = str(client.get("id") or "").strip()
-        if not iid or not cid:
+        if not iid or not cid or cid in seen_client_ids:
             continue
+        seen_client_ids.add(cid)
         await _request_json(
             "POST",
             f"/api/inbounds/{iid}/clients/{cid}/reset-traffic",
