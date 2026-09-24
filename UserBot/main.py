@@ -2687,6 +2687,54 @@ def _build_renew_patch_payload(service: dict, *, package_gb: float, package_days
     return payload, final_limit, final_days
 
 
+async def _retry_enable_renewed_user(
+    srv: dict,
+    uuid: str,
+    *,
+    service_id: int,
+    marzban_username: str = "",
+    attempts: int = 3,
+    delay_seconds: int = 5,
+) -> tuple[bool, str]:
+    """فعال‌سازی بعد از تمدید با retry برای قطعی‌های کوتاه API/apply-config.
+
+    خود تمدید در این تابع تکرار نمی‌شود؛ فقط enable_user دوباره تلاش می‌شود.
+    multi_panel.enable_user نیز وضعیت واقعی فعال‌شدن کاربر را verify می‌کند.
+    """
+    last_error = ""
+    for attempt in range(1, max(int(attempts), 1) + 1):
+        try:
+            await multi_panel.enable_user(
+                srv,
+                uuid,
+                marzban_username=marzban_username,
+            )
+            if attempt > 1:
+                logger.info(
+                    "Renewal activation recovered service_id=%s server_id=%s uuid=%s attempt=%s/%s",
+                    service_id,
+                    srv.get("id"),
+                    uuid,
+                    attempt,
+                    attempts,
+                )
+            return True, ""
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            logger.warning(
+                "Renewal activation failed service_id=%s server_id=%s uuid=%s attempt=%s/%s: %s",
+                service_id,
+                srv.get("id"),
+                uuid,
+                attempt,
+                attempts,
+                last_error,
+            )
+            if attempt < attempts:
+                await asyncio.sleep(max(int(delay_seconds), 1))
+    return False, last_error
+
+
 async def _apply_service_renewal_on_targets(
     service: dict,
     *,
@@ -2694,11 +2742,12 @@ async def _apply_service_renewal_on_targets(
     service_name: str,
     package_gb: float,
     package_days: int,
-) -> tuple[float, int, Any, list[str]]:
+) -> tuple[float, int, Any, list[str], list[str]]:
     """
     تمدید سرویس روی سرور اصلی + نودها بر اساس uuid مشترک.
-    خروجی: (usage_limit, days_left, last_online, failed_servers)
-      - failed_servers: لیست عنوان‌های سرور/نودهایی که در دسترس نبودند
+    خروجی: (usage_limit, days_left, last_online, failed_servers, activation_failed_servers)
+      - failed_servers: سرورهایی که خود PATCH تمدید روی آن‌ها انجام نشده است
+      - activation_failed_servers: تمدید انجام شده ولی فعال‌سازی بعد از retry تأیید نشده است
     """
     targets = _get_service_targets_for_renew(service)
     if not targets:
@@ -2721,6 +2770,8 @@ async def _apply_service_renewal_on_targets(
     ok_count = 0
     errors_primary: list[str] = []
     failed_servers: list[str] = []
+    activation_failed_servers: list[str] = []
+    activation_failed_targets: list[tuple[int, str]] = []
     for srv, uuid in targets:
         # Look up marzban_username for this target
         marzban_un = ""
@@ -2731,13 +2782,19 @@ async def _apply_service_renewal_on_targets(
                     break
         except Exception:
             pass
+
+        # مرحله ۱: خود تمدید فقط یک‌بار PATCH می‌شود.
+        # اگر مرحله فعال‌سازی بعدی شکست بخورد، نباید PATCH/پرداخت دوباره اجرا شود.
         try:
-            patched = await multi_panel.patch_user(srv, uuid, payload, marzban_username=marzban_un)
-            await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+            patched = await multi_panel.patch_user(
+                srv,
+                uuid,
+                payload,
+                marzban_username=marzban_un,
+            )
         except Exception as e:
-            # یک نود down نباید مانع تحویل به بقیه شود؛ فقط لاگ و ادامه بده.
             logger.warning(
-                "Renewal skipped for server_id=%s (uuid=%s) due to error: %s",
+                "Renewal PATCH failed for server_id=%s (uuid=%s): %s",
                 srv.get("id"),
                 uuid,
                 e,
@@ -2745,9 +2802,36 @@ async def _apply_service_renewal_on_targets(
             errors_primary.append(str(e))
             failed_servers.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
             continue
+
         ok_count += 1
         if last_online is None:
             last_online = patched.get("last_online")
+
+        # مرحله ۲: فعال‌سازی جداگانه و مقاوم در برابر قطعی کوتاه API.
+        activation_ok, activation_error = await _retry_enable_renewed_user(
+            srv,
+            uuid,
+            service_id=service_id,
+            marzban_username=marzban_un,
+            attempts=3,
+            delay_seconds=5,
+        )
+        if not activation_ok:
+            server_title = str(srv.get("title") or f"سرور #{srv.get('id')}")
+            activation_failed_servers.append(server_title)
+            try:
+                activation_failed_targets.append((int(srv.get("id") or 0), uuid))
+            except (TypeError, ValueError):
+                pass
+            logger.error(
+                "RENEWAL_APPLIED_BUT_ACTIVATION_FAILED "
+                "service_id=%s server_id=%s server=%s uuid=%s error=%s",
+                service_id,
+                srv.get("id"),
+                server_title,
+                uuid,
+                activation_error,
+            )
 
     # اگر هیچ نودی موفق نشد، یعنی کل شبکه سرورها از دسترس خارج است -> fail واقعی.
     if ok_count == 0:
@@ -2767,9 +2851,20 @@ async def _apply_service_renewal_on_targets(
             # ریست کامل حسابداری نودها: حذف رکوردهای نودِ حذف‌شده (شبح) و صفر/یخ‌زدایی
             # بقیه نودها (شروع دورهٔ جدید اشتراک).
             userbot_db.reset_service_nodes_on_renew(service_id)
+
+            # اگر تمدید روی پنل اعمال شد ولی فعال‌سازی تأیید نشد، وضعیت همان نود را
+            # در دیتابیس active نگذار تا مانیتورینگ/بررسی بعدی آن را سالم فرض نکند.
+            for failed_sid, failed_uuid in activation_failed_targets:
+                if failed_sid > 0 and failed_uuid:
+                    userbot_db.set_service_node_active(
+                        service_id,
+                        failed_sid,
+                        failed_uuid,
+                        0,
+                    )
         except Exception as e:
             logger.warning("Failed to re-enable/reset service_nodes after renewal (service_id=%s): %s", service_id, e)
-    return final_limit, final_days, last_online, failed_servers
+    return final_limit, final_days, last_online, failed_servers, activation_failed_servers
 
 
 def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
@@ -4766,6 +4861,45 @@ async def _warn_admin_pending_node_sync(
         logger.warning("Failed to warn admin about pending node sync (server_id=%s): %s", server_id, e)
 
 
+async def _warn_admin_renew_activation_failed(
+    *,
+    service_id: int,
+    service_name: str,
+    telegram_id: int,
+    failed_servers: list[str],
+) -> None:
+    """هشدار فوری وقتی تمدید اعمال شده ولی فعال‌سازی بعد از retry تأیید نشده است."""
+    if not (ADMIN_ID and ADMIN_BOT_TOKEN) or not failed_servers:
+        return
+    try:
+        from telegram import Bot
+
+        admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        fail_lines = "\n".join(
+            f"• {title}"
+            for title in list(dict.fromkeys(failed_servers))[:10]
+        )
+        await admin_bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                "🚨 تمدید انجام شد ولی فعال‌سازی تأیید نشد.\n\n"
+                f"🆔 سرویس: {service_id or '-'}\n"
+                f"📦 نام سرویس: {service_name or '-'}\n"
+                f"👤 Telegram ID: {telegram_id or '-'}\n"
+                f"🖥 سرور/نود:\n{fail_lines}\n\n"
+                "ربات ۳ بار با فاصله ۵ ثانیه برای فعال‌سازی تلاش کرد ولی موفق نشد.\n"
+                "⚠️ تمدید حجم/زمان قبلاً روی پنل اعمال شده است؛ تمدید یا پرداخت را دوباره اجرا نکنید.\n"
+                "لطفاً کاربر را در پنل بررسی و در صورت نیاز دستی فعال کنید."
+            ),
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to warn admin about renewal activation failure (service_id=%s): %s",
+            service_id,
+            e,
+        )
+
+
 def _resolve_plan_display_mode(server_block: Optional[Dict[str, Any]]) -> str:
     """Resolve plan display mode with backward compatibility for legacy `mode` key."""
     block = server_block or {}
@@ -5190,6 +5324,7 @@ async def _process_wallet_purchase(
     renew_service = None
     last_online = None
     renew_failed_servers: list[str] = []
+    renew_activation_failed_servers: list[str] = []
 
     if is_renew_flow:
         renew_service = userbot_db.get_service_by_id(renew_service_id)
@@ -5216,7 +5351,7 @@ async def _process_wallet_purchase(
             }
             if isinstance(delivery_info_out, dict):
                 delivery_info_out["renew_snapshot"] = renew_snapshot
-            usage_limit, days_left, last_online, renew_failed_servers = (
+            usage_limit, days_left, last_online, renew_failed_servers, renew_activation_failed_servers = (
                 await _apply_service_renewal_on_targets(
                     renew_service,
                     user_id=int(user_id),
@@ -5558,6 +5693,20 @@ async def _process_wallet_purchase(
             )
         except Exception as e:
             logger.warning("Failed to warn admin about pending node sync: %s", e)
+
+    if is_renew_flow and renew_activation_failed_servers:
+        try:
+            await _warn_admin_renew_activation_failed(
+                service_id=int(service_db_id or renew_service_id or 0),
+                service_name=service_name,
+                telegram_id=int(user_id or 0),
+                failed_servers=renew_activation_failed_servers,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to warn admin about renewal activation failure: %s",
+                e,
+            )
 
     return True
 
