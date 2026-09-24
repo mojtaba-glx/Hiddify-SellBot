@@ -1681,6 +1681,9 @@ setup_sub_ssl() {
         p80_pid="$(printf '%s\n' "$l80" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
         if [ -n "$p80_pid" ]; then
           p80_unit="$(ps -p "$p80_pid" -o unit= 2>/dev/null | xargs || true)"
+          if [[ "$p80_unit" != *.service ]] && [ -r "/proc/$p80_pid/cgroup" ]; then
+            p80_unit="$(awk -F/ '/\.service$/ {print $NF; exit}' "/proc/$p80_pid/cgroup" 2>/dev/null || true)"
+          fi
           if [[ "$p80_unit" != *.service ]]; then
             p80_unit=""
           fi
