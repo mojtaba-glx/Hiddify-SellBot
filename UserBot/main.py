@@ -3414,10 +3414,15 @@ async def _send_service_direct_configs_shell(
     if not links:
         msg = "❌ کانفیگی از لینک اشتراک استخراج نشد."
         if fallback_base:
+            fallback_link = (
+                fallback_base
+                if _is_native_subscription_url(fallback_base)
+                else f"{fallback_base}/all.txt"
+            )
             msg = (
                 f"{msg}\n"
                 "می‌توانید از لینک اشتراک استفاده کنید:\n"
-                f"{fallback_base}/all.txt"
+                f"{fallback_link}"
             )
         await context.bot.send_message(
             chat_id=user_id,
@@ -3746,8 +3751,18 @@ async def _collect_direct_configs_map_for_service(
     for base_url in _get_service_node_fetch_base_urls(service):
         candidate_lines: list[str] = []
         local_seen: set[str] = set()
-        for suffix in ("all.txt", "all.txt?base64=1"):
-            lines = _fetch_remote_lines(f"{base_url}/{suffix}")
+        if _is_native_subscription_url(base_url):
+            fetch_urls = [
+                base_url,
+                f"{base_url}{'&' if '?' in base_url else '?'}base64=1",
+            ]
+        else:
+            fetch_urls = [
+                f"{base_url}/all.txt",
+                f"{base_url}/all.txt?base64=1",
+            ]
+        for fetch_url in fetch_urls:
+            lines = _fetch_remote_lines(fetch_url)
             for ln in lines:
                 raw = str(ln).strip()
                 if not raw or raw in local_seen:
