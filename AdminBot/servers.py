@@ -27,7 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api
+from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api, xnet_api
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import (
     admin_main_keyboard,
@@ -428,6 +428,9 @@ ADD_STATE_XUI_PASSWORD = "add_server_xui_password"
 ADD_STATE_XUI_TOKEN = "add_server_xui_token"
 ADD_STATE_XUI_SUB_DOMAIN = "add_server_xui_sub_domain"
 ADD_STATE_XUI_INBOUND = "add_server_xui_inbound"
+ADD_STATE_XNET_USERNAME = "add_server_xnet_username"
+ADD_STATE_XNET_PASSWORD = "add_server_xnet_password"
+ADD_STATE_XNET_INBOUND = "add_server_xnet_inbound"
 
 # ویرایش سرور
 EDIT_SERVER_TITLE = "edit_server_title"
@@ -4971,6 +4974,9 @@ async def handle_add_server_flow(
                         InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data="servers:add:type:xui_alireza"),
                         InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data="servers:add:type:xui_sanaei"),
                     ],
+                    [
+                        InlineKeyboardButton("🟣 X-NET (Sing-box)", callback_data="servers:add:type:xnet"),
+                    ],
                     [InlineKeyboardButton("🔙بازگشت", callback_data="servers:list_back")],
                 ]
             ),
@@ -4982,10 +4988,17 @@ async def handle_add_server_flow(
         new_server["title"] = text
         context.user_data["new_server"] = new_server
         context.user_data["state"] = ADD_STATE_PANEL_URL
-        if str(new_server.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
+        panel_type = str(new_server.get("panel_type") or "").strip().lower()
+        if panel_type in {"xui", "x-ui"}:
             await message.reply_text(
                 "🌐 لطفاً آدرس پنل را وارد کنید:\nمثال: https://site.example.com/E6xNPh2XZF5A6UO\n"
                 "اگر پنل روی پورت غیر استاندارد است، پورت را هم وارد کنید (مثال: https://site.example.com:2056/E6xNPh2XZF5A6UO)",
+                reply_markup=cancel_keyboard(),
+            )
+        elif panel_type in {"xnet", "x-net"}:
+            await message.reply_text(
+                "🌐 آدرس اصلی پنل X-NET را وارد کنید (بدون مسیر مخفی رابط وب):\n"
+                "مثال: http://31.56.48.96:8080 یا https://xnet.example.com",
                 reply_markup=cancel_keyboard(),
             )
         else:
@@ -5013,6 +5026,14 @@ async def handle_add_server_flow(
             context.user_data["state"] = ADD_STATE_XUI_USERNAME
             await message.reply_text(
                 "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        if str(new_server.get("panel_type") or "").strip().lower() in {"xnet", "x-net"}:
+            context.user_data["state"] = ADD_STATE_XNET_USERNAME
+            await message.reply_text(
+                "👤 نام کاربری ادمین X-NET را وارد کنید (معمولاً admin):",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -5120,6 +5141,72 @@ async def handle_add_server_flow(
         )
         return
 
+    # مرحله X-NET: نام کاربری ادمین
+    if state == ADD_STATE_XNET_USERNAME:
+        new_server["xnet_username"] = text.strip() or "admin"
+        context.user_data["new_server"] = new_server
+        context.user_data["state"] = ADD_STATE_XNET_PASSWORD
+        await message.reply_text(
+            "🔑 رمز عبور ادمین X-NET را وارد کنید:\n"
+            "ربات با /api/auth/login یک JWT مدیریتی می‌گیرد؛ API Token ثابت نود استفاده نمی‌شود.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # مرحله X-NET: رمز عبور و دریافت Inboundها
+    if state == ADD_STATE_XNET_PASSWORD:
+        new_server["xnet_password"] = text
+        context.user_data["new_server"] = new_server
+        try:
+            inbounds = await xnet_api.get_inbounds(new_server)
+            rows = []
+            for ib in (inbounds or [])[:20]:
+                iid = str(ib.get("id") or "").strip()
+                if not iid:
+                    continue
+                remark = str(ib.get("remark") or ib.get("name") or "-").strip()
+                proto = str(ib.get("protocol") or "-").strip()
+                enabled = "✅" if bool(ib.get("enabled", True)) else "⛔"
+                rows.append(f"{enabled} {iid} | {proto} | {remark}")
+            inbound_text = "\n".join(rows) if rows else "هیچ Inboundی هنوز ساخته نشده."
+        except Exception as exc:
+            await message.reply_text(
+                "❌ ورود به X-NET یا دریافت Inboundها ناموفق بود.\n"
+                f"جزئیات: {str(exc)[:600]}\n\n"
+                "رمز را دوباره ارسال کنید یا عملیات را لغو کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        context.user_data["state"] = ADD_STATE_XNET_INBOUND
+        await message.reply_text(
+            "🧩 Inboundهای X-NET:\n\n"
+            f"{inbound_text}\n\n"
+            "شناسه Inbound فروش را بفرستید.\n"
+            "• skip = اولین Inbound فعال\n"
+            "• 0 = همه Inboundهای فعال با یک UUID مشترک\n"
+            "• چند شناسه = با کاما جدا کنید (مثال: in-a1,in-b2)",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == ADD_STATE_XNET_INBOUND:
+        raw_inbound = text.strip()
+        if raw_inbound not in {"skip", "-", "_", ".", "done", "نه", "خیر"}:
+            normalized = raw_inbound.replace("،", ",").replace(" ", ",")
+            parts = [p.strip() for p in normalized.split(",") if p.strip()]
+            if parts == ["0"]:
+                new_server["xnet_inbound_id"] = "0"
+            elif parts:
+                new_server["xnet_inbound_id"] = ",".join(parts)
+        context.user_data["new_server"] = new_server
+        context.user_data["state"] = ADD_STATE_LIMIT
+        await message.reply_text(
+            "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
     # مرحله ۳: admin_proxy_path
     if state == ADD_STATE_ADMIN_PROXY:
         new_server["admin_proxy_path"] = text.strip().strip("/")
@@ -5182,8 +5269,11 @@ async def handle_add_server_flow(
 
         # تست اتصال به پنل با اطلاعات وارد شده
         try:
-            if new_server.get("panel_type") == "xui":
+            panel_type = str(new_server.get("panel_type") or "").strip().lower()
+            if panel_type == "xui":
                 await xui_api.test_connect(new_server)
+            elif panel_type in {"xnet", "x-net"}:
+                await xnet_api.test_connect(new_server)
             else:
                 await hiddify_api.list_users(new_server)
         except Exception as e:
@@ -5223,7 +5313,7 @@ async def handle_add_server_flow(
             "✅ سرور با موفقیت اضافه شد.\n\n"
             f"🖥️ عنوان: {saved.get('title')}\n"
             f"🌐 آدرس پنل: {saved.get('panel_url')}\n"
-            f"🧩 نوع پنل: {'X-UI' if saved.get('panel_type') == 'xui' else 'هیدیفای'}\n"
+            f"🧩 نوع پنل: {('X-UI' if saved.get('panel_type') == 'xui' else 'X-NET' if str(saved.get('panel_type') or '').lower() in {'xnet', 'x-net'} else 'هیدیفای')}\n"
             f"👥 محدودیت کاربران: {saved.get('users_limit')}\n"
         )
         await message.reply_text(summary, reply_markup=admin_main_keyboard())
@@ -7815,7 +7905,7 @@ async def handle_server_inline_callback(
             ptype = "xui"
             # Store hint for UI (optional)
             context.user_data["xui_variant"] = ptype
-        if ptype not in {"hiddify", "xui"}:
+        if ptype not in {"hiddify", "xui", "xnet"}:
             await query.answer("نوع پنل نامعتبر است.")
             return
         context.user_data["state"] = ADD_STATE_TITLE
@@ -7831,7 +7921,8 @@ async def handle_server_inline_callback(
         elif context.user_data.get("xui_variant") == "xui_alireza":
             variant_text = " (علیرضا)"
         try:
-            await msg.edit_text("نوع پنل: " + ("هیدیفای" if ptype == "hiddify" else "X-UI" + variant_text))
+            panel_label = "هیدیفای" if ptype == "hiddify" else ("X-NET" if ptype == "xnet" else "X-UI" + variant_text)
+            await msg.edit_text("نوع پنل: " + panel_label)
         except Exception:
             pass
         await msg.reply_text(
@@ -7857,6 +7948,9 @@ async def handle_server_inline_callback(
                     [
                         InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data="servers:add:type:xui_alireza"),
                         InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data="servers:add:type:xui_sanaei"),
+                    ],
+                    [
+                        InlineKeyboardButton("🟣 X-NET (Sing-box)", callback_data="servers:add:type:xnet"),
                     ],
                     [InlineKeyboardButton("🔙بازگشت", callback_data="servers:list_back")],
                 ]
