@@ -121,6 +121,34 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         body = request_mock.await_args.kwargs["json"]
         self.assertEqual(body["uuid"], new_uuid)
 
+    async def test_multi_inbound_duplicate_client_is_not_double_counted(self):
+        uid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        shared = {
+            "id": "c-shared",
+            "uuid": uid,
+            "username": "demo",
+            "status": "active",
+            "trafficLimitBytes": 20 * 1024**3,
+            "trafficUsedBytes": 3 * 1024**3,
+        }
+        inbounds = [
+            {"id": "in-1", "protocol": "VLESS", "clients": [dict(shared)]},
+            {"id": "in-2", "protocol": "Hysteria2", "clients": [dict(shared)]},
+        ]
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ):
+            user = await xnet_api.get_user_by_uuid(self.server, uid)
+        self.assertEqual(user["current_usage_GB"], 3.0)
+
+    def test_public_subscription_url_can_use_custom_domain(self):
+        server = dict(self.server)
+        server["xnet_sub_domain"] = "sub.example.com"
+        self.assertEqual(
+            xnet_api.get_subscription_url(server, "abc"),
+            "https://sub.example.com/api/v1/sub/abc",
+        )
+
     async def test_get_user_configs_decodes_default_base64_subscription(self):
         body = base64.b64encode(
             b"vless://one\nhysteria2://two\nnot-a-config"
