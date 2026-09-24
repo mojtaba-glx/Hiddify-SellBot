@@ -3298,6 +3298,33 @@ def get_wholesale_pricing(agent_id: int) -> Dict[str, int]:
     }
 
 
+def is_wholesale_pricing_configured(agent_id: int) -> bool:
+    """Return True only after admin explicitly configured a usable agency tariff.
+
+    The reseller bot must remain locked until the global wholesale tariff
+    (per-GB / per-30-days) has been saved by AdminBot.  Legacy per-server plans
+    do not unlock the bot because a newly-added server could otherwise resolve
+    to a zero wholesale price and create a free service.
+    """
+    try:
+        settings = get_agent_settings(agent_id)
+    except Exception:
+        return False
+
+    required_keys = {
+        "wholesale_price_per_gb",
+        "wholesale_price_per_30_days",
+    }
+    if not required_keys.issubset(set(settings.keys())):
+        return False
+
+    rates = get_wholesale_pricing(agent_id)
+    return bool(
+        int(rates.get("price_per_gb", 0) or 0) > 0
+        or int(rates.get("price_per_30_days", 0) or 0) > 0
+    )
+
+
 def set_wholesale_pricing(agent_id: int, price_per_gb: int, price_per_30_days: int) -> Dict[str, int]:
     """ثبت تعرفه عمده نماینده بدون تاریخ انقضا برای کیف پول."""
     price_per_gb = max(0, int(price_per_gb or 0))
