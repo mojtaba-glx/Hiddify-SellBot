@@ -1232,6 +1232,13 @@ def _agent_payment_action_kb(payment_id: int, agent_id: int) -> InlineKeyboardMa
     ])
 
 
+def _agent_payment_done_kb(agent_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 پروفایل نماینده", callback_data=f"agency:view:{agent_id}")],
+        [InlineKeyboardButton("🔙 شارژهای در انتظار", callback_data="agency:payments:1")],
+    ])
+
+
 async def send_pending_agent_payments(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1) -> None:
     payments, total = agentbot_db.get_pending_wallet_charge_payments(page=page, page_size=8)
     total_pages = max(1, (total + 7) // 8)
@@ -1345,11 +1352,31 @@ async def approve_agent_payment(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.warning("Failed notifying agent payment approval: %s", e)
     await query.answer("پرداخت تایید و کیف پول شارژ شد.", show_alert=True)
+    agent_name = _escape(
+        agent.get("full_name")
+        or agent.get("username")
+        or f"نماینده #{agent_id}"
+    )
+    done_text = (
+        "✅ <b>پرداخت تایید شد.</b>\n\n"
+        f"👤 نماینده: <b>{agent_name}</b>\n"
+        f"🆔 شناسه نماینده: <code>{agent_id}</code>\n"
+        f"💰 موجودی جدید: <b>{_fmt_toman(wallet['balance'])}</b> تومان"
+    )
+    done_kb = _agent_payment_done_kb(agent_id)
     try:
-        await query.edit_message_caption(caption=f"✅ پرداخت تایید شد.\nموجودی جدید: {_fmt_toman(wallet['balance'])} تومان", parse_mode="HTML")
+        await query.edit_message_caption(
+            caption=done_text,
+            reply_markup=done_kb,
+            parse_mode="HTML",
+        )
     except BadRequest:
         try:
-            await query.edit_message_text(f"✅ پرداخت تایید شد.\nموجودی جدید: {_fmt_toman(wallet['balance'])} تومان", parse_mode="HTML")
+            await query.edit_message_text(
+                done_text,
+                reply_markup=done_kb,
+                parse_mode="HTML",
+            )
         except BadRequest:
             pass
 
