@@ -382,6 +382,13 @@ def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
                 return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
     except Exception:
         pass
+    # X-NET: native public subscription endpoint.
+    try:
+        from Shared import xnet_api
+        if xnet_api.is_xnet_server(server):
+            return xnet_api.get_subscription_url(server, user_uuid)
+    except Exception:
+        pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy or not user_uuid:
@@ -628,14 +635,19 @@ def build_subscription_text_for_service(service_id: int) -> str:
         fetched: List[str] = []
         srv = target.get("server") or {}
         is_xui = False
+        is_xnet = False
         try:
             from Shared import xui_api as _xai
             is_xui = _xai.is_xui_server(srv)
         except Exception:
             is_xui = False
-        if is_xui:
-            # برای X-UI: اول sub خود پنل (2096) که 3 تا vless میده، بعد admin API
-            # چون sub خود x-ui دقیق‌ترینه (حتی اگر hysteria پاک شده)
+        try:
+            from Shared import xnet_api as _xnai
+            is_xnet = _xnai.is_xnet_server(srv)
+        except Exception:
+            is_xnet = False
+        if is_xui or is_xnet:
+            # X-UI/X-NET: native subscription is the canonical visible config set.
             if base:
                 try:
                     fetched = _fetch_subscription_lines(base)
