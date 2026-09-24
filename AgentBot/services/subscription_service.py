@@ -1110,17 +1110,37 @@ async def get_service_last_online(svc) -> str:
         except Exception as exc:
             logger.warning("Agent runtime cache update failed svc=%s: %s", svc.get("id"), type(exc).__name__)
 
+    # X-NET reports online/offline explicitly. Prefer that signal instead of
+    # treating a recent last_seen timestamp as online for 15 minutes.
+    explicit_online = any(
+        str((user or {}).get("_user_list_status") or "").strip().lower() == "online"
+        for _target, user in available
+    )
+    if explicit_online:
+        return "آنلاین"
+
     latest_dt: Optional[datetime] = None
     latest_source = ""
+    explicit_xnet_offline = False
     for _target, user in available:
+        source = str(user.get("_source") or "").strip().lower()
+        if (
+            source == "xnet"
+            and str(user.get("_user_list_status") or "").strip().lower() == "offline"
+        ):
+            explicit_xnet_offline = True
         candidate = _parse_panel_datetime(user.get("last_online"))
         if candidate is not None and (latest_dt is None or candidate > latest_dt):
             latest_dt = candidate
-            latest_source = str(user.get("_source") or "").strip().lower()
+            latest_source = source
     if latest_dt is None:
-        return "هرگز"
+        return "آفلاین" if explicit_xnet_offline else "هرگز"
+
     seconds = (now - latest_dt).total_seconds()
-    online_window = 90 if latest_source == "xui" else ONLINE_WINDOW
+    if explicit_xnet_offline:
+        return _human_duration(seconds)
+
+    online_window = 90 if latest_source in {"xui", "xnet"} else ONLINE_WINDOW
     if -CLOCK_SKEW <= seconds <= online_window:
         return "آنلاین"
     return _human_duration(seconds)
