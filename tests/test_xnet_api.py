@@ -2,7 +2,7 @@ import base64
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from Shared import xnet_api
+from Shared import hiddify_api, xnet_api
 
 
 class XnetApiTests(unittest.IsolatedAsyncioTestCase):
@@ -514,6 +514,92 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
             await xnet_api.create_inbound_from_link(self.server, link)
         self.assertIn("REALITY", str(ctx.exception))
         self.assertIn("کلید خصوصی", str(ctx.exception))
+
+    async def test_download_server_backup_creates_downloads_and_cleans_up(self):
+        request_json = AsyncMock(
+            side_effect=[
+                {
+                    "id": "bk-2",
+                    "filename": "xnet-2026-09-24T2215.db",
+                    "sizeBytes": 205000,
+                },
+                {"success": True},
+            ]
+        )
+        request_bytes = AsyncMock(
+            return_value=(
+                b"XNET-BACKUP-ARCHIVE",
+                {"content-type": "application/octet-stream"},
+            )
+        )
+
+        with patch.object(xnet_api, "_request_json", new=request_json), patch.object(
+            xnet_api, "_request_bytes", new=request_bytes
+        ):
+            result = await xnet_api.download_server_backup(self.server)
+
+        self.assertEqual(result["filename"], "xnet-2026-09-24T2215.db")
+        self.assertEqual(result["content"], b"XNET-BACKUP-ARCHIVE")
+        self.assertEqual(
+            result["source_url"],
+            "http://127.0.0.1:8080/api/backups/bk-2/download",
+        )
+
+        self.assertEqual(request_json.await_args_list[0].args[:2], ("POST", "/api/backups"))
+        self.assertEqual(
+            request_bytes.await_args.args[:2],
+            ("GET", "/api/backups/bk-2/download"),
+        )
+        self.assertEqual(
+            request_json.await_args_list[1].args[:2],
+            ("DELETE", "/api/backups/bk-2"),
+        )
+
+    async def test_download_server_backup_falls_back_to_newest_backup_list(self):
+        request_json = AsyncMock(
+            side_effect=[
+                {"success": True},
+                [
+                    {
+                        "id": "bk-old",
+                        "filename": "old.db",
+                        "createdAt": "2026-09-23T10:00:00Z",
+                    },
+                    {
+                        "id": "bk-new",
+                        "filename": "new.db",
+                        "createdAt": "2026-09-24T10:00:00Z",
+                    },
+                ],
+                {"success": True},
+            ]
+        )
+        request_bytes = AsyncMock(return_value=(b"NEWEST", {}))
+
+        with patch.object(xnet_api, "_request_json", new=request_json), patch.object(
+            xnet_api, "_request_bytes", new=request_bytes
+        ):
+            result = await xnet_api.download_server_backup(self.server)
+
+        self.assertEqual(result["filename"], "new.db")
+        self.assertEqual(result["content"], b"NEWEST")
+        self.assertEqual(
+            request_bytes.await_args.args[1],
+            "/api/backups/bk-new/download",
+        )
+
+    async def test_hiddify_backup_dispatcher_routes_xnet(self):
+        expected = {
+            "filename": "xnet.db",
+            "content": b"backup",
+            "source_url": "http://127.0.0.1:8080/api/backups/bk-1/download",
+        }
+        downloader = AsyncMock(return_value=expected)
+        with patch.object(xnet_api, "download_server_backup", new=downloader):
+            result = await hiddify_api.download_server_backup(self.server)
+
+        self.assertEqual(result, expected)
+        downloader.assert_awaited_once_with(self.server)
 
     async def test_test_connect_requires_ok_ping_and_management_api(self):
         with patch.object(
