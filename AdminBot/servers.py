@@ -6923,13 +6923,24 @@ async def handle_xui_create_inbound_from_link_port(update: Update, context: Cont
         except Exception:
             inbound_id = ""
         final_port = port_override or parsed.get("port")
+        success_rows = []
+        if panel_type in {"xui", "x-ui", "xnet", "x-net"}:
+            success_rows.append(
+                [InlineKeyboardButton(
+                    "🔄 همگام‌سازی یوزرها روی اینباندها",
+                    callback_data=f"server:{server_id}:sync_inbounds",
+                )]
+            )
+        success_rows.append(
+            [InlineKeyboardButton("🔙 بازگشت به سرور", callback_data=f"server:{server_id}")]
+        )
         await message.reply_text(
             f"✅ اینباند با موفقیت ساخته شد.\n\n"
             f"🔧 پروتکل: {parsed.get('protocol')}\n"
             f"🔌 پورت: {final_port}\n"
             + (f"🆔 ID اینباند: {inbound_id}\n" if inbound_id else "")
             + f"🌐 دامنه پنل: {server.get('panel_url')}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به سرور", callback_data=f"server:{server_id}")]]),
+            reply_markup=InlineKeyboardMarkup(success_rows),
         )
     except Exception as e:
         err = str(e)
