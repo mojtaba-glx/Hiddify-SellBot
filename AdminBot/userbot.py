@@ -211,6 +211,14 @@ def _guess_ssl_domain_hint() -> str:
     return "site.example.com"
 
 
+def _build_ssl_copy_command(domain: str) -> str:
+    """One-shot SSL command shown to the admin after saving the smart-link domain."""
+    host = _extract_host_only(domain)
+    if not host:
+        host = str(domain or "").strip().replace("https://", "").replace("http://", "").split("/", 1)[0]
+    return f"cd ~/Hiddify-SellBot && sudo ./install.sh ssl {host}"
+
+
 def _env_bool_value(raw: Any, default: bool = False) -> bool:
     text = str(raw or "").strip().lower()
     if not text:
@@ -6571,15 +6579,19 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
         context.user_data.pop(SUB_BASE_URL_EDIT_STATE, None)
         if stored:
-            ssl_hint = ""
             host_hint = _extract_host_only(stored)
-            if host_hint:
-                ssl_hint = (
-                    "\n\nاگر SSL این دامنه هنوز فعال نیست، اجرا کنید:\n"
-                    f"cd ~/Hiddify-SellBot && sudo ./install.sh ssl {host_hint} your-email@example.com"
-                )
+            ssl_command = _build_ssl_copy_command(host_hint or stored)
+            saved_text = (
+                "✅ دامنه لینک اشتراک هوشمند ذخیره شد:\n"
+                f"{html_escape(stored)}\n\n"
+                "🔐 برای گرفتن SSL روی همین سرور، فقط این دستور را کپی و اجرا کنید:\n"
+                f"<code>{html_escape(ssl_command)}</code>\n\n"
+                "این دستور ایمیل نمی‌خواهد و اگر پورت 80 توسط یک سرویس systemd اشغال باشد، "
+                "آن سرویس را فقط هنگام ACME موقتاً متوقف و دوباره اجرا می‌کند."
+            )
             await msg.reply_text(
-                f"✅ دامنه لینک اشتراک هوشمند ذخیره شد:\n{stored}{ssl_hint}",
+                saved_text,
+                parse_mode="HTML",
                 reply_markup=admin_main_keyboard(),
             )
         else:
@@ -10661,20 +10673,23 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         if action == "ssl_help":
             await query.answer()
             hint_domain = _guess_ssl_domain_hint()
+            ssl_command = _build_ssl_copy_command(hint_domain)
             guide = (
                 "🔐 راهنمای فعال‌سازی SSL برای لینک‌های اشتراک هوشمند\n\n"
                 "1) DNS دامنه را روی IP همین سرور ست کنید.\n"
-                "2) روی سرور این دستور را اجرا کنید:\n"
-                f"`cd ~/Hiddify-SellBot && sudo ./install.sh ssl {hint_domain} your-email@example.com`\n\n"
-                "بعد از موفقیت، دامنه را در همین منو تنظیم کنید (با یا بدون https)."
+                "2) اگر Cloudflare Proxy روشن است، هنگام صدور اولیه گواهی آن را روی DNS Only بگذارید.\n"
+                "3) این دستور آماده را روی سرور کپی و اجرا کنید:\n"
+                f"<code>{html_escape(ssl_command)}</code>\n\n"
+                "دامنه داخل دستور به‌صورت خودکار از همان دامنه ذخیره‌شده ربات قرار می‌گیرد؛ "
+                "نیازی به وارد کردن ایمیل نمونه نیست."
             )
             try:
-                await msg.reply_text(guide, parse_mode="Markdown", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(guide, parse_mode="HTML", reply_markup=userbot_cancel_keyboard())
             except Exception:
                 await context.bot.send_message(
                     chat_id=cid,
                     text=guide,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                     reply_markup=userbot_cancel_keyboard(),
                 )
             return
