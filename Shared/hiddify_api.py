@@ -20,6 +20,11 @@ def _is_xui_server(server: Dict[str, Any]) -> bool:
     return str((server or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
 
 
+def _is_xnet_server(server: Dict[str, Any]) -> bool:
+    """True if the server dict is an X-NET panel."""
+    return str((server or {}).get("panel_type") or "").strip().lower() in {"xnet", "x-net"}
+
+
 SSL_MODE_ENV = "HIDDIFY_SSL_MODE"
 SSL_MODE_AUTO = "auto"
 SSL_MODE_SECURE = "secure"
@@ -829,6 +834,10 @@ async def list_users(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     GET /{admin_proxy}/api/v2/admin/user/
     لیست کاربران برای ادمین فعلی.
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.list_users(server)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.list_users(server)
@@ -848,6 +857,10 @@ async def get_user_by_uuid(server: Dict[str, Any], user_uuid: str) -> Dict[str, 
     GET /{admin_proxy}/api/v2/admin/user/{uuid}/
     دریافت اطلاعات یک کاربر با UUID/ID.
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.get_user_by_uuid(server, user_uuid)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.get_user_by_uuid(server, user_uuid)
@@ -871,6 +884,10 @@ async def patch_user(
     PATCH /{admin_proxy}/api/v2/admin/user/{uuid}/
     بروزرسانی اطلاعات یک کاربر (نام، حجم، روز، کامنت، ...).
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.patch_user(server, user_uuid, payload)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.patch_user(server, user_uuid, payload)
@@ -961,6 +978,10 @@ async def enable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]:
     """
     فعال‌سازی کاربر به‌صورت سازگار با نسخه‌های مختلف پنل.
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.enable_user(server, user_uuid)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.enable_user(server, user_uuid)
@@ -1034,6 +1055,10 @@ async def disable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]
     3) هر دو با هم
     سپس verify با GET.
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.disable_user(server, user_uuid)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.disable_user(server, user_uuid)
@@ -1126,6 +1151,10 @@ async def create_user(
         ...
     }
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.create_user(server, payload)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.create_user(server, payload)
@@ -1235,6 +1264,10 @@ async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
     ابتدا تلاش می‌کند DELETE بزند؛
     اگر API پشتیبانی نکند، به صورت fallback فقط is_active=False می‌کند.
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.delete_user(server, user_uuid)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.delete_user(server, user_uuid)
@@ -1278,6 +1311,10 @@ async def get_user_configs(
         ...
     }
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.get_user_configs(server, user_uuid)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.get_user_configs(server, user_uuid)
@@ -1295,6 +1332,10 @@ async def get_user_configs(
 
 async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     """دریافت آمار سیستم (System Stats) و کاربران"""
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.get_server_stats(server)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.get_server_stats(server)
