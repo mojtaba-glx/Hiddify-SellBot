@@ -1020,6 +1020,151 @@ async def patch_user(
     return await get_user_by_uuid(server, new_uuid)
 
 
+async def sync_users_to_inbounds(server: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach every existing X-NET subscriber to all configured target inbounds.
+
+    X-NET's own subscription editor models one primary inbound plus
+    ``extraInboundIds``. Updating that field lets us add a newly-created
+    inbound without recreating the subscriber, changing its UUID, quota, expiry,
+    status, or traffic counters.
+    """
+    inbounds = await get_inbounds(server)
+    target_ids = _selected_inbound_ids(server, inbounds)
+    if not target_ids:
+        return {
+            "ok": False,
+            "msg": "هیچ Inbound هدف قابل استفاده‌ای در X-NET پیدا نشد.",
+            "created": 0,
+            "skipped": 0,
+            "errors": [],
+            "total_users": 0,
+            "target_inbounds": 0,
+        }
+
+    groups: Dict[str, List[Tuple[Dict[str, Any], Dict[str, Any]]]] = {}
+    order: List[str] = []
+    for inbound in inbounds:
+        clients = inbound.get("clients") or []
+        if not isinstance(clients, list):
+            continue
+        for client in clients:
+            if not isinstance(client, dict):
+                continue
+            uid = _client_uuid(client)
+            if not uid:
+                continue
+            key = uid.lower()
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append((inbound, client))
+
+    if not groups:
+        return {
+            "ok": True,
+            "created": 0,
+            "skipped": 0,
+            "errors": [],
+            "total_users": 0,
+            "target_inbounds": len(target_ids),
+        }
+
+    target_set = set(target_ids)
+    added = 0
+    skipped = 0
+    errors: List[str] = []
+    requested_missing: Dict[str, List[str]] = {}
+
+    for key in order:
+        pairs = groups[key]
+        current_ids: List[str] = []
+        for inbound, _client in pairs:
+            iid = str(inbound.get("id") or "").strip()
+            if iid and iid not in current_ids:
+                current_ids.append(iid)
+
+        missing = [iid for iid in target_ids if iid not in current_ids]
+        if not missing:
+            skipped += 1
+            continue
+
+        anchor_inbound, anchor_client = pairs[0]
+        for inbound, client in pairs:
+            iid = str(inbound.get("id") or "").strip()
+            if iid in target_set:
+                anchor_inbound, anchor_client = inbound, client
+                break
+
+        anchor_id = str(anchor_inbound.get("id") or "").strip()
+        client_id = str(anchor_client.get("id") or "").strip()
+        user_uuid = _client_uuid(anchor_client)
+        if not anchor_id or not client_id or not user_uuid:
+            errors.append(f"{user_uuid or key}: رکورد اصلی کاربر ناقص است.")
+            continue
+
+        connected_ids: List[str] = []
+        for iid in current_ids + target_ids:
+            if iid and iid not in connected_ids:
+                connected_ids.append(iid)
+
+        body = _client_update_body(anchor_client, {})
+        body["extraInboundIds"] = [
+            iid for iid in connected_ids if iid != anchor_id
+        ]
+
+        try:
+            await _request_json(
+                "PUT",
+                f"/api/inbounds/{anchor_id}/clients/{client_id}",
+                server,
+                json=body,
+            )
+            requested_missing[user_uuid.lower()] = list(missing)
+            added += len(missing)
+        except Exception as exc:
+            username = str(
+                anchor_client.get("username")
+                or anchor_client.get("email")
+                or user_uuid
+            ).strip()
+            errors.append(f"{username}: {str(exc)[:160]}")
+
+    if requested_missing:
+        try:
+            fresh = await get_inbounds(server)
+            fresh_presence: Dict[str, set[str]] = {}
+            for inbound in fresh:
+                iid = str(inbound.get("id") or "").strip()
+                for client in inbound.get("clients") or []:
+                    if not isinstance(client, dict):
+                        continue
+                    uid = _client_uuid(client).lower()
+                    if uid and iid:
+                        fresh_presence.setdefault(uid, set()).add(iid)
+
+            verified_added = 0
+            for uid, missing_ids in requested_missing.items():
+                present = fresh_presence.get(uid, set())
+                absent = [iid for iid in missing_ids if iid not in present]
+                verified_added += len(missing_ids) - len(absent)
+                if absent:
+                    errors.append(
+                        f"{uid}: اتصال به {len(absent)} Inbound تأیید نشد."
+                    )
+            added = verified_added
+        except Exception as exc:
+            errors.append(f"تأیید نهایی همگام‌سازی انجام نشد: {str(exc)[:160]}")
+
+    return {
+        "ok": True,
+        "created": added,
+        "skipped": skipped,
+        "errors": errors,
+        "total_users": len(groups),
+        "target_inbounds": len(target_ids),
+    }
+
+
 async def reset_user_traffic(
     server: Dict[str, Any],
     user_uuid: str,
