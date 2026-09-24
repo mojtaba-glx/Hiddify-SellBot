@@ -81,9 +81,17 @@ def _build_user_base_url(server: dict, user_uuid: str) -> Optional[str]:
 
 
 def _build_panel_base_url(server: dict, user_uuid: str) -> Optional[str]:
+    if not user_uuid:
+        return None
+    try:
+        from Shared import xnet_api
+        if xnet_api.is_xnet_server(server):
+            return xnet_api.get_subscription_url(server, user_uuid)
+    except Exception:
+        pass
     panel_url = str(server.get("panel_url") or "").rstrip("/")
     user_proxy = str(server.get("user_proxy_path") or "").strip("/")
-    if not panel_url or not user_proxy or not user_uuid:
+    if not panel_url or not user_proxy:
         return None
     return f"{panel_url}/{user_proxy}/{user_uuid}"
 
