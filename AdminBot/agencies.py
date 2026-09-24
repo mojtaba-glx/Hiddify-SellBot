@@ -480,6 +480,12 @@ def _main_menu_kb() -> InlineKeyboardMarkup:
 
 
 def _agent_detail_kb(agent_id: int) -> InlineKeyboardMarkup:
+    tariff_ready = agent_db.is_wholesale_pricing_configured(agent_id)
+    tariff_label = (
+        "💵 تعرفه عمده ✅"
+        if tariff_ready
+        else "⚠️ تعرفه عمده — ربات قفل"
+    )
     return InlineKeyboardMarkup(
         [
             [
@@ -487,7 +493,7 @@ def _agent_detail_kb(agent_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("💳 کیف پول", callback_data=f"agency:wallet:{agent_id}"),
             ],
             [InlineKeyboardButton("📦 سرویس‌ها", callback_data=f"agency:services:{agent_id}:1")],
-            [InlineKeyboardButton("💵 تعرفه عمده", callback_data=f"agency:prices:{agent_id}:1")],
+            [InlineKeyboardButton(tariff_label, callback_data=f"agency:prices:{agent_id}:1")],
             [InlineKeyboardButton("🤖 ربات مشتری", callback_data=f"agency:bots:{agent_id}")],
             [InlineKeyboardButton("🔄 بازنشانی تست رایگان", callback_data=f"agency:resettrial:{agent_id}")],
             [InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"agency:editname:{agent_id}")],
@@ -610,6 +616,12 @@ async def send_agent_detail(
     context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
 
     active = "فعال ✅" if int(agent.get("is_active", 0)) else "غیرفعال ❌"
+    tariff_ready = agent_db.is_wholesale_pricing_configured(agent_id)
+    tariff_state = (
+        "فعال ✅"
+        if tariff_ready
+        else "قفل ⚠️ — تعرفه عمده هنوز تنظیم نشده"
+    )
     name = _escape(agent.get('full_name')) or "—"
     username = f"@{_escape(agent.get('username'))}" if agent.get('username') else "—"
     phone = _escape(agent.get('phone')) or "—"
@@ -623,6 +635,7 @@ async def send_agent_detail(
         f"🔗 <b>یوزرنیم:</b> {username}\n"
         f"📞 <b>تلفن:</b> {phone}\n"
         f"📍 <b>وضعیت:</b> {active}\n"
+        f"🔐 <b>دسترسی ربات نمایندگی:</b> {tariff_state}\n"
         f"🕒 <b>عضویت:</b> {_escape(agent.get('created_at'))}\n"
         f"{SEPARATOR}\n"
         f"💰 <b>کیف پول:</b> {_fmt_toman(stats['wallet_balance'])} تومان\n"
@@ -1423,9 +1436,17 @@ async def send_agent_prices(
         return
 
     rates = agent_db.get_wholesale_pricing(agent_id)
+    tariff_ready = agent_db.is_wholesale_pricing_configured(agent_id)
 
     lines = [
         f"💵 <b>تعرفه عمده نماینده</b>\n\n",
+        (
+            "✅ ربات نمایندگی برای خرید و تمدید فعال است.\n\n"
+            if tariff_ready
+            else
+            "⚠️ <b>تعرفه هنوز تنظیم نشده است.</b>\n"
+            "تا زمان ثبت تعرفه، ربات نمایندگی برای این نماینده قفل خواهد بود.\n\n"
+        ),
         f"👤 {_escape(agent.get('full_name')) or agent.get('telegram_id')}\n",
         f"📊 هر گیگ: <b>{_fmt_toman(rates['price_per_gb'])}</b> تومان\n",
         f"⏰ هر ۳۰ روز: <b>{_fmt_toman(rates['price_per_30_days'])}</b> تومان\n\n",
@@ -1535,12 +1556,21 @@ async def confirm_wholesale_rates(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     price_per_gb = int(context.user_data.get("agency_wholesale_price_per_gb") or 0)
     price_per_30_days = int(context.user_data.get("agency_wholesale_price_per_30_days") or 0)
+    if price_per_gb <= 0 and price_per_30_days <= 0:
+        try:
+            await query.answer(
+                "❌ هر دو مبلغ نمی‌توانند صفر باشند. حداقل یکی از تعرفه‌ها باید بیشتر از صفر باشد.",
+                show_alert=True,
+            )
+        except Exception:
+            pass
+        return
     rates = agent_db.set_wholesale_pricing(agent_id, price_per_gb, price_per_30_days)
     context.user_data.pop("state", None)
     context.user_data.pop("agency_wholesale_price_per_gb", None)
     context.user_data.pop("agency_wholesale_price_per_30_days", None)
     text = (
-        "✅ تعرفه عمده ثبت شد.\n"
+        "✅ تعرفه عمده ثبت شد و ربات نمایندگی برای خرید و تمدید فعال شد.\n"
         f"📊 هر گیگ: <b>{_fmt_toman(rates['price_per_gb'])}</b> تومان\n"
         f"⏰ هر ۳۰ روز: <b>{_fmt_toman(rates['price_per_30_days'])}</b> تومان"
     )
