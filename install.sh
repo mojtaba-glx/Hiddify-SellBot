@@ -1624,7 +1624,7 @@ setup_sub_ssl() {
   if [ -z "$raw_domain" ]; then
     _red "ERROR: domain is required."
     _yellow "Usage: ./install.sh ssl <domain> [email]"
-    _yellow "Example: sudo ./install.sh ssl sell.example.com"
+    _yellow "Example: sudo ./install.sh ssl sell.example.com admin@example.com"
     return 1
   fi
 
@@ -1654,160 +1654,34 @@ setup_sub_ssl() {
     return 1
   fi
 
+  if command -v ss >/dev/null 2>&1; then
+    local l80 l443
+    l80="$(ss -ltnp 'sport = :80' 2>/dev/null | tail -n +2 || true)"
+    l443="$(ss -ltnp 'sport = :443' 2>/dev/null | tail -n +2 || true)"
+    if [ -n "$l80" ] && ! printf '%s\n' "$l80" | grep -qi "nginx"; then
+      _red "ERROR: port 80 is already in use by another service."
+      _yellow "Stop that service or terminate SSL on another reverse proxy."
+      return 1
+    fi
+    if [ -n "$l443" ] && ! printf '%s\n' "$l443" | grep -qi "nginx"; then
+      _red "ERROR: port 443 is already in use by another service."
+      _yellow "Stop that service or terminate SSL on another reverse proxy."
+      return 1
+    fi
+  fi
+
   load_env_file "$ENV_FILE" || true
   local sub_port="${SUB_SERVER_PORT:-8787}"
   if ! [[ "$sub_port" =~ ^[0-9]+$ ]] || [ "$sub_port" -lt 1 ] || [ "$sub_port" -gt 65535 ]; then
     sub_port=8787
   fi
 
-  local l80="" l443="" p80_mode="free" p80_pid="" p80_unit=""
-  if command -v ss >/dev/null 2>&1; then
-    l80="$(ss -ltnp 'sport = :80' 2>/dev/null | tail -n +2 || true)"
-    l443="$(ss -ltnp 'sport = :443' 2>/dev/null | tail -n +2 || true)"
-
-    if [ -n "$l443" ] && ! printf '%s\n' "$l443" | grep -qi "nginx"; then
-      _red "ERROR: port 443 is already in use by another service."
-      _yellow "The smart subscription domain needs HTTPS on port 443."
-      _yellow "Free port 443 or terminate HTTPS on another reverse proxy, then retry."
-      printf '%s\n' "$l443" | head -n 3
-      return 1
-    fi
-
-    if [ -n "$l80" ]; then
-      if printf '%s\n' "$l80" | grep -qi "nginx"; then
-        p80_mode="nginx"
-      else
-        p80_mode="busy"
-        p80_pid="$(printf '%s\n' "$l80" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -n 1)"
-        if [ -n "$p80_pid" ]; then
-          p80_unit="$(ps -p "$p80_pid" -o unit= 2>/dev/null | xargs || true)"
-          if [[ "$p80_unit" != *.service ]] && [ -r "/proc/$p80_pid/cgroup" ]; then
-            p80_unit="$(awk -F/ '/\.service$/ {print $NF; exit}' "/proc/$p80_pid/cgroup" 2>/dev/null || true)"
-          fi
-          if [[ "$p80_unit" != *.service ]]; then
-            p80_unit=""
-          fi
-        fi
-
-        if [ -z "$p80_unit" ]; then
-          _red "ERROR: port 80 is busy and its owning systemd service could not be detected safely."
-          _yellow "No process will be killed automatically."
-          _yellow "Free port 80 temporarily or use a DNS-01/Cloudflare certificate method."
-          printf '%s\n' "$l80" | head -n 3
-          return 1
-        fi
-
-        case "$p80_unit" in
-          ssh.service|sshd.service|docker.service|containerd.service)
-            _red "ERROR: port 80 is owned by protected service: $p80_unit"
-            _yellow "This installer will not stop that service automatically."
-            return 1
-            ;;
-        esac
-      fi
-    fi
-  fi
-
-  _blue "Preparing SSL dependencies"
+  _blue "Installing nginx + certbot dependencies"
   apt-get update
-  apt-get install -y certbot
+  apt-get install -y nginx certbot python3-certbot-nginx
 
   local nginx_conf="/etc/nginx/sites-available/hiddify-sellbot-sub.conf"
-  local nginx_link="/etc/nginx/sites-enabled/hiddify-sellbot-sub.conf"
-  local certbot_cmd=()
-  local cert_rc=0
-
-  if [ "$p80_mode" = "busy" ]; then
-    _yellow "Port 80 is currently used by $p80_unit."
-    _yellow "The installer will stop it only for the ACME challenge, then start it again."
-
-    # Free :80 before nginx is installed/started, otherwise package post-install
-    # may fail and Certbot standalone cannot bind the challenge port.
-    systemctl stop "$p80_unit"
-    apt-get install -y nginx
-    systemctl stop nginx 2>/dev/null || true
-
-    certbot_cmd=(
-      certbot certonly --standalone
-      -d "$domain"
-      --agree-tos
-      --non-interactive
-      --no-eff-email
-      --preferred-challenges http
-    )
-    if [ -n "$email" ]; then
-      certbot_cmd+=(--email "$email")
-    else
-      certbot_cmd+=(--register-unsafely-without-email)
-    fi
-
-    _blue "Requesting Let's Encrypt certificate for $domain (temporary standalone challenge)"
-    set +e
-    "${certbot_cmd[@]}"
-    cert_rc=$?
-    set -e
-
-    # Always restore the service that owned port 80.
-    systemctl start "$p80_unit" 2>/dev/null || true
-
-    if [ "$cert_rc" -ne 0 ]; then
-      _red "ERROR: Let's Encrypt certificate request failed."
-      _yellow "The previous port-80 service was started again: $p80_unit"
-      return "$cert_rc"
-    fi
-
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-    cat > "$nginx_conf" <<EOF
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    server_name ${domain};
-
-    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-
-    client_max_body_size 20m;
-
-    location / {
-        proxy_pass http://127.0.0.1:${sub_port};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-EOF
-    ln -sf "$nginx_conf" "$nginx_link"
-
-    # Certbot remembers the standalone authenticator. During renewals this
-    # service must briefly release :80, then it is restored automatically.
-    local hook_tag pre_hook post_hook
-    hook_tag="$(printf '%s' "$domain" | tr '.-' '__')"
-    pre_hook="/etc/letsencrypt/renewal-hooks/pre/hiddify-sellbot-${hook_tag}-stop-port80.sh"
-    post_hook="/etc/letsencrypt/renewal-hooks/post/hiddify-sellbot-${hook_tag}-restore-port80.sh"
-    mkdir -p /etc/letsencrypt/renewal-hooks/pre /etc/letsencrypt/renewal-hooks/post
-    cat > "$pre_hook" <<EOF
-#!/bin/sh
-systemctl stop ${p80_unit} 2>/dev/null || true
-EOF
-    cat > "$post_hook" <<EOF
-#!/bin/sh
-systemctl start ${p80_unit} 2>/dev/null || true
-systemctl reload nginx 2>/dev/null || true
-EOF
-    chmod 700 "$pre_hook" "$post_hook"
-
-    nginx -t
-    systemctl enable --now nginx
-    systemctl reload nginx
-  else
-    _blue "Installing nginx + Certbot nginx plugin"
-    apt-get install -y nginx python3-certbot-nginx
-
-    cat > "$nginx_conf" <<EOF
+  cat > "$nginx_conf" <<EOF
 server {
     listen 80;
     listen [::]:80;
@@ -1828,31 +1702,32 @@ server {
 }
 EOF
 
-    ln -sf "$nginx_conf" "$nginx_link"
-    nginx -t
-    systemctl enable --now nginx
-    systemctl reload nginx
+  ln -sf "$nginx_conf" /etc/nginx/sites-enabled/hiddify-sellbot-sub.conf
 
-    certbot_cmd=(
-      certbot --nginx
-      -d "$domain"
-      --agree-tos
-      --non-interactive
-      --no-eff-email
-      --redirect
-    )
-    if [ -n "$email" ]; then
-      certbot_cmd+=(--email "$email")
-    else
-      certbot_cmd+=(--register-unsafely-without-email)
-    fi
+  nginx -t
+  systemctl enable --now nginx
+  systemctl reload nginx
 
-    _blue "Requesting Let's Encrypt certificate for $domain"
-    "${certbot_cmd[@]}"
+  local certbot_cmd=(
+    certbot --nginx
+    -d "$domain"
+    --agree-tos
+    --non-interactive
+    --no-eff-email
+    --redirect
+  )
+  if [ -n "$email" ]; then
+    certbot_cmd+=(--email "$email")
+  else
+    certbot_cmd+=(--register-unsafely-without-email)
   fi
+
+  _blue "Requesting Let's Encrypt certificate for $domain"
+  "${certbot_cmd[@]}"
 
   touch "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
+  # پورت خام HTTP دیگر روی همه کارت‌های شبکه باز نباشد — فقط nginx محلی
   set_env_var "SUB_SERVER_HOST" "127.0.0.1" "$ENV_FILE"
   set_env_var "SUB_SERVER_PUBLIC_HOST" "$domain" "$ENV_FILE"
   set_env_var "SUB_SERVER_PUBLIC_SCHEME" "https" "$ENV_FILE"
@@ -1868,10 +1743,6 @@ PY
 
   _green "OK: SSL configured successfully."
   _green "Domain: https://${domain}"
-  if [ "$p80_mode" = "busy" ]; then
-    _yellow "Port 80 remains assigned to: $p80_unit"
-    _yellow "Nginx serves the bot smart-subscription domain on HTTPS/443 only."
-  fi
   _yellow "Next step: ./install.sh restart"
 }
 
