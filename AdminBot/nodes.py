@@ -301,6 +301,7 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
                 [InlineKeyboardButton("👤 ویرایش نام کاربری X-NET", callback_data=f"seredit:{target_sid}:xnet_username")],
                 [InlineKeyboardButton("🔑 ویرایش رمز X-NET", callback_data=f"seredit:{target_sid}:xnet_password")],
                 [InlineKeyboardButton("🧩 ویرایش Inbound X-NET", callback_data=f"seredit:{target_sid}:xnet_inbound")],
+                [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{target_sid}:create_inbound_from_link")],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
             ]
         )
