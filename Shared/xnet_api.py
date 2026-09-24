@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import time
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -905,6 +906,448 @@ async def get_user_configs(
         protocol = link.split("://", 1)[0].lower()
         result.append({"link": link, "protocol": protocol})
     return result
+
+
+
+def parse_config_link(link: str) -> Dict[str, Any]:
+    """Parse a share URI using SellBot's existing, battle-tested link parser."""
+    from Shared import xui_api
+
+    try:
+        return xui_api.parse_config_link(link)
+    except Exception as exc:
+        raise XnetApiError(str(exc)) from exc
+
+
+async def get_singbox_compatibility(server: Dict[str, Any]) -> Dict[str, Any]:
+    data = await _request_json("GET", "/api/singbox/compatibility", server)
+    return data if isinstance(data, dict) else {}
+
+
+def _canonical_transport(raw: Any) -> str:
+    value = str(raw or "tcp").strip().lower().replace("-", "").replace("_", "")
+    mapping = {
+        "tcp": "TCP",
+        "ws": "WS",
+        "websocket": "WS",
+        "grpc": "gRPC",
+        "httpupgrade": "HTTPUpgrade",
+        "http2": "HTTP/2",
+        "h2": "HTTP/2",
+        "quic": "QUIC",
+    }
+    return mapping.get(value, str(raw or "TCP").strip())
+
+
+def _transport_compat_key(raw: Any) -> str:
+    value = _canonical_transport(raw).strip().lower()
+    return {
+        "http/2": "http2",
+        "httpupgrade": "httpupgrade",
+        "grpc": "grpc",
+        "ws": "ws",
+        "tcp": "tcp",
+        "quic": "quic",
+    }.get(value, value.replace("/", ""))
+
+
+def _split_alpn(raw: Any, default: Optional[List[str]] = None) -> List[str]:
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        values = [
+            x.strip()
+            for x in str(raw or "").replace(";", ",").split(",")
+            if x.strip()
+        ]
+    return values or list(default or [])
+
+
+def _link_remark(link: str, protocol: str, port: int) -> str:
+    try:
+        fragment = str(link or "").split("#", 1)[1]
+    except IndexError:
+        fragment = ""
+    try:
+        fragment = urllib.parse.unquote(fragment).strip()
+    except Exception:
+        fragment = fragment.strip()
+    return fragment or f"{protocol}-{port}"
+
+
+def _local_public_host(server: Dict[str, Any]) -> str:
+    raw = str(
+        (server or {}).get("xnet_sub_domain")
+        or (server or {}).get("xnet_sub_host")
+        or (server or {}).get("panel_url")
+        or ""
+    ).strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        return str(urllib.parse.urlparse(raw).hostname or "").strip()
+    except Exception:
+        return ""
+
+
+def _tls_candidate_from_inbound(inbound: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    def _from_row(row: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        cert = str(
+            row.get("certFile")
+            or row.get("certPath")
+            or row.get("certificateFile")
+            or ""
+        ).strip()
+        key = str(
+            row.get("keyFile")
+            or row.get("keyPath")
+            or row.get("privateKeyPath")
+            or ""
+        ).strip()
+        if not cert or not key:
+            return None
+        sni = str(
+            row.get("sni")
+            or row.get("domain")
+            or row.get("domainBinding")
+            or ""
+        ).strip()
+        return {"certFile": cert, "keyFile": key, "sni": sni}
+
+    direct = _from_row(inbound)
+    if direct:
+        return direct
+
+    node_tls = inbound.get("nodeTls")
+    if isinstance(node_tls, dict):
+        for value in node_tls.values():
+            if isinstance(value, dict):
+                candidate = _from_row(value)
+                if candidate:
+                    return candidate
+    return None
+
+
+async def _select_local_tls_material(
+    server: Dict[str, Any],
+    inbounds: List[Dict[str, Any]],
+    *,
+    preferred_sni: str = "",
+) -> Dict[str, str]:
+    """Pick certificate/key already installed on this X-NET server.
+
+    A client link never contains a server private key, so importing a link must
+    reuse local TLS material instead of copying the source server identity.
+    """
+    local_host = _local_public_host(server).lower()
+    preferred = str(preferred_sni or "").strip().lower()
+
+    candidates: List[Dict[str, str]] = []
+    for inbound in inbounds:
+        if not isinstance(inbound, dict):
+            continue
+        candidate = _tls_candidate_from_inbound(inbound)
+        if candidate:
+            candidates.append(candidate)
+
+    # Some X-NET builds expose certificate filesystem paths in this response.
+    # Use them when available, but do not guess paths from only a domain name.
+    if not candidates:
+        try:
+            data = await _request_json("GET", "/api/certificates", server)
+            rows = data if isinstance(data, list) else (
+                data.get("certificates") if isinstance(data, dict) else []
+            )
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    candidate = _tls_candidate_from_inbound(row)
+                    if candidate:
+                        candidates.append(candidate)
+        except Exception:
+            pass
+
+    if not candidates:
+        raise XnetApiError(
+            "برای ساخت اینباند TLS از روی لینک، گواهی و کلید محلی X-NET پیدا نشد. "
+            "ابتدا در X-NET یک گواهی معتبر تنظیم کنید یا یک اینباند TLS معتبر بسازید."
+        )
+
+    def _score(item: Dict[str, str]) -> int:
+        sni = str(item.get("sni") or "").strip().lower()
+        score = 0
+        if local_host and sni == local_host:
+            score += 4
+        if preferred and sni == preferred:
+            score += 2
+        if sni:
+            score += 1
+        return score
+
+    chosen = max(candidates, key=_score)
+    sni = str(chosen.get("sni") or "").strip() or _local_public_host(server)
+    if not sni:
+        raise XnetApiError(
+            "گواهی محلی پیدا شد ولی دامنه/SNI آن مشخص نیست؛ SNI گواهی را در X-NET تنظیم کنید."
+        )
+    return {
+        "certFile": str(chosen["certFile"]),
+        "keyFile": str(chosen["keyFile"]),
+        "sni": sni,
+    }
+
+
+def _compat_protocol_entry(data: Dict[str, Any], protocol: str) -> Dict[str, Any]:
+    root = data.get("protocols") if isinstance(data, dict) else None
+    if not isinstance(root, dict):
+        root = data if isinstance(data, dict) else {}
+    wanted = str(protocol or "").strip().lower()
+    for key, value in root.items():
+        if str(key).strip().lower() == wanted and isinstance(value, dict):
+            return value
+    return {}
+
+
+async def create_inbound_from_link(
+    server: Dict[str, Any],
+    link: str,
+    *,
+    port_override: Optional[int] = None,
+    remark: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create an X-NET inbound from the connection shape in a share URI.
+
+    The URI is treated as a template. Source-user credentials are deliberately
+    not imported. TLS inbounds reuse this X-NET server's existing certificate.
+    REALITY is rejected because a client URI does not contain the server private
+    key needed to reproduce the inbound safely.
+    """
+    parsed = parse_config_link(link)
+    protocol = str(parsed.get("protocol") or "").strip().lower()
+    supported = {"vless", "vmess", "trojan", "hysteria2", "shadowsocks"}
+    if protocol not in supported:
+        raise XnetApiError(
+            "ساخت اینباند X-NET از این نوع لینک فعلاً پشتیبانی نمی‌شود: "
+            f"{protocol or 'unknown'}"
+        )
+
+    security = str(
+        parsed.get("security")
+        or ("tls" if protocol == "hysteria2" else "none")
+    ).strip().lower()
+    if security == "reality":
+        raise XnetApiError(
+            "لینک REALITY فقط کلید عمومی سمت کاربر را دارد و کلید خصوصی سرور داخل لینک نیست؛ "
+            "برای جلوگیری از ساخت کانفیگ خراب، REALITY باید داخل خود X-NET ساخته شود."
+        )
+
+    try:
+        port = int(port_override) if port_override else int(parsed.get("port") or 443)
+    except (TypeError, ValueError) as exc:
+        raise XnetApiError("پورت لینک معتبر نیست.") from exc
+    if not 1 <= port <= 65535:
+        raise XnetApiError("پورت باید بین 1 تا 65535 باشد.")
+
+    inbounds = await get_inbounds(server)
+    used_ports = {
+        _to_int(row.get("port"), 0)
+        for row in inbounds
+        if isinstance(row, dict) and _to_int(row.get("port"), 0) > 0
+    }
+
+    # Protect panel/subscription ports too. Other system-level conflicts are
+    # still authoritatively checked by X-NET when POST /api/inbounds is called.
+    try:
+        pu = urllib.parse.urlparse(_base_url(server))
+        panel_url_port = pu.port or (443 if pu.scheme == "https" else 80)
+        if panel_url_port:
+            used_ports.add(int(panel_url_port))
+    except Exception:
+        pass
+    try:
+        panel_cfg = await get_panel_config(server)
+        for key in ("port", "subPort"):
+            p = _to_int(panel_cfg.get(key), 0)
+            if p > 0:
+                used_ports.add(p)
+    except Exception:
+        pass
+
+    if port in used_ports:
+        alt = port + 1
+        while alt <= 65535 and alt in used_ports:
+            alt += 1
+        if alt > 65535:
+            alt = 1024
+            while alt < port and alt in used_ports:
+                alt += 1
+        hint = f" مثلاً {alt}" if 1 <= alt <= 65535 and alt not in used_ports else ""
+        raise XnetApiError(
+            f"پورت {port} قبلاً توسط پنل/ساب/اینباند X-NET استفاده شده است؛ "
+            f"یک پورت آزاد انتخاب کنید.{hint}"
+        )
+
+    protocol_name = {
+        "vless": "VLESS",
+        "vmess": "VMess",
+        "trojan": "Trojan",
+        "hysteria2": "Hysteria2",
+        "shadowsocks": "Shadowsocks",
+    }[protocol]
+
+    transport = "TCP"
+    if protocol in {"vless", "vmess", "trojan"}:
+        transport = _canonical_transport(parsed.get("network") or "tcp")
+    elif protocol == "shadowsocks":
+        transport = "TCP"
+
+    compatibility = {}
+    try:
+        compatibility = await get_singbox_compatibility(server)
+    except Exception:
+        # Creation still goes through X-NET's own validation; compatibility is
+        # an early guard, not a reason to make older builds unusable.
+        compatibility = {}
+    entry = _compat_protocol_entry(compatibility, protocol)
+
+    allowed_security = {
+        str(x).strip().lower()
+        for x in (entry.get("security") or [])
+        if str(x).strip()
+    }
+    if allowed_security and security not in allowed_security:
+        raise XnetApiError(
+            f"X-NET برای {protocol_name} امنیت «{security}» را پشتیبانی نمی‌کند."
+        )
+
+    if protocol in {"vless", "vmess", "trojan"}:
+        allowed_transport = {
+            str(x).strip().lower()
+            for x in (entry.get("transports") or [])
+            if str(x).strip()
+        }
+        transport_key = _transport_compat_key(transport)
+        if allowed_transport and transport_key not in allowed_transport:
+            raise XnetApiError(
+                f"X-NET برای {protocol_name} ترنسپورت «{transport}» را پشتیبانی نمی‌کند."
+            )
+
+    final_remark = str(remark or "").strip() or _link_remark(
+        link, protocol_name, port
+    )
+    body: Dict[str, Any] = {
+        "remark": final_remark,
+        "protocol": protocol_name,
+        "port": port,
+        "listeningIp": "0.0.0.0",
+        "transport": transport,
+        "security": "TLS" if security == "tls" else "none",
+        "enabled": True,
+        "sniffingEnabled": True,
+        "sniffDestOverride": ["http", "tls"],
+        "clients": [],
+    }
+
+    if protocol in {"vless", "vmess", "trojan"}:
+        raw_qs = parsed.get("raw_qs")
+        raw_qs = raw_qs if isinstance(raw_qs, dict) else {}
+        path = str(parsed.get("path") or "").strip()
+        if transport == "WS":
+            body["wsPath"] = path or "/ws"
+        elif transport == "gRPC":
+            service_name = str(
+                raw_qs.get("serviceName")
+                or raw_qs.get("service_name")
+                or path.strip("/")
+                or "grpc-service"
+            ).strip()
+            body["grpcServiceName"] = service_name
+        elif transport == "HTTPUpgrade":
+            body["httpUpgradePath"] = path or "/"
+
+        if security == "tls":
+            tls = await _select_local_tls_material(
+                server,
+                inbounds,
+                preferred_sni=str(parsed.get("sni") or ""),
+            )
+            body.update(
+                {
+                    "sni": tls["sni"],
+                    "domainBinding": tls["sni"],
+                    "certFile": tls["certFile"],
+                    "keyFile": tls["keyFile"],
+                    "fingerprint": str(parsed.get("fp") or "chrome").strip() or "chrome",
+                    "alpn": _split_alpn(
+                        parsed.get("alpn"),
+                        default=["http/1.1"] if transport == "HTTPUpgrade" else ["h2", "http/1.1"],
+                    ),
+                }
+            )
+
+    elif protocol == "hysteria2":
+        tls = await _select_local_tls_material(
+            server,
+            inbounds,
+            preferred_sni=str(parsed.get("sni") or ""),
+        )
+        body.update(
+            {
+                "transport": "TCP",
+                "security": "TLS",
+                "sni": tls["sni"],
+                "domainBinding": tls["sni"],
+                "certFile": tls["certFile"],
+                "keyFile": tls["keyFile"],
+                "alpn": _split_alpn(parsed.get("alpn"), default=["h3"]),
+                "hyUnlimited": True,
+            }
+        )
+        raw_qs = parsed.get("raw_qs")
+        raw_qs = raw_qs if isinstance(raw_qs, dict) else {}
+        obfs_password = str(parsed.get("obfs_password") or "").strip()
+        obfs_type = str(parsed.get("obfs") or raw_qs.get("obfs") or "").strip()
+        if obfs_password:
+            body["hy2ObfsType"] = obfs_type or "salamander"
+            body["hy2ObfsPassword"] = obfs_password
+
+    elif protocol == "shadowsocks":
+        body.update(
+            {
+                "transport": "TCP",
+                "security": "none",
+                "ssNetwork": "tcp,udp",
+            }
+        )
+
+    created = await _request_json("POST", "/api/inbounds", server, json=body)
+    if not isinstance(created, dict):
+        created = {}
+
+    inbound_id = str(created.get("id") or "").strip()
+    if inbound_id:
+        result = dict(created)
+        result.setdefault("port", port)
+        result.setdefault("protocol", protocol_name)
+        result.setdefault("remark", final_remark)
+        return result
+
+    # Some builds return a generic success object. Verify by re-reading the
+    # inbounds so the bot never reports success for a missing inbound.
+    refreshed = await get_inbounds(server)
+    for row in refreshed:
+        if (
+            _to_int(row.get("port"), 0) == port
+            and str(row.get("protocol") or "").strip().lower() == protocol
+        ):
+            return dict(row)
+
+    raise XnetApiError(
+        "X-NET پاسخ موفق برگرداند اما اینباند ساخته‌شده در لیست پیدا نشد."
+    )
 
 
 async def test_connect(server: Dict[str, Any]) -> List[Dict[str, Any]]:
