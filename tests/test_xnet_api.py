@@ -601,6 +601,156 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, expected)
         downloader.assert_awaited_once_with(self.server)
 
+    async def test_get_server_stats_uses_real_xnet_windows_and_realtime_rates(self):
+        gib = 1024 ** 3
+        users = [
+            {
+                "uuid": "u-1",
+                "xnet_client_id": "c-1",
+                "_user_list_status": "online",
+            },
+            {
+                "uuid": "u-2",
+                "xnet_client_id": "c-2",
+                "_user_list_status": "offline",
+            },
+        ]
+        metrics = {
+            "cpuUsage": 6.5,
+            "cpuCores": 1,
+            "ramUsage": {"used": 0.52, "total": 3.82},
+            "storageUsage": {"used": 2.22, "total": 37.54},
+            "onlineUsersCount": 1,
+            "singBoxStatus": "running",
+        }
+        traffic = {
+            "totalUpload": 1 * gib,
+            "totalDownload": 2 * gib,
+            "todayUpload": 128 * 1024**2,
+            "todayDownload": 384 * 1024**2,
+            "activeClients": 1,
+        }
+        today_analytics = {
+            "windowHasData": True,
+            "periodUpload": 128 * 1024**2,
+            "periodDownload": 384 * 1024**2,
+            "periodTotal": 512 * 1024**2,
+            "consumers": [
+                {
+                    "clientId": "c-1",
+                    "kind": "vpn",
+                    "periodUpload": 128 * 1024**2,
+                    "periodDownload": 384 * 1024**2,
+                    "periodTotal": 512 * 1024**2,
+                }
+            ],
+        }
+        month_analytics = {
+            "windowHasData": True,
+            "periodUpload": 1 * gib,
+            "periodDownload": 2 * gib,
+            "periodTotal": 3 * gib,
+            "consumers": [
+                {
+                    "clientId": "c-1",
+                    "kind": "vpn",
+                    "periodTotal": 2 * gib,
+                },
+                {
+                    "clientId": "c-2",
+                    "kind": "vpn",
+                    "periodTotal": 1 * gib,
+                },
+                {
+                    "clientId": "ssh:ali",
+                    "kind": "ssh",
+                    "periodTotal": 9 * gib,
+                },
+            ],
+        }
+
+        with patch.object(
+            xnet_api, "list_users", new=AsyncMock(return_value=users)
+        ), patch.object(
+            xnet_api, "get_traffic_summary", new=AsyncMock(return_value=traffic)
+        ), patch.object(
+            xnet_api,
+            "_request_json",
+            new=AsyncMock(return_value=metrics),
+        ), patch.object(
+            xnet_api,
+            "_get_traffic_analytics",
+            new=AsyncMock(side_effect=[today_analytics, month_analytics]),
+        ), patch.object(
+            xnet_api,
+            "_get_realtime_network_mb",
+            new=AsyncMock(return_value=(8.4, 1.2)),
+        ):
+            stats = await xnet_api.get_server_stats(self.server)
+
+        self.assertEqual(stats["users_total"], 2)
+        self.assertEqual(stats["users_online"], 1)
+        self.assertEqual(stats["users_today"], 1)
+        self.assertEqual(stats["users_month"], 2)
+        self.assertAlmostEqual(stats["usage_today_gb"], 0.5)
+        self.assertAlmostEqual(stats["usage_30days_gb"], 3.0)
+        self.assertAlmostEqual(stats["traffic_ul"], 1.0)
+        self.assertAlmostEqual(stats["traffic_dl"], 2.0)
+        self.assertAlmostEqual(stats["now_net_recv_mb"], 8.4)
+        self.assertAlmostEqual(stats["now_net_sent_mb"], 1.2)
+
+    async def test_get_server_stats_current_online_is_included_in_period_counts(self):
+        users = [
+            {
+                "uuid": "u-1",
+                "xnet_client_id": "c-1",
+                "_user_list_status": "online",
+            }
+        ]
+        with patch.object(
+            xnet_api, "list_users", new=AsyncMock(return_value=users)
+        ), patch.object(
+            xnet_api,
+            "get_traffic_summary",
+            new=AsyncMock(return_value={}),
+        ), patch.object(
+            xnet_api,
+            "_request_json",
+            new=AsyncMock(return_value={"onlineUsersCount": 1}),
+        ), patch.object(
+            xnet_api,
+            "_get_traffic_analytics",
+            new=AsyncMock(
+                side_effect=[
+                    {"windowHasData": False, "consumers": []},
+                    {"windowHasData": False, "consumers": []},
+                ]
+            ),
+        ), patch.object(
+            xnet_api,
+            "_get_realtime_network_mb",
+            new=AsyncMock(return_value=(0.0, 0.0)),
+        ):
+            stats = await xnet_api.get_server_stats(self.server)
+
+        self.assertEqual(stats["users_online"], 1)
+        self.assertEqual(stats["users_today"], 1)
+        self.assertEqual(stats["users_month"], 1)
+        self.assertEqual(stats["usage_30days_gb"], 0.0)
+
+    async def test_realtime_network_prefers_metrics_tick_mb_per_second(self):
+        with patch.object(
+            xnet_api,
+            "_request_json",
+            new=AsyncMock(
+                return_value={"networkTraffic": {"up": 1.25, "down": 8.5}}
+            ),
+        ):
+            down, up = await xnet_api._get_realtime_network_mb(self.server)
+
+        self.assertAlmostEqual(down, 8.5)
+        self.assertAlmostEqual(up, 1.25)
+
     async def test_test_connect_requires_ok_ping_and_management_api(self):
         with patch.object(
             xnet_api, "ping", new=AsyncMock(return_value={"status": "ok"})
