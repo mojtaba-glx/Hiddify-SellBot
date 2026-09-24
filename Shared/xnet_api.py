@@ -205,6 +205,52 @@ async def _request_json(
         raise XnetApiError("پاسخ X-NET JSON معتبر نیست.") from exc
 
 
+async def _request_bytes(
+    method: str,
+    path: str,
+    server: Dict[str, Any],
+    *,
+    json: Optional[Any] = None,
+    params: Optional[Dict[str, Any]] = None,
+    auth: bool = True,
+    timeout: float = 60.0,
+) -> Tuple[bytes, Dict[str, str]]:
+    """Authenticated binary request with the same JWT refresh semantics as JSON calls."""
+    url = f"{_base_url(server)}/{path.lstrip('/')}"
+
+    async def _send(token: str = "") -> httpx.Response:
+        headers = {"Accept": "*/*"}
+        if json is not None:
+            headers["Content-Type"] = "application/json"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.request(
+                method.upper(), url, headers=headers, json=json, params=params
+            )
+
+    token = await _login(server) if auth else ""
+    try:
+        response = await _send(token)
+    except httpx.RequestError as exc:
+        raise XnetApiError(f"خطا در اتصال به X-NET: {exc}") from exc
+
+    if auth and response.status_code in {401, 403} and _password(server):
+        _TOKEN_CACHE.pop(_cache_key(server), None)
+        token = await _login(server, force=True)
+        try:
+            response = await _send(token)
+        except httpx.RequestError as exc:
+            raise XnetApiError(f"خطا در اتصال به X-NET: {exc}") from exc
+
+    if response.status_code >= 400:
+        detail = response.text.strip().replace("\n", " ")[:300]
+        raise XnetApiError(
+            f"X-NET API HTTP {response.status_code}: {detail or 'request failed'}"
+        )
+
+    return bytes(response.content or b""), dict(response.headers)
+
 async def _request_text(
     path: str,
     server: Dict[str, Any],
@@ -1314,6 +1360,131 @@ async def get_system_info(server: Dict[str, Any]) -> Dict[str, Any]:
 async def get_panel_config(server: Dict[str, Any]) -> Dict[str, Any]:
     data = await _request_json("GET", "/api/system/panel-config", server)
     return data if isinstance(data, dict) else {}
+
+def _backup_meta_dict(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    for key in ("data", "backup", "result"):
+        nested = value.get(key)
+        if isinstance(nested, dict):
+            return dict(nested)
+    return dict(value)
+
+
+def _backup_rows(value: Any) -> List[Dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(x) for x in value if isinstance(x, dict)]
+    if isinstance(value, dict):
+        for key in ("data", "backups", "items", "result"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                return [dict(x) for x in nested if isinstance(x, dict)]
+    return []
+
+
+def _safe_backup_filename(raw: Any, server: Dict[str, Any]) -> str:
+    name = str(raw or "").strip().replace("\\", "/").split("/")[-1].strip()
+    if name:
+        # Keep X-NET's own extension (.db/.zip/...) because the download route
+        # returns a binary archive whose exact format is panel-version specific.
+        cleaned = "".join(
+            ch if (ch.isalnum() or ch in "._- @()") else "_"
+            for ch in name
+        ).strip(" .")
+        if cleaned:
+            return cleaned
+
+    host = urllib.parse.urlparse(_base_url(server)).hostname or "xnet"
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    return f"xnet-{host}-{ts}.db"
+
+
+async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
+    """Create and download a fresh X-NET backup archive.
+
+    X-NET creates a server-side backup with POST /api/backups and exposes
+    the binary archive through GET /api/backups/{id}/download.
+    """
+    created_raw = await _request_json("POST", "/api/backups", server)
+    meta = _backup_meta_dict(created_raw)
+    backup_id = str(
+        meta.get("id")
+        or meta.get("backupId")
+        or meta.get("backup_id")
+        or ""
+    ).strip()
+
+    # Compatibility fallback for builds that acknowledge creation but do not
+    # return the full object. The newest list entry is the backup just made.
+    if not backup_id:
+        rows = _backup_rows(await _request_json("GET", "/api/backups", server))
+        if rows:
+            rows.sort(
+                key=lambda row: str(
+                    row.get("createdAt")
+                    or row.get("created_at")
+                    or row.get("timestamp")
+                    or ""
+                ),
+                reverse=True,
+            )
+            meta = rows[0]
+            backup_id = str(
+                meta.get("id")
+                or meta.get("backupId")
+                or meta.get("backup_id")
+                or ""
+            ).strip()
+
+    if not backup_id:
+        raise XnetApiError("X-NET بعد از ساخت بکاپ شناسه فایل برنگرداند.")
+
+    quoted_id = urllib.parse.quote(backup_id, safe="")
+    download_path = f"/api/backups/{quoted_id}/download"
+    body, headers = await _request_bytes(
+        "GET",
+        download_path,
+        server,
+        timeout=120.0,
+    )
+    if not body:
+        raise XnetApiError("فایل بکاپ X-NET خالی دریافت شد.")
+
+    filename_raw = (
+        meta.get("filename")
+        or meta.get("fileName")
+        or meta.get("name")
+        or ""
+    )
+    if not filename_raw:
+        disposition = str(
+            headers.get("content-disposition")
+            or headers.get("Content-Disposition")
+            or ""
+        )
+        if "filename=" in disposition.lower():
+            filename_raw = disposition.split("filename=", 1)[-1].split(";", 1)[0]
+            filename_raw = str(filename_raw).strip().strip('"').strip("'")
+
+    filename = _safe_backup_filename(filename_raw, server)
+    result = {
+        "filename": filename,
+        "content": body,
+        "source_url": f"{_base_url(server)}{download_path}",
+    }
+
+    # Cleanup is best-effort: after bytes are downloaded, a delete failure
+    # must not discard a valid Telegram/full-backup artifact.
+    try:
+        await _request_json(
+            "DELETE",
+            f"/api/backups/{quoted_id}",
+            server,
+        )
+    except Exception:
+        pass
+
+    return result
 
 
 def _public_origin(server: Dict[str, Any]) -> str:
