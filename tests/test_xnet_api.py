@@ -630,21 +630,6 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
             "todayDownload": 384 * 1024**2,
             "activeClients": 1,
         }
-        today_analytics = {
-            "windowHasData": True,
-            "periodUpload": 128 * 1024**2,
-            "periodDownload": 384 * 1024**2,
-            "periodTotal": 512 * 1024**2,
-            "consumers": [
-                {
-                    "clientId": "c-1",
-                    "kind": "vpn",
-                    "periodUpload": 128 * 1024**2,
-                    "periodDownload": 384 * 1024**2,
-                    "periodTotal": 512 * 1024**2,
-                }
-            ],
-        }
         month_analytics = {
             "windowHasData": True,
             "periodUpload": 1 * gib,
@@ -680,7 +665,7 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             xnet_api,
             "_get_traffic_analytics",
-            new=AsyncMock(side_effect=[today_analytics, month_analytics]),
+            new=AsyncMock(return_value=month_analytics),
         ), patch.object(
             xnet_api,
             "_get_realtime_network_mb",
@@ -720,12 +705,7 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             xnet_api,
             "_get_traffic_analytics",
-            new=AsyncMock(
-                side_effect=[
-                    {"windowHasData": False, "consumers": []},
-                    {"windowHasData": False, "consumers": []},
-                ]
-            ),
+            new=AsyncMock(return_value={"windowHasData": False, "consumers": []}),
         ), patch.object(
             xnet_api,
             "_get_realtime_network_mb",
