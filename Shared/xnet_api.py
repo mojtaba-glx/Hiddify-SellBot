@@ -823,11 +823,25 @@ async def get_panel_config(server: Dict[str, Any]) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _public_origin(server: Dict[str, Any]) -> str:
+    """Public origin used for X-NET subscription URLs."""
+    custom = str(
+        (server or {}).get("xnet_sub_domain")
+        or (server or {}).get("xnet_sub_host")
+        or ""
+    ).strip()
+    if custom:
+        if "://" not in custom:
+            custom = "https://" + custom
+        return custom.rstrip("/")
+    return _base_url(server)
+
+
 def get_subscription_url(server: Dict[str, Any], user_uuid: str) -> str:
     wanted = str(user_uuid or "").strip()
     if not wanted:
         raise XnetApiError("UUID کاربر X-NET خالی است.")
-    return f"{_base_url(server)}/api/v1/sub/{wanted}"
+    return f"{_public_origin(server)}/api/v1/sub/{wanted}"
 
 
 async def get_subscription_body(
