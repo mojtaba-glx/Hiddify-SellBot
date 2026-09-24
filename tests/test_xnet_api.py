@@ -89,6 +89,111 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["extraInboundIds"], ["in-2"])
         self.assertEqual(body["trafficLimitBytes"], 50 * 1024**3)
 
+    async def test_sync_users_to_inbounds_adds_new_target_without_recreating_user(self):
+        server = dict(self.server)
+        server["xnet_inbound_id"] = "0"
+        uid = "11111111-2222-4333-8444-555555555555"
+        client = {
+            "id": "c-1",
+            "uuid": uid,
+            "username": "demo",
+            "status": "active",
+            "trafficLimitBytes": 10 * 1024**3,
+            "trafficUsedBytes": 2 * 1024**3,
+            "expireDate": "2026-12-31T00:00:00Z",
+        }
+        initial = [
+            {
+                "id": "in-1",
+                "enabled": True,
+                "protocol": "VLESS",
+                "clients": [dict(client)],
+            },
+            {
+                "id": "in-2",
+                "enabled": True,
+                "protocol": "Hysteria2",
+                "clients": [],
+            },
+        ]
+        fresh = [
+            {
+                "id": "in-1",
+                "enabled": True,
+                "protocol": "VLESS",
+                "clients": [dict(client)],
+            },
+            {
+                "id": "in-2",
+                "enabled": True,
+                "protocol": "Hysteria2",
+                "clients": [dict(client)],
+            },
+        ]
+        get_inbounds = AsyncMock(side_effect=[initial, fresh])
+        request_mock = AsyncMock(return_value={"success": True})
+
+        with patch.object(
+            xnet_api, "get_inbounds", new=get_inbounds
+        ), patch.object(
+            xnet_api, "_request_json", new=request_mock
+        ):
+            result = await xnet_api.sync_users_to_inbounds(server)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["total_users"], 1)
+        self.assertEqual(result["target_inbounds"], 2)
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["skipped"], 0)
+        self.assertEqual(result["errors"], [])
+
+        args = request_mock.await_args
+        self.assertEqual(args.args[0], "PUT")
+        self.assertEqual(args.args[1], "/api/inbounds/in-1/clients/c-1")
+        body = args.kwargs["json"]
+        self.assertEqual(body["uuid"], uid)
+        self.assertEqual(body["username"], "demo")
+        self.assertEqual(body["trafficLimitBytes"], 10 * 1024**3)
+        self.assertEqual(body["expireDate"], "2026-12-31T00:00:00Z")
+        self.assertEqual(body["extraInboundIds"], ["in-2"])
+
+    async def test_sync_users_to_inbounds_is_idempotent_when_already_synced(self):
+        server = dict(self.server)
+        server["xnet_inbound_id"] = "0"
+        uid = "11111111-2222-4333-8444-555555555555"
+        shared = {
+            "id": "c-1",
+            "uuid": uid,
+            "username": "demo",
+            "status": "active",
+        }
+        inbounds = [
+            {
+                "id": "in-1",
+                "enabled": True,
+                "protocol": "VLESS",
+                "clients": [dict(shared)],
+            },
+            {
+                "id": "in-2",
+                "enabled": True,
+                "protocol": "Hysteria2",
+                "clients": [dict(shared)],
+            },
+        ]
+        request_mock = AsyncMock(return_value={"success": True})
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api, "_request_json", new=request_mock
+        ):
+            result = await xnet_api.sync_users_to_inbounds(server)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["skipped"], 1)
+        request_mock.assert_not_awaited()
+
     async def test_patch_user_can_rotate_uuid(self):
         old_uuid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
         new_uuid = "11111111-2222-4333-8444-555555555555"
