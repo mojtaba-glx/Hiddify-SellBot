@@ -3239,13 +3239,18 @@ def _collect_all_direct_configs_for_service(service: dict) -> list[str]:
         pass
     for base_url in _get_service_node_base_urls(service):
         seen_lines: set[str] = set()
-        if _is_xui_service:
+        is_native = _is_xui_service or _is_native_subscription_url(base_url)
+        if is_native:
             suffixes = ("", "?base64=1")
         else:
             suffixes = ("all.txt", "all.txt?base64=1")
         for suffix in suffixes:
-            if _is_xui_service:
-                fetch_url = base_url if not suffix else f"{base_url}{suffix}"
+            if is_native:
+                if not suffix:
+                    fetch_url = base_url
+                else:
+                    sep = "&" if "?" in base_url else "?"
+                    fetch_url = f"{base_url}{sep}{suffix.lstrip('?')}"
             else:
                 fetch_url = f"{base_url}/{suffix}"
             lines = _fetch_remote_lines(fetch_url)
@@ -3264,26 +3269,87 @@ def _collect_all_direct_configs_for_service(service: dict) -> list[str]:
 
 async def _collect_all_direct_configs_from_api_for_service(service: dict) -> list[str]:
     """
-    Fallback source when subscription endpoints (all.txt) are blocked (e.g. HTTP 400/403).
+    Fallback source when the public subscription endpoint is unavailable.
+    Keeps every real config scheme returned by the panel (including X-NET
+    Hysteria2/Shadowsocks/AnyTLS), not only legacy VLESS/VMess/Trojan.
     """
     out: list[str] = []
     seen: set[str] = set()
-    try:
-        mapped = await _collect_direct_configs_map_from_api(
-            service,
-            protocols=("vless", "vmess", "trojan"),
-        )
-    except Exception as e:
-        logger.warning("API fallback for direct configs failed: %s", e)
-        return out
+    service_id = int(service.get("id") or 0)
+    targets: list[tuple[dict, str, str]] = []
 
-    for proto in ("vless", "vmess", "trojan"):
-        for link in (mapped.get(proto) or []):
-            raw = _sanitize_config_text(link)
-            if not raw or raw in seen:
-                continue
-            seen.add(raw)
-            out.append(raw)
+    mappings = userbot_db.get_service_nodes(service_id) if service_id > 0 else []
+    for m in mappings or []:
+        try:
+            sid = int((m or {}).get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        uuid = str((m or {}).get("panel_user_uuid") or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+        srv = database.get_server_by_id(sid)
+        if not srv:
+            continue
+        targets.append(
+            (srv, uuid, str((m or {}).get("marzban_username") or "").strip())
+        )
+
+    if not targets:
+        try:
+            sid = int(service.get("server_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        srv = database.get_server_by_id(sid) if sid > 0 else None
+        uuid = _extract_uuid_from_comment(service.get("comment") or "")
+        if srv and uuid:
+            targets.append((srv, uuid, ""))
+
+    for srv, uuid, marzban_un in targets:
+        try:
+            configs = await multi_panel.get_user_configs(
+                srv,
+                uuid,
+                marzban_username=marzban_un,
+            )
+        except Exception as e:
+            logger.warning(
+                "API fallback for direct configs failed server=%s uuid=%s: %s",
+                srv.get("id"),
+                uuid[:8],
+                e,
+            )
+            continue
+
+        for item in configs or []:
+            candidates: list[Any] = []
+            if isinstance(item, dict):
+                candidates.extend(
+                    [
+                        item.get("link"),
+                        item.get("url"),
+                        item.get("uri"),
+                        item.get("config"),
+                    ]
+                )
+                candidates.extend(list(_iter_text_values(item)))
+            else:
+                candidates.extend(list(_iter_text_values(item)))
+
+            for candidate in candidates:
+                raw = _extract_config_link_from_line(candidate)
+                if not raw:
+                    continue
+                low = raw.lower()
+                if (
+                    "status.hiddify-sellbot.invalid" in low
+                    or "fake_ip_for_sub_link" in low
+                ):
+                    continue
+                if raw in seen:
+                    continue
+                seen.add(raw)
+                out.append(raw)
+
     return out
 
 
@@ -3312,18 +3378,25 @@ async def _send_service_direct_configs_shell(
         "yes",
         "on",
     }
-    # X-UI: subscription fetch via base_url may need special handling; always allow API fallback
+    # X-UI/X-NET have native subscription APIs; always permit panel API fallback.
     if not links:
         try:
             from Shared import xui_api as _xui_fallback_check
+            from Shared import xnet_api as _xnet_fallback_check
             sid_tmp = int(service.get("server_id") or 0)
             srv_tmp = database.get_server_by_id(sid_tmp) if sid_tmp else None
-            if srv_tmp and _xui_fallback_check.is_xui_server(srv_tmp):
+            if srv_tmp and (
+                _xui_fallback_check.is_xui_server(srv_tmp)
+                or _xnet_fallback_check.is_xnet_server(srv_tmp)
+            ):
                 allow_api_fallback = True
             else:
                 for m in (userbot_db.get_service_nodes(int(service.get("id") or 0)) if service.get("id") else []):
                     s = database.get_server_by_id(int(m.get("server_id") or 0))
-                    if s and _xui_fallback_check.is_xui_server(s):
+                    if s and (
+                        _xui_fallback_check.is_xui_server(s)
+                        or _xnet_fallback_check.is_xnet_server(s)
+                    ):
                         allow_api_fallback = True
                         break
         except Exception:
