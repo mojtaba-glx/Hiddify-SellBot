@@ -1138,6 +1138,12 @@ class DirectServiceSchemaMigrationTests(unittest.TestCase):
 class TransactionLinkTests(_Base):
     """مورد ۶: اتصال قطعی تراکنش خرید اولیه به سرویس + عدم کسر دوباره."""
 
+    def setUp(self):
+        super().setUp()
+        # 10GB × 500 تومان = 5,000 تومان؛ تعرفه عمومی ادمین باید قبل از
+        # فعال‌شدن خرید نماینده ثبت شده باشد.
+        agent_db.set_wholesale_pricing(self.agent1, 500, 0)
+
     def test_attach_links_only_unlinked_and_own_agent(self):
         tx = agent_db.add_transaction(self.agent1, 100, "purchase", "خرید A", service_id=0)
         self.assertTrue(agent_db.attach_transaction_to_service(tx, self.agent1, self.svc_active12))
@@ -1276,6 +1282,57 @@ class TransactionLinkTests(_Base):
         # هیچ سرویسی ساخته نشده و تراکنش purchase به سرویسی دروغ متصل نشده
         txs, _total = agent_db.get_transactions(self.agent1, page=1, page_size=20)
         self.assertFalse(any(t["service_id"] != 0 for t in txs))
+
+    def test_unconfigured_tariff_blocks_creation_before_panel_call(self):
+        from AgentBot.services import subscription_service as subs
+
+        locked_agent = agent_db.upsert_agent(8811, username="locked")
+        agent_db.charge_wallet(locked_agent, 100000)
+        server = {"id": 1, "title": "srv", "panel_type": "xnet"}
+        create_mock = AsyncMock(
+            return_value=(
+                {"uuid": "should-not-exist"},
+                [{
+                    "server_id": 1,
+                    "server_title": "srv",
+                    "panel_user_uuid": "should-not-exist",
+                    "marzban_username": "",
+                }],
+            )
+        )
+
+        with patch.object(subs, "get_server_by_id", return_value=server), \
+             patch.object(subs, "_get_cluster_servers", return_value=[server]), \
+             patch.object(subs, "_create_user_on_cluster", new=create_mock):
+            with self.assertRaises(subs.WholesalePricingNotConfiguredError):
+                _run(subs.create_subscription(
+                    locked_agent,
+                    0,
+                    1,
+                    {"days": 30, "gb": 1, "wholesale_price": 0, "sale_price": 0},
+                    "نباید ساخته شود",
+                    operation_key="locked-xnet-create",
+                    raise_on_error=True,
+                ))
+
+        self.assertEqual(create_mock.await_count, 0)
+        self.assertEqual(agent_db.get_wallet_balance(locked_agent), 100000)
+
+    def test_tariff_configuration_requires_admin_rates_not_legacy_plan(self):
+        legacy_agent = agent_db.upsert_agent(8822, username="legacy_only")
+        agent_db.set_agent_plan(
+            legacy_agent,
+            server_id=1,
+            days=30,
+            gb=1,
+            wholesale_price=10000,
+            sale_price=12000,
+            plan_title="legacy",
+        )
+        self.assertFalse(agent_db.is_wholesale_pricing_configured(legacy_agent))
+
+        agent_db.set_wholesale_pricing(legacy_agent, 1000, 5000)
+        self.assertTrue(agent_db.is_wholesale_pricing_configured(legacy_agent))
 
     def test_general_wallet_charge_not_in_service_history(self):
         agent_db.add_transaction(self.agent1, 900, "charge", "شارژ کلی", service_id=0)
