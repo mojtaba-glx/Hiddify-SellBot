@@ -292,7 +292,7 @@ async def _send_expired_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if page < 1:
         page = 1
 
-    items, online_cnt, offline_cnt, expired_cnt = await _fetch_services_with_status(agent_id)
+    items, online_cnt, offline_cnt, inactive_cnt, expired_cnt = await _fetch_services_with_status(agent_id)
     expired_items = [(s, st) for s, st in items if st == "expired"]
     total = len(expired_items)
 
@@ -457,6 +457,8 @@ async def _panel_user_status(svc) -> Optional[str]:
     except Exception:
         is_active = True
     if not is_active:
+        if str(u.get("_source") or "").strip().lower() == "xnet":
+            return "inactive"
         return "expired"
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     expiry_dt = _panel_expiry_dt(u)
@@ -472,11 +474,19 @@ async def _panel_user_status(svc) -> Optional[str]:
             return "expired"
     except Exception:
         pass
-    # آنلاین؟
+    # آنلاین؟ X-NET وضعیت لحظه‌ای را صریحاً از API برمی‌گرداند.
+    forced = str(u.get("_user_list_status") or "").strip().lower()
+    if forced == "online":
+        return "online"
+    if str(u.get("_source") or "").strip().lower() == "xnet" and forced == "offline":
+        return "offline"
+
     lo = _panel_dt(u.get("last_online"))
     if lo:
         try:
-            if abs((now_utc - lo).total_seconds()) <= 15 * 60:
+            source = str(u.get("_source") or "").strip().lower()
+            window = 90 if source in {"xui", "xnet"} else 15 * 60
+            if abs((now_utc - lo).total_seconds()) <= window:
                 return "online"
         except Exception:
             pass
@@ -497,8 +507,9 @@ async def _fetch_services_with_status(agent_id: int):
     items = [(s, st) for s, st in zip(all_services, statuses) if st is not None]
     online = sum(1 for _, st in items if st == "online")
     offline = sum(1 for _, st in items if st == "offline")
+    inactive = sum(1 for _, st in items if st == "inactive")
     expired = sum(1 for _, st in items if st == "expired")
-    return items, online, offline, expired
+    return items, online, offline, inactive, expired
 
 
 async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1) -> None:
@@ -519,7 +530,7 @@ async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     from AgentBot.keyboards import _ikb, BTN_BACK
     from Shared.tg_button_styles import inline_button as IButton
 
-    STATUS_ICON = {"online": "🔵", "offline": "🟡", "expired": "🔴"}
+    STATUS_ICON = {"online": "🔵", "offline": "🟡", "inactive": "⚫", "expired": "🔴"}
     rows = []
     row = []
     for s, st in page_items:
@@ -550,6 +561,7 @@ async def _send_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         f"👥 تعداد کاربران: {total}\n"
         f"🔵 آنلاین: {online_cnt}\n"
         f"🟡 آفلاین: {offline_cnt}\n"
+        f"⚫ غیرفعال: {inactive_cnt}\n"
         f"🔴 منقضی شده: {expired_cnt}"
     )
     if not items:
