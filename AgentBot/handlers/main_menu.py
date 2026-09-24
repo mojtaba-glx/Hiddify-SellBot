@@ -1,6 +1,6 @@
 import logging
 
-from telegram import Update
+from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 
 from Shared import agent_db
@@ -16,6 +16,47 @@ from AgentBot.handlers import (
 
 logger = logging.getLogger(__name__)
 
+_TARIFF_REQUIRED_TEXT = (
+    "❌ تعرفه خرید برای نمایندگی شما توسط ادمین تنظیم نشده است.\n\n"
+    "لطفاً برای فعال‌سازی خرید و تمدید با پشتیبانی/ادمین تماس بگیرید."
+)
+
+
+def _tariff_ready(agent_id: int) -> bool:
+    try:
+        return bool(agent_db.is_wholesale_pricing_configured(int(agent_id or 0)))
+    except Exception:
+        logger.exception("Failed to check wholesale tariff readiness for agent=%s", agent_id)
+        return False
+
+
+async def _send_tariff_required_message(update: Update) -> None:
+    clear_markup = ReplyKeyboardRemove()
+    if update.callback_query:
+        try:
+            await update.callback_query.answer(
+                "تعرفه نمایندگی توسط ادمین تنظیم نشده است.",
+                show_alert=True,
+            )
+        except Exception:
+            pass
+        try:
+            await update.callback_query.message.reply_text(
+                _TARIFF_REQUIRED_TEXT,
+                reply_markup=clear_markup,
+            )
+        except Exception:
+            pass
+        return
+    if update.message:
+        try:
+            await update.message.reply_text(
+                _TARIFF_REQUIRED_TEXT,
+                reply_markup=clear_markup,
+            )
+        except Exception:
+            pass
+
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent = await authenticate(update, context)
@@ -24,6 +65,11 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "\u26a0\ufe0f \u0634\u0645\u0627 \u0628\u0647 \u0639\u0646\u0648\u0627\u0646 \u0646\u0645\u0627\u06cc\u0646\u062f\u0647 \u062b\u0628\u062a \u0646\u0634\u062f\u0647\u200c\u0627\u06cc\u062f.\n"
             "\u0628\u0627 \u0627\u062f\u0645\u06cc\u0646 \u062f\u0631 \u0627\u0631\u062a\u0628\u0627\u0637 \u0628\u0627\u0634\u06cc\u062f."
         )
+        return
+
+    if not _tariff_ready(int(agent.get("id") or 0)):
+        clear_state(context)
+        await _send_tariff_required_message(update)
         return
 
     # دپ‌لینک اسکرین‌شات تیکت: /start tshotu_... (باید بعد از authenticate باشد تا agent_id ست شود)
@@ -73,6 +119,10 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
             pass
         return
     agent_id = agent["id"]
+    if not _tariff_ready(agent_id):
+        clear_state(context)
+        await _send_tariff_required_message(update)
+        return
 
     if action == "menu" or action == "":
         clear_state(context)
@@ -160,6 +210,11 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         except Exception:
             pass
         return
+    if not _tariff_ready(int(agent.get("id") or 0)):
+        clear_state(context)
+        await _send_tariff_required_message(update)
+        return
+
     text = (update.message.text or update.message.caption or "").strip()
     from AgentBot.keyboards import (
         BTN_SUBSCRIPTIONS, BTN_WALLET, BTN_PLANS, BTN_CUSTOMER_BOT,
