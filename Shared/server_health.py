@@ -34,6 +34,8 @@ _state: Dict[int, Dict[str, Any]] = {}
 
 
 def _panel_label(server: Dict[str, Any]) -> str:
+    if hiddify_api._is_xnet_server(server):
+        return "X-NET"
     if hiddify_api._is_xui_server(server):
         return "X-UI"
     return "Hiddify"
@@ -41,6 +43,11 @@ def _panel_label(server: Dict[str, Any]) -> str:
 
 async def _probe_server(server: Dict[str, Any]) -> None:
     """Perform an uncached panel probe suitable for outage detection."""
+    if hiddify_api._is_xnet_server(server):
+        from Shared import xnet_api
+
+        await xnet_api.test_connect(server)
+        return
     if hiddify_api._is_xui_server(server):
         # X-UI list_users may be served from its short-lived inbounds/clients
         # cache.  test_connect forces a live API request in both adapters.
