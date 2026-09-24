@@ -19,7 +19,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from Shared import database, hiddify_api, node_ops, plans_storage
+from Shared import database, hiddify_api, node_ops, plans_storage, xnet_api
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import admin_main_keyboard, cancel_keyboard
 
@@ -39,6 +39,9 @@ NODES_STATE_ADD_XUI_PASSWORD = "nodes_add_xui_password"
 NODES_STATE_ADD_XUI_TOKEN = "nodes_add_xui_token"
 NODES_STATE_ADD_XUI_SUB_DOMAIN = "nodes_add_xui_sub_domain"
 NODES_STATE_ADD_XUI_INBOUND = "nodes_add_xui_inbound"
+NODES_STATE_ADD_XNET_USERNAME = "nodes_add_xnet_username"
+NODES_STATE_ADD_XNET_PASSWORD = "nodes_add_xnet_password"
+NODES_STATE_ADD_XNET_INBOUND = "nodes_add_xnet_inbound"
 NODES_STATE_AUTO_TITLE = "nodes_auto_title"
 NODES_STATE_AUTO_PANEL = "nodes_auto_panel"
 NODES_STATE_AUTO_ADMIN_PROXY = "nodes_auto_admin_proxy"
@@ -207,9 +210,13 @@ def _build_node_edit_text(
             users_count = len((child or {}).get("users") or [])
     plans_count = _get_node_plans_count(server_id)
     priority = int((child or {}).get("priority") or 0)
-    is_xui_child = str((child or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+    child_panel_type = str((child or {}).get("panel_type") or "").strip().lower()
+    is_xui_child = child_panel_type in {"xui", "x-ui"}
+    is_xnet_child = child_panel_type in {"xnet", "x-net"}
     if is_xui_child:
-        version_text = "x-ui"
+        version_text = "X-UI"
+    elif is_xnet_child:
+        version_text = "X-NET"
     else:
         version_text = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,12").strip()
 
@@ -261,9 +268,12 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
         _, node, _ = _find_node(server_id, node_id)
         target_sid = int((node or {}).get("target_server_id") or 0)
         child = database.get_server_by_id(target_sid) if target_sid else None
-        is_xui = str((child or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+        panel_type = str((child or {}).get("panel_type") or "").strip().lower()
+        is_xui = panel_type in {"xui", "x-ui"}
+        is_xnet = panel_type in {"xnet", "x-net"}
     except Exception:
         is_xui = False
+        is_xnet = False
         target_sid = 0
     if is_xui:
         return InlineKeyboardMarkup(
@@ -278,6 +288,19 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
                 [InlineKeyboardButton("🧩 ویرایش اینباند", callback_data=f"seredit:{target_sid}:xui_inbound")],
                 [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{target_sid}:create_inbound_from_link")],
                 [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{target_sid}:sync_inbounds")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
+            ]
+        )
+    if is_xnet:
+        return InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("👤 لیست کاربران نود", callback_data=f"nodeact:{server_id}:{node_id}:users")],
+                [InlineKeyboardButton("🛡️ عملیات کاربری نود", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")],
+                [InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"nodeedit:{server_id}:{node_id}:title")],
+                [InlineKeyboardButton("🌐 ویرایش آدرس پنل", callback_data=f"seredit:{target_sid}:panel_url")],
+                [InlineKeyboardButton("👤 ویرایش نام کاربری X-NET", callback_data=f"seredit:{target_sid}:xnet_username")],
+                [InlineKeyboardButton("🔑 ویرایش رمز X-NET", callback_data=f"seredit:{target_sid}:xnet_password")],
+                [InlineKeyboardButton("🧩 ویرایش Inbound X-NET", callback_data=f"seredit:{target_sid}:xnet_inbound")],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data=f"nodes:{server_id}:back")],
             ]
         )
@@ -645,11 +668,19 @@ async def handle_add_node_flow(
         new_node["title"] = text
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_PANEL
-        is_xui = str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+        panel_type = str(new_node.get("panel_type") or "").strip().lower()
+        is_xui = panel_type in {"xui", "x-ui"}
+        is_xnet = panel_type in {"xnet", "x-net"}
         if is_xui:
             await message.reply_text(
                 "🌐 آدرس پنل نود را وارد کنید:\nمثال: https://node.example.com/E6xNPh2XZF5A6UO\n"
                 "اگر پورت غیر استاندارد است: https://node.example.com:2056/E6xNPh2XZF5A6UO",
+                reply_markup=cancel_keyboard(),
+            )
+        elif is_xnet:
+            await message.reply_text(
+                "🌐 آدرس اصلی پنل X-NET نود را وارد کنید:\n"
+                "مثال: http://1.2.3.4:8080 یا https://xnet-node.example.com",
                 reply_markup=cancel_keyboard(),
             )
         else:
@@ -676,11 +707,17 @@ async def handle_add_node_flow(
             return
         new_node["panel_url"] = panel_url.rstrip("/")
         context.user_data["new_node"] = new_node
-        # شاخه X-UI vs هیدیفای
-        if str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}:
+        panel_type = str(new_node.get("panel_type") or "").strip().lower()
+        if panel_type in {"xui", "x-ui"}:
             context.user_data["state"] = NODES_STATE_ADD_XUI_USERNAME
             await message.reply_text(
                 "👤 لطفاً «نام کاربری» پنل X-UI را وارد کنید:",
+                reply_markup=cancel_keyboard(),
+            )
+        elif panel_type in {"xnet", "x-net"}:
+            context.user_data["state"] = NODES_STATE_ADD_XNET_USERNAME
+            await message.reply_text(
+                "👤 نام کاربری ادمین X-NET نود را وارد کنید (معمولاً admin):",
                 reply_markup=cancel_keyboard(),
             )
         else:
@@ -786,6 +823,67 @@ async def handle_add_node_flow(
         )
         return
 
+    if state == NODES_STATE_ADD_XNET_USERNAME:
+        new_node["xnet_username"] = text.strip() or "admin"
+        context.user_data["new_node"] = new_node
+        context.user_data["state"] = NODES_STATE_ADD_XNET_PASSWORD
+        await message.reply_text(
+            "🔑 رمز ادمین X-NET نود را وارد کنید:",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == NODES_STATE_ADD_XNET_PASSWORD:
+        new_node["xnet_password"] = text
+        context.user_data["new_node"] = new_node
+        try:
+            inbounds = await xnet_api.get_inbounds(new_node)
+            rows = []
+            for ib in (inbounds or [])[:20]:
+                iid = str(ib.get("id") or "").strip()
+                if not iid:
+                    continue
+                rows.append(
+                    f"{'✅' if bool(ib.get('enabled', True)) else '⛔'} {iid} | "
+                    f"{str(ib.get('protocol') or '-')} | "
+                    f"{str(ib.get('remark') or ib.get('name') or '-')}"
+                )
+            inbound_text = "\n".join(rows) if rows else "Inboundی پیدا نشد."
+        except Exception as exc:
+            await message.reply_text(
+                "❌ ورود به X-NET نود یا دریافت Inboundها ناموفق بود.\n"
+                f"{_short_error(exc)}",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        context.user_data["state"] = NODES_STATE_ADD_XNET_INBOUND
+        await message.reply_text(
+            "🧩 Inboundهای X-NET نود:\n\n"
+            f"{inbound_text}\n\n"
+            "شناسه Inbound فروش را بفرستید.\n"
+            "skip = اولین فعال | 0 = همه فعال | چند شناسه با کاما",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == NODES_STATE_ADD_XNET_INBOUND:
+        raw = text.strip()
+        if raw not in {"skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            normalized = raw.replace("،", ",").replace(" ", ",")
+            parts = [p.strip() for p in normalized.split(",") if p.strip()]
+            if parts == ["0"]:
+                new_node["xnet_inbound_id"] = "0"
+            elif parts:
+                new_node["xnet_inbound_id"] = ",".join(parts)
+        context.user_data["new_node"] = new_node
+        context.user_data["state"] = NODES_STATE_ADD_LIMIT
+        await message.reply_text(
+            "📊 محدودیت تعداد کاربران نود را وارد کنید (عدد):",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
     if state == NODES_STATE_ADD_ADMIN_PROXY:
         val = text.strip().strip("/")
         if not val:
@@ -865,7 +963,9 @@ async def handle_add_node_flow(
         domain = str(new_node.get("domain") or "").strip()
         host = urlparse(panel_url).hostname or panel_url
 
-        is_xui_node = str(new_node.get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+        panel_type = str(new_node.get("panel_type") or "").strip().lower()
+        is_xui_node = panel_type in {"xui", "x-ui"}
+        is_xnet_node = panel_type in {"xnet", "x-net"}
         if is_xui_node:
             new_server_payload = {
                 "title": title,
@@ -883,6 +983,24 @@ async def handle_add_node_flow(
                 "users": [],
                 "plans": [],
                 "domains": ([{"id": 1, "title": domain, "domain": domain}] if domain else []),
+                "nodes": [],
+                "is_node": True,
+                "parent_server_id": int(server_id),
+            }
+        elif is_xnet_node:
+            new_server_payload = {
+                "title": title,
+                "panel_url": panel_url,
+                "panel_type": "xnet",
+                "xnet_username": str(new_node.get("xnet_username") or "admin").strip(),
+                "xnet_password": str(new_node.get("xnet_password") or ""),
+                "xnet_inbound_id": str(new_node.get("xnet_inbound_id") or "").strip(),
+                "users_limit": int(users_limit),
+                "priority": 0,
+                "version": 1,
+                "users": [],
+                "plans": [],
+                "domains": [],
                 "nodes": [],
                 "is_node": True,
                 "parent_server_id": int(server_id),
@@ -912,8 +1030,9 @@ async def handle_add_node_flow(
             await message.reply_text("⏳ در حال تست اتصال پنل نود...")
             if is_xui_node:
                 from Shared import xui_api
-
                 await xui_api.test_connect(new_server_payload)
+            elif is_xnet_node:
+                await xnet_api.test_connect(new_server_payload)
             else:
                 await hiddify_api.list_users(new_server_payload)
         except Exception as e:
@@ -1577,6 +1696,9 @@ async def handle_nodes_inline_callback(
                             InlineKeyboardButton("🔵 X-UI علیرضا (alireza0)", callback_data=f"nodes:{server_id}:add_type:xui_alireza"),
                             InlineKeyboardButton("🟢 X-UI سنایی (3x-ui)", callback_data=f"nodes:{server_id}:add_type:xui_sanaei"),
                         ],
+                        [
+                            InlineKeyboardButton("🟣 X-NET (Sing-box)", callback_data=f"nodes:{server_id}:add_type:xnet"),
+                        ],
                         [InlineKeyboardButton("🔙بازگشت", callback_data=f"nodes:{server_id}:back")],
                     ]
                 ),
@@ -1587,7 +1709,7 @@ async def handle_nodes_inline_callback(
             ptype = action.split(":", 1)[1]
             if ptype in {"xui_alireza", "xui_sanaei"}:
                 ptype = "xui"
-            if ptype not in {"hiddify", "xui"}:
+            if ptype not in {"hiddify", "xui", "xnet"}:
                 await query.answer("نوع پنل نامعتبر است.")
                 return
             new_node = context.user_data.get("new_node") or {}
