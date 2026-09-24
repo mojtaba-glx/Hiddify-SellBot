@@ -3428,12 +3428,15 @@ def build_user_ops_keyboard(server_id: int) -> InlineKeyboardMarkup:
 
 
 def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
-    # برای X-UI دکمه ساخت اینباند از لینک را اضافه کن
+    # ساخت Inbound از لینک برای X-UI و X-NET از همین منو در دسترس است.
     try:
         srv = database.get_server_by_id(server_id)
-        is_xui = str((srv or {}).get("panel_type") or "").strip().lower() in {"xui", "x-ui"}
+        panel_type = str((srv or {}).get("panel_type") or "").strip().lower()
+        is_xui = panel_type in {"xui", "x-ui"}
+        is_xnet = panel_type in {"xnet", "x-net"}
     except Exception:
         is_xui = False
+        is_xnet = False
     keyboard = [
         [InlineKeyboardButton("👤لیست کاربران", callback_data=f"server:{server_id}:users")],
         [InlineKeyboardButton("🛡️عملیات کاربری", callback_data=f"server:{server_id}:user_ops")],
@@ -3445,8 +3448,9 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔄همگام سازی نودها", callback_data=f"server:{server_id}:sync_nodes")],
         [InlineKeyboardButton("❄️ کاربران یخ‌زده این لوکیشن", callback_data=f"server:{server_id}:frozen:1")],
     ]
-    if is_xui:
+    if is_xui or is_xnet:
         keyboard.insert(4, [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:create_inbound_from_link")])
+    if is_xui:
         keyboard.insert(5, [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{server_id}:sync_inbounds")])
     keyboard.append([InlineKeyboardButton("↩️بازگشت", callback_data="servers:list_back")])
     return InlineKeyboardMarkup(keyboard)
@@ -6747,14 +6751,18 @@ async def handle_xui_create_inbound_from_link(update: Update, context: ContextTy
             link = text.strip()
     if not link:
         await message.reply_text(
-            "❌ لینک نامعتبر است. لطفاً یک لینک vless/vmess/hysteria2/trojan بفرستید.",
+            "❌ لینک نامعتبر است. لطفاً یک لینک vless/vmess/hysteria2/trojan/ss بفرستید.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]),
         )
         return
     try:
-        from Shared import xui_api
+        panel_type = str(server.get("panel_type") or "").strip().lower()
+        if panel_type in {"xnet", "x-net"}:
+            from Shared import xnet_api as inbound_link_api
+        else:
+            from Shared import xui_api as inbound_link_api
 
-        parsed = xui_api.parse_config_link(link)
+        parsed = inbound_link_api.parse_config_link(link)
     except Exception as e:
         await message.reply_text(
             f"❌ خطا در پارس لینک:\n{e}",
@@ -6769,8 +6777,20 @@ async def handle_xui_create_inbound_from_link(update: Update, context: ContextTy
     context.user_data["state"] = XUI_CREATE_INBOUND_FROM_LINK_PORT
     # پیشنهاد پورت: اگر پورت لینک اشغال بود، بعدی را پیشنهاد بده
     try:
-        inbounds = await xui_api._list_inbounds(server)  # type: ignore
+        if panel_type in {"xnet", "x-net"}:
+            inbounds = await inbound_link_api.get_inbounds(server)
+        else:
+            inbounds = await inbound_link_api._list_inbounds(server)  # type: ignore
         used = {int(ib.get("port") or 0) for ib in inbounds}
+        if panel_type in {"xnet", "x-net"}:
+            try:
+                panel_cfg = await inbound_link_api.get_panel_config(server)
+                for key in ("port", "subPort"):
+                    value = int(panel_cfg.get(key) or 0)
+                    if value:
+                        used.add(value)
+            except Exception:
+                pass
         try:
             pu = __import__("urllib.parse", fromlist=["urlparse"]).urlparse(str(server.get("panel_url") or ""))
             pp = pu.port or (443 if pu.scheme == "https" else 80)
@@ -6838,14 +6858,20 @@ async def handle_xui_create_inbound_from_link_port(update: Update, context: Cont
             return
     await message.reply_text("⏳ در حال ساخت اینباند...")
     try:
-        from Shared import xui_api
+        panel_type = str(server.get("panel_type") or "").strip().lower()
+        if panel_type in {"xnet", "x-net"}:
+            from Shared import xnet_api as inbound_link_api
+        else:
+            from Shared import xui_api as inbound_link_api
 
-        result = await xui_api.create_inbound_from_link(server, link, port_override=port_override)
+        result = await inbound_link_api.create_inbound_from_link(
+            server, link, port_override=port_override
+        )
         context.user_data.pop("state", None)
         context.user_data.pop("create_inbound_server_id", None)
         context.user_data.pop("create_inbound_link", None)
         context.user_data.pop("create_inbound_parsed_port", None)
-        parsed = xui_api.parse_config_link(link)
+        parsed = inbound_link_api.parse_config_link(link)
         inbound_id = ""
         try:
             if isinstance(result, dict):
@@ -9016,16 +9042,24 @@ async def handle_server_inline_callback(
 
         if action == "create_inbound_from_link":
             server = database.get_server_by_id(server_id)
-            if not server or str(server.get("panel_type") or "").strip().lower() not in {"xui", "x-ui"}:
-                await msg.edit_text("❌ این قابلیت فقط برای پنل X-UI است.")
+            panel_type = str((server or {}).get("panel_type") or "").strip().lower()
+            if not server or panel_type not in {"xui", "x-ui", "xnet", "x-net"}:
+                await msg.edit_text("❌ این قابلیت برای پنل‌های X-UI و X-NET است.")
                 return
             from AdminBot.states import XUI_CREATE_INBOUND_FROM_LINK
 
             context.user_data["state"] = XUI_CREATE_INBOUND_FROM_LINK
             context.user_data["create_inbound_server_id"] = server_id
+            xnet_note = ""
+            if panel_type in {"xnet", "x-net"}:
+                xnet_note = (
+                    "\n\nℹ️ در X-NET ساختار لینک به Inbound تبدیل می‌شود؛ "
+                    "برای TLS از گواهی محلی خود X-NET استفاده می‌شود و اطلاعات کاربر مبدا کپی نمی‌شود."
+                )
             await msg.edit_text(
-                "🔗 لطفاً لینک کانفیگ (vless/vmess/hysteria2/trojan) را ارسال کنید:\n\n"
-                "مثال:\n`vless://uuid@host:443?security=tls&type=httpupgrade...`",
+                "🔗 لطفاً لینک کانفیگ (vless/vmess/hysteria2/trojan/ss) را ارسال کنید:\n\n"
+                "مثال:\n`vless://uuid@host:443?security=tls&type=httpupgrade...`"
+                + xnet_note,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton("لغو❌", callback_data=f"server:{server_id}")]]
