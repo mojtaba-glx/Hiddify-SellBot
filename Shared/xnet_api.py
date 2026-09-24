@@ -763,6 +763,56 @@ async def get_traffic_summary(server: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
+    """Return X-NET metrics in the legacy SellBot server-stats shape."""
+    users = await list_users(server)
+    try:
+        metrics = await _request_json("GET", "/api/metrics", server)
+        if not isinstance(metrics, dict):
+            metrics = {}
+    except Exception:
+        metrics = {}
+    try:
+        traffic = await get_traffic_summary(server)
+    except Exception:
+        traffic = {}
+
+    ram = metrics.get("ramUsage") if isinstance(metrics.get("ramUsage"), dict) else {}
+    storage = (
+        metrics.get("storageUsage")
+        if isinstance(metrics.get("storageUsage"), dict)
+        else {}
+    )
+
+    total_upload = _to_int(traffic.get("totalUpload"), 0)
+    total_download = _to_int(traffic.get("totalDownload"), 0)
+    today_upload = _to_int(traffic.get("todayUpload"), 0)
+    today_download = _to_int(traffic.get("todayDownload"), 0)
+
+    return {
+        "cpu_percent": _to_float(metrics.get("cpuUsage"), 0.0),
+        "cpu_cores": _to_int(metrics.get("cpuCores"), 1),
+        "ram_used": _to_float(ram.get("used"), 0.0),
+        "ram_total": max(_to_float(ram.get("total"), 1.0), 1.0),
+        "disk_used": _to_float(storage.get("used"), 0.0),
+        "disk_total": max(_to_float(storage.get("total"), 1.0), 1.0),
+        "users_total": len(users),
+        "users_online": _to_int(
+            metrics.get("onlineUsersCount", traffic.get("activeClients")), 0
+        ),
+        "users_today": 0,
+        "users_month": 0,
+        "usage_today_gb": round((today_upload + today_download) / _GB, 3),
+        "usage_30days_gb": round((total_upload + total_download) / _GB, 3),
+        "traffic_dl": round(total_download / _GB, 3),
+        "traffic_ul": round(total_upload / _GB, 3),
+        "now_net_recv_mb": 0.0,
+        "now_net_sent_mb": 0.0,
+        "singbox_status": str(metrics.get("singBoxStatus") or ""),
+        "_source": "xnet",
+    }
+
+
 async def get_system_info(server: Dict[str, Any]) -> Dict[str, Any]:
     data = await _request_json("GET", "/api/system/info", server)
     return data if isinstance(data, dict) else {}
