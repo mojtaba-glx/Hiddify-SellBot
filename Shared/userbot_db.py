@@ -318,6 +318,30 @@ def init_db() -> None:
     )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS xnet_guard_snapshots (
+            server_id INTEGER NOT NULL,
+            user_uuid TEXT NOT NULL,
+            username TEXT DEFAULT '',
+            usage_limit_gb REAL DEFAULT 0,
+            usage_current_gb REAL DEFAULT 0,
+            expire_date TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            is_active INTEGER DEFAULT 1,
+            comment TEXT DEFAULT '',
+            snapshot_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT '',
+            PRIMARY KEY (server_id, user_uuid)
+        )
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_xnet_guard_server "
+        "ON xnet_guard_snapshots(server_id)"
+    )
+
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS userbot_service_probe (
             service_id INTEGER PRIMARY KEY,
             missing_streak INTEGER DEFAULT 0,
@@ -2411,6 +2435,163 @@ def get_stale_zero_day_services() -> List[Dict[str, Any]]:
         return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
+
+def _xnet_guard_parse_dt(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def upsert_xnet_guard_snapshot_users(
+    server_id: int,
+    users: List[Dict[str, Any]],
+) -> int:
+    """Persist recoverable X-NET user state without deleting older missing rows.
+
+    The stored used-traffic value is monotonic inside the same expiry period so
+    an accidental panel counter reset cannot erase the recovery baseline.  A
+    later expiry date is treated as a renewal/new period and may reset usage.
+    """
+    init_db()
+    sid = int(server_id or 0)
+    if sid <= 0:
+        return 0
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    saved = 0
+    try:
+        for user in users or []:
+            if not isinstance(user, dict):
+                continue
+            uuid = str(user.get("uuid") or user.get("id") or "").strip()
+            if not uuid:
+                continue
+            username = str(
+                user.get("name") or user.get("username") or user.get("email") or uuid
+            ).strip()
+            try:
+                limit_gb = max(float(user.get("usage_limit_GB") or user.get("usage_limit_gb") or 0), 0.0)
+            except Exception:
+                limit_gb = 0.0
+            try:
+                used_gb = max(float(user.get("current_usage_GB") or 0), 0.0)
+            except Exception:
+                used_gb = 0.0
+            expire_date = str(
+                user.get("expireDate") or user.get("expire") or user.get("expire_date") or ""
+            ).strip()
+            status = str(user.get("status") or ("active" if user.get("is_active", True) else "disabled")).strip().lower()
+            active = 1 if bool(user.get("is_active", status not in {"disabled", "inactive", "expired"})) else 0
+            comment = str(user.get("comment") or "").strip()
+
+            existing = cur.execute(
+                "SELECT usage_limit_gb, usage_current_gb, expire_date "
+                "FROM xnet_guard_snapshots WHERE server_id = ? AND user_uuid = ?",
+                (sid, uuid),
+            ).fetchone()
+            if existing:
+                old_exp = _xnet_guard_parse_dt(existing["expire_date"])
+                new_exp = _xnet_guard_parse_dt(expire_date)
+                renewed = bool(old_exp and new_exp and new_exp > old_exp)
+                if not renewed:
+                    try:
+                        used_gb = max(used_gb, float(existing["usage_current_gb"] or 0))
+                        limit_gb = max(limit_gb, float(existing["usage_limit_gb"] or 0))
+                    except Exception:
+                        pass
+
+            snapshot = {
+                "uuid": uuid,
+                "name": username,
+                "username": str(user.get("username") or "").strip(),
+                "email": str(user.get("email") or "").strip(),
+                "comment": comment,
+                "usage_limit_GB": limit_gb,
+                "current_usage_GB": used_gb,
+                "expireDate": expire_date,
+                "days_left": user.get("days_left"),
+                "remaining_days": user.get("remaining_days"),
+                "status": status,
+                "is_active": bool(active),
+            }
+            cur.execute(
+                """
+                INSERT INTO xnet_guard_snapshots (
+                    server_id, user_uuid, username, usage_limit_gb,
+                    usage_current_gb, expire_date, status, is_active,
+                    comment, snapshot_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(server_id, user_uuid) DO UPDATE SET
+                    username=excluded.username,
+                    usage_limit_gb=excluded.usage_limit_gb,
+                    usage_current_gb=excluded.usage_current_gb,
+                    expire_date=excluded.expire_date,
+                    status=excluded.status,
+                    is_active=excluded.is_active,
+                    comment=excluded.comment,
+                    snapshot_json=excluded.snapshot_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    sid, uuid, username, limit_gb, used_gb, expire_date,
+                    status, active, comment,
+                    json.dumps(snapshot, ensure_ascii=False),
+                    now, now,
+                ),
+            )
+            saved += 1
+        conn.commit()
+        return saved
+    finally:
+        conn.close()
+
+
+def get_xnet_guard_snapshots(server_id: int) -> List[Dict[str, Any]]:
+    init_db()
+    sid = int(server_id or 0)
+    if sid <= 0:
+        return []
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM xnet_guard_snapshots WHERE server_id = ? "
+            "ORDER BY updated_at DESC, username COLLATE NOCASE ASC",
+            (sid,),
+        ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                payload = json.loads(str(item.get("snapshot_json") or "{}"))
+                if isinstance(payload, dict):
+                    item["snapshot"] = payload
+            except Exception:
+                item["snapshot"] = {}
+            out.append(item)
+        return out
+    finally:
+        conn.close()
+
+
+def get_xnet_guard_snapshot(server_id: int, user_uuid: str) -> Optional[Dict[str, Any]]:
+    sid = int(server_id or 0)
+    uuid = str(user_uuid or "").strip()
+    if sid <= 0 or not uuid:
+        return None
+    rows = get_xnet_guard_snapshots(sid)
+    for row in rows:
+        if str(row.get("user_uuid") or "").strip().lower() == uuid.lower():
+            return row
+    return None
+
 
 def get_service_by_id(service_id: int) -> Optional[Dict[str, Any]]:
     init_db()
