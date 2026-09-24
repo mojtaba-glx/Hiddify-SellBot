@@ -6584,10 +6584,11 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             saved_text = (
                 "✅ دامنه لینک اشتراک هوشمند ذخیره شد:\n"
                 f"{html_escape(stored)}\n\n"
-                "🔐 برای گرفتن SSL روی همین سرور، فقط این دستور را کپی و اجرا کنید:\n"
+                "🔐 اگر این دامنه مستقیم روی همین سرور است و پورت‌های 80/443 آزاد هستند، "
+                "برای گرفتن SSL این دستور را کپی و اجرا کنید:\n"
                 f"<code>{html_escape(ssl_command)}</code>\n\n"
-                "این دستور ایمیل نمی‌خواهد و اگر پورت 80 توسط یک سرویس systemd اشغال باشد، "
-                "آن سرویس را فقط هنگام ACME موقتاً متوقف و دوباره اجرا می‌کند."
+                "☁️ اگر روی همین سرور از Cloudflare Tunnel استفاده می‌کنید، این دستور را اجرا نکنید؛ "
+                "SSL را Cloudflare انجام می‌دهد و سرویس ربات باید روی 127.0.0.1:8787 پشت Tunnel بماند."
             )
             await msg.reply_text(
                 saved_text,
@@ -10676,12 +10677,14 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             ssl_command = _build_ssl_copy_command(hint_domain)
             guide = (
                 "🔐 راهنمای فعال‌سازی SSL برای لینک‌های اشتراک هوشمند\n\n"
-                "1) DNS دامنه را روی IP همین سرور ست کنید.\n"
-                "2) اگر Cloudflare Proxy روشن است، هنگام صدور اولیه گواهی آن را روی DNS Only بگذارید.\n"
-                "3) این دستور آماده را روی سرور کپی و اجرا کنید:\n"
+                "روش مستقیم:\n"
+                "• DNS دامنه را روی IP همین سرور ست کنید.\n"
+                "• پورت‌های 80 و 443 باید برای این کار در دسترس باشند.\n"
+                "• سپس دستور آماده زیر را اجرا کنید:\n"
                 f"<code>{html_escape(ssl_command)}</code>\n\n"
-                "دامنه داخل دستور به‌صورت خودکار از همان دامنه ذخیره‌شده ربات قرار می‌گیرد؛ "
-                "نیازی به وارد کردن ایمیل نمونه نیست."
+                "روش Cloudflare Tunnel:\n"
+                "• اگر ربات پشت Tunnel روی 127.0.0.1:8787 اجرا می‌شود، SSL روی خود سرور نصب نکنید.\n"
+                "• در این حالت Cloudflare HTTPS را مدیریت می‌کند و همین دامنه باید به Tunnel Route شده باشد."
             )
             try:
                 await msg.reply_text(guide, parse_mode="HTML", reply_markup=userbot_cancel_keyboard())
