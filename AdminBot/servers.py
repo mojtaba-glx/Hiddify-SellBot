@@ -3256,7 +3256,15 @@ def build_server_detail_text(
         admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
     elif is_xnet:
         version_text = "X-NET"
-        admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
+        admin_panel_url = ""
+        if panel_url.startswith(("http://", "https://")):
+            panel_base = panel_url.rstrip("/")
+            web_base_path = str(server.get("xnet_web_base_path") or "").strip("/")
+            admin_panel_url = (
+                f"{panel_base}/{web_base_path}/"
+                if web_base_path
+                else f"{panel_base}/"
+            )
     else:
         version_text = SERVER_DISPLAY_VERSION or f"V{int(server.get('version') or 11)}"
         admin_panel_url = ""
@@ -3335,9 +3343,34 @@ def build_server_detail_text(
 
 async def build_server_detail_text_live(server: Dict[str, Any]) -> str:
     server_id = int(server.get("id") or 0)
+    server_for_view = dict(server or {})
+
+    # X-NET exposes the secret login path through /api/system/panel-config.
+    # Keep panel_url as the API root, but use webBasePath only for the clickable
+    # admin-panel link shown in Telegram.
+    if xnet_api.is_xnet_server(server_for_view):
+        try:
+            panel_cfg = await xnet_api.get_panel_config(server_for_view)
+            web_base_path = str(panel_cfg.get("webBasePath") or "").strip("/")
+            server_for_view["xnet_web_base_path"] = web_base_path
+            if server_id > 0 and str(server.get("xnet_web_base_path") or "").strip("/") != web_base_path:
+                try:
+                    database.update_server(
+                        server_id,
+                        {"xnet_web_base_path": web_base_path},
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(
+                "Failed reading X-NET webBasePath (server_id=%s): %s",
+                server_id,
+                e,
+            )
+
     users_count = 0
     try:
-        users_count = len(await hiddify_api.list_users(server))
+        users_count = len(await hiddify_api.list_users(server_for_view))
     except Exception as e:
         logger.warning("Failed reading users count from panel (server_id=%s): %s", server_id, e)
         try:
@@ -3352,7 +3385,7 @@ async def build_server_detail_text_live(server: Dict[str, Any]) -> str:
         plans_count = 0
 
     return build_server_detail_text(
-        server,
+        server_for_view,
         users_count_override=users_count,
         plans_count_override=plans_count,
     )
@@ -5353,6 +5386,13 @@ async def handle_add_server_flow(
                 await xui_api.test_connect(new_server)
             elif panel_type in {"xnet", "x-net"}:
                 await xnet_api.test_connect(new_server)
+                try:
+                    panel_cfg = await xnet_api.get_panel_config(new_server)
+                    new_server["xnet_web_base_path"] = str(
+                        panel_cfg.get("webBasePath") or ""
+                    ).strip("/")
+                except Exception:
+                    new_server["xnet_web_base_path"] = ""
             else:
                 await hiddify_api.list_users(new_server)
         except Exception as e:
