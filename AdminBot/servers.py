@@ -1099,6 +1099,12 @@ def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str
                     return f"{origin.rstrip('/')}{sub_path}{user_uuid}"
     except Exception:
         pass
+    # X-NET native subscription URL. X-NET does not use user_proxy_path.
+    try:
+        if xnet_api.is_xnet_server(server):
+            return xnet_api.get_subscription_url(server, user_uuid)
+    except Exception:
+        pass
     panel_url = (server.get("panel_url") or "").rstrip("/")
     user_proxy = (server.get("user_proxy_path") or "").strip("/")
     if not panel_url or not user_proxy:
@@ -4195,8 +4201,9 @@ async def send_user_configs_menu(
         user_name_link=user_name_link,
     )
 
-    keyboard = InlineKeyboardMarkup(
-        [
+    is_xnet_server = xnet_api.is_xnet_server(server)
+    if is_xnet_server:
+        rows = [
             [
                 InlineKeyboardButton(
                     "📄 کانفیگ‌های مستقیم",
@@ -4206,22 +4213,8 @@ async def send_user_configs_menu(
             ],
             [
                 InlineKeyboardButton(
-                    "🔄 اشتراک خودکار",
-                    callback_data=f"server:{server_id}:usercfg:{user_uuid}:auto_sub",
-                    style="primary",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔗 لینک اشتراک اصلی",
+                    "🔗 لینک اشتراک X-NET",
                     callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub",
-                    style="primary",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🧬 لینک اشتراک Base64",
-                    callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub_b64",
                     style="primary",
                 )
             ],
@@ -4240,21 +4233,6 @@ async def send_user_configs_menu(
                 )
             ],
             [
-                (
-                    InlineKeyboardButton(
-                        "🚪 ورود به پنل کاربر",
-                        url=panel_user_link,
-                        style="success",
-                    )
-                    if panel_user_link
-                    else InlineKeyboardButton(
-                        "🚪 ورود به پنل کاربر",
-                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:bot_link",
-                        style="success",
-                    )
-                )
-            ],
-            [
                 InlineKeyboardButton(
                     "🔙 برگشت به جزئیات کاربر",
                     callback_data=f"server:{server_id}:useruuid:{user_uuid}",
@@ -4262,7 +4240,76 @@ async def send_user_configs_menu(
                 )
             ],
         ]
-    )
+        keyboard = InlineKeyboardMarkup(rows)
+    else:
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📄 کانفیگ‌های مستقیم",
+                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:direct",
+                        style="primary",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔄 اشتراک خودکار",
+                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:auto_sub",
+                        style="primary",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔗 لینک اشتراک اصلی",
+                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub",
+                        style="primary",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🧬 لینک اشتراک Base64",
+                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:sub_b64",
+                        style="primary",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🌐 اشتراک هوشمند",
+                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi",
+                        style="success",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🌐 اشتراک هوشمند Base64",
+                        callback_data=f"server:{server_id}:usercfg:{user_uuid}:multi_b64",
+                        style="success",
+                    )
+                ],
+                [
+                    (
+                        InlineKeyboardButton(
+                            "🚪 ورود به پنل کاربر",
+                            url=panel_user_link,
+                            style="success",
+                        )
+                        if panel_user_link
+                        else InlineKeyboardButton(
+                            "🚪 ورود به پنل کاربر",
+                            callback_data=f"server:{server_id}:usercfg:{user_uuid}:bot_link",
+                            style="success",
+                        )
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔙 برگشت به جزئیات کاربر",
+                        callback_data=f"server:{server_id}:useruuid:{user_uuid}",
+                        style="primary",
+                    )
+                ],
+            ]
+        )
 
     if message is not None and message.text:
         await message.edit_text(
@@ -8404,16 +8451,27 @@ async def handle_server_inline_callback(
 
                 panel_user_uuid = await _resolve_panel_user_uuid(server, server_id, user_uuid)
                 base = _build_user_base_url(server, panel_user_uuid)
+                is_xnet_server = xnet_api.is_xnet_server(server)
                 if cfg_type in {"auto_sub", "sub", "sub_b64"} and not base:
+                    panel_type_text = "X-NET" if is_xnet_server else "این سرور"
                     await msg.edit_text(
-                        "❌ تنظیمات panel_url یا user_proxy_path برای این سرور کامل نیست.",
+                        f"❌ لینک اشتراک برای {panel_type_text} قابل ساخت نیست. تنظیمات آدرس پنل را بررسی کنید.",
                     )
                     return
 
                 url = ""
                 caption_title = ""
 
-                if cfg_type == "auto_sub":
+                if is_xnet_server and cfg_type in {"auto_sub", "sub", "sub_b64"}:
+                    # X-NET already returns the public subscription endpoint:
+                    # /api/v1/sub/{uuid}. Do not append Hiddify-specific paths.
+                    url = base
+                    caption_title = (
+                        "لینک اشتراک X-NET"
+                        if cfg_type != "sub_b64"
+                        else "لینک اشتراک X-NET (Base64)"
+                    )
+                elif cfg_type == "auto_sub":
                     url = f"{base}/sub/?asn=unknown"
                     caption_title = "لینک اشتراک خودکار"
                 elif cfg_type == "sub":
@@ -8481,11 +8539,15 @@ async def handle_server_inline_callback(
                 elif cfg_type == "bot_link":
                     if not base:
                         await msg.edit_text(
-                            "❌ تنظیمات panel_url یا user_proxy_path برای این سرور کامل نیست.",
+                            "❌ لینک عمومی کاربر قابل ساخت نیست. تنظیمات آدرس پنل را بررسی کنید.",
                         )
                         return
-                    url = _panel_user_link_from_base(base)
-                    text = f"🌐 لینک پنل کاربر هیدیفای\n{url}"
+                    if is_xnet_server:
+                        url = base
+                        text = f"🔗 لینک اشتراک عمومی X-NET\n{url}"
+                    else:
+                        url = _panel_user_link_from_base(base)
+                        text = f"🌐 لینک پنل کاربر هیدیفای\n{url}"
                     kb = InlineKeyboardMarkup(
                         [
                             [
