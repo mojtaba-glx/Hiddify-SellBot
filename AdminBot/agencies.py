@@ -652,7 +652,21 @@ async def send_agent_detail(
         try:
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         except BadRequest:
-            await query.answer()
+            # Payment approval messages may be photos/captions. Telegram cannot
+            # turn a media caption into text via edit_message_text, so replace
+            # the media message with a fresh text page.
+            chat_id = getattr(getattr(query, "message", None), "chat_id", None)
+            if chat_id:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=kb,
+                    parse_mode="HTML",
+                )
     elif update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
@@ -1262,10 +1276,26 @@ async def send_pending_agent_payments(update: Update, context: ContextTypes.DEFA
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="agency:root")])
+    text = "\n".join(lines)
+    kb = InlineKeyboardMarkup(rows)
+    query = update.callback_query
     try:
-        await update.callback_query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
     except BadRequest:
-        await update.callback_query.answer()
+        # The shortcut can originate from a receipt/photo approval message.
+        # Replace the media message because edit_message_text cannot edit captions.
+        chat_id = getattr(getattr(query, "message", None), "chat_id", None)
+        if chat_id:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=kb,
+                parse_mode="HTML",
+            )
 
 
 async def show_agent_payment_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: int) -> None:
