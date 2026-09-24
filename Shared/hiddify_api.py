@@ -552,15 +552,18 @@ async def _request_bytes(
 
 async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
     """
-    دانلود بکاپ JSON از پنل هیدیفای.
-    روی چند endpoint کاندید تلاش می‌کند تا با نسخه‌های مختلف پنل سازگار باشد.
+    دانلود بکاپ پنل با dispatcher مشترک Hiddify / X-UI / X-NET.
     خروجی:
       {
-        "filename": "...json",
+        "filename": "...",
         "content": b"...",
         "source_url": "..."
       }
     """
+    if _is_xnet_server(server):
+        from Shared import xnet_api
+        return await xnet_api.download_server_backup(server)
+
     if _is_xui_server(server):
         from Shared import xui_api
         return await xui_api.download_server_backup(server)
