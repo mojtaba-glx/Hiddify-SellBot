@@ -3076,23 +3076,50 @@ async def refresh_service_detail(update: Update, context: ContextTypes.DEFAULT_T
             except Exception:
                 pass
 
-        # آخرین اتصال از تازه‌ترین last_online بین نودها
+        # آخرین اتصال از تازه‌ترین last_online بین نودها.
+        # X-NET وضعیت لحظه‌ای online/offline را صریحاً گزارش می‌کند؛ این سیگنال
+        # از صرفاً نزدیک بودن last_seen دقیق‌تر است.
+        explicit_online = any(
+            str((u or {}).get("_user_list_status") or "").strip().lower() == "online"
+            for _t, u in available
+        )
+        explicit_xnet_offline = any(
+            str((u or {}).get("_source") or "").strip().lower() == "xnet"
+            and str((u or {}).get("_user_list_status") or "").strip().lower() == "offline"
+            for _t, u in available
+        )
+
         latest = None
+        latest_source = ""
         for _t, u in available:
             dt = _parse_panel_dt(u.get("last_online"))
             if dt is not None and (latest is None or dt > latest):
                 latest = dt
+                latest_source = str((u or {}).get("_source") or "").strip().lower()
+
         online_label = UNKNOWN
-        if latest is not None:
+        if explicit_online:
+            online_label = "آنلاین"
+        elif latest is not None:
             seconds = (now - latest).total_seconds()
-            if -120 <= seconds <= 900:
-                online_label = "آنلاین"
-            else:
+            if explicit_xnet_offline:
                 try:
                     from AgentBot.services.subscription_service import _human_duration
                     online_label = _human_duration(seconds)
                 except Exception:
                     online_label = "مدتی پیش"
+            else:
+                window = 90 if latest_source in {"xui", "xnet"} else 900
+                if -120 <= seconds <= window:
+                    online_label = "آنلاین"
+                else:
+                    try:
+                        from AgentBot.services.subscription_service import _human_duration
+                        online_label = _human_duration(seconds)
+                    except Exception:
+                        online_label = "مدتی پیش"
+        elif explicit_xnet_offline:
+            online_label = "آفلاین"
         ud = getattr(context, "user_data", None)
         if isinstance(ud, dict):
             ud[f"agency_svc_rt_{agent_id}_{service_id}"] = {"online": online_label}
