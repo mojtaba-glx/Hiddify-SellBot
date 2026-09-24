@@ -159,6 +159,119 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
             configs = await xnet_api.get_user_configs(self.server, "abc")
         self.assertEqual([c["protocol"] for c in configs], ["vless", "hysteria2"])
 
+    def test_parse_config_link_reuses_existing_parser(self):
+        parsed = xnet_api.parse_config_link(
+            "vless://11111111-2222-4333-8444-555555555555@example.com:8443"
+            "?security=tls&type=httpupgrade&path=%2Fhu-speed&sni=example.com"
+        )
+        self.assertEqual(parsed["protocol"], "vless")
+        self.assertEqual(parsed["port"], 8443)
+        self.assertEqual(parsed["network"], "httpupgrade")
+        self.assertEqual(parsed["path"], "/hu-speed")
+
+    async def test_create_inbound_from_link_maps_vless_tls_to_local_xnet_cert(self):
+        inbounds = [
+            {
+                "id": "in-existing",
+                "protocol": "VLESS",
+                "port": 558,
+                "security": "TLS",
+                "sni": "xnet.example.com",
+                "certFile": "/etc/sing-box/certs/xnet.example.com.crt",
+                "keyFile": "/etc/sing-box/certs/xnet.example.com.key",
+                "clients": [],
+            }
+        ]
+        request_mock = AsyncMock(
+            return_value={
+                "id": "in-new",
+                "protocol": "VLESS",
+                "port": 8443,
+                "enabled": True,
+            }
+        )
+        compatibility = {
+            "protocols": {
+                "vless": {
+                    "transports": ["tcp", "ws", "httpupgrade", "grpc", "http2"],
+                    "security": ["none", "tls", "reality"],
+                }
+            }
+        }
+        link = (
+            "vless://11111111-2222-4333-8444-555555555555@source.example:8443"
+            "?security=tls&type=httpupgrade&path=%2Fhu-speed"
+            "&sni=source.example&alpn=http%2F1.1#Imported"
+        )
+
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api,
+            "get_panel_config",
+            new=AsyncMock(return_value={"port": "8080", "subPort": "2096"}),
+        ), patch.object(
+            xnet_api,
+            "get_singbox_compatibility",
+            new=AsyncMock(return_value=compatibility),
+        ), patch.object(
+            xnet_api, "_request_json", new=request_mock
+        ):
+            result = await xnet_api.create_inbound_from_link(self.server, link)
+
+        self.assertEqual(result["id"], "in-new")
+        args = request_mock.await_args
+        self.assertEqual(args.args[:2], ("POST", "/api/inbounds"))
+        body = args.kwargs["json"]
+        self.assertEqual(body["protocol"], "VLESS")
+        self.assertEqual(body["port"], 8443)
+        self.assertEqual(body["transport"], "HTTPUpgrade")
+        self.assertEqual(body["security"], "TLS")
+        self.assertEqual(body["httpUpgradePath"], "/hu-speed")
+        self.assertEqual(body["sni"], "xnet.example.com")
+        self.assertEqual(
+            body["certFile"], "/etc/sing-box/certs/xnet.example.com.crt"
+        )
+        self.assertEqual(
+            body["keyFile"], "/etc/sing-box/certs/xnet.example.com.key"
+        )
+        self.assertEqual(body["clients"], [])
+
+    async def test_create_inbound_from_link_rejects_duplicate_port(self):
+        inbounds = [
+            {
+                "id": "in-existing",
+                "protocol": "VLESS",
+                "port": 8443,
+                "clients": [],
+            }
+        ]
+        link = (
+            "vless://11111111-2222-4333-8444-555555555555@example.com:8443"
+            "?security=none&type=tcp"
+        )
+        with patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock(return_value=inbounds)
+        ), patch.object(
+            xnet_api,
+            "get_panel_config",
+            new=AsyncMock(return_value={"port": "8080", "subPort": "2096"}),
+        ):
+            with self.assertRaises(xnet_api.XnetApiError) as ctx:
+                await xnet_api.create_inbound_from_link(self.server, link)
+        self.assertIn("8443", str(ctx.exception))
+        self.assertIn("استفاده شده", str(ctx.exception))
+
+    async def test_create_inbound_from_link_rejects_reality_without_private_key(self):
+        link = (
+            "vless://11111111-2222-4333-8444-555555555555@example.com:443"
+            "?security=reality&type=tcp&pbk=public-only"
+        )
+        with self.assertRaises(xnet_api.XnetApiError) as ctx:
+            await xnet_api.create_inbound_from_link(self.server, link)
+        self.assertIn("REALITY", str(ctx.exception))
+        self.assertIn("کلید خصوصی", str(ctx.exception))
+
     async def test_test_connect_requires_ok_ping_and_management_api(self):
         with patch.object(
             xnet_api, "ping", new=AsyncMock(return_value={"status": "ok"})
