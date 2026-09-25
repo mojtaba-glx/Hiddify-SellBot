@@ -11,6 +11,18 @@ class ServerHealthXuiTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         server_health._state.clear()
 
+    async def test_xnet_probe_uses_lightweight_health_probe(self):
+        server = {"id": 6, "title": "X-NET France", "panel_type": "xnet"}
+        with patch(
+            "Shared.xnet_api.health_probe", new_callable=AsyncMock
+        ) as health_probe, patch(
+            "Shared.xnet_api.test_connect", new_callable=AsyncMock
+        ) as test_connect:
+            await server_health._probe_server(server)
+
+        health_probe.assert_awaited_once_with(server)
+        test_connect.assert_not_awaited()
+
     async def test_xui_probe_uses_live_test_connect(self):
         server = {"id": 2, "title": "France", "panel_type": "xui"}
         with patch("Shared.xui_api.test_connect", new_callable=AsyncMock) as test_connect, patch.object(
