@@ -55,9 +55,21 @@ def is_xnet_server(server: Dict[str, Any]) -> bool:
 
 
 def _base_url(server: Dict[str, Any]) -> str:
-    url = str((server or {}).get("panel_url") or "").strip().rstrip("/")
+    """Management/API origin for X-NET.
+
+    panel_url remains the public/browser address. When SellBot runs on the
+    same host as X-NET, xnet_api_url can point to loopback so management
+    traffic does not depend on public DNS, NAT, TLS termination or firewall
+    rules.
+    """
+    url = str(
+        (server or {}).get("xnet_api_url")
+        or (server or {}).get("xnet_internal_url")
+        or (server or {}).get("panel_url")
+        or ""
+    ).strip().rstrip("/")
     if not url:
-        raise XnetApiError("panel_url برای X-NET تنظیم نشده است.")
+        raise XnetApiError("آدرس API/پنل برای X-NET تنظیم نشده است.")
     return url
 
 
@@ -1697,7 +1709,11 @@ def _public_origin(server: Dict[str, Any]) -> str:
         or (server or {}).get("xnet_sub_host")
         or ""
     ).strip()
-    raw = custom or _base_url(server)
+    # Public subscriber links must never inherit an internal management
+    # origin such as http://127.0.0.1:8080.
+    raw = custom or str((server or {}).get("panel_url") or "").strip()
+    if not raw:
+        raw = _base_url(server)
     if "://" not in raw:
         raw = "https://" + raw
     raw = raw.rstrip("/")
