@@ -1357,27 +1357,23 @@ async def _renew_subscription_from_order(
     time_mode = str(time_mode or "add").strip().lower()
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    old_days_left = int(float(svc.get("days_left") or 0) or 0)
-    # ── زمان (مطابق renew_service_with_policy) ──
+
+    # Match UserBot exactly: every renewal starts a fresh traffic/time
+    # accounting period. add-mode carries only the remaining allowance/time,
+    # never the already-consumed traffic.
+    old_days_left = max(int(float(svc.get("days_left") or 0) or 0), 0)
     if time_mode == "add":
         new_days_left = old_days_left + extra_days
-        end_date = str(svc.get("end_date") or "").strip()
-        if end_date:
-            try:
-                current_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                current_end = now
-        else:
-            current_end = now
-        new_end = current_end + timedelta(days=extra_days)
     else:
         new_days_left = extra_days
-        new_end = now + timedelta(days=extra_days)
+    new_end = now + timedelta(days=max(new_days_left, 0))
     new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
 
-    # ── حجم (مطابق renew_service_with_policy) ──
+    old_usage_limit = float(svc.get("usage_limit") or 0)
+    old_usage_current = float(svc.get("usage_current") or 0)
+    remaining_gb = max(old_usage_limit - old_usage_current, 0.0)
     if vol_mode == "add":
-        new_usage_limit = float(svc.get("usage_limit") or 0) + extra_gb
+        new_usage_limit = remaining_gb + extra_gb
     else:
         new_usage_limit = float(extra_gb)
 
@@ -1392,11 +1388,11 @@ async def _renew_subscription_from_order(
         patch_data = {
             "usage_limit_GB": new_usage_limit,
             "package_days": int(new_days_left),
+            "current_usage_GB": 0,
+            "start_date": now.strftime("%Y-%m-%d"),
+            "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "is_active": True,
         }
-        if vol_mode == "reset":
-            patch_data["current_usage_GB"] = 0
-        if time_mode == "reset":
-            patch_data["start_date"] = now.strftime("%Y-%m-%d")
         try:
             await multi_panel.patch_user(
                 primary_target[0], primary_target[1],
@@ -1434,8 +1430,10 @@ async def _renew_subscription_from_order(
     try:
         agent_db.reset_service_nodes_on_renew(
             service_id,
-            reset_usage=vol_mode == "reset",
-            reset_time=time_mode == "reset",
+            # Same as UserBot: a confirmed renewal always starts a fresh
+            # runtime period, even when unused allowance/time is carried over.
+            reset_usage=True,
+            reset_time=True,
             pending_server_ids=renew_failed_ids if targets else [],
         )
     except Exception as e:
@@ -1451,7 +1449,9 @@ async def _renew_subscription_from_order(
 
     notify = (
         "♻️ اشتراک شما با موفقیت تمدید شد.\n\n"
-        f"📊 حجم: {new_usage_limit:g} گیگ\n"
+        f"📊 حجم تمدید: {extra_gb:g} گیگ\n"
+        f"⏳ مدت تمدید: {extra_days} روز\n"
+        f"📦 حجم دوره جدید: {new_usage_limit:g} گیگ\n"
         f"⏳ تاریخ انقضا: {new_end_str[:10]}\n\n"
         "از دکمه «📊وضعیت اشتراک» می‌توانید اطلاعات به‌روزشده را ببینید."
     )
@@ -1480,8 +1480,10 @@ async def _renew_subscription_from_order(
             customer_name=customer_name,
             service_name=str(svc.get("name") or ""),
             server_title=str(primary_server.get("title") or svc.get("server_title") or ""),
-            volume_gb=float(new_usage_limit or 0),
-            days=int(new_days_left or 0),
+            # Delivery report describes what was purchased/renewed, matching
+            # UserBot's renewal report, not the post-renewal total allowance.
+            volume_gb=float(extra_gb or 0),
+            days=int(extra_days or 0),
             amount=int(order.get("amount") or order.get("price") or 0),
             status="success",
         )
