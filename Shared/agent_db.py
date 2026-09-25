@@ -2242,43 +2242,40 @@ def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float 
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # ── زمان ──
+    # UserBot renewal starts a fresh accounting period in every policy mode.
+    # In add-mode only the *remaining* allowance/time is carried forward.
+    remaining_days = max(int(row["days_left"] or 0), 0)
     if str(time_mode).strip().lower() == "add":
-        new_days_left = int(row["days_left"] or 0) + int(extra_days)
-        end_date = str(row["end_date"] or "").strip()
-        if end_date:
-            try:
-                current_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                current_end = now
-        else:
-            current_end = now
-        new_end = current_end + timedelta(days=int(extra_days))
+        new_days_left = remaining_days + int(extra_days)
     else:
         new_days_left = int(extra_days)
-        new_end = now + timedelta(days=int(extra_days))
+    new_end = now + timedelta(days=max(new_days_left, 0))
 
-    # ── حجم ──
+    old_usage_limit = float(row["usage_limit"] or 0)
+    old_usage_current = float(row["usage_current"] or 0)
+    remaining_gb = max(old_usage_limit - old_usage_current, 0.0)
     if str(volume_mode).strip().lower() == "add":
-        new_usage_limit = float(row["usage_limit"] or 0) + float(extra_gb)
+        new_usage_limit = remaining_gb + float(extra_gb)
     else:
         new_usage_limit = float(extra_gb)
 
-    # ── در حالت ریست حجم، مصرف فعلی هم صفر می‌شود ──
+    # Match UserBot: renewal always resets the traffic counter and starts the
+    # new accounting period now. add/reset only controls what allowance/time
+    # is carried into that fresh period.
     new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
-    if str(volume_mode).strip().lower() == "add":
-        cur.execute(
-            "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, "
-            "last_payment_operation_key = ?, updated_at = ? WHERE id = ?",
-            (new_days_left, new_usage_limit, new_end_str, operation_key, _now(), service_id),
-        )
-    else:
-        cur.execute(
-            "UPDATE agent_services SET days_left = ?, usage_limit = ?, usage_current = 0, "
-            "start_date = ?, end_date = ?, last_payment_operation_key = ?, updated_at = ? WHERE id = ?",
-            (new_days_left, new_usage_limit, now.strftime("%Y-%m-%d %H:%M:%S"),
-             new_end_str, operation_key, _now(), service_id),
-        )
+    cur.execute(
+        "UPDATE agent_services SET days_left = ?, usage_limit = ?, usage_current = 0, "
+        "start_date = ?, end_date = ?, last_payment_operation_key = ?, updated_at = ? WHERE id = ?",
+        (
+            new_days_left,
+            new_usage_limit,
+            now.strftime("%Y-%m-%d %H:%M:%S"),
+            new_end_str,
+            operation_key,
+            _now(),
+            service_id,
+        ),
+    )
     conn.commit()
     conn.close()
     return True
