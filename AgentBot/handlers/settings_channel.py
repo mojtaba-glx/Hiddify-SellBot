@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import re
-from html import escape as html_escape
+from html import escape as html_escape, unescape as html_unescape
 from typing import Any
 from urllib.parse import urlparse
 
@@ -31,6 +31,8 @@ DRAFT_KEY = "agent_channel_post_draft"
 BUTTON_TEXT_KEY = "agent_channel_post_button_text"
 CB = "agbot:channel:"
 MAX_BUTTONS = 8
+MAX_TEXT_LENGTH = 4096
+MAX_CAPTION_LENGTH = 1024
 CANCEL_WORDS = {"❌ لغو", "/cancel", "لغو"}
 
 
@@ -121,6 +123,21 @@ def _normalize_button_url(value: str) -> str:
     if scheme == "tg" and (parsed.netloc or parsed.path):
         return raw
     return ""
+
+
+def _visible_html_length(value: str) -> int:
+    raw = str(value or "")
+    plain = re.sub(r"<[^>]+>", "", raw)
+    return len(html_unescape(plain))
+
+
+def _content_length_error(kind: str, plain_text: str) -> str:
+    limit = MAX_TEXT_LENGTH if str(kind or "") == "text" else MAX_CAPTION_LENGTH
+    size = len(str(plain_text or ""))
+    if size <= limit:
+        return ""
+    label = "متن" if str(kind or "") == "text" else "کپشن"
+    return f"❌ {label} بیش از حد طولانی است. حداکثر {limit} کاراکتر مجاز است."
 
 
 def _post_markup(draft: dict[str, Any]) -> InlineKeyboardMarkup | None:
@@ -500,18 +517,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
     if state == STATE_CHANNEL_CONTENT:
         if message.photo:
+            length_error = _content_length_error("photo", message.caption or "")
+            if length_error:
+                await message.reply_text(length_error)
+                return True
             draft.update(
                 kind="photo",
                 file_id=message.photo[-1].file_id,
                 text=message.caption_html or "",
             )
         elif message.video:
+            length_error = _content_length_error("video", message.caption or "")
+            if length_error:
+                await message.reply_text(length_error)
+                return True
             draft.update(
                 kind="video",
                 file_id=message.video.file_id,
                 text=message.caption_html or "",
             )
         elif message.text:
+            length_error = _content_length_error("text", message.text or "")
+            if length_error:
+                await message.reply_text(length_error)
+                return True
             draft.update(
                 kind="text",
                 file_id="",
@@ -535,6 +564,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         new_text = message.text_html or message.text or ""
         if str(message.text or "").strip() in {"0", "-", "—"}:
             new_text = ""
+        else:
+            current_kind = str(draft.get("kind") or "text")
+            length_error = _content_length_error(current_kind, message.text or "")
+            if length_error:
+                await message.reply_text(length_error)
+                return True
         draft["text"] = new_text
         context.user_data.pop(UD_STATE, None)
         await message.reply_text("✅ متن/کپشن پست ویرایش شد.")
@@ -542,6 +577,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         return True
 
     if state == STATE_CHANNEL_EDIT_MEDIA:
+        # Converting a text-only post to media also converts its text to a
+        # caption, so enforce Telegram's caption limit before changing kind.
+        if _visible_html_length(str(draft.get("text") or "")) > MAX_CAPTION_LENGTH:
+            await message.reply_text(
+                f"❌ متن فعلی برای کپشن طولانی است. ابتدا آن را به کمتر از {MAX_CAPTION_LENGTH} کاراکتر کاهش بده."
+            )
+            return True
         if message.photo:
             draft["kind"] = "photo"
             draft["file_id"] = message.photo[-1].file_id
