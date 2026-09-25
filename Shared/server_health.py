@@ -46,7 +46,10 @@ async def _probe_server(server: Dict[str, Any]) -> None:
     if hiddify_api._is_xnet_server(server):
         from Shared import xnet_api
 
-        await xnet_api.test_connect(server)
+        # Health alerts should answer only "is the X-NET panel reachable?".
+        # Full test_connect/list_users can legitimately exceed this monitor's
+        # short timeout on busy panels and used to cause false Down alerts.
+        await xnet_api.health_probe(server)
         return
     if hiddify_api._is_xui_server(server):
         # X-UI list_users may be served from its short-lived inbounds/clients
