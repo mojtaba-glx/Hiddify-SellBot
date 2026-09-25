@@ -62,12 +62,38 @@ def _channel_target() -> str:
     return f"@{username}" if username else ""
 
 
-def _valid_url(value: str) -> bool:
+def _normalize_button_url(value: str) -> str:
+    """Accept normal URLs plus Telegram @username shorthand."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    # Telegram username shorthand: @user_speedl_bot -> https://t.me/user_speedl_bot
+    if raw.startswith("@"):
+        username = raw[1:].strip()
+        if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            return f"https://t.me/{username}"
+        return ""
+
+    # Friendly shorthand without scheme.
+    if raw.lower().startswith("t.me/"):
+        raw = "https://" + raw
+
     try:
-        parsed = urlparse(value.strip())
-        return parsed.scheme in {"http", "https", "tg"} and bool(parsed.netloc or parsed.scheme == "tg")
+        parsed = urlparse(raw)
     except Exception:
-        return False
+        return ""
+
+    scheme = str(parsed.scheme or "").lower()
+    if scheme in {"http", "https"} and parsed.netloc:
+        return raw
+    if scheme == "tg" and (parsed.netloc or parsed.path):
+        return raw
+    return ""
+
+
+def _valid_url(value: str) -> bool:
+    return bool(_normalize_button_url(value))
 
 
 def _post_markup(draft: dict[str, Any]) -> InlineKeyboardMarkup | None:
@@ -241,19 +267,29 @@ async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_T
             raise ApplicationHandlerStop
         context.user_data["_channel_post_button_text"] = text
         context.user_data[STATE_KEY] = "button_url"
-        await message.reply_text("🔗 حالا لینک دکمه را بفرست؛ مثال: https://t.me/YourBot")
+        await message.reply_text(
+            "🔗 حالا لینک دکمه را بفرست.\n"
+            "می‌توانی لینک کامل یا آیدی تلگرام بفرستی؛ مثال:\n"
+            "• https://t.me/YourBot\n"
+            "• @YourBot"
+        )
         raise ApplicationHandlerStop
 
     if state == "button_url":
-        if not _valid_url(text):
-            await message.reply_text("❌ لینک معتبر نیست. لینک باید با https:// ، http:// یا tg:// شروع شود.")
+        normalized_url = _normalize_button_url(text)
+        if not normalized_url:
+            await message.reply_text(
+                "❌ لینک معتبر نیست.\n"
+                "لینک کامل مثل https://example.com یا https://t.me/YourBot، "
+                "یا آیدی تلگرام مثل @YourBot بفرست."
+            )
             raise ApplicationHandlerStop
         label = str(context.user_data.pop("_channel_post_button_text", "") or "لینک")
         buttons = list(draft.get("buttons") or [])
         if len(buttons) >= MAX_BUTTONS:
             await message.reply_text(f"❌ حداکثر {MAX_BUTTONS} دکمه برای هر پست مجاز است.")
         else:
-            buttons.append({"text": label, "url": text, "style": "primary"})
+            buttons.append({"text": label, "url": normalized_url, "style": "primary"})
             draft["buttons"] = buttons
             await message.reply_text("✅ دکمه اضافه شد.")
         context.user_data.pop(STATE_KEY, None)
