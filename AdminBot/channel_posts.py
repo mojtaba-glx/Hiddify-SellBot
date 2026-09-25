@@ -129,14 +129,17 @@ def _menu_markup(has_draft: bool) -> InlineKeyboardMarkup:
 
 def _edit_markup(draft: dict[str, Any]) -> InlineKeyboardMarkup:
     kind = str(draft.get("kind") or "").strip().lower()
+    media_title = (
+        "🖼 افزودن عکس / ویدئو"
+        if kind == "text"
+        else "🖼 ویرایش عکس / ویدئو"
+    )
     rows = [
         [InlineKeyboardButton("📝 ویرایش متن / کپشن", callback_data=CB + "edit_text", style="primary")],
-        [InlineKeyboardButton("🖼 ویرایش عکس / ویدئو", callback_data=CB + "edit_media", style="primary")],
+        [InlineKeyboardButton(media_title, callback_data=CB + "edit_media", style="primary")],
         [InlineKeyboardButton("🔄 جایگزینی کامل پست", callback_data=CB + "edit_replace", style="danger")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data=CB + "menu", style="primary")],
     ]
-    if kind == "text":
-        rows[1][0].text = "🖼 افزودن عکس / ویدئو"
     return InlineKeyboardMarkup(rows)
 
 
