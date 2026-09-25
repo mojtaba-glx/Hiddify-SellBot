@@ -2217,6 +2217,19 @@ async def create_inbound_from_link(
     )
 
 
+async def health_probe(server: Dict[str, Any]) -> Dict[str, Any]:
+    """Lightweight live reachability probe used only by outage monitoring.
+
+    A server-down alert must represent panel reachability, not slow statistics,
+    a large subscriber list, or an admin-authentication problem.  The public
+    X-NET ping endpoint is sufficient for that distinction.
+    """
+    status = await ping(server)
+    if str(status.get("status") or "").strip().lower() != "ok":
+        raise XnetApiError("X-NET ping پاسخ ok نداد.")
+    return status
+
+
 async def test_connect(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     status = await ping(server)
     if str(status.get("status") or "").strip().lower() != "ok":
