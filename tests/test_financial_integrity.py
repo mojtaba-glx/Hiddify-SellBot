@@ -91,6 +91,63 @@ class WalletIdempotencyTests(unittest.TestCase):
                 self.assertEqual(renewed["days_left"], 60)
                 self.assertEqual(renewed["usage_limit"], 40)
 
+    def test_renewal_add_carries_only_remaining_volume_and_resets_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "agency.db"
+            self._seed_agency(path)
+            with patch.object(agent_db, "DB_PATH", path):
+                svc = agent_db.create_service(
+                    agent_id=1,
+                    customer_id=1,
+                    server_id=10,
+                    name="vpn-used",
+                    panel_user_uuid="uuid-used",
+                    usage_limit=10,
+                    days=5,
+                )
+                agent_db.update_service(
+                    svc["id"],
+                    {"usage_current": 8.0, "usage_limit": 10.0, "days_left": 5},
+                )
+
+                self.assertTrue(agent_db.renew_service_with_policy(
+                    svc["id"], 30, 10, "add", "add", "renew:used"
+                ))
+                renewed = agent_db.get_service_by_id(svc["id"])
+
+                # Same contract as UserBot:
+                # 10 GB total - 8 GB used + 10 GB renewal = 12 GB fresh period.
+                self.assertAlmostEqual(float(renewed["usage_limit"]), 12.0)
+                self.assertAlmostEqual(float(renewed["usage_current"]), 0.0)
+                self.assertEqual(int(renewed["days_left"]), 35)
+
+    def test_renewal_reset_replaces_package_and_resets_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "agency.db"
+            self._seed_agency(path)
+            with patch.object(agent_db, "DB_PATH", path):
+                svc = agent_db.create_service(
+                    agent_id=1,
+                    customer_id=1,
+                    server_id=10,
+                    name="vpn-reset",
+                    panel_user_uuid="uuid-reset",
+                    usage_limit=10,
+                    days=5,
+                )
+                agent_db.update_service(
+                    svc["id"],
+                    {"usage_current": 8.0, "usage_limit": 10.0, "days_left": 5},
+                )
+
+                self.assertTrue(agent_db.renew_service_with_policy(
+                    svc["id"], 30, 10, "reset", "reset", "renew:reset"
+                ))
+                renewed = agent_db.get_service_by_id(svc["id"])
+                self.assertAlmostEqual(float(renewed["usage_limit"]), 10.0)
+                self.assertAlmostEqual(float(renewed["usage_current"]), 0.0)
+                self.assertEqual(int(renewed["days_left"]), 30)
+
 
 class PaymentClaimTests(unittest.TestCase):
     def test_agent_payment_claim_has_one_exclusive_owner(self):
