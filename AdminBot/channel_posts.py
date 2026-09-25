@@ -122,7 +122,7 @@ def _menu_markup(has_draft: bool) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🚀 انتشار در کانال", callback_data=CB + "publish", style="success")],
             [InlineKeyboardButton("🧹 پاک کردن دکمه‌ها", callback_data=CB + "clear_buttons", style="danger")],
         ])
-    rows.append([InlineKeyboardButton("❌ بستن", callback_data=CB + "close", style="danger")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت به مدیریت ربات کاربران", callback_data=CB + "back_userbot", style="primary")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -308,6 +308,28 @@ async def handle_channel_callback(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     action = data[len(CB):]
     draft = _draft(context)
+
+    if action == "menu":
+        context.user_data.pop(STATE_KEY, None)
+        try:
+            await query.edit_message_text(
+                _summary(draft),
+                parse_mode="HTML",
+                reply_markup=_menu_markup(bool(draft.get("kind"))),
+            )
+        except Exception:
+            await _show_menu(query.message, context)
+        return
+
+    if action == "back_userbot":
+        _clear(context)
+        from AdminBot.userbot import send_userbot_main_menu
+        await send_userbot_main_menu(
+            query.message.chat_id,
+            context,
+            message=query.message,
+        )
+        return
 
     if action == "new":
         context.user_data[DRAFT_KEY] = {"kind": "", "text": "", "file_id": "", "buttons": []}
