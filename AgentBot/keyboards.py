@@ -220,6 +220,7 @@ def settings_menu_keyboard():
             IButton("🎁 مدیریت هدایا", callback_data="agbot:set:gifts"),
             IButton("📧 ارسال پیام همگانی", callback_data="agbot:set:broadcast"),
         ],
+        [IButton("📢 مدیریت کانال", callback_data="agbot:set:channel")],
         [IButton("⚙️ تنظیمات", callback_data="agbot:set:config")],
     ])
 
