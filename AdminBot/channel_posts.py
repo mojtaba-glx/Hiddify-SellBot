@@ -117,6 +117,7 @@ def _menu_markup(has_draft: bool) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("➕ ساخت پست جدید", callback_data=CB + "new", style="success")]]
     if has_draft:
         rows.extend([
+            [InlineKeyboardButton("✏️ ویرایش پست", callback_data=CB + "edit", style="primary")],
             [InlineKeyboardButton("🔘 افزودن دکمه", callback_data=CB + "button", style="primary")],
             [InlineKeyboardButton("👁 پیش‌نمایش", callback_data=CB + "preview", style="primary")],
             [InlineKeyboardButton("🚀 انتشار در کانال", callback_data=CB + "publish", style="success")],
@@ -258,7 +259,7 @@ async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_T
             await message.reply_text("❌ فقط متن، عکس یا ویدئو ارسال کن.")
             raise ApplicationHandlerStop
         context.user_data.pop(STATE_KEY, None)
-        await message.reply_text("✅ محتوای پست ذخیره شد.")
+        await message.reply_text("✅ محتوای پست ذخیره/ویرایش شد.")
         await _show_menu(message, context)
         raise ApplicationHandlerStop
 
@@ -336,6 +337,21 @@ async def handle_channel_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data[STATE_KEY] = "content"
         await query.message.reply_text(
             "📝 متن پست را بفرست، یا عکس/ویدئو را همراه کپشن ارسال کن.\n\nبرای انصراف «❌ لغو» را بفرست."
+        )
+        return
+
+    if action == "edit":
+        if not draft.get("kind"):
+            await query.message.reply_text("❌ هنوز پستی برای ویرایش وجود ندارد.")
+            return
+        context.user_data[STATE_KEY] = "content"
+        await query.message.reply_text(
+            "✏️ نسخه جدید پست را بفرست.\n\n"
+            "• برای پست متنی: متن جدید را ارسال کن.\n"
+            "• برای عکس: عکس جدید را همراه کپشن بفرست.\n"
+            "• برای ویدئو: ویدئوی جدید را همراه کپشن بفرست.\n\n"
+            "🔘 دکمه‌های فعلی پست حفظ می‌شوند.\n"
+            "برای انصراف «❌ لغو» را بفرست."
         )
         return
 
