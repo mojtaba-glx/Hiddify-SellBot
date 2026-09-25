@@ -107,6 +107,14 @@ class AgentChannelManagerTests(unittest.TestCase):
         )[0]
         self.assertNotIn("clear_draft=True", cancel_section)
 
+    def test_telegram_text_and_caption_limits_are_guarded(self):
+        self.assertIn("MAX_TEXT_LENGTH = 4096", CHANNEL_SOURCE)
+        self.assertIn("MAX_CAPTION_LENGTH = 1024", CHANNEL_SOURCE)
+        self.assertIn('_content_length_error("photo", message.caption or "")', CHANNEL_SOURCE)
+        self.assertIn('_content_length_error("video", message.caption or "")', CHANNEL_SOURCE)
+        self.assertIn('_content_length_error("text", message.text or "")', CHANNEL_SOURCE)
+        self.assertIn("_visible_html_length", CHANNEL_SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()
