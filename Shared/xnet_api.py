@@ -1685,17 +1685,44 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _public_origin(server: Dict[str, Any]) -> str:
-    """Public origin used for X-NET subscription URLs."""
+    """Public origin used for X-NET subscription URLs.
+
+    X-NET's management panel is commonly exposed on :8080 while the public
+    subscription endpoint is served through the same hostname on standard
+    HTTPS (443).  Never leak that management port into subscriber links when
+    a DNS hostname is available.
+    """
     custom = str(
         (server or {}).get("xnet_sub_domain")
         or (server or {}).get("xnet_sub_host")
         or ""
     ).strip()
-    if custom:
-        if "://" not in custom:
-            custom = "https://" + custom
-        return custom.rstrip("/")
-    return _base_url(server)
+    raw = custom or _base_url(server)
+    if "://" not in raw:
+        raw = "https://" + raw
+    raw = raw.rstrip("/")
+
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        host = str(parsed.hostname or "").strip()
+        port = parsed.port
+        scheme = str(parsed.scheme or "https").strip().lower() or "https"
+        if host:
+            # :8080 is the X-NET management port in our supported setup.
+            # For a real DNS hostname, subscriber URLs belong on public HTTPS.
+            is_ip = False
+            try:
+                import ipaddress
+                ipaddress.ip_address(host)
+                is_ip = True
+            except ValueError:
+                is_ip = False
+            if port == 8080 and not is_ip:
+                return f"https://{host}"
+    except Exception:
+        pass
+
+    return raw
 
 
 def get_subscription_url(server: Dict[str, Any], user_uuid: str) -> str:
