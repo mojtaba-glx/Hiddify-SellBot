@@ -127,6 +127,19 @@ def _menu_markup(has_draft: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _edit_markup(draft: dict[str, Any]) -> InlineKeyboardMarkup:
+    kind = str(draft.get("kind") or "").strip().lower()
+    rows = [
+        [InlineKeyboardButton("📝 ویرایش متن / کپشن", callback_data=CB + "edit_text", style="primary")],
+        [InlineKeyboardButton("🖼 ویرایش عکس / ویدئو", callback_data=CB + "edit_media", style="primary")],
+        [InlineKeyboardButton("🔄 جایگزینی کامل پست", callback_data=CB + "edit_replace", style="danger")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data=CB + "menu", style="primary")],
+    ]
+    if kind == "text":
+        rows[1][0].text = "🖼 افزودن عکس / ویدئو"
+    return InlineKeyboardMarkup(rows)
+
+
 def _summary(draft: dict[str, Any]) -> str:
     kind = draft.get("kind") or ""
     kind_fa = {"text": "متنی", "photo": "عکس + کپشن", "video": "ویدئو + کپشن"}.get(kind, "هنوز ساخته نشده")
@@ -263,6 +276,40 @@ async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_T
         await _show_menu(message, context)
         raise ApplicationHandlerStop
 
+    if state == "edit_text":
+        if not message.text:
+            await message.reply_text(
+                "❌ برای ویرایش متن/کپشن فقط متن بفرست.\n"
+                "برای پاک‌کردن کامل متن، عدد 0 را بفرست."
+            )
+            raise ApplicationHandlerStop
+        new_text = message.text_html or message.text or ""
+        if str(message.text or "").strip() in {"0", "-", "—"}:
+            new_text = ""
+        draft["text"] = new_text
+        context.user_data.pop(STATE_KEY, None)
+        await message.reply_text("✅ متن/کپشن پست ویرایش شد.")
+        await _show_menu(message, context)
+        raise ApplicationHandlerStop
+
+    if state == "edit_media":
+        if message.photo:
+            draft["kind"] = "photo"
+            draft["file_id"] = message.photo[-1].file_id
+        elif message.video:
+            draft["kind"] = "video"
+            draft["file_id"] = message.video.file_id
+        else:
+            await message.reply_text(
+                "❌ فقط عکس یا ویدئو بفرست.\n"
+                "متن/کپشن فعلی و دکمه‌ها بدون تغییر می‌مانند."
+            )
+            raise ApplicationHandlerStop
+        context.user_data.pop(STATE_KEY, None)
+        await message.reply_text("✅ عکس/ویدئوی پست ویرایش شد.")
+        await _show_menu(message, context)
+        raise ApplicationHandlerStop
+
     if state == "button_text":
         if not text or len(text) > 64:
             await message.reply_text("❌ عنوان دکمه باید بین ۱ تا ۶۴ کاراکتر باشد.")
@@ -344,14 +391,48 @@ async def handle_channel_callback(update: Update, context: ContextTypes.DEFAULT_
         if not draft.get("kind"):
             await query.message.reply_text("❌ هنوز پستی برای ویرایش وجود ندارد.")
             return
+        context.user_data.pop(STATE_KEY, None)
+        await query.message.reply_text(
+            "✏️ <b>ویرایش پست</b>\n\n"
+            "بخشی که می‌خواهی تغییر کند را انتخاب کن.\n"
+            "متن، رسانه و دکمه‌ها مستقل از هم نگه داشته می‌شوند.",
+            parse_mode="HTML",
+            reply_markup=_edit_markup(draft),
+        )
+        return
+
+    if action == "edit_text":
+        if not draft.get("kind"):
+            await query.message.reply_text("❌ هنوز پستی برای ویرایش وجود ندارد.")
+            return
+        context.user_data[STATE_KEY] = "edit_text"
+        await query.message.reply_text(
+            "📝 متن یا کپشن جدید را بفرست.\n\n"
+            "عکس/ویدئو و دکمه‌های فعلی تغییر نمی‌کنند.\n"
+            "برای پاک‌کردن کامل متن، عدد 0 را بفرست."
+        )
+        return
+
+    if action == "edit_media":
+        if not draft.get("kind"):
+            await query.message.reply_text("❌ هنوز پستی برای ویرایش وجود ندارد.")
+            return
+        context.user_data[STATE_KEY] = "edit_media"
+        await query.message.reply_text(
+            "🖼 عکس یا ویدئوی جدید را بفرست.\n\n"
+            "متن/کپشن و دکمه‌های فعلی تغییر نمی‌کنند."
+        )
+        return
+
+    if action == "edit_replace":
+        if not draft.get("kind"):
+            await query.message.reply_text("❌ هنوز پستی برای ویرایش وجود ندارد.")
+            return
         context.user_data[STATE_KEY] = "content"
         await query.message.reply_text(
-            "✏️ نسخه جدید پست را بفرست.\n\n"
-            "• برای پست متنی: متن جدید را ارسال کن.\n"
-            "• برای عکس: عکس جدید را همراه کپشن بفرست.\n"
-            "• برای ویدئو: ویدئوی جدید را همراه کپشن بفرست.\n\n"
-            "🔘 دکمه‌های فعلی پست حفظ می‌شوند.\n"
-            "برای انصراف «❌ لغو» را بفرست."
+            "🔄 نسخه کامل جدید پست را بفرست.\n\n"
+            "می‌تواند متن، عکس + کپشن یا ویدئو + کپشن باشد.\n"
+            "🔘 دکمه‌های فعلی همچنان حفظ می‌شوند."
         )
         return
 
