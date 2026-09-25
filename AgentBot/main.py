@@ -231,7 +231,7 @@ def main() -> None:
 
         application.add_handler(CommandHandler("start", handle_start))
         application.add_handler(CommandHandler("cancel", handle_agent_text))
-        application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_agent_text))
+        application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.VIDEO) & ~filters.COMMAND, handle_agent_text))
         application.add_handler(CallbackQueryHandler(handle_main_menu_callback))
         application.add_error_handler(error_handler)
 
