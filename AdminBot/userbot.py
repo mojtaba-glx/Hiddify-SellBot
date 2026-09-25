@@ -1807,6 +1807,9 @@ def build_userbot_main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📧ارسال پیام همگانی", callback_data="userbot:broadcast_menu"),
         ],
         [
+            InlineKeyboardButton("📢 مدیریت کانال", callback_data="channelpost:menu")
+        ],
+        [
             InlineKeyboardButton("⚙️تنظیمات", callback_data="userbot:settings_menu")
         ],
     ]
