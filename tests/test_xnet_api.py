@@ -392,6 +392,37 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
             "https://sub.example.com/api/v1/sub/abc",
         )
 
+    def test_public_subscription_url_drops_xnet_management_port_for_dns_host(self):
+        server = dict(self.server)
+        server["panel_url"] = "https://xnet.speedll.ir:8080"
+        server.pop("xnet_sub_domain", None)
+        server.pop("xnet_sub_host", None)
+
+        self.assertEqual(
+            xnet_api.get_subscription_url(server, "abc"),
+            "https://xnet.speedll.ir/api/v1/sub/abc",
+        )
+
+    def test_public_subscription_custom_domain_drops_management_port(self):
+        server = dict(self.server)
+        server["xnet_sub_domain"] = "https://xnet.speedll.ir:8080"
+
+        self.assertEqual(
+            xnet_api.get_subscription_url(server, "abc"),
+            "https://xnet.speedll.ir/api/v1/sub/abc",
+        )
+
+    def test_public_subscription_keeps_management_port_for_raw_ip_fallback(self):
+        server = dict(self.server)
+        server["panel_url"] = "https://31.56.48.96:8080"
+        server.pop("xnet_sub_domain", None)
+        server.pop("xnet_sub_host", None)
+
+        self.assertEqual(
+            xnet_api.get_subscription_url(server, "abc"),
+            "https://31.56.48.96:8080/api/v1/sub/abc",
+        )
+
     async def test_get_user_configs_decodes_default_base64_subscription(self):
         body = base64.b64encode(
             b"vless://one\nhysteria2://two\nnot-a-config"
