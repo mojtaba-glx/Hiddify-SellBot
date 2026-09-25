@@ -447,6 +447,7 @@ EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
 EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
 EDIT_SERVER_XNET_USERNAME = "edit_server_xnet_username"
 EDIT_SERVER_XNET_PASSWORD = "edit_server_xnet_password"
+EDIT_SERVER_XNET_API_URL = "edit_server_xnet_api_url"
 EDIT_SERVER_XNET_SUB_DOMAIN = "edit_server_xnet_sub_domain"
 EDIT_SERVER_XNET_INBOUND = "edit_server_xnet_inbound"
 
@@ -3335,6 +3336,9 @@ def build_server_detail_text(
             xnet_user = str(server.get("xnet_username") or "admin").strip()
             if xnet_user:
                 xnet_info += f"\n👤 یوزر پنل: {escape(xnet_user)}"
+            internal_api = str(server.get("xnet_api_url") or "").strip()
+            if internal_api:
+                xnet_info += f"\n🔌 API داخلی: {escape(internal_api)}"
             inbound_info = str(server.get("xnet_inbound_id") or "").strip()
             if inbound_info == "0":
                 xnet_info += "\n🧩 اینباند: همه (0)"
@@ -5730,6 +5734,22 @@ async def handle_edit_server_flow(
     elif state == EDIT_SERVER_XNET_PASSWORD:
         updates["xnet_password"] = text
         msg_ok = "✅ رمز پنل X-NET بروزرسانی شد."
+    elif state == EDIT_SERVER_XNET_API_URL:
+        api_url = text.strip()
+        if api_url in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            updates["xnet_api_url"] = ""
+            msg_ok = "✅ API داخلی X-NET پاک شد؛ ربات دوباره از آدرس عمومی پنل استفاده می‌کند."
+        else:
+            api_url = api_url.rstrip("/")
+            if not api_url.startswith(("http://", "https://")):
+                await message.reply_text(
+                    "❌ آدرس API داخلی باید با http:// یا https:// شروع شود.\n"
+                    "مثال: http://127.0.0.1:8080",
+                    reply_markup=cancel_keyboard(),
+                )
+                return
+            updates["xnet_api_url"] = api_url
+            msg_ok = "✅ آدرس API داخلی X-NET بروزرسانی شد."
     elif state == EDIT_SERVER_XNET_SUB_DOMAIN:
         sub = text.strip()
         if sub in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
@@ -5882,6 +5902,7 @@ async def send_server_edit_menu(
                 [InlineKeyboardButton("🌐ویرایش آدرس پنل", callback_data=f"seredit:{server_id}:panel_url")],
                 [InlineKeyboardButton("👤ویرایش نام کاربری پنل", callback_data=f"seredit:{server_id}:xnet_username")],
                 [InlineKeyboardButton("🔑ویرایش رمز پنل", callback_data=f"seredit:{server_id}:xnet_password")],
+                [InlineKeyboardButton("🔌ویرایش API داخلی X-NET", callback_data=f"seredit:{server_id}:xnet_api_url")],
                 [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xnet_sub_domain")],
                 [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xnet_inbound")],
                 [InlineKeyboardButton("🗿ویرایش محدودیت کاربر", callback_data=f"seredit:{server_id}:limit")],
@@ -8094,6 +8115,19 @@ async def handle_server_inline_callback(
             set_server_state(EDIT_SERVER_XNET_PASSWORD)
             await msg.edit_text(
                 "🔑 رمز جدید ادمین X-NET را وارد کنید:",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xnet_api_url":
+            set_server_state(EDIT_SERVER_XNET_API_URL)
+            await msg.edit_text(
+                "🔌 آدرس داخلی API پنل X-NET را وارد کنید.\n"
+                "اگر ربات و X-NET روی همین سرور هستند، مقدار پیشنهادی:\n"
+                "<code>http://127.0.0.1:8080</code>\n\n"
+                "این آدرس فقط برای ارتباط داخلی ربات استفاده می‌شود و لینک پنل/ساب کاربران تغییر نمی‌کند.\n"
+                "برای غیرفعال‌کردن: 0 یا skip",
+                parse_mode="HTML",
                 reply_markup=cancel_kb,
             )
             return
