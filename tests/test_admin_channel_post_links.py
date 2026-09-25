@@ -77,11 +77,30 @@ class AdminChannelPostLinkTests(unittest.TestCase):
             SOURCE,
         )
         self.assertIn('if action == "edit":', SOURCE)
-        self.assertIn("🔘 دکمه‌های فعلی پست حفظ می‌شوند.", SOURCE)
+        self.assertIn('callback_data=CB + "edit_text"', SOURCE)
+        self.assertIn('callback_data=CB + "edit_media"', SOURCE)
+        self.assertIn('callback_data=CB + "edit_replace"', SOURCE)
         edit_section = SOURCE.split('if action == "edit":', 1)[1].split(
             'if action == "button":', 1
         )[0]
         self.assertNotIn('context.user_data[DRAFT_KEY] =', edit_section)
+
+    def test_channel_text_and_media_edits_are_independent(self):
+        text_state = SOURCE.split('if state == "edit_text":', 1)[1].split(
+            'if state == "edit_media":', 1
+        )[0]
+        self.assertIn('draft["text"] = new_text', text_state)
+        self.assertNotIn('draft["file_id"]', text_state)
+        self.assertNotIn('draft["buttons"]', text_state)
+
+        media_state = SOURCE.split('if state == "edit_media":', 1)[1].split(
+            'if state == "button_text":', 1
+        )[0]
+        self.assertIn('draft["file_id"] =', media_state)
+        self.assertIn('draft["kind"] = "photo"', media_state)
+        self.assertIn('draft["kind"] = "video"', media_state)
+        self.assertNotIn('draft["text"] =', media_state)
+        self.assertNotIn('draft["buttons"]', media_state)
 
 
 if __name__ == "__main__":
