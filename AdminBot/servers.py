@@ -4089,7 +4089,10 @@ async def send_expired_user_detail(
     )
     panel_user_uuid = str(user_data.get("uuid") or user_uuid or "")
     user_link_base = _build_user_base_url(server, panel_user_uuid)
-    user_link = f"{user_link_base.rstrip('/')}/" if user_link_base else None
+    if user_link_base and xnet_api.is_xnet_server(server):
+        user_link = user_link_base.rstrip("/")
+    else:
+        user_link = f"{user_link_base.rstrip('/')}/" if user_link_base else None
     text = build_user_detail_html_text(
         server,
         user_data,
@@ -4172,7 +4175,10 @@ async def send_user_detail(
 
     panel_user_uuid = str(user_data.get("uuid") or user_uuid or "")
     user_link_base = _build_user_base_url(server, panel_user_uuid)
-    user_link = f"{user_link_base.rstrip('/')}/" if user_link_base else None
+    if user_link_base and xnet_api.is_xnet_server(server):
+        user_link = user_link_base.rstrip("/")
+    else:
+        user_link = f"{user_link_base.rstrip('/')}/" if user_link_base else None
     text = build_user_detail_html_text(
         server,
         user_data,
@@ -6360,7 +6366,11 @@ async def handle_add_user_flow(
                 base_url = _build_user_base_url(server, row_uuid)
                 if not base_url:
                     continue
-                sub_url = f"{base_url}/all.txt"
+                sub_url = (
+                    base_url.rstrip("/")
+                    if xnet_api.is_xnet_server(server)
+                    else f"{base_url.rstrip('/')}/all.txt"
+                )
                 qr_image = make_qr_image(sub_url)
                 await context.bot.send_photo(
                     chat_id=message.chat_id,
