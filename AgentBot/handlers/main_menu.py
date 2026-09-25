@@ -228,6 +228,20 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     state = context.user_data.get(UD_STATE)
 
+    channel_states = {
+        STATE_CHANNEL_CONTENT,
+        STATE_CHANNEL_EDIT_TEXT,
+        STATE_CHANNEL_EDIT_MEDIA,
+        STATE_CHANNEL_BUTTON_TEXT,
+        STATE_CHANNEL_BUTTON_URL,
+    }
+    # داخل سازنده پست، «لغو» باید کاربر را به همان مدیریت کانال برگرداند
+    # و پیش‌نویس فعلی را حفظ کند؛ نه اینکه به منوی اصلی پرت شود.
+    if state in channel_states and text in ("❌ لغو", "/cancel", "لغو"):
+        consumed = await settings_channel.handle_text(update, context)
+        if consumed:
+            return
+
     # اگر در حالت تغییر نام هستیم، دکمه بازگشت پایین باید مستقیم به هندلر rename برود
     if state == "st:rename_service" and text in (BTN_BACK, "🔙 بازگشت", "❌ لغو", "/cancel", "لغو"):
         consumed = await subscriptions.handle_text(update, context)
