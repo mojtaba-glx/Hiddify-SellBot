@@ -71,6 +71,18 @@ class AdminChannelPostLinkTests(unittest.TestCase):
             SOURCE,
         )
 
+    def test_channel_draft_can_be_edited_without_resetting_buttons(self):
+        self.assertIn(
+            'InlineKeyboardButton("✏️ ویرایش پست", callback_data=CB + "edit"',
+            SOURCE,
+        )
+        self.assertIn('if action == "edit":', SOURCE)
+        self.assertIn("🔘 دکمه‌های فعلی پست حفظ می‌شوند.", SOURCE)
+        edit_section = SOURCE.split('if action == "edit":', 1)[1].split(
+            'if action == "button":', 1
+        )[0]
+        self.assertNotIn('context.user_data[DRAFT_KEY] =', edit_section)
+
 
 if __name__ == "__main__":
     unittest.main()
