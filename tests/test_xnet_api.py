@@ -384,6 +384,27 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(user["status"], "disabled")
         self.assertEqual(user["_user_list_status"], "offline")
 
+    def test_management_api_prefers_internal_url(self):
+        server = dict(self.server)
+        server["panel_url"] = "https://xnet.speedll.ir:8080"
+        server["xnet_api_url"] = "http://127.0.0.1:8080"
+        self.assertEqual(
+            xnet_api._base_url(server),
+            "http://127.0.0.1:8080",
+        )
+
+    def test_internal_api_url_never_leaks_into_public_subscription(self):
+        server = dict(self.server)
+        server["panel_url"] = "https://xnet.speedll.ir:8080"
+        server["xnet_api_url"] = "http://127.0.0.1:8080"
+        server.pop("xnet_sub_domain", None)
+        server.pop("xnet_sub_host", None)
+
+        self.assertEqual(
+            xnet_api.get_subscription_url(server, "abc"),
+            "https://xnet.speedll.ir/api/v1/sub/abc",
+        )
+
     def test_public_subscription_url_can_use_custom_domain(self):
         server = dict(self.server)
         server["xnet_sub_domain"] = "sub.example.com"
