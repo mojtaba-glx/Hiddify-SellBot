@@ -6,12 +6,16 @@ from telegram.ext import ContextTypes
 from Shared import agent_db
 from AgentBot.handlers.base import authenticate, clear_state
 from AgentBot.keyboards import main_menu_keyboard
-from AgentBot.constants import MENU_MAIN, UD_STATE
+from AgentBot.constants import (
+    MENU_MAIN, UD_STATE,
+    STATE_CHANNEL_CONTENT, STATE_CHANNEL_EDIT_TEXT, STATE_CHANNEL_EDIT_MEDIA,
+    STATE_CHANNEL_BUTTON_TEXT, STATE_CHANNEL_BUTTON_URL,
+)
 from AgentBot.handlers import (
     subscriptions, wallet, plans, customer_bot, tickets,
     settings_users, settings_orders, settings_transactions, settings_gifts,
     settings_shop, settings_payment, settings_customer_payments, settings_broadcast,
-    settings_forcejoin, finance,
+    settings_forcejoin, settings_channel, finance,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,6 +147,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
         "cbot": customer_bot,
         "ticket": tickets,
         "broadcast": settings_broadcast,
+        "channel": settings_channel,
         "custpay": settings_customer_payments,
         "finance": finance,
         "set": None,
@@ -171,6 +176,7 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
             "tx": settings_transactions,
             "gifts": settings_gifts,
             "broadcast": settings_broadcast,
+            "channel": settings_channel,
             "config": None,
             "cfg": None,
         }
@@ -292,6 +298,11 @@ async def handle_agent_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "st:search_name": subscriptions.handle_text,
             "st:search_tx": settings_transactions.handle_text,
             "st:broadcast_message": settings_broadcast.handle_text,
+            STATE_CHANNEL_CONTENT: settings_channel.handle_text,
+            STATE_CHANNEL_EDIT_TEXT: settings_channel.handle_text,
+            STATE_CHANNEL_EDIT_MEDIA: settings_channel.handle_text,
+            STATE_CHANNEL_BUTTON_TEXT: settings_channel.handle_text,
+            STATE_CHANNEL_BUTTON_URL: settings_channel.handle_text,
             "st:dyn_settings": plans.handle_text,
             "st:dyn_edit_field": plans.handle_text,
             "st:fixed_add_cat_title": plans.handle_text,
