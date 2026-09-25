@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 SOURCE_PATH = Path(__file__).resolve().parents[1] / "AdminBot" / "channel_posts.py"
 SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
+KEYBOARDS_SOURCE = (Path(__file__).resolve().parents[1] / "AdminBot" / "keyboards.py").read_text(encoding="utf-8")
+USERBOT_ADMIN_SOURCE = (Path(__file__).resolve().parents[1] / "AdminBot" / "userbot.py").read_text(encoding="utf-8")
 
 
 def _load_normalizer():
@@ -54,6 +56,20 @@ class AdminChannelPostLinkTests(unittest.TestCase):
     def test_rejects_invalid_telegram_username(self):
         normalize = _load_normalizer()
         self.assertEqual(normalize("@bad-name"), "")
+
+    def test_channel_management_lives_inside_userbot_admin_menu(self):
+        self.assertIn(
+            'InlineKeyboardButton("📢 مدیریت کانال", callback_data="channelpost:menu")',
+            USERBOT_ADMIN_SOURCE,
+        )
+        self.assertNotIn(
+            "[KeyboardButton(BTN_USERBOT), KeyboardButton(BTN_CHANNEL_POSTS)]",
+            KEYBOARDS_SOURCE,
+        )
+        self.assertIn(
+            'callback_data=CB + "back_userbot"',
+            SOURCE,
+        )
 
 
 if __name__ == "__main__":
