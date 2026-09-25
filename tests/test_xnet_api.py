@@ -762,6 +762,20 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(down, 8.5)
         self.assertAlmostEqual(up, 1.25)
 
+    async def test_health_probe_uses_only_public_ping(self):
+        ping = AsyncMock(return_value={"status": "ok"})
+        with patch.object(xnet_api, "ping", new=ping), patch.object(
+            xnet_api, "get_inbounds", new=AsyncMock()
+        ) as get_inbounds, patch.object(
+            xnet_api, "list_users", new=AsyncMock()
+        ) as list_users:
+            result = await xnet_api.health_probe(self.server)
+
+        self.assertEqual(result["status"], "ok")
+        ping.assert_awaited_once_with(self.server)
+        get_inbounds.assert_not_awaited()
+        list_users.assert_not_awaited()
+
     async def test_test_connect_requires_ok_ping_and_management_api(self):
         with patch.object(
             xnet_api, "ping", new=AsyncMock(return_value={"status": "ok"})
