@@ -698,13 +698,31 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
                     pass
 
         # کانفیگ‌های این سرور
+        # Hiddify: Admin API first so renamed/edited users are reflected
+        # immediately in managed subscriptions instead of a stale public sub.
         fetched: list[str] = []
         try:
-            base_url = sub_aggregator._build_user_base_url(srv, user_uuid)
+            from Shared import xnet_api
+            is_xnet = xnet_api.is_xnet_server(srv)
         except Exception:
-            base_url = None
-        if base_url:
-            fetched = sub_aggregator._fetch_subscription_lines(base_url)
+            is_xnet = False
+        try:
+            from Shared import xui_api
+            is_xui = xui_api.is_xui_server(srv)
+        except Exception:
+            is_xui = False
+
+        if not is_xnet and not is_xui:
+            fetched = sub_aggregator._fetch_lines_from_admin_api(srv, user_uuid)
+
+        if not fetched:
+            try:
+                base_url = sub_aggregator._build_user_base_url(srv, user_uuid)
+            except Exception:
+                base_url = None
+            if base_url:
+                fetched = sub_aggregator._fetch_subscription_lines(base_url)
+
         if not fetched:
             fetched = sub_aggregator._fetch_lines_from_admin_api(srv, user_uuid)
 
