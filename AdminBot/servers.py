@@ -3362,10 +3362,13 @@ def build_server_detail_text(
                 or server.get("xnet_token")
                 or ""
             ).strip()
-            if api_token:
+            has_fallback = bool(str(server.get("xnet_password") or "").strip())
+            if api_token and has_fallback:
+                xnet_info += "\n🔐 احراز هویت API: Bearer Token + JWT Fallback ✅"
+            elif api_token:
                 xnet_info += "\n🔐 احراز هویت API: Bearer Token ✅"
             else:
-                xnet_info += "\n⚠️ احراز هویت API: Legacy Login"
+                xnet_info += "\n⚠️ احراز هویت API: JWT Login"
             internal_api = str(server.get("xnet_api_url") or "").strip()
             if internal_api:
                 xnet_info += f"\n🔌 API داخلی: {escape(internal_api)}"
@@ -5236,7 +5239,8 @@ async def handle_add_server_flow(
                 "🔑 توکن API مدیریت X-NET را وارد کنید:\n"
                 "از پنل X-NET → تنظیمات پیشرفته پنل → مدیریت سرویس API، "
                 "Bearer Token را کپی کنید.\n\n"
-                "✅ برای اتصال ربات دیگر نام کاربری/رمز پنل لازم نیست.",
+                "ربات اول Bearer Token را امتحان می‌کند؛ اگر این نسخه X-NET "
+                "توکن را رد کند، فقط یک‌بار اطلاعات fallback ادمین را می‌پرسد.",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -5373,10 +5377,21 @@ async def handle_add_server_flow(
                 rows.append(f"{enabled} {iid} | {proto} | {remark}")
             inbound_text = "\n".join(rows) if rows else "هیچ Inboundی هنوز ساخته نشده."
         except Exception as exc:
+            detail = str(exc)
+            if "fallback" in detail.lower() or "نام کاربری و رمز" in detail:
+                context.user_data["state"] = ADD_STATE_XNET_USERNAME
+                await message.reply_text(
+                    "⚠️ خود X-NET این Bearer Token را روی API محافظت‌شده رد کرد.\n"
+                    "توکن ذخیره شد و ربات از این به بعد در این نسخه از JWT cache استفاده می‌کند.\n\n"
+                    "👤 نام کاربری ادمین X-NET را برای fallback وارد کنید "
+                    "(معمولاً admin):",
+                    reply_markup=cancel_keyboard(),
+                )
+                return
             await message.reply_text(
-                "❌ توکن API X-NET یا دریافت Inboundها ناموفق بود.\n"
-                f"جزئیات: {str(exc)[:600]}\n\n"
-                "توکن جدید را دوباره ارسال کنید یا عملیات را لغو کنید.",
+                "❌ اتصال X-NET یا دریافت Inboundها ناموفق بود.\n"
+                f"جزئیات: {detail[:600]}\n\n"
+                "توکن را بررسی کنید یا عملیات را لغو کنید.",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -5401,7 +5416,8 @@ async def handle_add_server_flow(
         context.user_data["state"] = ADD_STATE_XNET_PASSWORD
         await message.reply_text(
             "🔑 رمز عبور ادمین X-NET را وارد کنید:\n"
-            "ربات با /api/auth/login یک JWT مدیریتی می‌گیرد؛ API Token ثابت نود استفاده نمی‌شود.",
+            "این رمز فقط برای fallback استفاده می‌شود. JWT بین چهار ربات cache می‌شود "
+            "و تا زمان انقضا دوباره Login انجام نمی‌شود.",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -5820,7 +5836,10 @@ async def handle_edit_server_flow(
         else:
             updates["xnet_api_token"] = token
             updates["xnet_token"] = token
-            msg_ok = "✅ Bearer Token مدیریت X-NET بروزرسانی شد؛ ربات دیگر برای API لاگین نمی‌کند."
+            msg_ok = (
+                "✅ Bearer Token مدیریت X-NET بروزرسانی شد. "
+                "اگر پنل آن را رد کند، ربات خودکار از JWT cache مشترک fallback می‌کند."
+            )
     elif state == EDIT_SERVER_XNET_API_URL:
         api_url = text.strip()
         if api_url in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
@@ -5988,6 +6007,8 @@ async def send_server_edit_menu(
                 [InlineKeyboardButton("📌ویرایش عنوان", callback_data=f"seredit:{server_id}:title")],
                 [InlineKeyboardButton("🌐ویرایش آدرس پنل", callback_data=f"seredit:{server_id}:panel_url")],
                 [InlineKeyboardButton("🔑ویرایش توکن API X-NET", callback_data=f"seredit:{server_id}:xnet_token")],
+                [InlineKeyboardButton("👤نام کاربری fallback X-NET", callback_data=f"seredit:{server_id}:xnet_username")],
+                [InlineKeyboardButton("🔐رمز fallback X-NET", callback_data=f"seredit:{server_id}:xnet_password")],
                 [InlineKeyboardButton("🔌ویرایش API داخلی X-NET", callback_data=f"seredit:{server_id}:xnet_api_url")],
                 [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xnet_sub_domain")],
                 [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xnet_inbound")],
@@ -8207,7 +8228,8 @@ async def handle_server_inline_callback(
             await msg.edit_text(
                 "🔑 Bearer Token جدید X-NET را وارد کنید.\n"
                 "مسیر پنل: تنظیمات پیشرفته پنل → مدیریت سرویس API\n\n"
-                "می‌توانید خود توکن یا عبارت Bearer <token> را ارسال کنید.",
+                "می‌توانید خود توکن یا عبارت Bearer <token> را ارسال کنید.\n"
+                "اگر این نسخه X-NET توکن را رد کند، ربات خودکار از JWT fallback استفاده می‌کند.",
                 reply_markup=cancel_kb,
             )
             return
@@ -8215,7 +8237,7 @@ async def handle_server_inline_callback(
         if field == "xnet_username":
             set_server_state(EDIT_SERVER_XNET_USERNAME)
             await msg.edit_text(
-                "👤 نام کاربری جدید ادمین X-NET را وارد کنید:",
+                "👤 نام کاربری ادمین X-NET برای JWT fallback را وارد کنید:",
                 reply_markup=cancel_kb,
             )
             return
@@ -8223,7 +8245,7 @@ async def handle_server_inline_callback(
         if field == "xnet_password":
             set_server_state(EDIT_SERVER_XNET_PASSWORD)
             await msg.edit_text(
-                "🔑 رمز جدید ادمین X-NET را وارد کنید:",
+                "🔑 رمز ادمین X-NET برای JWT fallback را وارد کنید:",
                 reply_markup=cancel_kb,
             )
             return
