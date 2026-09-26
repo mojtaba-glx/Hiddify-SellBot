@@ -5,8 +5,10 @@ from Hiddify/X-UI while using X-NET's documented management API.
 
 Important:
 - Management calls prefer X-NET's persistent Bearer API token (xnet_api_token).
-- Legacy username/password login is kept only as a compatibility fallback for
-  existing servers that have not been migrated to an API token yet.
+- Some X-NET builds expose an xnet_* API token but reject it on protected
+  routes. SellBot detects that once and falls back to a cached admin JWT.
+- The JWT cache is shared across bot processes so Admin/User/Agent/Customer do
+  not independently hammer /api/auth/login.
 - Client UUID may be supplied on create and may be changed with the client PUT
   endpoint. This lets SellBot keep one canonical UUID across its server cluster.
 """
@@ -15,13 +17,22 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
+import os
 import time
 import urllib.parse
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import httpx
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Linux production hosts provide fcntl.
+    fcntl = None
 
 
 class XnetApiError(RuntimeError):
@@ -31,6 +42,9 @@ class XnetApiError(RuntimeError):
 _TOKEN_CACHE: Dict[Tuple[str, str], Tuple[float, str]] = {}
 _TOKEN_LOCK = asyncio.Lock()
 _DEFAULT_TOKEN_TTL = 15 * 60
+_JWT_EXPIRY_SKEW = 30
+_API_TOKEN_REJECT_TTL = 15 * 60
+_REJECTED_API_TOKENS: Dict[Tuple[str, str], float] = {}
 _GB = 1024 ** 3
 
 # X-NET online endpoints are live data. Keep only a very short cache so bulk
@@ -112,65 +126,208 @@ def _cache_key(server: Dict[str, Any]) -> Tuple[str, str]:
     return (_base_url(server), _username(server))
 
 
+def _jwt_expiry_epoch(token: str) -> float:
+    """Best-effort JWT expiry. Fall back to a short TTL for opaque tokens."""
+    now = time.time()
+    try:
+        parts = str(token or "").split(".")
+        if len(parts) >= 2:
+            raw = parts[1] + ("=" * (-len(parts[1]) % 4))
+            payload = json.loads(base64.urlsafe_b64decode(raw.encode("ascii")).decode("utf-8"))
+            exp = float(payload.get("exp") or 0)
+            if exp > now + _JWT_EXPIRY_SKEW:
+                return exp - _JWT_EXPIRY_SKEW
+    except Exception:
+        pass
+    return now + _DEFAULT_TOKEN_TTL
+
+
+def _shared_jwt_paths(server: Dict[str, Any]) -> Tuple[Path, Path]:
+    """Per-panel cache/lock shared by Admin/User/Agent/Customer bot processes."""
+    raw = f"{_base_url(server)}\0{_username(server)}".encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:24]
+    base = Path(os.environ.get("HIDDIFY_SELLBOT_RUNTIME_DIR") or "/tmp")
+    return (
+        base / f"hiddify-sellbot-xnet-jwt-{digest}.json",
+        base / f"hiddify-sellbot-xnet-jwt-{digest}.lock",
+    )
+
+
+def _read_shared_jwt(server: Dict[str, Any]) -> Tuple[float, str]:
+    cache_path, _ = _shared_jwt_paths(server)
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        token = str(data.get("token") or "").strip()
+        expires_at = float(data.get("expires_at") or 0)
+        if token and expires_at > time.time() + 5:
+            return expires_at, token
+    except Exception:
+        pass
+    return 0.0, ""
+
+
+def _write_shared_jwt(server: Dict[str, Any], token: str, expires_at: float) -> None:
+    cache_path, _ = _shared_jwt_paths(server)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(
+            json.dumps({"token": token, "expires_at": expires_at}),
+            encoding="utf-8",
+        )
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, cache_path)
+        try:
+            os.chmod(cache_path, 0o600)
+        except OSError:
+            pass
+    except Exception:
+        pass
+
+
+def _clear_cached_jwt(server: Dict[str, Any]) -> None:
+    _TOKEN_CACHE.pop(_cache_key(server), None)
+    try:
+        cache_path, _ = _shared_jwt_paths(server)
+        cache_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _get_cached_jwt(server: Dict[str, Any]) -> str:
+    key = _cache_key(server)
+    now = time.time()
+    cached = _TOKEN_CACHE.get(key)
+    if cached and cached[0] > now + 5 and cached[1]:
+        return cached[1]
+
+    expires_at, token = _read_shared_jwt(server)
+    if token:
+        _TOKEN_CACHE[key] = (expires_at, token)
+        return token
+    return ""
+
+
+async def _acquire_cross_process_login_lock(server: Dict[str, Any]) -> Optional[int]:
+    if fcntl is None:
+        return None
+    _, lock_path = _shared_jwt_paths(server)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    await asyncio.to_thread(fcntl.flock, fd, fcntl.LOCK_EX)
+    return fd
+
+
+def _release_cross_process_login_lock(fd: Optional[int]) -> None:
+    if fd is None:
+        return
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _api_token_reject_key(server: Dict[str, Any], token: str) -> Tuple[str, str]:
+    fingerprint = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()[:20]
+    return (_base_url(server), fingerprint)
+
+
+def _is_api_token_rejected(server: Dict[str, Any], token: str) -> bool:
+    if not token:
+        return False
+    key = _api_token_reject_key(server, token)
+    until = float(_REJECTED_API_TOKENS.get(key) or 0)
+    if until > time.monotonic():
+        return True
+    _REJECTED_API_TOKENS.pop(key, None)
+    return False
+
+
+def _mark_api_token_rejected(server: Dict[str, Any], token: str) -> None:
+    if token:
+        _REJECTED_API_TOKENS[_api_token_reject_key(server, token)] = (
+            time.monotonic() + _API_TOKEN_REJECT_TTL
+        )
+
+
 async def _login(server: Dict[str, Any], *, force: bool = False) -> str:
     configured = _configured_jwt(server)
     if configured and not force:
         return configured
 
-    key = _cache_key(server)
-    now = time.monotonic()
     if not force:
-        cached = _TOKEN_CACHE.get(key)
-        if cached and cached[0] > now and cached[1]:
-            return cached[1]
+        cached = _get_cached_jwt(server)
+        if cached:
+            return cached
 
     password = _password(server)
     if not password:
         raise XnetApiError(
-            "برای مدیریت X-NET باید نام کاربری و رمز ادمین پنل در تنظیمات سرور "
-            "ثبت شود (xnet_username/xnet_password)."
+            "توکن API X-NET توسط پنل رد شده و برای fallback امن JWT باید "
+            "نام کاربری و رمز ادمین پنل در تنظیمات سرور ثبت شود."
         )
 
     async with _TOKEN_LOCK:
         if not force:
-            cached = _TOKEN_CACHE.get(key)
-            if cached and cached[0] > time.monotonic() and cached[1]:
-                return cached[1]
+            cached = _get_cached_jwt(server)
+            if cached:
+                return cached
 
-        url = f"{_base_url(server)}/api/auth/login"
-        payload = {"username": _username(server), "password": password}
+        lock_fd = await _acquire_cross_process_login_lock(server)
         try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers={"Accept": "application/json"},
+            # Another bot process may have logged in while we were waiting.
+            if not force:
+                cached = _get_cached_jwt(server)
+                if cached:
+                    return cached
+
+            url = f"{_base_url(server)}/api/auth/login"
+            payload = {"username": _username(server), "password": password}
+            try:
+                async with httpx.AsyncClient(timeout=12.0) as client:
+                    response = await client.post(
+                        url,
+                        json=payload,
+                        headers={"Accept": "application/json"},
+                    )
+            except httpx.RequestError as exc:
+                detail = str(exc).strip() or type(exc).__name__
+                raise XnetApiError(
+                    f"خطا در ورود fallback به X-NET ({type(exc).__name__}): {detail}"
+                ) from exc
+
+            if response.status_code >= 400:
+                detail = response.text.strip().replace("\n", " ")[:250]
+                raise XnetApiError(
+                    f"ورود fallback به X-NET ناموفق بود (HTTP {response.status_code}): "
+                    f"{detail or 'login failed'}"
                 )
-        except httpx.RequestError as exc:
-            raise XnetApiError(f"خطا در اتصال به X-NET: {exc}") from exc
 
-        if response.status_code >= 400:
-            raise XnetApiError(
-                f"ورود به X-NET ناموفق بود (HTTP {response.status_code})."
-            )
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise XnetApiError("پاسخ ورود X-NET JSON معتبر نیست.") from exc
 
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise XnetApiError("پاسخ ورود X-NET JSON معتبر نیست.") from exc
+            if bool(data.get("requires2fa")):
+                raise XnetApiError(
+                    "اکانت ادمین X-NET نیاز به 2FA دارد. برای fallback خودکار ربات "
+                    "یک اکانت مدیریتی بدون TOTP اختصاص دهید."
+                )
 
-        if bool(data.get("requires2fa")):
-            raise XnetApiError(
-                "اکانت ادمین X-NET نیاز به 2FA دارد. برای اتصال خودکار ربات "
-                "یک اکانت مدیریتی بدون TOTP اختصاص دهید."
-            )
+            token = str(data.get("token") or "").strip()
+            if not token:
+                raise XnetApiError("X-NET بعد از ورود JWT برنگرداند.")
 
-        token = str(data.get("token") or "").strip()
-        if not token:
-            raise XnetApiError("X-NET بعد از ورود JWT برنگرداند.")
-
-        _TOKEN_CACHE[key] = (time.monotonic() + _DEFAULT_TOKEN_TTL, token)
-        return token
+            expires_at = _jwt_expiry_epoch(token)
+            _TOKEN_CACHE[_cache_key(server)] = (expires_at, token)
+            _write_shared_jwt(server, token, expires_at)
+            return token
+        finally:
+            _release_cross_process_login_lock(lock_fd)
 
 
 async def _management_token(
@@ -178,14 +335,13 @@ async def _management_token(
     *,
     force_legacy_login: bool = False,
 ) -> str:
-    """Return the credential used for X-NET management API calls.
+    """Return the best available X-NET management credential.
 
-    A configured persistent API token is authoritative and completely bypasses
-    /api/auth/login. Username/password login remains only as a compatibility
-    fallback for older server records that do not yet have an API token.
+    Prefer the persistent API token. If this X-NET build rejects that token,
+    remember the rejection briefly and use the shared JWT fallback instead.
     """
     token = _api_token(server)
-    if token:
+    if token and not _is_api_token_rejected(server, token):
         return token
     return await _login(server, force=force_legacy_login)
 
@@ -213,6 +369,8 @@ async def _request_json(
             )
 
     token = await _management_token(server) if auth else ""
+    api_token = _api_token(server) if auth else ""
+    using_api_token = bool(api_token and token == api_token)
     try:
         response = await _send(token)
     except httpx.RequestError as exc:
@@ -220,26 +378,38 @@ async def _request_json(
         raise XnetApiError(f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}") from exc
 
     if auth and response.status_code in {401, 403}:
-        # A persistent API token must never fall back to /api/auth/login.
-        # If it is invalid/revoked, fail explicitly instead of hammering login.
-        if _api_token(server):
-            detail = response.text.strip().replace("\n", " ")[:300]
-            raise XnetApiError(
-                f"توکن API X-NET رد شد (HTTP {response.status_code}): "
-                f"{detail or 'توکن را در پنل تولید/کپی و در ربات بروزرسانی کنید.'}"
-            )
-
-        # Legacy JWT sessions may expire. Old installations without an API
-        # token get one compatibility retry through username/password login.
-        if _password(server):
-            _TOKEN_CACHE.pop(_cache_key(server), None)
-            token = await _management_token(server, force_legacy_login=True)
+        if using_api_token:
+            # X-NET v1.4.x may expose xnet_* management tokens but reject them
+            # on protected routes. Do not retry that broken token on every
+            # request; switch to the shared JWT fallback.
+            _mark_api_token_rejected(server, api_token)
+            if not (_password(server) or _configured_jwt(server)):
+                detail = response.text.strip().replace("\n", " ")[:300]
+                raise XnetApiError(
+                    f"توکن API X-NET رد شد (HTTP {response.status_code}) و "
+                    "اطلاعات fallback ادمین ثبت نشده است. "
+                    f"{detail or 'username/password fallback required'}"
+                )
+            token = await _login(server, force=False)
             try:
                 response = await _send(token)
             except httpx.RequestError as exc:
                 detail = str(exc).strip() or type(exc).__name__
                 raise XnetApiError(
-                    f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}"
+                    f"خطا در اتصال fallback به X-NET ({type(exc).__name__}): {detail}"
+                ) from exc
+
+        # Cached JWT can expire/revoke earlier than its advertised exp. Refresh
+        # once, never in a loop.
+        if response.status_code in {401, 403} and not using_api_token and _password(server):
+            _clear_cached_jwt(server)
+            token = await _login(server, force=True)
+            try:
+                response = await _send(token)
+            except httpx.RequestError as exc:
+                detail = str(exc).strip() or type(exc).__name__
+                raise XnetApiError(
+                    f"خطا در اتصال fallback به X-NET ({type(exc).__name__}): {detail}"
                 ) from exc
 
     if response.status_code >= 400:
@@ -282,6 +452,8 @@ async def _request_bytes(
             )
 
     token = await _management_token(server) if auth else ""
+    api_token = _api_token(server) if auth else ""
+    using_api_token = bool(api_token and token == api_token)
     try:
         response = await _send(token)
     except httpx.RequestError as exc:
@@ -289,21 +461,33 @@ async def _request_bytes(
         raise XnetApiError(f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}") from exc
 
     if auth and response.status_code in {401, 403}:
-        if _api_token(server):
-            detail = response.text.strip().replace("\n", " ")[:300]
-            raise XnetApiError(
-                f"توکن API X-NET رد شد (HTTP {response.status_code}): "
-                f"{detail or 'توکن را در پنل تولید/کپی و در ربات بروزرسانی کنید.'}"
-            )
-        if _password(server):
-            _TOKEN_CACHE.pop(_cache_key(server), None)
-            token = await _management_token(server, force_legacy_login=True)
+        if using_api_token:
+            _mark_api_token_rejected(server, api_token)
+            if not (_password(server) or _configured_jwt(server)):
+                detail = response.text.strip().replace("\n", " ")[:300]
+                raise XnetApiError(
+                    f"توکن API X-NET رد شد (HTTP {response.status_code}) و "
+                    "اطلاعات fallback ادمین ثبت نشده است. "
+                    f"{detail or 'username/password fallback required'}"
+                )
+            token = await _login(server, force=False)
             try:
                 response = await _send(token)
             except httpx.RequestError as exc:
                 detail = str(exc).strip() or type(exc).__name__
                 raise XnetApiError(
-                    f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}"
+                    f"خطا در اتصال fallback به X-NET ({type(exc).__name__}): {detail}"
+                ) from exc
+
+        if response.status_code in {401, 403} and not using_api_token and _password(server):
+            _clear_cached_jwt(server)
+            token = await _login(server, force=True)
+            try:
+                response = await _send(token)
+            except httpx.RequestError as exc:
+                detail = str(exc).strip() or type(exc).__name__
+                raise XnetApiError(
+                    f"خطا در اتصال fallback به X-NET ({type(exc).__name__}): {detail}"
                 ) from exc
 
     if response.status_code >= 400:
