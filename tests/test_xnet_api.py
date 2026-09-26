@@ -405,6 +405,31 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
             "https://xnet.speedll.ir/api/v1/sub/abc",
         )
 
+    def test_admin_web_url_uses_hidden_panel_path_and_subscriptions_page(self):
+        server = dict(self.server)
+        server["panel_url"] = "https://xnet.speedll.ir:8080"
+        server["xnet_web_base_path"] = "SecretPanelPath"
+
+        self.assertEqual(
+            xnet_api.get_admin_web_url(server, "#/subscriptions"),
+            "https://xnet.speedll.ir:8080/SecretPanelPath/#/subscriptions",
+        )
+
+    def test_admin_web_url_is_separate_from_public_subscription_url(self):
+        server = dict(self.server)
+        server["panel_url"] = "https://xnet.speedll.ir:8080"
+        server["xnet_web_base_path"] = "SecretPanelPath"
+        server["xnet_sub_domain"] = "https://xnet.speedll.ir"
+
+        self.assertEqual(
+            xnet_api.get_admin_web_url(server, "#/subscriptions"),
+            "https://xnet.speedll.ir:8080/SecretPanelPath/#/subscriptions",
+        )
+        self.assertEqual(
+            xnet_api.get_subscription_url(server, "abc"),
+            "https://xnet.speedll.ir/api/v1/sub/abc",
+        )
+
     def test_public_subscription_url_can_use_custom_domain(self):
         server = dict(self.server)
         server["xnet_sub_domain"] = "sub.example.com"
