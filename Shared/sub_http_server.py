@@ -687,30 +687,41 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
 
         if isinstance(panel_user, dict) and panel_user:
             total_usage += _to_float(panel_user.get("current_usage_GB"), 0.0)
-            if is_primary:
+            # panel-srv is shared by Admin/Agent/Customer.  Do not freeze
+            # status metadata to target_servers[0]: after adding heterogeneous
+            # nodes (X-NET/X-UI), the first/parent panel may still expose stale
+            # package metadata while another related panel has the freshly
+            # edited values. Prefer the explicit token server when encountered;
+            # otherwise keep the first usable metadata as fallback.
+            try:
+                _srv_id = int(srv.get("id") or 0)
+            except (TypeError, ValueError):
+                _srv_id = 0
+            _is_token_server = _srv_id == server_id
+            if _is_token_server or not primary_name:
                 primary_name = (
                     str(panel_user.get("name") or panel_user.get("username") or user_uuid).strip()
                     or user_uuid
                 )
                 try:
-                    primary_limit = sub_aggregator._usage_limit_from_panel_user(panel_user)
+                    _limit = sub_aggregator._usage_limit_from_panel_user(panel_user)
                 except Exception:
-                    primary_limit = _to_float(
+                    _limit = _to_float(
                         panel_user.get("usage_limit_GB") or panel_user.get("usage_limit"), 0.0
                     )
+                if _limit is not None:
+                    primary_limit = _limit
                 try:
                     days_left = sub_aggregator._days_left_from_panel_user(panel_user)
                     if days_left is not None:
                         min_days_left = int(days_left)
                 except Exception:
                     pass
-            else:
+            elif min_days_left is None:
                 try:
                     days_left = sub_aggregator._days_left_from_panel_user(panel_user)
                     if days_left is not None:
-                        min_days_left = (
-                            days_left if min_days_left is None else min(min_days_left, int(days_left))
-                        )
+                        min_days_left = int(days_left)
                 except Exception:
                     pass
 
