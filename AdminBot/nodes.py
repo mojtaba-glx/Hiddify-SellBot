@@ -39,8 +39,9 @@ NODES_STATE_ADD_XUI_PASSWORD = "nodes_add_xui_password"
 NODES_STATE_ADD_XUI_TOKEN = "nodes_add_xui_token"
 NODES_STATE_ADD_XUI_SUB_DOMAIN = "nodes_add_xui_sub_domain"
 NODES_STATE_ADD_XUI_INBOUND = "nodes_add_xui_inbound"
-NODES_STATE_ADD_XNET_USERNAME = "nodes_add_xnet_username"
-NODES_STATE_ADD_XNET_PASSWORD = "nodes_add_xnet_password"
+NODES_STATE_ADD_XNET_USERNAME = "nodes_add_xnet_username"  # legacy
+NODES_STATE_ADD_XNET_PASSWORD = "nodes_add_xnet_password"  # legacy
+NODES_STATE_ADD_XNET_TOKEN = "nodes_add_xnet_token"
 NODES_STATE_ADD_XNET_INBOUND = "nodes_add_xnet_inbound"
 NODES_STATE_AUTO_TITLE = "nodes_auto_title"
 NODES_STATE_AUTO_PANEL = "nodes_auto_panel"
@@ -302,8 +303,7 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
                 [InlineKeyboardButton("🛡️ عملیات کاربری نود", callback_data=f"nodeact:{server_id}:{node_id}:user_ops")],
                 [InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"nodeedit:{server_id}:{node_id}:title")],
                 [InlineKeyboardButton("🌐 ویرایش آدرس پنل", callback_data=f"seredit:{target_sid}:panel_url")],
-                [InlineKeyboardButton("👤 ویرایش نام کاربری X-NET", callback_data=f"seredit:{target_sid}:xnet_username")],
-                [InlineKeyboardButton("🔑 ویرایش رمز X-NET", callback_data=f"seredit:{target_sid}:xnet_password")],
+                [InlineKeyboardButton("🔑 ویرایش توکن API X-NET", callback_data=f"seredit:{target_sid}:xnet_token")],
                 [InlineKeyboardButton("🧩 ویرایش Inbound X-NET", callback_data=f"seredit:{target_sid}:xnet_inbound")],
                 [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{target_sid}:create_inbound_from_link")],
                 [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{target_sid}:sync_inbounds")],
@@ -734,9 +734,11 @@ async def handle_add_node_flow(
                 reply_markup=cancel_keyboard(),
             )
         elif panel_type in {"xnet", "x-net"}:
-            context.user_data["state"] = NODES_STATE_ADD_XNET_USERNAME
+            context.user_data["state"] = NODES_STATE_ADD_XNET_TOKEN
             await message.reply_text(
-                "👤 نام کاربری ادمین X-NET نود را وارد کنید (معمولاً admin):",
+                "🔑 Bearer Token مدیریت API نود X-NET را وارد کنید:\n"
+                "از X-NET → تنظیمات پیشرفته پنل → مدیریت سرویس API کپی کنید.\n\n"
+                "✅ نام کاربری/رمز پنل برای اتصال ربات لازم نیست.",
                 reply_markup=cancel_keyboard(),
             )
         else:
@@ -838,6 +840,63 @@ async def handle_add_node_flow(
         context.user_data["state"] = NODES_STATE_ADD_LIMIT
         await message.reply_text(
             "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    if state == NODES_STATE_ADD_XNET_TOKEN:
+        token = text.strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        if not token:
+            await message.reply_text(
+                "❌ توکن API X-NET خالی است. Bearer Token را از بخش مدیریت سرویس API کپی کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        new_node["xnet_api_token"] = token
+        new_node["xnet_token"] = token
+        context.user_data["new_node"] = new_node
+        try:
+            # API calls use the persistent Bearer token; /api/auth/login is not
+            # touched. Discover the hidden web path only for clickable UI links.
+            try:
+                panel_cfg = await xnet_api.get_panel_config(new_node)
+                web_base_path = str(panel_cfg.get("webBasePath") or "").strip("/")
+                if web_base_path:
+                    new_node["xnet_web_base_path"] = web_base_path
+                    context.user_data["new_node"] = new_node
+            except Exception as exc:
+                logger.warning("Could not auto-detect X-NET node webBasePath: %s", exc)
+
+            inbounds = await xnet_api.get_inbounds(new_node)
+            rows = []
+            for ib in (inbounds or [])[:20]:
+                iid = str(ib.get("id") or "").strip()
+                if not iid:
+                    continue
+                rows.append(
+                    f"{'✅' if bool(ib.get('enabled', True)) else '⛔'} {iid} | "
+                    f"{str(ib.get('protocol') or '-')} | "
+                    f"{str(ib.get('remark') or ib.get('name') or '-')}"
+                )
+            inbound_text = "\n".join(rows) if rows else "Inboundی پیدا نشد."
+        except Exception as exc:
+            await message.reply_text(
+                "❌ توکن API X-NET نود یا دریافت Inboundها ناموفق بود.\n"
+                f"{_short_error(exc)}",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        context.user_data["state"] = NODES_STATE_ADD_XNET_INBOUND
+        await message.reply_text(
+            "✅ اتصال نود با Bearer Token برقرار شد.\n\n"
+            "🧩 Inboundهای X-NET نود:\n\n"
+            f"{inbound_text}\n\n"
+            "شناسه Inbound فروش را بفرستید.\n"
+            "skip = اولین فعال | 0 = همه فعال | چند شناسه با کاما",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -1023,8 +1082,8 @@ async def handle_add_node_flow(
                 "title": title,
                 "panel_url": panel_url,
                 "panel_type": "xnet",
-                "xnet_username": str(new_node.get("xnet_username") or "admin").strip(),
-                "xnet_password": str(new_node.get("xnet_password") or ""),
+                "xnet_api_token": str(new_node.get("xnet_api_token") or "").strip(),
+                "xnet_token": str(new_node.get("xnet_token") or new_node.get("xnet_api_token") or "").strip(),
                 "xnet_web_base_path": str(new_node.get("xnet_web_base_path") or "").strip("/"),
                 "xnet_inbound_id": str(new_node.get("xnet_inbound_id") or "").strip(),
                 "users_limit": int(users_limit),
