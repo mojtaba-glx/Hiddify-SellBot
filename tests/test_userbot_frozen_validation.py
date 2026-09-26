@@ -175,6 +175,34 @@ class UserBotFrozenReportDbTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertAlmostEqual(float(rows[0]["usage_current"]), 0.005)
 
+    def test_partial_mapping_heals_configured_xui_child(self):
+        primary = {
+            "id": 1,
+            "title": "Germany",
+            "nodes": [{"target_server_id": 2}],
+        }
+        child = {"id": 2, "title": "Sanaei", "nodes": []}
+        servers = {1: primary, 2: child}
+        svc = userbot_db.get_service_by_id(1)
+
+        with patch.object(
+            service_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: servers.get(int(sid)),
+        ), patch.object(
+            service_enforcer.database,
+            "get_servers",
+            return_value=[primary, child],
+        ):
+            mappings = service_enforcer._get_or_create_mappings_for_service(svc)
+
+        self.assertEqual(
+            {int(row["server_id"]) for row in mappings},
+            {1, 2},
+        )
+        child_row = next(row for row in mappings if int(row["server_id"]) == 2)
+        self.assertEqual(child_row["panel_user_uuid"], "uuid-a")
+
 
 if __name__ == "__main__":
     unittest.main()
