@@ -160,7 +160,15 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         from Shared.agent_db import get_services_by_customer
-        from CustomerBot.services import is_customer_service_visible, service_is_renewable, renew_not_allowed_text, service_is_renewable_live
+        from CustomerBot.services import (
+            sync_service_status_from_panels, is_customer_service_visible,
+            service_is_renewable, renew_not_allowed_text, service_is_renewable_live,
+        )
+        # Probe even currently-hidden rows so a service can recover during the
+        # seven-day grace period when its panel/server comes back.
+        services = get_services_by_customer(cust["id"], include_missing=True)
+        for svc in services:
+            await sync_service_status_from_panels(svc.get("id", 0))
         services = get_services_by_customer(cust["id"])
         visible = [s for s in services if is_customer_service_visible(s)]
         if not visible:
@@ -192,7 +200,9 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         from Shared.agent_db import get_services_by_customer
         from CustomerBot.services import sync_service_status_from_panels, is_customer_service_visible
-        services = get_services_by_customer(cust["id"])
+        # First pass includes retained missing rows. The panel check decides
+        # whether each row is visible now; second pass returns only confirmed rows.
+        services = get_services_by_customer(cust["id"], include_missing=True)
         for svc in services:
             await sync_service_status_from_panels(svc.get("id", 0))
         services = get_services_by_customer(cust["id"])
