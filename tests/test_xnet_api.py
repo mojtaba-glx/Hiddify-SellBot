@@ -1,4 +1,7 @@
 import base64
+import os
+import tempfile
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -53,6 +56,36 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(token, "legacy-jwt")
         login.assert_awaited_once_with(server, force=False)
+
+    async def test_rejected_api_token_switches_management_token_to_jwt(self):
+        server = dict(self.server)
+        server["xnet_api_token"] = "xnet_rejected_token"
+        login = AsyncMock(return_value="shared-jwt")
+
+        xnet_api._mark_api_token_rejected(server, server["xnet_api_token"])
+        with patch.object(xnet_api, "_login", new=login):
+            token = await xnet_api._management_token(server)
+
+        self.assertEqual(token, "shared-jwt")
+        login.assert_awaited_once_with(server, force=False)
+
+    def test_shared_jwt_cache_roundtrip(self):
+        server = dict(self.server)
+        with tempfile.TemporaryDirectory() as runtime_dir, patch.dict(
+            os.environ,
+            {"HIDDIFY_SELLBOT_RUNTIME_DIR": runtime_dir},
+        ):
+            expires_at = time.time() + 120
+            xnet_api._write_shared_jwt(server, "jwt-shared-test", expires_at)
+            cached_exp, token = xnet_api._read_shared_jwt(server)
+
+        self.assertEqual(token, "jwt-shared-test")
+        self.assertGreater(cached_exp, time.time())
+
+    def test_jwt_expiry_falls_back_for_opaque_token(self):
+        before = time.time()
+        expiry = xnet_api._jwt_expiry_epoch("opaque-token")
+        self.assertGreaterEqual(expiry, before + xnet_api._DEFAULT_TOKEN_TTL - 2)
 
     async def test_get_user_by_uuid_reads_inbound_clients(self):
         inbounds = [
