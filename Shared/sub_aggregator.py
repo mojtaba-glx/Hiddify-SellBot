@@ -294,6 +294,7 @@ async def _sync_service_runtime_from_panels_async(service_id: int) -> dict:
     latest_last_online: Optional[datetime] = None
     synced_usage_limit: Optional[float] = None
     fallback_usage_limit: Optional[float] = None
+    synced_name: Optional[str] = None
 
     for result in results:
         if not result.get("ok"):
@@ -309,6 +310,14 @@ async def _sync_service_runtime_from_panels_async(service_id: int) -> dict:
                 synced_usage_limit = panel_limit
             elif fallback_usage_limit is None:
                 fallback_usage_limit = panel_limit
+
+        server_id = int(result.get("server_id") or 0)
+        if primary_server_id > 0 and server_id == primary_server_id:
+            panel_name = str(
+                panel_user.get("name") or panel_user.get("username") or ""
+            ).strip()
+            if panel_name:
+                synced_name = panel_name
 
         days_left = _days_left_from_panel_user(panel_user)
         if days_left is not None:
@@ -340,6 +349,13 @@ async def _sync_service_runtime_from_panels_async(service_id: int) -> dict:
         days_left=min_days_left,
         last_online=latest_last_online.isoformat(sep=" ") if latest_last_online else None,
     )
+    # The synthetic status Trojan is built from userbot_services. Keep its
+    # display name in sync with the primary panel just like usage/expiry.
+    if synced_name and synced_name != str(service.get("name") or "").strip():
+        try:
+            userbot_db.update_service_name(int(service_id), synced_name)
+        except Exception:
+            pass
     return userbot_db.get_service_by_id(int(service_id)) or service
 
 
