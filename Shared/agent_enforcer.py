@@ -203,7 +203,13 @@ async def _process_service(svc: dict) -> Dict[str, str]:
 
     mappings = _service_mappings(svc)
     if not mappings:
-        return result
+        # DB-only/orphan service: hide it from CustomerBot immediately, but
+        # retain the row for the normal seven-day missing-service grace period.
+        try:
+            agent_db.mark_service_missing(service_id)
+        except Exception:
+            pass
+        return {"status": "missing", "reason": "no_targets", "frozen_nodes": "0"}
 
     total_usage = 0.0
     live_success = 0
@@ -359,10 +365,34 @@ async def _process_service(svc: dict) -> Dict[str, str]:
                 service_id, server_id, uuid[:8], new_fail, frozen, prev_usage, e,
             )
 
-    # اگر کل خوشه در یک دور از دسترس بود و snapshot قدیمی ناقص بود،
-    # هرگز مصرف سرویس را کمتر از آخرین مقدار سراسری ثبت‌شده نکن.
-    if live_success == 0:
+    # CustomerBot must never show a DB-only subscription as if it still exists
+    # on a panel. A successful read on at least one related panel proves the
+    # service still exists and clears a previous missing probe. If *none* of
+    # the targets can confirm the user (not-found, panel/network outage, or a
+    # removed server), hide it immediately but keep its DB row for seven days.
+    # A later successful probe restores visibility by mark_service_seen().
+    if live_success > 0:
+        try:
+            agent_db.mark_service_seen(service_id)
+        except Exception:
+            pass
+    else:
         total_usage = max(total_usage, _to_float(svc.get("usage_current"), 0.0))
+        try:
+            agent_db.mark_service_missing(service_id)
+        except Exception:
+            pass
+        # Preserve accounting/state while the service is in the grace period.
+        # Do not mark it active/inactive merely because the panel is currently
+        # unavailable; visibility is controlled by agent_service_probe.
+        try:
+            agent_db.update_service(service_id, {"usage_current": total_usage})
+        except Exception:
+            pass
+        result["status"] = "missing"
+        result["reason"] = "panel_unconfirmed"
+        result["frozen_nodes"] = str(frozen_count)
+        return result
 
     usage_limit = _to_float(svc.get("usage_limit"), 0.0)
     updates: Dict[str, Any] = {"usage_current": total_usage}
