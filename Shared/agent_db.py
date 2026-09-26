@@ -1968,19 +1968,51 @@ def cleanup_stale_agent_services(days: int = 7) -> int:
     return removed
 
 
-def get_services_by_customer(customer_id: int) -> List[Dict[str, Any]]:
-    """لیست تمام سرویس‌های یک مشتری (فقط سرویس‌هایی که روی پنل هنوز وجود دارند)."""
+def is_service_panel_missing(service_id: int) -> bool:
+    """True when the last panel verification could not find/reach this service.
+
+    Missing rows stay in the agency database for the grace period, but must not
+    be shown by CustomerBot until a later successful panel check marks them seen.
+    """
+    init_db()
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return True
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT missing_streak FROM agent_service_probe WHERE service_id = ? LIMIT 1",
+            (sid,),
+        ).fetchone()
+        return bool(row and int(row["missing_streak"] or 0) > 0)
+    finally:
+        conn.close()
+
+
+def get_services_by_customer(
+    customer_id: int,
+    *,
+    include_missing: bool = False,
+) -> List[Dict[str, Any]]:
+    """لیست سرویس‌های مشتری.
+
+    حالت معمول فقط سرویس‌هایی را برمی‌گرداند که آخرین بررسی پنل آن‌ها موفق
+    بوده است. include_missing فقط برای probe داخلی CustomerBot است تا
+    رکوردهای مخفی‌شده در بازه نگهداری ۷روزه دوباره بررسی و در صورت بازگشت
+    پنل/کاربر بازیابی شوند.
+    """
     cleanup_stale_agent_services(7)
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
+    missing_clause = "" if include_missing else "AND COALESCE(p.missing_streak, 0) = 0"
     cur.execute(
-        """
+        f"""
         SELECT s.* FROM agent_services s
         LEFT JOIN agent_service_probe p ON p.service_id = s.id
         WHERE s.customer_id = ?
           AND (s.deleted_at IS NULL OR s.deleted_at = '')
-          AND COALESCE(p.missing_streak, 0) = 0
+          {missing_clause}
         ORDER BY s.id DESC
         """,
         (customer_id,),
