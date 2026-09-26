@@ -391,10 +391,19 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
 
 
 async def get_configs(service_id: int) -> Dict[str, Any]:
-    """Get subscription configs from all panels (main + X-UI nodes) — aggregated."""
+    """Get real configs only while the agency/customer service is usable."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc:
         return {"ok": False, "error": "service_not_found"}
+    try:
+        from Shared import sub_aggregator
+        if (
+            sub_aggregator._service_lock_reason(svc, check_userbot_nodes=False)
+            or int(svc.get("is_active") or 0) != 1
+        ):
+            return {"ok": False, "error": "service_locked"}
+    except Exception:
+        return {"ok": False, "error": "service_locked"}
 
     panel_uuid = str(svc.get("panel_user_uuid", "")).strip()
     if not panel_uuid:
