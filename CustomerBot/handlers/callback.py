@@ -88,6 +88,7 @@ from CustomerBot.services import (
     get_service_panel_targets, collect_all_direct_configs_for_service,
     get_or_create_bot_sub_links,
     sync_service_status_from_panels, regenerate_service_uuid,
+    is_customer_service_visible,
     service_is_renewable, renew_not_allowed_text, service_is_renewable_live,
     _resolve_live_server_title,
 )
