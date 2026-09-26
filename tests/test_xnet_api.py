@@ -402,7 +402,7 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             xnet_api.get_subscription_url(server, "abc"),
-            "https://xnet.speedll.ir/api/v1/sub/abc",
+            "https://xnet.speedll.ir:2096/sub/abc",
         )
 
     def test_admin_web_url_uses_hidden_panel_path_and_subscriptions_page(self):
@@ -427,7 +427,7 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             xnet_api.get_subscription_url(server, "abc"),
-            "https://xnet.speedll.ir/api/v1/sub/abc",
+            "https://xnet.speedll.ir:2096/sub/abc",
         )
 
     def test_public_subscription_url_can_use_custom_domain(self):
@@ -435,7 +435,17 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         server["xnet_sub_domain"] = "sub.example.com"
         self.assertEqual(
             xnet_api.get_subscription_url(server, "abc"),
-            "https://sub.example.com/api/v1/sub/abc",
+            "https://sub.example.com:2096/sub/abc",
+        )
+
+    def test_public_subscription_url_supports_custom_port_and_path(self):
+        server = dict(self.server)
+        server["xnet_sub_domain"] = "https://xnet.speedll.ir"
+        server["xnet_sub_port"] = 2443
+        server["xnet_sub_path"] = "vpn-link"
+        self.assertEqual(
+            xnet_api.get_subscription_url(server, "abc"),
+            "https://xnet.speedll.ir:2443/vpn-link/abc",
         )
 
     def test_public_subscription_url_drops_xnet_management_port_for_dns_host(self):
@@ -446,7 +456,7 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             xnet_api.get_subscription_url(server, "abc"),
-            "https://xnet.speedll.ir/api/v1/sub/abc",
+            "https://xnet.speedll.ir:2096/sub/abc",
         )
 
     def test_public_subscription_custom_domain_drops_management_port(self):
@@ -455,7 +465,7 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             xnet_api.get_subscription_url(server, "abc"),
-            "https://xnet.speedll.ir/api/v1/sub/abc",
+            "https://xnet.speedll.ir:2096/sub/abc",
         )
 
     def test_public_subscription_keeps_management_port_for_raw_ip_fallback(self):
@@ -466,7 +476,7 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             xnet_api.get_subscription_url(server, "abc"),
-            "https://31.56.48.96:8080/api/v1/sub/abc",
+            "https://31.56.48.96:2096/sub/abc",
         )
 
     async def test_get_user_configs_decodes_default_base64_subscription(self):
