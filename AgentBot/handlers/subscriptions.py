@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import uuid
+from html import escape as html_escape
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -226,7 +227,19 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def _service_detail_text(svc, last_online: str = "هرگز") -> str:
     """متن کارت جزئیات سرویس (بدون قیمت و بدون UUID)."""
-    name = _escape(svc.get('name') or 'سرویس')
+    raw_name = str(svc.get('name') or 'سرویس').strip()
+    name = _escape(raw_name)
+    # Make the service name open the subscriber's actual public subscription
+    # endpoint.  Never link it to the X-NET admin panel.
+    name_html = f"<b>{name}</b>"
+    try:
+        from Shared.sub_links import get_service_user_base_urls
+        sub_urls = get_service_user_base_urls(svc)
+        if sub_urls:
+            href = html_escape(str(sub_urls[0]), quote=True)
+            name_html = f'<a href="{href}"><b>{name}</b></a>'
+    except Exception:
+        pass
     server = _escape(svc.get('server_title') or '—')
     gb = _fmt_gb(svc.get('usage_limit', 0))
     used = _fmt_gb(svc.get('usage_current', 0))
@@ -234,7 +247,7 @@ def _service_detail_text(svc, last_online: str = "هرگز") -> str:
     note = agent_db._service_note_from_comment(svc.get("comment") or "") or '—'
     online_line = _escape(last_online or 'هرگز')
     return (
-        f"\U0001f464 کاربر: <b>{name}</b>\n"
+        f"\U0001f464 کاربر: {name_html}\n"
         f"❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
         f"⬖ سرور: {server}\n"
         f"\U0001f4ca مصرف: {used} از {gb} گیگابایت\n"
