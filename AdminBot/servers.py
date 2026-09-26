@@ -934,8 +934,9 @@ def _panel_user_is_active(user_data: Dict[str, Any]) -> bool:
     return True
 
 
-# بازه تشخیص آنلاین بودن (اینجا ۱۵ دقیقه در نظر گرفتیم مثل خیلی از پنل‌ها)
-ONLINE_WINDOW_SECONDS = 15 * 60
+# بازه تشخیص آنلاین بودن Hiddify.
+# کوتاه نگه می‌داریم تا last_online تازه، کاربر را مدت طولانی آنلاین نشان ندهد.
+ONLINE_WINDOW_SECONDS = 90
 # تلورانس برای اختلاف ساعت‌های خیلی کم (۱-۲ دقیقه)
 CLOCK_SKEW_TOLERANCE = 120
 
