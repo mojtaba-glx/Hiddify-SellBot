@@ -652,7 +652,12 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: 
 
 
 def build_subscription_text_for_service(service_id: int) -> str:
-    service = userbot_db.get_service_by_id(int(service_id))
+    # Always refresh runtime metadata before generating SellBot's synthetic
+    # status Trojan.  This keeps name, quota and expiry aligned with the
+    # primary panel on every subscription refresh, including AdminBot edits.
+    service = sync_service_runtime_from_panels(int(service_id))
+    if not service:
+        service = userbot_db.get_service_by_id(int(service_id))
     if not service:
         return ""
     lock_reason = _service_lock_reason(service)
