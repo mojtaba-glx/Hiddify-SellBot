@@ -571,8 +571,25 @@ def _fetch_remote_lines(url: str) -> List[str]:
     return []
 
 
+def _agency_service_is_locked(svc: dict) -> bool:
+    """Do not expose real direct configs for expired/disabled agency services."""
+    if not isinstance(svc, dict) or not svc:
+        return True
+    try:
+        from Shared import sub_aggregator
+        if sub_aggregator._service_lock_reason(svc, check_userbot_nodes=False):
+            return True
+    except Exception:
+        return True
+    try:
+        return int(svc.get("is_active") or 0) != 1
+    except Exception:
+        return True
+
 def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
     """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)"""
+    if _agency_service_is_locked(svc):
+        return []
     out: List[str] = []
     seen_links: set = set()
     for srv, uuid, marzban_un in get_service_panel_targets(svc):
@@ -610,6 +627,8 @@ def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
 
 async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
     """پشتیبان: دریافت کانفیگ‌ها از API پنل برای همه نودها"""
+    if _agency_service_is_locked(svc):
+        return []
     out: List[str] = []
     seen: set = set()
     for srv, uuid, marzban_un in get_service_panel_targets(svc):
