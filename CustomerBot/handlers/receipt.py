@@ -818,6 +818,20 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop(UD_STATE, None)
             await update.message.reply_text("❌ اشتراک موردنظر یافت نشد.", reply_markup=main_menu_keyboard())
             return
+        # Security + consistency: the CustomerBot must only rename a service
+        # owned by the current customer.  Also replace the possibly stale
+        # callback snapshot with the canonical agent_services row so panel
+        # mappings/UUIDs are resolved from the same database as AgentBot.
+        customer = get_customer_by_telegram_id(update.effective_user.id)
+        if not customer or int(svc.get("customer_id") or 0) != int(customer.get("id") or 0):
+            context.user_data.pop(UD_STATE, None)
+            await update.message.reply_text("❌ این اشتراک متعلق به حساب شما نیست.", reply_markup=main_menu_keyboard())
+            return
+        svc = next(
+            (item for item in (get_services_by_customer(int(customer["id"])) or [])
+             if int((item or {}).get("id") or 0) == svc_id),
+            svc,
+        )
         old_name = str(svc.get("name") or "").strip()
         if new_name == old_name:
             await update.message.reply_text(
