@@ -939,7 +939,7 @@ async def create_user(
     status = _payload_status(payload) or "active"
 
     client_body: Dict[str, Any] = {
-        "username": username.replace(" ", "_"),
+        "username": username,
         "uuid": user_uuid,
         "status": status,
         "trafficLimitBytes": traffic_limit,
@@ -1021,9 +1021,9 @@ def _client_update_body(
             body[key] = client.get(key)
 
     if payload.get("name") is not None:
-        body["username"] = str(payload.get("name") or "").strip().replace(" ", "_")
+        body["username"] = str(payload.get("name") or "").strip()
     if payload.get("username") is not None:
-        body["username"] = str(payload.get("username") or "").strip().replace(" ", "_")
+        body["username"] = str(payload.get("username") or "").strip()
     if payload.get("email") is not None:
         body["email"] = str(payload.get("email") or "").strip()
     if payload.get("comment") is not None:
