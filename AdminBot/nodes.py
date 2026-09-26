@@ -304,6 +304,8 @@ def _build_node_edit_keyboard(server_id: int, node_id: int) -> InlineKeyboardMar
                 [InlineKeyboardButton("✏️ ویرایش عنوان", callback_data=f"nodeedit:{server_id}:{node_id}:title")],
                 [InlineKeyboardButton("🌐 ویرایش آدرس پنل", callback_data=f"seredit:{target_sid}:panel_url")],
                 [InlineKeyboardButton("🔑 ویرایش توکن API X-NET", callback_data=f"seredit:{target_sid}:xnet_token")],
+                [InlineKeyboardButton("👤 نام کاربری fallback", callback_data=f"seredit:{target_sid}:xnet_username")],
+                [InlineKeyboardButton("🔐 رمز fallback", callback_data=f"seredit:{target_sid}:xnet_password")],
                 [InlineKeyboardButton("🧩 ویرایش Inbound X-NET", callback_data=f"seredit:{target_sid}:xnet_inbound")],
                 [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{target_sid}:create_inbound_from_link")],
                 [InlineKeyboardButton("🔄 همگام‌سازی یوزرها روی اینباندها", callback_data=f"server:{target_sid}:sync_inbounds")],
@@ -738,7 +740,8 @@ async def handle_add_node_flow(
             await message.reply_text(
                 "🔑 Bearer Token مدیریت API نود X-NET را وارد کنید:\n"
                 "از X-NET → تنظیمات پیشرفته پنل → مدیریت سرویس API کپی کنید.\n\n"
-                "✅ نام کاربری/رمز پنل برای اتصال ربات لازم نیست.",
+                "ربات اول Bearer Token را امتحان می‌کند؛ اگر این نسخه X-NET "
+                "آن را رد کند، اطلاعات fallback ادمین را می‌پرسد.",
                 reply_markup=cancel_keyboard(),
             )
         else:
@@ -883,9 +886,19 @@ async def handle_add_node_flow(
                 )
             inbound_text = "\n".join(rows) if rows else "Inboundی پیدا نشد."
         except Exception as exc:
+            detail = _short_error(exc)
+            if "fallback" in detail.lower() or "نام کاربری و رمز" in detail:
+                context.user_data["state"] = NODES_STATE_ADD_XNET_USERNAME
+                await message.reply_text(
+                    "⚠️ خود X-NET این Bearer Token را رد کرد.\n"
+                    "توکن ذخیره شد و ربات برای این نسخه از JWT cache fallback می‌کند.\n\n"
+                    "👤 نام کاربری ادمین X-NET نود را وارد کنید (معمولاً admin):",
+                    reply_markup=cancel_keyboard(),
+                )
+                return
             await message.reply_text(
-                "❌ توکن API X-NET نود یا دریافت Inboundها ناموفق بود.\n"
-                f"{_short_error(exc)}",
+                "❌ اتصال X-NET نود یا دریافت Inboundها ناموفق بود.\n"
+                f"{detail}",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -906,7 +919,8 @@ async def handle_add_node_flow(
         context.user_data["new_node"] = new_node
         context.user_data["state"] = NODES_STATE_ADD_XNET_PASSWORD
         await message.reply_text(
-            "🔑 رمز ادمین X-NET نود را وارد کنید:",
+            "🔑 رمز ادمین X-NET نود را برای JWT fallback وارد کنید.\n"
+            "JWT مشترک cache می‌شود و تا زمان انقضا Login تکرار نمی‌شود.",
             reply_markup=cancel_keyboard(),
         )
         return
