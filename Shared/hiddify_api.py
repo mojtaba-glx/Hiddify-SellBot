@@ -39,6 +39,8 @@ CREATE_USER_STABILIZE_ENV = "HIDDIFY_CREATE_USER_STABILIZE_MODE"
 CREATE_USER_STABILIZE_OFF = "off"
 CREATE_USER_STABILIZE_UPDATE = "update"
 CREATE_USER_STABILIZE_TOGGLE = "toggle"
+PANEL_VERSION_CACHE_SECONDS_ENV = "HIDDIFY_PANEL_VERSION_CACHE_SECONDS"
+PANEL_VERSION_CACHE_SECONDS_DEFAULT = 600.0
 
 
 class HiddifyApiError(Exception):
@@ -172,6 +174,143 @@ def _get_api_key(server: Dict[str, Any]) -> str:
     if not api_key:
         raise HiddifyApiError("admin_uuid یا api_key برای سرور تنظیم نشده است.")
     return str(api_key)
+
+
+_PANEL_VERSION_CACHE: Dict[Any, Tuple[float, Dict[str, Any]]] = {}
+_panel_version_cache_lock = threading.Lock()
+
+
+def _get_panel_version_cache_seconds() -> float:
+    raw = str(os.getenv(PANEL_VERSION_CACHE_SECONDS_ENV, str(PANEL_VERSION_CACHE_SECONDS_DEFAULT)) or "").strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = PANEL_VERSION_CACHE_SECONDS_DEFAULT
+    return max(30.0, min(value, 3600.0))
+
+
+def _panel_version_cache_key(server: Dict[str, Any]) -> Tuple[Any, str, str]:
+    return (
+        server.get("id"),
+        str(server.get("panel_url") or "").rstrip("/"),
+        str(server.get("admin_proxy_path") or "").strip("/"),
+    )
+
+
+def _parse_panel_major(version: Any) -> int:
+    match = re.match(r"^\s*v?(\d+)", str(version or "").strip(), flags=re.IGNORECASE)
+    if not match:
+        return 0
+    try:
+        return int(match.group(1))
+    except Exception:
+        return 0
+
+
+async def get_panel_version(
+    server: Dict[str, Any],
+    *,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Detect Hiddify panel version using the API shared by v11/v12/v13.
+
+    Detection is best-effort: failure never blocks normal panel operations.
+    """
+    if _is_xnet_server(server) or _is_xui_server(server):
+        return {"version": "", "major": 0, "source": "not-hiddify"}
+
+    key = _panel_version_cache_key(server)
+    now = time.monotonic()
+    if not force:
+        with _panel_version_cache_lock:
+            cached = _PANEL_VERSION_CACHE.get(key)
+            if cached and now < cached[0]:
+                return dict(cached[1])
+
+    base = _get_panel_url(server)
+    proxy = _get_admin_proxy(server)
+    url = f"{base}/{proxy}/api/v2/panel/info/"
+    result: Dict[str, Any] = {"version": "", "major": 0, "source": "unknown"}
+
+    try:
+        data = await _request("GET", url, server)
+        if isinstance(data, dict):
+            version = str(data.get("version") or "").strip()
+            if version:
+                result = {
+                    "version": version,
+                    "major": _parse_panel_major(version),
+                    "source": "panel-info",
+                }
+                logger.info(
+                    "Detected Hiddify panel version server_id=%s version=%s major=%s",
+                    server.get("id"),
+                    result["version"],
+                    result["major"],
+                )
+    except Exception as exc:
+        logger.debug(
+            "Hiddify panel version detection failed for server_id=%s: %s",
+            server.get("id"),
+            exc,
+        )
+
+    ttl = _get_panel_version_cache_seconds() if result["major"] else 60.0
+    with _panel_version_cache_lock:
+        _PANEL_VERSION_CACHE[key] = (now + ttl, dict(result))
+    return result
+
+
+def _coerce_compat_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "active", "enabled", "enable", "y"}:
+        return True
+    if text in {"0", "false", "no", "off", "inactive", "disabled", "disable", "n"}:
+        return False
+    return None
+
+
+def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dict[str, Any]:
+    """Translate legacy account-state fields only for Hiddify v13+.
+
+    v11/v12 payloads are copied unchanged. In v13, enable is the writable
+    account switch while is_active is a computed/output state.
+    """
+    out = dict(payload or {})
+    if panel_major < 13:
+        return out
+
+    requested_enable: Optional[bool] = None
+    for key in ("enable", "is_active", "enabled", "active"):
+        if key in out:
+            parsed = _coerce_compat_bool(out.get(key))
+            if parsed is not None:
+                requested_enable = parsed
+                break
+
+    mode = str(out.get("mode") or "").strip().lower()
+    if mode in {"disable", "disabled", "inactive"}:
+        requested_enable = False
+        out["mode"] = "no_reset"
+
+    for key in ("is_active", "enabled", "active", "status"):
+        out.pop(key, None)
+
+    if requested_enable is not None:
+        out["enable"] = requested_enable
+    elif "enable" in out:
+        parsed = _coerce_compat_bool(out.get("enable"))
+        if parsed is not None:
+            out["enable"] = parsed
+
+    return out
+
 
 
 def _get_ssl_mode() -> str:
@@ -572,6 +711,9 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
     proxy = _get_admin_proxy(server)
 
     candidate_urls = [
+        # Flask-Classful backup download used by Hiddify v11/v12/v13.
+        f"{base}/{proxy}/admin/backup/backupfile",
+        f"{base}/{proxy}/admin/backup/backupfile/",
         f"{base}/{proxy}/backup",
         f"{base}/{proxy}/admin/backup",
         f"{base}/{proxy}/api/v2/admin/backup/",
@@ -899,7 +1041,10 @@ async def patch_user(
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/{user_uuid}/"
 
-    data = await _request("PATCH", url, server, json=payload)
+    version_info = await get_panel_version(server)
+    panel_major = int(version_info.get("major") or 0)
+    request_payload = _normalize_hiddify_payload(payload, panel_major)
+    data = await _request("PATCH", url, server, json=request_payload)
     if not isinstance(data, dict):
         raise HiddifyApiError("پاسخ patch_user شکل دیکشنری ندارد.")
     return data
@@ -1138,22 +1283,7 @@ async def create_user(
     server: Dict[str, Any],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    POST /{admin_proxy}/api/v2/admin/user/
-    ساخت کاربر جدید.
-
-    payload مثلاً:
-    {
-        "name": "...",
-        "usage_limit_GB": 30,
-        "package_days": 30,
-        "start_date": "2025-12-24",
-        "current_usage_GB": 0,
-        "last_reset_time": "...",
-        "is_active": True,
-        ...
-    }
-    """
+    """Create a Hiddify user with v11/v12/v13-compatible state fields."""
     if _is_xnet_server(server):
         from Shared import xnet_api
         return await xnet_api.create_user(server, payload)
@@ -1166,11 +1296,15 @@ async def create_user(
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/admin/user/"
 
-    data = await _request("POST", url, server, json=payload)
+    version_info = await get_panel_version(server)
+    panel_major = int(version_info.get("major") or 0)
+    request_payload = _normalize_hiddify_payload(payload, panel_major)
+
+    data = await _request("POST", url, server, json=request_payload)
     if not isinstance(data, dict):
         raise HiddifyApiError("پاسخ create_user شکل دیکشنری ندارد.")
 
-    user_uuid = str(data.get("uuid") or payload.get("uuid") or "").strip()
+    user_uuid = str(data.get("uuid") or request_payload.get("uuid") or payload.get("uuid") or "").strip()
     if not user_uuid:
         logger.warning(
             "Created Hiddify user cannot be stabilized because panel response has no uuid: %s",
@@ -1183,7 +1317,12 @@ async def create_user(
         return data
 
     update_payload = dict(payload)
-    update_payload["is_active"] = True
+    if panel_major >= 13:
+        update_payload["enable"] = True
+        update_payload.pop("is_active", None)
+    else:
+        update_payload["is_active"] = True
+
     last_error: Optional[Exception] = None
     for attempt in range(2):
         try:
@@ -1207,59 +1346,26 @@ async def create_user(
         return data
 
     await asyncio.sleep(0.2)
-    disable_payloads = (
-        {"is_active": False, "enable": "n", "mode": "disable", "status": "disable"},
-        {"is_active": False},
-        {"mode": "disable"},
-    )
-    enable_payload = dict(payload)
-    enable_payload.update(
-        {
-            "is_active": True,
-            "enable": "y",
-            "mode": "no_reset",
-            "status": "active",
-        }
-    )
-    enable_payloads = (
-        enable_payload,
-        {"is_active": True, "enable": "y", "mode": "no_reset", "status": "active"},
-        {"is_active": True},
-        {"mode": "no_reset"},
-    )
-
-    def _payload_error(exc: Exception) -> str:
-        return str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
-
-    async def _try_patch_payloads(payloads: tuple[Dict[str, Any], ...]) -> Optional[str]:
-        last: Optional[Exception] = None
-        for patch_payload in payloads:
-            try:
-                await patch_user(server, user_uuid, patch_payload)
-                return None
-            except Exception as exc:
-                last = exc
-        return _payload_error(last) if last is not None else "unknown"
-
-    disable_error = await _try_patch_payloads(disable_payloads)
-    if disable_error:
+    try:
+        await disable_user(server, user_uuid)
+    except Exception as exc:
         logger.warning(
             "Post-create Hiddify user activation refresh disable step failed for uuid=%s: %s",
             user_uuid,
-            disable_error,
+            exc,
         )
         return data
 
     await asyncio.sleep(0.25)
-    enable_error = await _try_patch_payloads(enable_payloads)
-    if enable_error:
+    try:
+        await enable_user(server, user_uuid)
+    except Exception as exc:
         logger.warning(
             "Post-create Hiddify user activation refresh enable step failed for uuid=%s: %s",
             user_uuid,
-            enable_error,
+            exc,
         )
     return data
-
 
 async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:
     """
