@@ -4,9 +4,9 @@ The adapter exposes the same user-management shape the rest of SellBot expects
 from Hiddify/X-UI while using X-NET's documented management API.
 
 Important:
-- Management calls authenticate with the admin JWT returned by /api/auth/login.
-- The static xnet_* API token is for node-to-panel traffic and is deliberately
-  not used for admin automation.
+- Management calls prefer X-NET's persistent Bearer API token (xnet_api_token).
+- Legacy username/password login is kept only as a compatibility fallback for
+  existing servers that have not been migrated to an API token yet.
 - Client UUID may be supplied on create and may be changed with the client PUT
   endpoint. This lets SellBot keep one canonical UUID across its server cluster.
 """
@@ -89,6 +89,15 @@ def _password(server: Dict[str, Any]) -> str:
     return ""
 
 
+def _api_token(server: Dict[str, Any]) -> str:
+    """Return X-NET's persistent management Bearer token."""
+    for key in ("xnet_api_token", "xnet_token", "xnet_bearer_token"):
+        value = str((server or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _configured_jwt(server: Dict[str, Any]) -> str:
     # Optional escape hatch for tests/manual setups. Normally JWT is obtained
     # from /api/auth/login and refreshed automatically.
@@ -164,6 +173,23 @@ async def _login(server: Dict[str, Any], *, force: bool = False) -> str:
         return token
 
 
+async def _management_token(
+    server: Dict[str, Any],
+    *,
+    force_legacy_login: bool = False,
+) -> str:
+    """Return the credential used for X-NET management API calls.
+
+    A configured persistent API token is authoritative and completely bypasses
+    /api/auth/login. Username/password login remains only as a compatibility
+    fallback for older server records that do not yet have an API token.
+    """
+    token = _api_token(server)
+    if token:
+        return token
+    return await _login(server, force=force_legacy_login)
+
+
 async def _request_json(
     method: str,
     path: str,
@@ -186,21 +212,35 @@ async def _request_json(
                 method.upper(), url, headers=headers, json=json, params=params
             )
 
-    token = await _login(server) if auth else ""
+    token = await _management_token(server) if auth else ""
     try:
         response = await _send(token)
     except httpx.RequestError as exc:
-        raise XnetApiError(f"خطا در اتصال به X-NET: {exc}") from exc
+        detail = str(exc).strip() or type(exc).__name__
+        raise XnetApiError(f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}") from exc
 
-    # JWTs are session credentials and can expire. Retry exactly once after
-    # a fresh login when password credentials are available.
-    if auth and response.status_code in {401, 403} and _password(server):
-        _TOKEN_CACHE.pop(_cache_key(server), None)
-        token = await _login(server, force=True)
-        try:
-            response = await _send(token)
-        except httpx.RequestError as exc:
-            raise XnetApiError(f"خطا در اتصال به X-NET: {exc}") from exc
+    if auth and response.status_code in {401, 403}:
+        # A persistent API token must never fall back to /api/auth/login.
+        # If it is invalid/revoked, fail explicitly instead of hammering login.
+        if _api_token(server):
+            detail = response.text.strip().replace("\n", " ")[:300]
+            raise XnetApiError(
+                f"توکن API X-NET رد شد (HTTP {response.status_code}): "
+                f"{detail or 'توکن را در پنل تولید/کپی و در ربات بروزرسانی کنید.'}"
+            )
+
+        # Legacy JWT sessions may expire. Old installations without an API
+        # token get one compatibility retry through username/password login.
+        if _password(server):
+            _TOKEN_CACHE.pop(_cache_key(server), None)
+            token = await _management_token(server, force_legacy_login=True)
+            try:
+                response = await _send(token)
+            except httpx.RequestError as exc:
+                detail = str(exc).strip() or type(exc).__name__
+                raise XnetApiError(
+                    f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}"
+                ) from exc
 
     if response.status_code >= 400:
         detail = response.text.strip().replace("\n", " ")[:300]
@@ -241,19 +281,30 @@ async def _request_bytes(
                 method.upper(), url, headers=headers, json=json, params=params
             )
 
-    token = await _login(server) if auth else ""
+    token = await _management_token(server) if auth else ""
     try:
         response = await _send(token)
     except httpx.RequestError as exc:
-        raise XnetApiError(f"خطا در اتصال به X-NET: {exc}") from exc
+        detail = str(exc).strip() or type(exc).__name__
+        raise XnetApiError(f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}") from exc
 
-    if auth and response.status_code in {401, 403} and _password(server):
-        _TOKEN_CACHE.pop(_cache_key(server), None)
-        token = await _login(server, force=True)
-        try:
-            response = await _send(token)
-        except httpx.RequestError as exc:
-            raise XnetApiError(f"خطا در اتصال به X-NET: {exc}") from exc
+    if auth and response.status_code in {401, 403}:
+        if _api_token(server):
+            detail = response.text.strip().replace("\n", " ")[:300]
+            raise XnetApiError(
+                f"توکن API X-NET رد شد (HTTP {response.status_code}): "
+                f"{detail or 'توکن را در پنل تولید/کپی و در ربات بروزرسانی کنید.'}"
+            )
+        if _password(server):
+            _TOKEN_CACHE.pop(_cache_key(server), None)
+            token = await _management_token(server, force_legacy_login=True)
+            try:
+                response = await _send(token)
+            except httpx.RequestError as exc:
+                detail = str(exc).strip() or type(exc).__name__
+                raise XnetApiError(
+                    f"خطا در اتصال به X-NET ({type(exc).__name__}): {detail}"
+                ) from exc
 
     if response.status_code >= 400:
         detail = response.text.strip().replace("\n", " ")[:300]
@@ -2279,7 +2330,7 @@ async def test_connect(server: Dict[str, Any]) -> List[Dict[str, Any]]:
     status = await ping(server)
     if str(status.get("status") or "").strip().lower() != "ok":
         raise XnetApiError("X-NET ping پاسخ ok نداد.")
-    # This call intentionally requires a management JWT and therefore also
-    # verifies the stored admin credentials.
+    # This verifies the management credential. A persistent X-NET API token
+    # is preferred; legacy admin login is used only when no token exists.
     await get_inbounds(server)
     return await list_users(server)
