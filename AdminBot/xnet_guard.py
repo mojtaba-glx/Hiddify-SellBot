@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from telegram import InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from Shared import agent_db, database, userbot_db, xnet_api
@@ -330,10 +331,18 @@ async def handle_xnet_guard_callback(
     if action in {"menu", "status"}:
         try:
             state = await _guard_state(server)
-            await query.message.edit_text(
-                _state_text(server, state),
-                reply_markup=_menu_keyboard(server_id, missing=len(state["missing"])),
-            )
+            try:
+                await query.message.edit_text(
+                    _state_text(server, state),
+                    reply_markup=_menu_keyboard(server_id, missing=len(state["missing"])),
+                )
+            except BadRequest as exc:
+                # Telegram raises this when the freshly checked guard state is
+                # identical to what is already on screen. That means the check
+                # succeeded; it is not an X-NET/guard failure.
+                if "message is not modified" in str(exc).lower():
+                    return
+                raise
         except Exception as exc:
             await query.message.edit_text(
                 f"❌ خطا در بررسی محافظ X-NET:\n{str(exc)[:700]}",
