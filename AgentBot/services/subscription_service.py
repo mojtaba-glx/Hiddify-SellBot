@@ -907,9 +907,18 @@ async def rename_service_on_panels(agent_id: int, service_id: int, new_name: str
 
 
 async def get_configs(agent_id: int, service_id: int) -> list:
-    """Aggregated configs from all nodes (Hiddify + X-UI) — fixes X-UI node missing."""
+    """Aggregated configs from all nodes, only while the service is usable."""
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
+        return []
+    try:
+        from Shared import sub_aggregator
+        if (
+            sub_aggregator._service_lock_reason(svc, check_userbot_nodes=False)
+            or int(svc.get("is_active") or 0) != 1
+        ):
+            return []
+    except Exception:
         return []
     from Shared.sub_links import get_service_panel_targets
     targets = get_service_panel_targets(svc)
