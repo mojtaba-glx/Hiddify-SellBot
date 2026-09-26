@@ -24,12 +24,16 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
                 "VALUES (1, 1001, 'agent', 'Agent', 1, '', '')"
             )
             conn.execute(
+                "INSERT INTO agent_customers (id, agent_id, telegram_id, username, full_name, created_at, updated_at) "
+                "VALUES (1, 1, 2001, 'customer', 'Customer', '', '')"
+            )
+            conn.execute(
                 """
                 INSERT INTO agent_services (
                     id, agent_id, customer_id, server_id, server_title, name,
                     panel_user_uuid, usage_current, usage_limit, days_left,
                     start_date, end_date, is_active, created_at, updated_at
-                ) VALUES (1, 1, NULL, 1, 'Germany', 'Test', 'uuid-a',
+                ) VALUES (1, 1, 1, 1, 'Germany', 'Test', 'uuid-a',
                           0, 20, 30, '', '2099-01-01 00:00:00', 1, '', '')
                 """
             )
@@ -187,6 +191,56 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
             await agent_enforcer._process_service(svc)
 
         self.assertAlmostEqual(float(agent_db.get_service_by_id(1)["usage_current"]), 12.5)
+
+        self.assertTrue(agent_db.is_service_panel_missing(1))
+        self.assertEqual(agent_db.get_services_by_customer(1), [])
+        retained = agent_db.get_services_by_customer(1, include_missing=True)
+        self.assertEqual([int(row["id"]) for row in retained], [1])
+
+    async def test_missing_customer_service_recovers_when_panel_returns(self):
+        agent_db.mark_service_missing(1)
+        self.assertTrue(agent_db.is_service_panel_missing(1))
+
+        svc = agent_db.get_service_by_id(1)
+        with patch.object(
+            agent_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: {"id": sid, "title": str(sid)},
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value={"uuid": "uuid-a", "current_usage_GB": 1.0}),
+        ):
+            result = await agent_enforcer._process_service(svc)
+
+        self.assertEqual(result["status"], "synced")
+        self.assertFalse(agent_db.is_service_panel_missing(1))
+        visible = agent_db.get_services_by_customer(1)
+        self.assertEqual([int(row["id"]) for row in visible], [1])
+
+    async def test_confirmed_not_found_marks_customer_service_missing(self):
+        svc = agent_db.get_service_by_id(1)
+        direct = AsyncMock(side_effect=RuntimeError("HTTP 404 user not found"))
+        listing = AsyncMock(return_value=[])
+
+        with patch.object(
+            agent_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: {"id": sid, "title": str(sid)},
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=direct,
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "list_users",
+            new=listing,
+        ):
+            result = await agent_enforcer._process_service(svc)
+
+        self.assertEqual(result["status"], "missing")
+        self.assertTrue(agent_db.is_service_panel_missing(1))
+        self.assertEqual(agent_db.get_services_by_customer(1), [])
 
     async def test_renewal_resets_frozen_runtime_snapshot(self):
         agent_db.update_service_node_runtime(
