@@ -658,9 +658,26 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
 
     for idx, srv in enumerate(target_servers):
         is_primary = idx == 0
-        # اطلاعات کاربر از پنل
+        # اطلاعات metadata را با adapter خود همان پنل بخوان.
+        # لینک panel-srv بین Admin/Agent/Customer مشترک است و بعد از اضافه‌شدن
+        # X-NET نباید همه targetها با Hiddify API خوانده شوند.
         try:
-            panel_user = asyncio.run(hiddify_api.get_user_by_uuid(srv, user_uuid)) or {}
+            from Shared import xnet_api
+            _is_xnet_meta = xnet_api.is_xnet_server(srv)
+        except Exception:
+            _is_xnet_meta = False
+        try:
+            from Shared import xui_api
+            _is_xui_meta = xui_api.is_xui_server(srv)
+        except Exception:
+            _is_xui_meta = False
+        try:
+            if _is_xnet_meta:
+                panel_user = asyncio.run(xnet_api.get_user_by_uuid(srv, user_uuid)) or {}
+            elif _is_xui_meta:
+                panel_user = asyncio.run(xui_api.get_user_by_uuid(srv, user_uuid)) or {}
+            else:
+                panel_user = asyncio.run(hiddify_api.get_user_by_uuid(srv, user_uuid)) or {}
         except Exception as e:
             logger.warning(
                 "Failed fetching panel user for managed admin sub server_id=%s uuid=%s: %s",
