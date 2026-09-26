@@ -750,6 +750,7 @@ async def agent_enforce(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"سرویس همگام‌شده: {summary['services_synced']}\n"
         f"سرویس قطع‌شده: {summary['services_disabled']}\n"
         f"نود قطع‌شده: {summary['nodes_disabled']}\n"
+        f"نود قطع‌ناموفق/در انتظار: {summary.get('nodes_disable_failed', 0)}\n"
         f"خطا: {summary['errors']}"
     )
 
@@ -783,12 +784,13 @@ async def _enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _agent_enforcer_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     summary = await agent_enforcer.run_agent_usage_enforcer(scan_all=True)
     logger.info(
-        "Agent enforcer cycle done: scanned=%s/%s synced=%s disabled=%s nodes_disabled=%s errors=%s",
+        "Agent enforcer cycle done: scanned=%s/%s synced=%s disabled=%s nodes_disabled=%s nodes_disable_failed=%s errors=%s",
         summary["services_scanned"],
         summary["services_total"],
         summary["services_synced"],
         summary["services_disabled"],
         summary["nodes_disabled"],
+        summary.get("nodes_disable_failed", 0),
         summary["errors"],
     )
 
