@@ -12,9 +12,9 @@
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-from Shared import hiddify_api, agent_db, database
+from Shared import hiddify_api, agent_db, database, sub_aggregator
 from Shared.sub_links import get_service_panel_targets
 
 logger = logging.getLogger(__name__)
@@ -54,9 +54,19 @@ def _to_int(value, default: int = 0) -> int:
         return int(default)
 
 
-async def _disable_on_all_targets(svc: dict, mappings: List[dict]) -> int:
-    """غیرفعال کردن سرویس روی همه نودهای موجود؛ نود حذف‌شده فقط محلی می‌ماند."""
+async def _disable_on_all_targets(
+    svc: dict,
+    mappings: List[dict],
+) -> Tuple[int, int]:
+    """Disable every reachable panel target and persist per-node verification.
+
+    A failed X-UI/Hiddify/X-Net disable stays locally active with
+    disable_pending so the periodic enforcer retries it. Successful targets
+    are marked expired_disabled_verified.
+    """
     disabled = 0
+    failed = 0
+    service_id = _to_int(svc.get("id"), 0)
     for node in mappings:
         if int(node.get("deleted") or 0) == 1:
             continue
@@ -66,16 +76,42 @@ async def _disable_on_all_targets(svc: dict, mappings: List[dict]) -> int:
             continue
         srv = database.get_server_by_id(server_id)
         if not srv:
+            failed += 1
+            try:
+                agent_db.update_service_node_runtime(
+                    service_id, server_id, uuid,
+                    is_active=1, frozen_reason="disable_pending",
+                )
+            except Exception:
+                pass
             continue
         try:
             await hiddify_api.disable_user(srv, uuid)
             disabled += 1
+            try:
+                agent_db.update_service_node_runtime(
+                    service_id, server_id, uuid,
+                    is_active=0, fail_count=0,
+                    frozen_reason="expired_disabled_verified",
+                )
+            except Exception:
+                pass
         except Exception as e:
+            failed += 1
+            try:
+                agent_db.update_service_node_runtime(
+                    service_id, server_id, uuid,
+                    is_active=1,
+                    fail_count=_to_int(node.get("fail_count"), 0) + 1,
+                    frozen_reason="disable_pending",
+                )
+            except Exception:
+                pass
             logger.warning(
-                "agent enforcer disable svc=%s server=%s uuid=%s failed: %s",
+                "agent enforcer disable pending svc=%s server=%s uuid=%s: %s",
                 svc.get("id"), server_id, uuid[:8], e,
             )
-    return disabled
+    return disabled, failed
 
 
 def _is_user_not_found_error(exc: Exception) -> bool:
@@ -114,22 +150,29 @@ async def _get_user_with_list_fallback(
 
 
 def _service_mappings(svc: dict) -> List[dict]:
-    """Ensure old agency services also have per-node rows before accounting."""
+    """Return complete mappings and heal partial legacy agency clusters.
+
+    Older services can have only the primary Hiddify row even though the server
+    has an X-UI child. Merge every currently configured target without
+    reactivating an existing/deleted mapping.
+    """
     service_id = _to_int(svc.get("id"), 0)
     if service_id <= 0:
         return []
-    mappings = agent_db.get_service_nodes(service_id) or []
-    if mappings:
-        return mappings
 
-    # Legacy fallback: discover the old targets once and persist them.
+    mappings = agent_db.get_service_nodes(service_id) or []
+    existing = {
+        (_to_int(m.get("server_id"), 0), str(m.get("panel_user_uuid") or "").strip())
+        for m in mappings
+    }
+
     for srv, uuid, marzban_un in get_service_panel_targets(svc) or []:
         try:
             sid = int(srv.get("id") or 0)
         except Exception:
             sid = 0
         uuid = str(uuid or "").strip()
-        if sid <= 0 or not uuid:
+        if sid <= 0 or not uuid or (sid, uuid) in existing:
             continue
         try:
             agent_db.add_service_node(
@@ -139,9 +182,14 @@ def _service_mappings(svc: dict) -> List[dict]:
                 panel_user_uuid=uuid,
                 marzban_username=str(marzban_un or ""),
             )
+            existing.add((sid, uuid))
+            logger.info(
+                "agent enforcer healed missing mapping svc=%s server=%s uuid=%s",
+                service_id, sid, uuid[:8],
+            )
         except Exception as e:
             logger.warning(
-                "agent enforcer legacy mapping failed svc=%s server=%s: %s",
+                "agent enforcer mapping heal failed svc=%s server=%s: %s",
                 service_id, sid, e,
             )
     return agent_db.get_service_nodes(service_id) or []
@@ -214,6 +262,7 @@ async def _process_service(svc: dict) -> Dict[str, str]:
     total_usage = 0.0
     live_success = 0
     frozen_count = 0
+    exact_time_expired = False
     now_str = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
     for node in mappings:
@@ -289,6 +338,11 @@ async def _process_service(svc: dict) -> Dict[str, str]:
             usage = _to_float(user_data.get("current_usage_GB"), 0.0)
             total_usage += usage
             live_success += 1
+            try:
+                if sub_aggregator._panel_user_exactly_expired(user_data):
+                    exact_time_expired = True
+            except Exception:
+                pass
             try:
                 agent_db.update_service_node_runtime(
                     service_id,
@@ -400,7 +454,7 @@ async def _process_service(svc: dict) -> Dict[str, str]:
         updates["usage_limit"] = usage_limit
 
     usage_exceeded = usage_limit > 0 and total_usage >= usage_limit
-    time_expired = False
+    time_expired = bool(exact_time_expired)
     try:
         days_left = _to_int(svc.get("days_left"), None) if svc.get("days_left") is not None else None
         if days_left is not None and days_left < 0:
@@ -421,17 +475,19 @@ async def _process_service(svc: dict) -> Dict[str, str]:
                     continue
 
     if usage_exceeded or time_expired:
-        disabled = await _disable_on_all_targets(svc, mappings)
+        disabled, disable_failed = await _disable_on_all_targets(svc, mappings)
+        # Lock locally now, while failed individual nodes stay active so the
+        # periodic enforcer keeps retrying them until remote disable succeeds.
         agent_db.set_service_active(service_id, False)
-        agent_db.set_service_nodes_active(service_id, False)
         updates["is_active"] = 0
         reason = "usage_limit_reached" if usage_exceeded else "time_expired"
         result["status"] = "disabled"
         result["reason"] = reason
         result["nodes_disabled"] = str(disabled)
+        result["nodes_disable_failed"] = str(disable_failed)
         logger.info(
-            "agent enforcer DISABLED svc=%s reason=%s usage=%s/%s disabled_nodes=%s frozen_nodes=%s",
-            service_id, reason, total_usage, usage_limit, disabled, frozen_count,
+            "agent enforcer DISABLED svc=%s reason=%s usage=%s/%s disabled_nodes=%s failed_nodes=%s frozen_nodes=%s",
+            service_id, reason, total_usage, usage_limit, disabled, disable_failed, frozen_count,
         )
     else:
         updates["is_active"] = 1
