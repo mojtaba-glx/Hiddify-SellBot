@@ -5133,6 +5133,23 @@ async def _delete_user_across_related_servers(
         except Exception:
             pass
 
+    # Explicit AdminBot deletion is authoritative. As soon as deletion succeeds
+    # on at least one intended panel target, remove the reseller/CustomerBot
+    # service record immediately (financial/customer history is preserved by
+    # hard_delete_service_by_uuid). This also avoids server_id mismatches when
+    # the admin initiated deletion from a child node while the agency service
+    # is owned by the parent server.
+    if deleted_server_ids:
+        try:
+            from Shared import agent_db as _agn
+            _agn.hard_delete_service_by_uuid(user_uuid)
+        except Exception as exc:
+            logger.warning(
+                "Admin panel delete succeeded but agency DB cleanup failed uuid=%s: %s",
+                user_uuid[:12],
+                exc,
+            )
+
     return deleted_server_ids, failed_servers
 
 
@@ -7257,11 +7274,6 @@ async def handle_server_inline_callback(
                 )
 
                 if deleted_server_ids and not failed_servers:
-                    try:
-                        from Shared import agent_db as _agn
-                        _agn.soft_delete_service_by_uuid(user_uuid, sid)
-                    except Exception:
-                        pass
                     success_count += 1
                 elif deleted_server_ids and failed_servers:
                     partial_count += 1
@@ -7348,12 +7360,6 @@ async def handle_server_inline_callback(
             else:
                 await msg.edit_text("❌ حذف کاربر روی هیچ سروری موفق نشد.")
             return
-
-        try:
-            from Shared import agent_db as _agn
-            _agn.soft_delete_service_by_uuid(user_uuid, server_id)
-        except Exception:
-            pass
 
         if failed_servers:
             await msg.edit_text(
