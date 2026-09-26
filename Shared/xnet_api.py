@@ -9,6 +9,8 @@ Important:
   routes. SellBot detects that once and falls back to a cached admin JWT.
 - The JWT cache is shared across bot processes so Admin/User/Agent/Customer do
   not independently hammer /api/auth/login.
+- Failed login attempts activate a shared cooldown/circuit-breaker, so a stuck
+  auth endpoint or rejected password cannot trigger a login storm.
 - Client UUID may be supplied on create and may be changed with the client PUT
   endpoint. This lets SellBot keep one canonical UUID across its server cluster.
 """
@@ -45,6 +47,8 @@ _DEFAULT_TOKEN_TTL = 15 * 60
 _JWT_EXPIRY_SKEW = 30
 _API_TOKEN_REJECT_TTL = 15 * 60
 _REJECTED_API_TOKENS: Dict[Tuple[str, str], float] = {}
+_LOGIN_FAILURE_BASE_COOLDOWN = 60
+_LOGIN_FAILURE_MAX_COOLDOWN = 15 * 60
 _GB = 1024 ** 3
 
 # X-NET online endpoints are live data. Keep only a very short cache so bulk
@@ -151,6 +155,76 @@ def _shared_jwt_paths(server: Dict[str, Any]) -> Tuple[Path, Path]:
         base / f"hiddify-sellbot-xnet-jwt-{digest}.json",
         base / f"hiddify-sellbot-xnet-jwt-{digest}.lock",
     )
+
+
+def _shared_login_failure_path(server: Dict[str, Any]) -> Path:
+    cache_path, _ = _shared_jwt_paths(server)
+    return cache_path.with_name(cache_path.stem + "-login-failure.json")
+
+
+def _login_backoff_remaining(server: Dict[str, Any]) -> int:
+    path = _shared_login_failure_path(server)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        retry_at = float(data.get("retry_at") or 0)
+        remaining = int(max(0.0, retry_at - time.time()))
+        if remaining > 0:
+            return remaining
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return 0
+
+
+def _record_login_failure(
+    server: Dict[str, Any],
+    *,
+    reason: str = "",
+    minimum_seconds: int = _LOGIN_FAILURE_BASE_COOLDOWN,
+) -> int:
+    """Persist a cross-process login circuit breaker after a failed auth attempt."""
+    path = _shared_login_failure_path(server)
+    failures = 0
+    try:
+        old = json.loads(path.read_text(encoding="utf-8"))
+        failures = max(0, int(old.get("failures") or 0))
+    except Exception:
+        pass
+
+    failures += 1
+    exponential = _LOGIN_FAILURE_BASE_COOLDOWN * (2 ** min(failures - 1, 4))
+    cooldown = min(
+        _LOGIN_FAILURE_MAX_COOLDOWN,
+        max(int(minimum_seconds), int(exponential)),
+    )
+    payload = {
+        "failures": failures,
+        "retry_at": time.time() + cooldown,
+        "reason": str(reason or "")[:200],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except Exception:
+        pass
+    return cooldown
+
+
+def _clear_login_failure(server: Dict[str, Any]) -> None:
+    try:
+        _shared_login_failure_path(server).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _read_shared_jwt(server: Dict[str, Any]) -> Tuple[float, str]:
@@ -286,6 +360,13 @@ async def _login(server: Dict[str, Any], *, force: bool = False) -> str:
             if cached:
                 return cached
 
+            remaining = _login_backoff_remaining(server)
+            if remaining > 0:
+                raise XnetApiError(
+                    "ورود fallback به X-NET موقتاً در حالت محافظت است؛ "
+                    f"برای جلوگیری از قفل/فشار روی پنل حدود {remaining} ثانیه دیگر دوباره امتحان می‌شود."
+                )
+
             url = f"{_base_url(server)}/api/auth/login"
             payload = {"username": _username(server), "password": password}
             try:
@@ -297,21 +378,42 @@ async def _login(server: Dict[str, Any], *, force: bool = False) -> str:
                     )
             except httpx.RequestError as exc:
                 detail = str(exc).strip() or type(exc).__name__
+                cooldown = _record_login_failure(
+                    server,
+                    reason=f"{type(exc).__name__}: {detail}",
+                    minimum_seconds=60,
+                )
                 raise XnetApiError(
-                    f"خطا در ورود fallback به X-NET ({type(exc).__name__}): {detail}"
+                    f"خطا در ورود fallback به X-NET ({type(exc).__name__}): {detail}. "
+                    f"برای محافظت از پنل تا حدود {cooldown} ثانیه Login جدید ارسال نمی‌شود."
                 ) from exc
 
             if response.status_code >= 400:
                 detail = response.text.strip().replace("\n", " ")[:250]
+                min_cooldown = 300 if response.status_code in {401, 403, 429} else 60
+                cooldown = _record_login_failure(
+                    server,
+                    reason=f"HTTP {response.status_code}: {detail}",
+                    minimum_seconds=min_cooldown,
+                )
                 raise XnetApiError(
                     f"ورود fallback به X-NET ناموفق بود (HTTP {response.status_code}): "
-                    f"{detail or 'login failed'}"
+                    f"{detail or 'login failed'}. "
+                    f"برای محافظت از پنل تا حدود {cooldown} ثانیه Login جدید ارسال نمی‌شود."
                 )
 
             try:
                 data = response.json()
             except ValueError as exc:
-                raise XnetApiError("پاسخ ورود X-NET JSON معتبر نیست.") from exc
+                cooldown = _record_login_failure(
+                    server,
+                    reason="invalid login JSON",
+                    minimum_seconds=60,
+                )
+                raise XnetApiError(
+                    "پاسخ ورود X-NET JSON معتبر نیست. "
+                    f"برای محافظت از پنل تا حدود {cooldown} ثانیه Login جدید ارسال نمی‌شود."
+                ) from exc
 
             if bool(data.get("requires2fa")):
                 raise XnetApiError(
@@ -321,8 +423,17 @@ async def _login(server: Dict[str, Any], *, force: bool = False) -> str:
 
             token = str(data.get("token") or "").strip()
             if not token:
-                raise XnetApiError("X-NET بعد از ورود JWT برنگرداند.")
+                cooldown = _record_login_failure(
+                    server,
+                    reason="login response missing JWT",
+                    minimum_seconds=60,
+                )
+                raise XnetApiError(
+                    "X-NET بعد از ورود JWT برنگرداند. "
+                    f"برای محافظت از پنل تا حدود {cooldown} ثانیه Login جدید ارسال نمی‌شود."
+                )
 
+            _clear_login_failure(server)
             expires_at = _jwt_expiry_epoch(token)
             _TOKEN_CACHE[_cache_key(server)] = (expires_at, token)
             _write_shared_jwt(server, token, expires_at)
