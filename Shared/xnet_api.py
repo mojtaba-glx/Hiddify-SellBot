@@ -1697,20 +1697,18 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _public_origin(server: Dict[str, Any]) -> str:
-    """Public origin used for X-NET subscription URLs.
+    """Public origin used by X-NET's dedicated subscription listener.
 
-    X-NET's management panel is commonly exposed on :8080 while the public
-    subscription endpoint is served through the same hostname on standard
-    HTTPS (443).  Never leak that management port into subscriber links when
-    a DNS hostname is available.
+    X-NET deliberately serves customer subscriptions on a port separate from
+    the management panel.  Current X-NET defaults are 2096 + /sub, and both
+    values can be overridden per SellBot server with xnet_sub_port and
+    xnet_sub_path.
     """
     custom = str(
         (server or {}).get("xnet_sub_domain")
         or (server or {}).get("xnet_sub_host")
         or ""
     ).strip()
-    # Public subscriber links must never inherit an internal management
-    # origin such as http://127.0.0.1:8080.
     raw = custom or str((server or {}).get("panel_url") or "").strip()
     if not raw:
         raw = _base_url(server)
@@ -1721,20 +1719,18 @@ def _public_origin(server: Dict[str, Any]) -> str:
     try:
         parsed = urllib.parse.urlparse(raw)
         host = str(parsed.hostname or "").strip()
-        port = parsed.port
         scheme = str(parsed.scheme or "https").strip().lower() or "https"
         if host:
-            # :8080 is the X-NET management port in our supported setup.
-            # For a real DNS hostname, subscriber URLs belong on public HTTPS.
-            is_ip = False
-            try:
-                import ipaddress
-                ipaddress.ip_address(host)
-                is_ip = True
-            except ValueError:
-                is_ip = False
-            if port == 8080 and not is_ip:
-                return f"https://{host}"
+            configured_port = _to_int((server or {}).get("xnet_sub_port"), 2096)
+            sub_port = configured_port if configured_port > 0 else 2096
+            # Keep an explicitly configured custom subscription URL port unless
+            # it is the management port.  Otherwise use X-NET's subscription
+            # listener port (2096 by default).
+            explicit_port = parsed.port
+            if custom and explicit_port and explicit_port != 8080 and not (server or {}).get("xnet_sub_port"):
+                sub_port = explicit_port
+            default_port = (scheme == "https" and sub_port == 443) or (scheme == "http" and sub_port == 80)
+            return f"{scheme}://{host}" if default_port else f"{scheme}://{host}:{sub_port}"
     except Exception:
         pass
 
@@ -1765,10 +1761,20 @@ def get_admin_web_url(server: Dict[str, Any], section: str = "#/subscriptions") 
 
 
 def get_subscription_url(server: Dict[str, Any], user_uuid: str) -> str:
+    """Return X-NET's public customer subscription URL.
+
+    This is intentionally not /api/v1/sub/<uuid>: that route belongs to the
+    management/API listener.  The public listener uses /<vpn-path>/<uuid>.
+    """
     wanted = str(user_uuid or "").strip()
     if not wanted:
         raise XnetApiError("UUID کاربر X-NET خالی است.")
-    return f"{_public_origin(server)}/api/v1/sub/{wanted}"
+    sub_path = str(
+        (server or {}).get("xnet_sub_path")
+        or (server or {}).get("xnet_sub_path_vpn")
+        or "sub"
+    ).strip().strip("/") or "sub"
+    return f"{_public_origin(server)}/{sub_path}/{urllib.parse.quote(wanted, safe='')}"
 
 
 async def get_subscription_body(
