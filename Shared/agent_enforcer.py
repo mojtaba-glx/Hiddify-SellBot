@@ -524,6 +524,7 @@ async def _run_agent_usage_enforcer_impl(*, scan_all: bool = True) -> Dict[str, 
         "services_synced": 0,
         "services_disabled": 0,
         "nodes_disabled": 0,
+        "nodes_disable_failed": 0,
         "errors": 0,
     }
 
@@ -547,6 +548,9 @@ async def _run_agent_usage_enforcer_impl(*, scan_all: bool = True) -> Dict[str, 
             if res.get("status") == "disabled":
                 summary["services_disabled"] += 1
                 summary["nodes_disabled"] += _to_int(res.get("nodes_disabled"), 0)
+                summary["nodes_disable_failed"] += _to_int(
+                    res.get("nodes_disable_failed"), 0
+                )
             elif res.get("status") == "synced":
                 summary["services_synced"] += 1
         except Exception as e:
