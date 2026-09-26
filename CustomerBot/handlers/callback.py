@@ -671,6 +671,14 @@ async def _show_subscription_status(msg, agent_id, svc_id):
     if not svc:
         await msg.edit_text("❌ سرویس یافت نشد.")
         return None
+    # Old inline buttons may survive after the panel user is deleted. Never
+    # render stale DB data directly: the probe state is authoritative for
+    # CustomerBot visibility during the seven-day retention window.
+    if not is_customer_service_visible(svc):
+        await msg.edit_text(
+            "❌ این اشتراک در حال حاضر روی سرور تأیید نشد و نمایش داده نمی‌شود."
+        )
+        return None
     show_detach = bool(svc.get("comment") == "connected")
     svc_text = build_subscription_status_text(svc, subs_settings, br)
     kb = subscription_status_keyboard(
@@ -932,7 +940,7 @@ async def _handle_status(query, context, agent_id, user, data):
             if not cust:
                 return
             from CustomerBot.services import sync_service_status_from_panels, is_customer_service_visible
-            services = get_services_by_customer(cust["id"])
+            services = get_services_by_customer(cust["id"], include_missing=True)
             for svc in services:
                 await sync_service_status_from_panels(svc.get("id", 0))
             services = get_services_by_customer(cust["id"])
