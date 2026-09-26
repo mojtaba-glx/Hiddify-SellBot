@@ -582,6 +582,23 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
     if not server:
         return "", {}
 
+    # AgentBot/CustomerBot smart links intentionally use panel-srv-* too, but
+    # they DO have a local agent_services row with the authoritative global
+    # expiry/quota state. Route those links through the agency builder instead
+    # of treating them as raw AdminBot panel users; otherwise X-UI API fallback
+    # can leak direct configs after the subscription has expired.
+    try:
+        agent_svc = agent_db.get_service_by_uuid(user_uuid)
+        if agent_svc and int(agent_svc.get("server_id") or 0) == server_id:
+            return _build_agent_subscription_body(agent_svc, is_b64)
+    except Exception as exc:
+        logger.warning(
+            "agent smart-sub ownership lookup failed server_id=%s uuid=%s: %s",
+            server_id,
+            user_uuid[:12],
+            exc,
+        )
+
     service: dict = {
         "id": 0,
         "name": user_uuid,
@@ -730,17 +747,26 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
                     )
                 if _limit is not None:
                     primary_limit = _limit
+
+            # Expiry is global for a managed cluster: the earliest confirmed
+            # expiry wins. For Sanaei, _days_left_from_panel_user also honors
+            # the exact expiryTime even while the rounded day counter is 0.
+            try:
+                days_left = sub_aggregator._days_left_from_panel_user(panel_user)
+                if days_left is not None:
+                    days_val = int(days_left)
+                    min_days_left = (
+                        days_val
+                        if min_days_left is None
+                        else min(int(min_days_left), days_val)
+                    )
+            except Exception:
+                pass
+
+            if _is_token_server:
                 try:
-                    days_left = sub_aggregator._days_left_from_panel_user(panel_user)
-                    if days_left is not None:
-                        min_days_left = int(days_left)
-                except Exception:
-                    pass
-            elif min_days_left is None:
-                try:
-                    days_left = sub_aggregator._days_left_from_panel_user(panel_user)
-                    if days_left is not None:
-                        min_days_left = int(days_left)
+                    if sub_aggregator._explicitly_disabled(panel_user):
+                        service["is_active"] = False
                 except Exception:
                     pass
 
@@ -796,6 +822,19 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
     service["usage_limit"] = primary_limit if primary_limit is not None else 0.0
     if min_days_left is not None:
         service["days_left"] = int(min_days_left)
+
+    # AdminBot-created users do not have a local service row, so lock directly
+    # from the live panel metadata. Never return X-UI fallback configs once the
+    # quota/time is over or the token-server user is disabled.
+    lock_reason = sub_aggregator._service_lock_reason(
+        service,
+        check_userbot_nodes=False,
+    )
+    if lock_reason:
+        status_line = sub_aggregator._build_status_config_line(service, lock_reason)
+        if is_b64 and status_line:
+            status_line = base64.b64encode(status_line.encode("utf-8")).decode("ascii")
+        return status_line or "", service
 
     if not lines:
         return "", service
@@ -2129,12 +2168,20 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
         )
         from Shared.sub_links import get_service_user_base_urls, get_service_panel_targets
 
-        lock_reason = _service_lock_reason(svc)
+        lock_reason = _service_lock_reason(svc, check_userbot_nodes=False)
         if not lock_reason and int((svc or {}).get("is_active") or 0) != 1:
             lock_reason = "service_not_found"
         locked_status = ""
         if lock_reason:
             locked_status = _build_status_config_line(svc, lock_reason)
+            # Hard gate: an expired/disabled agency service must expose only the
+            # synthetic status Trojan. In particular, X-UI/Sanaei admin-API
+            # fallback is never allowed to append real configs after expiry.
+            if is_b64 and locked_status:
+                locked_status = base64.b64encode(
+                    locked_status.encode("utf-8")
+                ).decode("ascii")
+            return locked_status or "", svc
 
         lines: list[str] = []
         seen: set = set()
@@ -2206,13 +2253,6 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
             except Exception:
                 pass
 
-        if lock_reason and not lines:
-            if is_b64 and locked_status:
-                try:
-                    locked_status = base64.b64encode(locked_status.encode("utf-8")).decode("ascii")
-                except Exception:
-                    pass
-            return locked_status or "", svc
     except Exception as e:
         logger.warning("agent sub build failed for uuid=%s: %s", str(svc.get("panel_user_uuid") or "")[:12], e)
         return "", {}
