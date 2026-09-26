@@ -1,7 +1,10 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from telegram.error import BadRequest
 
 from AdminBot import xnet_guard
 from Shared import userbot_db, xnet_api
@@ -77,6 +80,40 @@ class XnetGuardSnapshotTests(unittest.TestCase):
         snap = userbot_db.get_xnet_guard_snapshot(7, "u-1")
         self.assertAlmostEqual(float(snap["usage_current_gb"]), 1.0)
         self.assertAlmostEqual(float(snap["recovery_base_gb"]), 0.0)
+
+
+class XnetGuardCallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unchanged_status_is_not_reported_as_guard_failure(self):
+        server = {"id": 7, "panel_type": "xnet", "title": "France"}
+        state = {
+            "inbounds": [],
+            "enabled_inbounds": 0,
+            "users": [],
+            "snapshots": [],
+            "missing": [],
+        }
+        query = MagicMock()
+        query.data = "xnetguard:7:status"
+        query.answer = AsyncMock()
+        query.message = MagicMock()
+        query.message.edit_text = AsyncMock(
+            side_effect=BadRequest(
+                "Message is not modified: specified new message content and reply markup "
+                "are exactly the same as a current content and reply markup of the message"
+            )
+        )
+        update = SimpleNamespace(callback_query=query)
+        context = MagicMock()
+
+        with patch.object(
+            xnet_guard, "_is_main_xnet", return_value=(True, server)
+        ), patch.object(
+            xnet_guard, "_guard_state", new=AsyncMock(return_value=state)
+        ):
+            await xnet_guard.handle_xnet_guard_callback(update, context)
+
+        query.answer.assert_awaited_once()
+        self.assertEqual(query.message.edit_text.await_count, 1)
 
 
 class XnetGuardRecoveryTests(unittest.IsolatedAsyncioTestCase):
