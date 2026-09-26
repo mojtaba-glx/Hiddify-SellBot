@@ -594,6 +594,20 @@ def _fetch_lines_from_admin_api(server: dict, user_uuid: str, marzban_username: 
     The legacy marzban_username argument is ignored for compatibility.
     """
     lines: List[str] = []
+    # X-NET: use its authenticated adapter as a fallback when the public
+    # /api/v1/sub route is unavailable from this host/reverse proxy.
+    try:
+        from Shared import xnet_api
+        if xnet_api.is_xnet_server(server):
+            configs = _run_async(xnet_api.get_user_configs(server, user_uuid))
+            for item in configs or []:
+                link = str((item or {}).get("link") or "").strip() if isinstance(item, dict) else str(item or "").strip()
+                if "://" in link and link not in lines:
+                    lines.append(link)
+            if lines:
+                return lines
+    except Exception:
+        pass
     # X-UI: native subscription is the most faithful source of config lines
     if xui_api.is_xui_server(server):
         try:
