@@ -6582,6 +6582,9 @@ async def handle_edit_user_flow(
                 context.user_data.pop("state", None)
                 await send_user_edit_menu(server_id, target_user_uuid, message.chat_id, context)
                 return
+            # Keep every local owner of this panel UUID in sync. UserBot
+            # services live in hiddify_sellbot.db, while AgentBot and
+            # CustomerBot both read reseller/customer services from agency.db.
             try:
                 owner = userbot_db.get_service_owner_by_panel_uuid(str(target_user_uuid))
                 local_service_id = int((owner or {}).get("service_id") or 0)
@@ -6590,6 +6593,16 @@ async def handle_edit_user_flow(
             except Exception as sync_err:
                 logger.warning(
                     "Failed syncing service name to userbot_services (server_id=%s, user_uuid=%s): %s",
+                    server_id,
+                    user_uuid,
+                    sync_err,
+                )
+            try:
+                from Shared import agent_db
+                agent_db.update_service_name_by_panel_uuid(str(target_user_uuid), new_name)
+            except Exception as sync_err:
+                logger.warning(
+                    "Failed syncing service name to agent_services (server_id=%s, user_uuid=%s): %s",
                     server_id,
                     user_uuid,
                     sync_err,
