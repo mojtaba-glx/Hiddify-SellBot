@@ -645,32 +645,62 @@ def _panel_user_already_absent(exc: Exception) -> bool:
     )
 
 
+async def _set_subscription_active_on_all_targets(svc: dict, active: bool) -> bool:
+    """Apply manual agency enable/disable to the complete multi-panel cluster."""
+    service_id = int(svc.get("id") or 0)
+    targets = get_service_panel_targets(svc) or []
+    if not targets:
+        logger.error("service active toggle has no panel targets svc=%s", service_id)
+        return False
+
+    failures: List[str] = []
+    for server, panel_uuid, marzban_username in targets:
+        try:
+            sid = int((server or {}).get("id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        panel_uuid = str(panel_uuid or "").strip()
+        if sid <= 0 or not panel_uuid:
+            failures.append(f"server={sid or '?'} invalid target")
+            continue
+        try:
+            if active:
+                await multi_panel.enable_user(
+                    server, panel_uuid, marzban_username=str(marzban_username or "").strip()
+                )
+            else:
+                await multi_panel.disable_user(
+                    server, panel_uuid, marzban_username=str(marzban_username or "").strip()
+                )
+        except Exception as exc:
+            failures.append(f"server={sid}: {str(exc)[:100]}")
+            logger.error(
+                "%s panel API failed svc=%s server=%s: %s",
+                "enable" if active else "disable", service_id, sid, exc,
+            )
+
+    if failures:
+        # Do not claim a global state when even one Hiddify/X-UI/X-Net target
+        # failed; the caller can retry after the failing node is reachable.
+        return False
+
+    agent_db.set_service_active(service_id, active)
+    agent_db.set_service_nodes_active(service_id, active)
+    return True
+
+
 async def disable_subscription(agent_id: int, service_id: int) -> bool:
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return False
-    sid = int(svc.get("server_id") or 0)
-    marzban_un = _lookup_marzban_username(service_id, sid)
-    try:
-        await disable_user_on_panel(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
-    except Exception as e:
-        logger.error("disable panel API failed svc=%s: %s", service_id, e)
-    agent_db.set_service_active(service_id, False)
-    return True
+    return await _set_subscription_active_on_all_targets(svc, False)
 
 
 async def enable_subscription(agent_id: int, service_id: int) -> bool:
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return False
-    sid = int(svc.get("server_id") or 0)
-    marzban_un = _lookup_marzban_username(service_id, sid)
-    try:
-        await enable_user_on_panel(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
-    except Exception as e:
-        logger.error("enable panel API failed svc=%s: %s", service_id, e)
-    agent_db.set_service_active(service_id, True)
-    return True
+    return await _set_subscription_active_on_all_targets(svc, True)
 
 
 async def delete_subscription(agent_id: int, service_id: int) -> bool:
