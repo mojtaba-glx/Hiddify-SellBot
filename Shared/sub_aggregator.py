@@ -154,8 +154,18 @@ def _build_status_config_line(service: dict, lock_reason: str = "") -> str:
 
 
 def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
-    if not dt_str:
+    if dt_str is None or dt_str == "":
         return None
+    # X-UI/Sanaei exposes expiryTime as epoch milliseconds. Other adapters may
+    # expose epoch seconds. Normalize both before trying ISO/date strings.
+    try:
+        stamp = float(dt_str)
+        if stamp > 0:
+            if stamp > 10_000_000_000:
+                stamp /= 1000.0
+            return datetime.fromtimestamp(stamp, timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OSError):
+        pass
     try:
         iso_raw = str(dt_str).strip().replace("Z", "+00:00")
         dt = datetime.fromisoformat(iso_raw)
@@ -175,6 +185,72 @@ def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
         except ValueError:
             continue
     return None
+
+
+def _panel_user_exactly_expired(
+    user: Dict[str, Any],
+    *,
+    now: Optional[datetime] = None,
+) -> bool:
+    """Return True only when an explicit panel expiry has actually passed.
+
+    Date-only values are treated as valid through that calendar day; exact
+    timestamps / epoch values (notably Sanaei expiryTime) are compared to the
+    current UTC instant. This closes the "days_left == 0" gap without expiring
+    a date-only Hiddify subscription too early.
+    """
+    if not isinstance(user, dict):
+        return False
+    current = now or datetime.now(timezone.utc).replace(tzinfo=None)
+
+    for key in ("expiryTime", "expires_at", "expiration_date", "end_date", "expire", "expire_date"):
+        raw = user.get(key)
+        if raw is None or str(raw).strip() in {"", "0", "0.0"}:
+            continue
+        parsed = _parse_dt(raw)
+        if parsed is None:
+            continue
+        raw_text = str(raw).strip()
+        is_epoch = False
+        try:
+            is_epoch = float(raw_text) > 0
+        except (TypeError, ValueError):
+            is_epoch = False
+        has_clock = is_epoch or any(ch in raw_text for ch in ("T", ":", "Z", "z", "+"))
+        if has_clock:
+            if parsed <= current:
+                return True
+        elif parsed.date() < current.date():
+            return True
+    return False
+
+
+def _explicitly_disabled(user: Dict[str, Any]) -> bool:
+    if not isinstance(user, dict):
+        return False
+
+    def _as_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return bool(int(value))
+        raw = str(value).strip().lower()
+        if raw in {"1", "true", "yes", "on", "active", "enabled", "enable", "y"}:
+            return True
+        if raw in {"0", "false", "no", "off", "inactive", "disabled", "disable", "n"}:
+            return False
+        return None
+
+    for key in ("is_active", "active", "enabled", "enable"):
+        if key in user and _as_bool(user.get(key)) is False:
+            return True
+    mode = str(user.get("mode") or "").strip().lower()
+    status = str(user.get("status") or "").strip().lower()
+    return mode in {"disable", "disabled", "inactive"} or status in {
+        "disable", "disabled", "inactive", "deactive", "off",
+    }
 
 
 def _optional_int_from_any(value: Any) -> Optional[int]:
@@ -201,6 +277,12 @@ def _usage_limit_from_panel_user(user: Dict[str, Any]) -> Optional[float]:
 
 
 def _days_left_from_panel_user(user: Dict[str, Any]) -> Optional[int]:
+    # Sanaei can report remaining_days=0 for the whole expiry date even after
+    # its exact expiryTime has passed. Exact expiry must win over the rounded
+    # day counter so the smart link locks immediately.
+    if _panel_user_exactly_expired(user):
+        return -1
+
     today_utc = datetime.now(timezone.utc).date()
     for key in ("remaining_days", "remaining_day", "days_left"):
         remaining = _optional_int_from_any(user.get(key))
@@ -223,7 +305,11 @@ def _days_left_from_panel_user(user: Dict[str, Any]) -> Optional[int]:
     return None
 
 
-def _service_lock_reason(service: dict) -> Optional[str]:
+def _service_lock_reason(
+    service: dict,
+    *,
+    check_userbot_nodes: bool = True,
+) -> Optional[str]:
     if not service:
         return "service_not_found"
 
@@ -232,6 +318,12 @@ def _service_lock_reason(service: dict) -> Optional[str]:
     if usage_limit > 0 and usage_current >= usage_limit:
         return "usage_limit_reached"
 
+    # Prefer exact panel/local expiry when available. This is important for
+    # X-UI/Sanaei where remaining_days is date-rounded and can stay 0 after the
+    # actual expiryTime has already passed.
+    if _panel_user_exactly_expired(service):
+        return "time_expired"
+
     try:
         days_left = int(service.get("days_left"))
     except Exception:
@@ -239,14 +331,21 @@ def _service_lock_reason(service: dict) -> Optional[str]:
     if days_left is not None and days_left < 0:
         return "time_expired"
 
-    try:
-        service_id = int(service.get("id") or 0)
-    except (TypeError, ValueError):
-        service_id = 0
-    if service_id > 0:
-        mappings = userbot_db.get_service_nodes(service_id)
-        if mappings and not any(int((m or {}).get("is_active") or 0) == 1 for m in mappings):
-            return "nodes_inactive"
+    if _explicitly_disabled(service):
+        return "nodes_inactive"
+
+    # This mapping table belongs to UserBot only. Agent/Customer records can
+    # share the same numeric service id, so their callers must disable this
+    # lookup with check_userbot_nodes=False.
+    if check_userbot_nodes:
+        try:
+            service_id = int(service.get("id") or 0)
+        except (TypeError, ValueError):
+            service_id = 0
+        if service_id > 0:
+            mappings = userbot_db.get_service_nodes(service_id)
+            if mappings and not any(int((m or {}).get("is_active") or 0) == 1 for m in mappings):
+                return "nodes_inactive"
 
     return None
 
