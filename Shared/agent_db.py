@@ -1478,6 +1478,26 @@ def get_service_by_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def update_service_name_by_panel_uuid(panel_user_uuid: str, name: str) -> int:
+    """Sync a panel-side rename into every matching reseller/customer service."""
+    init_db()
+    uuid = str(panel_user_uuid or "").strip()
+    new_name = str(name or "").strip()
+    if not uuid or not new_name:
+        return 0
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE agent_services SET name = ?, updated_at = ? "
+            "WHERE panel_user_uuid = ? AND (deleted_at IS NULL OR deleted_at = '')",
+            (new_name, _now(), uuid),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
 def get_service_by_payment_operation(payment_operation_key: str) -> Optional[Dict[str, Any]]:
     key = str(payment_operation_key or "").strip()
     if not key:
