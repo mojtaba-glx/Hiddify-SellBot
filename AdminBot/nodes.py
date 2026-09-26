@@ -236,14 +236,18 @@ def _build_node_edit_text(
     server_panel_link = ""
     if panel_link:
         base = panel_link.rstrip("/")
-        ap = str(admin_proxy or "").strip().strip("/")
-        au = str(admin_uuid or "").strip().strip("/")
-        if ap and au:
-            server_panel_link = f"{base}/{ap}/{au}/"
-        elif ap:
-            server_panel_link = f"{base}/{ap}/"
+        if is_xnet_child:
+            web_base_path = str((child or {}).get("xnet_web_base_path") or "").strip("/")
+            server_panel_link = f"{base}/{web_base_path}/" if web_base_path else base
         else:
-            server_panel_link = base
+            ap = str(admin_proxy or "").strip().strip("/")
+            au = str(admin_uuid or "").strip().strip("/")
+            if ap and au:
+                server_panel_link = f"{base}/{ap}/{au}/"
+            elif ap:
+                server_panel_link = f"{base}/{ap}/"
+            else:
+                server_panel_link = base
     server_title = _safe_text(node.get("title") or "—")
     if server_panel_link:
         server_line = f'🖥 سرور: <a href="{escape(server_panel_link, quote=True)}">{server_title}</a>'
@@ -327,6 +331,19 @@ async def _build_node_edit_text_live(server_id: int, node: Dict[str, Any]) -> st
     child = database.get_server_by_id(target_sid) if target_sid > 0 else None
     users_count = 0
     if child:
+        if xnet_api.is_xnet_server(child):
+            try:
+                panel_cfg = await xnet_api.get_panel_config(child)
+                web_base_path = str(panel_cfg.get("webBasePath") or "").strip("/")
+                if web_base_path and str(child.get("xnet_web_base_path") or "").strip("/") != web_base_path:
+                    database.update_server(target_sid, {"xnet_web_base_path": web_base_path})
+                    child = database.get_server_by_id(target_sid) or child
+            except Exception as exc:
+                logger.warning(
+                    "Could not refresh X-NET node webBasePath (server_id=%s): %s",
+                    target_sid,
+                    exc,
+                )
         try:
             users_count = len(await hiddify_api.list_users(child))
         except Exception as e:
@@ -839,6 +856,18 @@ async def handle_add_node_flow(
         new_node["xnet_password"] = text
         context.user_data["new_node"] = new_node
         try:
+            # X-NET API itself lives under /api and does not need the hidden
+            # frontend path. Discover that path automatically so the node's
+            # clickable panel link can still open the real web UI.
+            try:
+                panel_cfg = await xnet_api.get_panel_config(new_node)
+                web_base_path = str(panel_cfg.get("webBasePath") or "").strip("/")
+                if web_base_path:
+                    new_node["xnet_web_base_path"] = web_base_path
+                    context.user_data["new_node"] = new_node
+            except Exception as exc:
+                logger.warning("Could not auto-detect X-NET node webBasePath: %s", exc)
+
             inbounds = await xnet_api.get_inbounds(new_node)
             rows = []
             for ib in (inbounds or [])[:20]:
@@ -996,6 +1025,7 @@ async def handle_add_node_flow(
                 "panel_type": "xnet",
                 "xnet_username": str(new_node.get("xnet_username") or "admin").strip(),
                 "xnet_password": str(new_node.get("xnet_password") or ""),
+                "xnet_web_base_path": str(new_node.get("xnet_web_base_path") or "").strip("/"),
                 "xnet_inbound_id": str(new_node.get("xnet_inbound_id") or "").strip(),
                 "users_limit": int(users_limit),
                 "priority": 0,
