@@ -1741,6 +1741,29 @@ def _public_origin(server: Dict[str, Any]) -> str:
     return raw
 
 
+def get_admin_web_url(server: Dict[str, Any], section: str = "#/subscriptions") -> str:
+    """Build the browser/admin-panel URL for an X-NET UI section.
+
+    This is intentionally separate from get_subscription_url(): the latter is
+    the public client subscription endpoint, while this URL opens X-NET's web
+    interface for the operator.
+    """
+    raw = str((server or {}).get("panel_url") or "").strip().rstrip("/")
+    if not raw:
+        return ""
+
+    web_base_path = str((server or {}).get("xnet_web_base_path") or "").strip("/")
+    if web_base_path:
+        raw = f"{raw}/{web_base_path}"
+
+    route = str(section or "").strip()
+    if not route:
+        return raw
+    if not route.startswith("#"):
+        route = "#" + route.lstrip("#")
+    return f"{raw}/{route}"
+
+
 def get_subscription_url(server: Dict[str, Any], user_uuid: str) -> str:
     wanted = str(user_uuid or "").strip()
     if not wanted:
