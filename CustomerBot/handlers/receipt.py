@@ -822,7 +822,7 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # owned by the current customer.  Also replace the possibly stale
         # callback snapshot with the canonical agent_services row so panel
         # mappings/UUIDs are resolved from the same database as AgentBot.
-        customer = get_customer_by_telegram_id(update.effective_user.id)
+        customer = get_customer_by_telegram_id(user.id)
         if not customer or int(svc.get("customer_id") or 0) != int(customer.get("id") or 0):
             context.user_data.pop(UD_STATE, None)
             await update.message.reply_text("❌ این اشتراک متعلق به حساب شما نیست.", reply_markup=main_menu_keyboard())
