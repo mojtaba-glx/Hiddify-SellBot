@@ -677,7 +677,26 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
             elif _is_xui_meta:
                 panel_user = asyncio.run(xui_api.get_user_by_uuid(srv, user_uuid)) or {}
             else:
-                panel_user = asyncio.run(hiddify_api.get_user_by_uuid(srv, user_uuid)) or {}
+                # Hiddify's single-user detail endpoint can lag behind the user
+                # list after PATCH. AdminBot itself reads the fresh list, so use
+                # that same source for panel-srv status metadata and only fall
+                # back to the detail endpoint when the UUID is not present.
+                panel_user = {}
+                try:
+                    _users = asyncio.run(hiddify_api.list_users(srv)) or []
+                    _wanted = str(user_uuid or "").strip()
+                    panel_user = next(
+                        (
+                            row for row in _users
+                            if isinstance(row, dict)
+                            and str(row.get("uuid") or row.get("id") or "").strip() == _wanted
+                        ),
+                        {},
+                    )
+                except Exception:
+                    panel_user = {}
+                if not panel_user:
+                    panel_user = asyncio.run(hiddify_api.get_user_by_uuid(srv, user_uuid)) or {}
         except Exception as e:
             logger.warning(
                 "Failed fetching panel user for managed admin sub server_id=%s uuid=%s: %s",
