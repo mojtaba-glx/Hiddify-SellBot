@@ -428,8 +428,9 @@ ADD_STATE_XUI_PASSWORD = "add_server_xui_password"
 ADD_STATE_XUI_TOKEN = "add_server_xui_token"
 ADD_STATE_XUI_SUB_DOMAIN = "add_server_xui_sub_domain"
 ADD_STATE_XUI_INBOUND = "add_server_xui_inbound"
-ADD_STATE_XNET_USERNAME = "add_server_xnet_username"
-ADD_STATE_XNET_PASSWORD = "add_server_xnet_password"
+ADD_STATE_XNET_USERNAME = "add_server_xnet_username"  # legacy flow
+ADD_STATE_XNET_PASSWORD = "add_server_xnet_password"  # legacy flow
+ADD_STATE_XNET_TOKEN = "add_server_xnet_token"
 ADD_STATE_XNET_INBOUND = "add_server_xnet_inbound"
 
 # ویرایش سرور
@@ -445,8 +446,9 @@ EDIT_SERVER_XUI_PASSWORD = "edit_server_xui_password"
 EDIT_SERVER_XUI_TOKEN = "edit_server_xui_token"
 EDIT_SERVER_XUI_SUB_DOMAIN = "edit_server_xui_sub_domain"
 EDIT_SERVER_XUI_INBOUND = "edit_server_xui_inbound"
-EDIT_SERVER_XNET_USERNAME = "edit_server_xnet_username"
-EDIT_SERVER_XNET_PASSWORD = "edit_server_xnet_password"
+EDIT_SERVER_XNET_USERNAME = "edit_server_xnet_username"  # legacy
+EDIT_SERVER_XNET_PASSWORD = "edit_server_xnet_password"  # legacy
+EDIT_SERVER_XNET_TOKEN = "edit_server_xnet_token"
 EDIT_SERVER_XNET_API_URL = "edit_server_xnet_api_url"
 EDIT_SERVER_XNET_SUB_DOMAIN = "edit_server_xnet_sub_domain"
 EDIT_SERVER_XNET_INBOUND = "edit_server_xnet_inbound"
@@ -3355,9 +3357,15 @@ def build_server_detail_text(
     if is_xnet:
         xnet_info = ""
         try:
-            xnet_user = str(server.get("xnet_username") or "admin").strip()
-            if xnet_user:
-                xnet_info += f"\n👤 یوزر پنل: {escape(xnet_user)}"
+            api_token = str(
+                server.get("xnet_api_token")
+                or server.get("xnet_token")
+                or ""
+            ).strip()
+            if api_token:
+                xnet_info += "\n🔐 احراز هویت API: Bearer Token ✅"
+            else:
+                xnet_info += "\n⚠️ احراز هویت API: Legacy Login"
             internal_api = str(server.get("xnet_api_url") or "").strip()
             if internal_api:
                 xnet_info += f"\n🔌 API داخلی: {escape(internal_api)}"
@@ -5223,9 +5231,12 @@ async def handle_add_server_flow(
             return
 
         if str(new_server.get("panel_type") or "").strip().lower() in {"xnet", "x-net"}:
-            context.user_data["state"] = ADD_STATE_XNET_USERNAME
+            context.user_data["state"] = ADD_STATE_XNET_TOKEN
             await message.reply_text(
-                "👤 نام کاربری ادمین X-NET را وارد کنید (معمولاً admin):",
+                "🔑 توکن API مدیریت X-NET را وارد کنید:\n"
+                "از پنل X-NET → تنظیمات پیشرفته پنل → مدیریت سرویس API، "
+                "Bearer Token را کپی کنید.\n\n"
+                "✅ برای اتصال ربات دیگر نام کاربری/رمز پنل لازم نیست.",
                 reply_markup=cancel_keyboard(),
             )
             return
@@ -5329,6 +5340,56 @@ async def handle_add_server_flow(
         context.user_data["state"] = ADD_STATE_LIMIT
         await message.reply_text(
             "📊 لطفاً محدودیت تعداد کاربران سرور را وارد کنید (عدد):",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # مرحله X-NET: Bearer API Token (مسیر اصلی)
+    if state == ADD_STATE_XNET_TOKEN:
+        token = text.strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        if not token:
+            await message.reply_text(
+                "❌ توکن API X-NET خالی است. Bearer Token را از بخش مدیریت سرویس API کپی کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        new_server["xnet_api_token"] = token
+        new_server["xnet_token"] = token  # alias for compatibility
+        context.user_data["new_server"] = new_server
+
+        try:
+            inbounds = await xnet_api.get_inbounds(new_server)
+            rows = []
+            for ib in (inbounds or [])[:20]:
+                iid = str(ib.get("id") or "").strip()
+                if not iid:
+                    continue
+                remark = str(ib.get("remark") or ib.get("name") or "-").strip()
+                proto = str(ib.get("protocol") or "-").strip()
+                enabled = "✅" if bool(ib.get("enabled", True)) else "⛔"
+                rows.append(f"{enabled} {iid} | {proto} | {remark}")
+            inbound_text = "\n".join(rows) if rows else "هیچ Inboundی هنوز ساخته نشده."
+        except Exception as exc:
+            await message.reply_text(
+                "❌ توکن API X-NET یا دریافت Inboundها ناموفق بود.\n"
+                f"جزئیات: {str(exc)[:600]}\n\n"
+                "توکن جدید را دوباره ارسال کنید یا عملیات را لغو کنید.",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+
+        context.user_data["state"] = ADD_STATE_XNET_INBOUND
+        await message.reply_text(
+            "✅ اتصال با Bearer Token برقرار شد.\n\n"
+            "🧩 Inboundهای X-NET:\n\n"
+            f"{inbound_text}\n\n"
+            "شناسه Inbound فروش را بفرستید.\n"
+            "• skip = اولین Inbound فعال\n"
+            "• 0 = همه Inboundهای فعال با یک UUID مشترک\n"
+            "• چند شناسه = با کاما جدا کنید (مثال: in-a1,in-b2)",
             reply_markup=cancel_keyboard(),
         )
         return
@@ -5744,10 +5805,22 @@ async def handle_edit_server_flow(
         msg_ok = "✅ اولویت سرور بروزرسانی شد."
     elif state == EDIT_SERVER_XNET_USERNAME:
         updates["xnet_username"] = text.strip() or "admin"
-        msg_ok = "✅ نام کاربری پنل X-NET بروزرسانی شد."
+        msg_ok = "✅ نام کاربری قدیمی X-NET بروزرسانی شد."
     elif state == EDIT_SERVER_XNET_PASSWORD:
         updates["xnet_password"] = text
-        msg_ok = "✅ رمز پنل X-NET بروزرسانی شد."
+        msg_ok = "✅ رمز قدیمی X-NET بروزرسانی شد."
+    elif state == EDIT_SERVER_XNET_TOKEN:
+        token = text.strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        if token in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
+            updates["xnet_api_token"] = ""
+            updates["xnet_token"] = ""
+            msg_ok = "✅ توکن API X-NET پاک شد؛ فقط سازگاری قدیمی username/password باقی می‌ماند."
+        else:
+            updates["xnet_api_token"] = token
+            updates["xnet_token"] = token
+            msg_ok = "✅ Bearer Token مدیریت X-NET بروزرسانی شد؛ ربات دیگر برای API لاگین نمی‌کند."
     elif state == EDIT_SERVER_XNET_API_URL:
         api_url = text.strip()
         if api_url in {"0", "skip", "-", "_", ".", "done", "نه", "خیر", ""}:
@@ -5914,8 +5987,7 @@ async def send_server_edit_menu(
             [
                 [InlineKeyboardButton("📌ویرایش عنوان", callback_data=f"seredit:{server_id}:title")],
                 [InlineKeyboardButton("🌐ویرایش آدرس پنل", callback_data=f"seredit:{server_id}:panel_url")],
-                [InlineKeyboardButton("👤ویرایش نام کاربری پنل", callback_data=f"seredit:{server_id}:xnet_username")],
-                [InlineKeyboardButton("🔑ویرایش رمز پنل", callback_data=f"seredit:{server_id}:xnet_password")],
+                [InlineKeyboardButton("🔑ویرایش توکن API X-NET", callback_data=f"seredit:{server_id}:xnet_token")],
                 [InlineKeyboardButton("🔌ویرایش API داخلی X-NET", callback_data=f"seredit:{server_id}:xnet_api_url")],
                 [InlineKeyboardButton("🔗ویرایش دامنه ساب", callback_data=f"seredit:{server_id}:xnet_sub_domain")],
                 [InlineKeyboardButton("🧩ویرایش اینباند", callback_data=f"seredit:{server_id}:xnet_inbound")],
@@ -8126,6 +8198,16 @@ async def handle_server_inline_callback(
             set_server_state(EDIT_SERVER_USER_PROXY)
             await msg.edit_text(
                 "🔑 لطفاً کد مسیر جدید کاربران را وارد کنید (User Proxy Path):",
+                reply_markup=cancel_kb,
+            )
+            return
+
+        if field == "xnet_token":
+            set_server_state(EDIT_SERVER_XNET_TOKEN)
+            await msg.edit_text(
+                "🔑 Bearer Token جدید X-NET را وارد کنید.\n"
+                "مسیر پنل: تنظیمات پیشرفته پنل → مدیریت سرویس API\n\n"
+                "می‌توانید خود توکن یا عبارت Bearer <token> را ارسال کنید.",
                 reply_markup=cancel_kb,
             )
             return
