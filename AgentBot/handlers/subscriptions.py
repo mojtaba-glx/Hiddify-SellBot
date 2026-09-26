@@ -843,15 +843,44 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if action == "picksrv_back":
+        # Back from the dynamic purchase wizard must return to the server
+        # selection screen.  Do not rewrite CallbackQuery.data and recurse:
+        # CallbackQuery is the Telegram update object and mutating its payload
+        # is brittle across python-telegram-bot versions.
         context.user_data.pop(UD_SELECTED_SERVER, None)
+        context.user_data.pop(UD_SELECTED_PLAN, None)
+        context.user_data.pop(_UD_CREATE_OPERATION, None)
         context.user_data.pop("wiz_gb", None)
         context.user_data.pop("wiz_months", None)
         context.user_data.pop("wiz_wholesale", None)
         context.user_data.pop("wiz_sale", None)
         context.user_data.pop("wiz_off", None)
-        query = update.callback_query
-        query.data = "agbot:subs:create"
-        await handle_callback(update, context)
+
+        servers = shared_db.get_main_servers() or []
+        if not servers:
+            await _safe_answer(query, "هیچ سرور اصلی ثبت نشده.", alert=True)
+            await show_menu(update, context)
+            return
+
+        from AgentBot.keyboards import _ikb
+        from Shared.tg_button_styles import inline_button as IButton
+        rows = [
+            [IButton(
+                _escape(s.get("title") or f"سرور #{s['id']}"),
+                callback_data=f"agbot:subs:picksrv:{s['id']}",
+            )]
+            for s in servers
+        ]
+        rows.append([IButton("🔙 بازگشت", callback_data="agbot:subs:back")])
+        try:
+            await query.edit_message_text(
+                "🖥 <b>انتخاب سرور</b>\n\nلطفا سرور مورد نظر را انتخاب کنید:",
+                reply_markup=_ikb(rows),
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.exception("Failed to return purchase wizard to server selection")
+        await _safe_answer(query)
         return
 
     if action == "wiz":
