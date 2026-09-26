@@ -87,6 +87,24 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         expiry = xnet_api._jwt_expiry_epoch("opaque-token")
         self.assertGreaterEqual(expiry, before + xnet_api._DEFAULT_TOKEN_TTL - 2)
 
+    def test_login_failure_backoff_is_shared_and_clearable(self):
+        server = dict(self.server)
+        with tempfile.TemporaryDirectory() as runtime_dir, patch.dict(
+            os.environ,
+            {"HIDDIFY_SELLBOT_RUNTIME_DIR": runtime_dir},
+        ):
+            cooldown = xnet_api._record_login_failure(
+                server,
+                reason="HTTP 401",
+                minimum_seconds=120,
+            )
+            remaining = xnet_api._login_backoff_remaining(server)
+            self.assertGreaterEqual(cooldown, 120)
+            self.assertGreater(remaining, 0)
+
+            xnet_api._clear_login_failure(server)
+            self.assertEqual(xnet_api._login_backoff_remaining(server), 0)
+
     async def test_get_user_by_uuid_reads_inbound_clients(self):
         inbounds = [
             {
