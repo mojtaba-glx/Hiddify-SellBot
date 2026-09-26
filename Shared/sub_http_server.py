@@ -745,8 +745,10 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
                     pass
 
         # کانفیگ‌های این سرور
-        # Hiddify: Admin API first so renamed/edited users are reflected
-        # immediately in managed subscriptions instead of a stale public sub.
+        # Hiddify MUST use its native/public subscription. The Admin API exposes
+        # hidden/disabled configs too and therefore bypasses Hiddify's
+        # "include in subscription" filtering. Metadata above may still come
+        # from the Admin API; only config lines must respect the public sub.
         fetched: list[str] = []
         try:
             from Shared import xnet_api
@@ -759,18 +761,17 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
         except Exception:
             is_xui = False
 
-        if not is_xnet and not is_xui:
-            fetched = sub_aggregator._fetch_lines_from_admin_api(srv, user_uuid)
+        try:
+            base_url = sub_aggregator._build_user_base_url(srv, user_uuid)
+        except Exception:
+            base_url = None
+        if base_url:
+            fetched = sub_aggregator._fetch_subscription_lines(base_url)
 
-        if not fetched:
-            try:
-                base_url = sub_aggregator._build_user_base_url(srv, user_uuid)
-            except Exception:
-                base_url = None
-            if base_url:
-                fetched = sub_aggregator._fetch_subscription_lines(base_url)
-
-        if not fetched:
+        # X-Net / X-UI can fall back to their API when the native subscription
+        # is unavailable. Never do this for Hiddify, otherwise hidden configs
+        # leak back into the managed subscription.
+        if not fetched and (is_xnet or is_xui):
             fetched = sub_aggregator._fetch_lines_from_admin_api(srv, user_uuid)
 
         for line in fetched or []:
