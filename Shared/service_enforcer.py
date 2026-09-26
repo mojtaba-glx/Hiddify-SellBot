@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from Shared import database, hiddify_api, userbot_db
+from Shared import database, hiddify_api, userbot_db, sub_aggregator
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,14 @@ def _usage_limit_from_panel_user(user: Dict[str, Any]) -> Optional[float]:
 
 
 def _days_left_from_panel_user(user: Dict[str, Any]) -> Optional[int]:
+    # X-UI/Sanaei rounds remaining_days to the calendar date. If its exact
+    # expiryTime already passed today, force -1 so enforcement happens now.
+    try:
+        if sub_aggregator._panel_user_exactly_expired(user):
+            return -1
+    except Exception:
+        pass
+
     today_utc = datetime.now(timezone.utc).date()
     for key in ("remaining_days", "remaining_day", "days_left"):
         remaining = _optional_int_from_any(user.get(key))
@@ -224,27 +232,116 @@ def _select_services_for_cycle(services: list[Dict[str, Any]]) -> list[Dict[str,
     return selected
 
 
+def _configured_cluster_server_ids(primary_server_id: int) -> list[int]:
+    """Resolve primary + configured children, or parent + siblings for a child."""
+    primary_server_id = int(primary_server_id or 0)
+    if primary_server_id <= 0:
+        return []
+    ordered: list[int] = []
+
+    def _add(value: int) -> None:
+        value = int(value or 0)
+        if value > 0 and value not in ordered:
+            ordered.append(value)
+
+    _add(primary_server_id)
+    primary = database.get_server_by_id(primary_server_id)
+    if primary:
+        for node in primary.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            try:
+                _add(int(node.get("target_server_id") or 0))
+            except Exception:
+                pass
+
+    # Legacy rows may point at a child node as service.server_id.
+    for parent in database.get_servers() or []:
+        try:
+            parent_id = int(parent.get("id") or 0)
+        except Exception:
+            parent_id = 0
+        is_parent = False
+        for node in parent.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            try:
+                if int(node.get("target_server_id") or 0) == primary_server_id:
+                    is_parent = True
+                    break
+            except Exception:
+                continue
+        if not is_parent:
+            continue
+        _add(parent_id)
+        for node in parent.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            try:
+                _add(int(node.get("target_server_id") or 0))
+            except Exception:
+                pass
+    return ordered
+
+
 def _get_or_create_mappings_for_service(service: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Return complete UserBot mappings and heal partial legacy clusters."""
     service_id = int(service.get("id") or 0)
     if service_id <= 0:
         return []
-    mappings = userbot_db.get_service_nodes(service_id)
-    if mappings:
-        return mappings
-
-    # fallback برای داده‌های قدیمی: uuid در comment + server_id خود سرویس
-    service_uuid = _extract_uuid_from_comment(service.get("comment"))
+    mappings = userbot_db.get_service_nodes(service_id) or []
     service_server_id = int(service.get("server_id") or 0)
-    if service_uuid and service_server_id > 0:
-        userbot_db.add_service_node(
-            service_id=service_id,
-            server_id=service_server_id,
-            panel_user_uuid=service_uuid,
-            server_title=str(service.get("server_title") or ""),
-            is_active=1,
+
+    # Prefer the primary mapping UUID, then legacy comment UUID, then any saved
+    # mapping. SellBot creates cluster users with one shared UUID, so this is
+    # safe for recovering old rows where the X-UI child mapping was omitted.
+    service_uuid = ""
+    for row in mappings:
+        if int(row.get("server_id") or 0) == service_server_id:
+            service_uuid = str(row.get("panel_user_uuid") or "").strip()
+            if service_uuid:
+                break
+    if not service_uuid:
+        service_uuid = _extract_uuid_from_comment(service.get("comment"))
+    if not service_uuid:
+        service_uuid = next(
+            (str(row.get("panel_user_uuid") or "").strip() for row in mappings
+             if str(row.get("panel_user_uuid") or "").strip()),
+            "",
         )
-        return userbot_db.get_service_nodes(service_id)
-    return []
+
+    existing_server_ids = {
+        int(row.get("server_id") or 0)
+        for row in mappings
+        if int(row.get("server_id") or 0) > 0
+    }
+    if service_uuid:
+        for server_id in _configured_cluster_server_ids(service_server_id):
+            if server_id in existing_server_ids:
+                continue
+            srv = database.get_server_by_id(server_id)
+            if not srv:
+                continue
+            try:
+                userbot_db.add_service_node(
+                    service_id=service_id,
+                    server_id=server_id,
+                    panel_user_uuid=service_uuid,
+                    server_title=str(srv.get("title") or f"سرور #{server_id}"),
+                    is_active=1,
+                )
+                existing_server_ids.add(server_id)
+                logger.info(
+                    "usage enforcer healed missing mapping service_id=%s server_id=%s uuid=%s",
+                    service_id, server_id, service_uuid[:8],
+                )
+            except Exception as exc:
+                logger.warning(
+                    "usage enforcer mapping heal failed service_id=%s server_id=%s: %s",
+                    service_id, server_id, exc,
+                )
+
+    return userbot_db.get_service_nodes(service_id) or []
 
 
 async def _fetch_service_node_usage(
