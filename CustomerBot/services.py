@@ -645,6 +645,19 @@ def is_customer_service_visible(svc: Optional[Dict[str, Any]]) -> bool:
         return False
 
     try:
+        service_id = int(svc.get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    if service_id <= 0:
+        return False
+    try:
+        if agent_db.is_service_panel_missing(service_id):
+            return False
+    except Exception:
+        # Visibility is fail-closed when the DB probe state cannot be read.
+        return False
+
+    try:
         is_active = int(svc.get("is_active") or 0) == 1
     except (TypeError, ValueError):
         is_active = False
