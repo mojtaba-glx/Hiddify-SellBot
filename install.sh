@@ -647,12 +647,29 @@ update_source_if_git() {
   preserve_snapshot="$(create_runtime_git_preserve_snapshot || true)"
   [ -n "$preserve_snapshot" ] && _blue "Preserved runtime data files before git pull."
 
-  local branch before_head after_head
+  local branch before_head after_head remote_head
   branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
   before_head="$(git -C "$ROOT_DIR" rev-parse --verify HEAD 2>/dev/null || echo "")"
   _blue "Updating source from git (branch: $branch)"
-  git -C "$ROOT_DIR" fetch --all --prune
-  if git -C "$ROOT_DIR" pull --ff-only; then
+
+  # Never decide that the source is current from a stale origin/* ref.
+  # Fetch must succeed first, then compare/pull explicitly against origin/<branch>.
+  if ! git -C "$ROOT_DIR" fetch origin "$branch" --prune; then
+    UPDATE_SOURCE_STATUS="fetch-failed"
+    _red "ERROR: git fetch origin/$branch failed; refusing to restart with stale source."
+    restore_runtime_git_preserve_snapshot "$preserve_snapshot"
+    return 1
+  fi
+  if ! git -C "$ROOT_DIR" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    UPDATE_SOURCE_STATUS="fetch-failed"
+    _red "ERROR: origin/$branch was not found after fetch."
+    restore_runtime_git_preserve_snapshot "$preserve_snapshot"
+    return 1
+  fi
+  remote_head="$(git -C "$ROOT_DIR" rev-parse --verify "origin/$branch" 2>/dev/null || echo "")"
+  _blue "Remote HEAD: ${remote_head:0:12}"
+
+  if git -C "$ROOT_DIR" pull --ff-only origin "$branch"; then
     after_head="$(git -C "$ROOT_DIR" rev-parse --verify HEAD 2>/dev/null || echo "")"
     if [ -n "$before_head" ] && [ "$before_head" = "$after_head" ]; then
       UPDATE_SOURCE_STATUS="already-latest"
@@ -1809,8 +1826,10 @@ update_all() {
       _yellow "WARN: source code update skipped due to local code changes."
       _yellow "If this server should track GitHub exactly, run: ./install.sh update-force"
       ;;
-    pull-failed)
-      _yellow "WARN: source update failed (git pull). Runtime restart will continue."
+    fetch-failed|pull-failed)
+      _red "ERROR: source update failed; update aborted before dependency install/restart."
+      _yellow "Bots were left on the existing source instead of reporting a false successful update."
+      return 1
       ;;
     already-latest)
       _blue "Source already latest. Reinstalling deps/restarting services..."
