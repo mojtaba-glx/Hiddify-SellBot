@@ -19,6 +19,41 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(xnet_api.is_xnet_server({"panel_type": "X-NET"}))
         self.assertFalse(xnet_api.is_xnet_server({"panel_type": "hiddify"}))
 
+    def test_management_api_token_accepts_canonical_and_compat_aliases(self):
+        self.assertEqual(
+            xnet_api._api_token({"xnet_api_token": "xnet_primary"}),
+            "xnet_primary",
+        )
+        self.assertEqual(
+            xnet_api._api_token({"xnet_token": "xnet_alias"}),
+            "xnet_alias",
+        )
+        self.assertEqual(
+            xnet_api._api_token({"xnet_bearer_token": "xnet_bearer"}),
+            "xnet_bearer",
+        )
+
+    async def test_management_token_prefers_api_token_without_admin_login(self):
+        server = dict(self.server)
+        server["xnet_api_token"] = "xnet_management_token"
+        login = AsyncMock(return_value="jwt-should-not-be-used")
+
+        with patch.object(xnet_api, "_login", new=login):
+            token = await xnet_api._management_token(server)
+
+        self.assertEqual(token, "xnet_management_token")
+        login.assert_not_awaited()
+
+    async def test_management_token_keeps_legacy_login_as_fallback(self):
+        server = dict(self.server)
+        login = AsyncMock(return_value="legacy-jwt")
+
+        with patch.object(xnet_api, "_login", new=login):
+            token = await xnet_api._management_token(server)
+
+        self.assertEqual(token, "legacy-jwt")
+        login.assert_awaited_once_with(server, force=False)
+
     async def test_get_user_by_uuid_reads_inbound_clients(self):
         inbounds = [
             {
