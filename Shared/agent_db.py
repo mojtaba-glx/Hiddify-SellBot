@@ -2037,11 +2037,44 @@ def get_active_services_by_agent(agent_id: int) -> List[Dict[str, Any]]:
 
 
 def get_all_active_services() -> List[Dict[str, Any]]:
-    """لیست تمام سرویس‌های فعال (برای ادمین)."""
+    """سرویس‌های نیازمند enforce: فعال‌ها + disableهای تأییدنشده.
+
+    سرویس منقضی ممکن است قبلاً به‌صورت bulk محلی غیرفعال شده باشد در حالی
+    که یک X-UI دوردست واقعاً disable نشده است. چنین رکوردهایی یک بار دیگر
+    وارد enforcer می‌شوند تا هر نود با expired_disabled_verified تأیید شود.
+    """
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM agent_services WHERE is_active = 1 ORDER BY id DESC")
+    cur.execute(
+        """
+        SELECT s.*
+        FROM agent_services s
+        WHERE (s.deleted_at IS NULL OR s.deleted_at = '')
+          AND (
+                COALESCE(s.is_active, 0) = 1
+                OR EXISTS (
+                    SELECT 1 FROM agent_service_nodes n
+                    WHERE n.service_id = s.id
+                      AND COALESCE(n.deleted, 0) = 0
+                      AND COALESCE(n.is_active, 0) = 1
+                )
+                OR (
+                    (
+                        (COALESCE(s.end_date, '') != '' AND datetime(s.end_date) <= datetime('now'))
+                        OR (COALESCE(s.usage_limit, 0) > 0 AND COALESCE(s.usage_current, 0) >= COALESCE(s.usage_limit, 0))
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM agent_service_nodes n2
+                        WHERE n2.service_id = s.id
+                          AND COALESCE(n2.deleted, 0) = 0
+                          AND COALESCE(n2.frozen_reason, '') != 'expired_disabled_verified'
+                    )
+                )
+          )
+        ORDER BY s.id DESC
+        """
+    )
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
