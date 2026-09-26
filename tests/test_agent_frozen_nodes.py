@@ -426,5 +426,87 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(int(n["server_id"]) == 2 for n in agent_db.get_service_nodes(1)))
 
 
+    async def test_partial_legacy_mapping_heals_xui_child(self):
+        conn = agent_db._get_conn()
+        try:
+            conn.execute(
+                "DELETE FROM agent_service_nodes WHERE service_id = 1 AND server_id = 2"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        svc = agent_db.get_service_by_id(1)
+        targets = [
+            ({"id": 1, "title": "Germany"}, "uuid-a", ""),
+            ({"id": 2, "title": "Sanaei"}, "uuid-a", ""),
+        ]
+        with patch.object(
+            agent_enforcer,
+            "get_service_panel_targets",
+            return_value=targets,
+        ):
+            mappings = agent_enforcer._service_mappings(svc)
+
+        self.assertEqual(
+            {int(row["server_id"]) for row in mappings},
+            {1, 2},
+        )
+
+    async def test_expiry_disable_failure_stays_pending_and_is_retried(self):
+        agent_db.update_service(
+            1,
+            {
+                "end_date": "2000-01-01 00:00:00",
+                "days_left": 0,
+                "is_active": 1,
+            },
+        )
+        svc = agent_db.get_service_by_id(1)
+
+        async def get_user(server, _uuid):
+            return {
+                "uuid": "uuid-a",
+                "current_usage_GB": 0.0,
+                "remaining_days": 0,
+                "is_active": True,
+            }
+
+        async def disable_user(server, _uuid):
+            if int(server["id"]) == 2:
+                raise RuntimeError("temporary X-UI failure")
+            return {"uuid": "uuid-a", "is_active": False}
+
+        with patch.object(
+            agent_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: {"id": sid, "title": str(sid)},
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            agent_enforcer.hiddify_api,
+            "disable_user",
+            new=AsyncMock(side_effect=disable_user),
+        ):
+            result = await agent_enforcer._process_service(svc)
+
+        self.assertEqual(result["status"], "disabled")
+        self.assertEqual(int(result["nodes_disable_failed"]), 1)
+        self.assertEqual(int(agent_db.get_service_by_id(1)["is_active"]), 0)
+
+        nodes = {int(n["server_id"]): n for n in agent_db.get_service_nodes(1)}
+        self.assertEqual(int(nodes[1]["is_active"]), 0)
+        self.assertEqual(nodes[1]["frozen_reason"], "expired_disabled_verified")
+        self.assertEqual(int(nodes[2]["is_active"]), 1)
+        self.assertEqual(nodes[2]["frozen_reason"], "disable_pending")
+
+        retry_ids = {
+            int(row["id"]) for row in agent_db.get_all_active_services()
+        }
+        self.assertIn(1, retry_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
