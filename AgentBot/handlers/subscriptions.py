@@ -229,17 +229,8 @@ def _service_detail_text(svc, last_online: str = "هرگز") -> str:
     """متن کارت جزئیات سرویس (بدون قیمت و بدون UUID)."""
     raw_name = str(svc.get('name') or 'سرویس').strip()
     name = _escape(raw_name)
-    # Make the service name open the subscriber's actual public subscription
-    # endpoint.  Never link it to the X-NET admin panel.
+    # AgentBot must not expose panel/subscriber URLs from the service name.
     name_html = f"<b>{name}</b>"
-    try:
-        from Shared.sub_links import get_service_user_base_urls
-        sub_urls = get_service_user_base_urls(svc)
-        if sub_urls:
-            href = html_escape(str(sub_urls[0]), quote=True)
-            name_html = f'<a href="{href}"><b>{name}</b></a>'
-    except Exception:
-        pass
     server = _escape(svc.get('server_title') or '—')
     gb = _fmt_gb(svc.get('usage_limit', 0))
     used = _fmt_gb(svc.get('usage_current', 0))
