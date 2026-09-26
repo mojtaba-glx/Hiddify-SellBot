@@ -1185,6 +1185,42 @@ def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str
     return base_url
 
 
+async def _build_user_name_link(server: Dict[str, Any], user_uuid: str) -> Optional[str]:
+    """Link used only on the clickable username in AdminBot.
+
+    For X-NET, the public /api/v1/sub/{uuid} endpoint is a raw subscription,
+    not a browser user page. X-NET exposes client management inside the admin
+    Subscription Management page, so point the username there instead.
+    """
+    if not user_uuid:
+        return None
+
+    if xnet_api.is_xnet_server(server):
+        try:
+            current_path = str(server.get("xnet_web_base_path") or "").strip("/")
+            if not current_path:
+                panel_cfg = await xnet_api.get_panel_config(server)
+                current_path = str(panel_cfg.get("webBasePath") or "").strip("/")
+                if current_path:
+                    server["xnet_web_base_path"] = current_path
+                    server_id = int(server.get("id") or 0)
+                    if server_id > 0:
+                        try:
+                            database.update_server(
+                                server_id,
+                                {"xnet_web_base_path": current_path},
+                            )
+                        except Exception:
+                            pass
+            return xnet_api.get_admin_web_url(server, "#/subscriptions") or None
+        except Exception as exc:
+            logger.warning("Could not build X-NET admin user link: %s", exc)
+            return xnet_api.get_admin_web_url(server, "#/subscriptions") or None
+
+    base = _build_user_base_url(server, user_uuid)
+    return f"{base.rstrip('/')}/" if base else None
+
+
 def _panel_user_link_from_base(base_url: Optional[str]) -> str:
     base = str(base_url or "").strip()
     if not base:
@@ -4092,11 +4128,7 @@ async def send_expired_user_detail(
         user_data.get("comment") or "",
     )
     panel_user_uuid = str(user_data.get("uuid") or user_uuid or "")
-    user_link_base = _build_user_base_url(server, panel_user_uuid)
-    if user_link_base and xnet_api.is_xnet_server(server):
-        user_link = user_link_base.rstrip("/")
-    else:
-        user_link = f"{user_link_base.rstrip('/')}/" if user_link_base else None
+    user_link = await _build_user_name_link(server, panel_user_uuid)
     text = build_user_detail_html_text(
         server,
         user_data,
@@ -4178,11 +4210,7 @@ async def send_user_detail(
     user_data = _merge_user_list_snapshot(user_data, snapshot)
 
     panel_user_uuid = str(user_data.get("uuid") or user_uuid or "")
-    user_link_base = _build_user_base_url(server, panel_user_uuid)
-    if user_link_base and xnet_api.is_xnet_server(server):
-        user_link = user_link_base.rstrip("/")
-    else:
-        user_link = f"{user_link_base.rstrip('/')}/" if user_link_base else None
+    user_link = await _build_user_name_link(server, panel_user_uuid)
     text = build_user_detail_html_text(
         server,
         user_data,
