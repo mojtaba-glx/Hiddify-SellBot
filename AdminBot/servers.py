@@ -1186,36 +1186,21 @@ def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str
 
 
 async def _build_user_name_link(server: Dict[str, Any], user_uuid: str) -> Optional[str]:
-    """Link used only on the clickable username in AdminBot.
+    """Link used on the clickable username in AdminBot.
 
-    For X-NET, the public /api/v1/sub/{uuid} endpoint is a raw subscription,
-    not a browser user page. X-NET exposes client management inside the admin
-    Subscription Management page, so point the username there instead.
+    X-NET customer links live on the dedicated public subscription listener
+    (normally :2096/sub/<uuid>).  Never send an AdminBot user to X-NET's
+    management /#/subscriptions page.
     """
     if not user_uuid:
         return None
 
     if xnet_api.is_xnet_server(server):
         try:
-            current_path = str(server.get("xnet_web_base_path") or "").strip("/")
-            if not current_path:
-                panel_cfg = await xnet_api.get_panel_config(server)
-                current_path = str(panel_cfg.get("webBasePath") or "").strip("/")
-                if current_path:
-                    server["xnet_web_base_path"] = current_path
-                    server_id = int(server.get("id") or 0)
-                    if server_id > 0:
-                        try:
-                            database.update_server(
-                                server_id,
-                                {"xnet_web_base_path": current_path},
-                            )
-                        except Exception:
-                            pass
-            return xnet_api.get_admin_web_url(server, "#/subscriptions") or None
+            return xnet_api.get_subscription_url(server, user_uuid) or None
         except Exception as exc:
-            logger.warning("Could not build X-NET admin user link: %s", exc)
-            return xnet_api.get_admin_web_url(server, "#/subscriptions") or None
+            logger.warning("Could not build X-NET public user link: %s", exc)
+            return None
 
     base = _build_user_base_url(server, user_uuid)
     return f"{base.rstrip('/')}/" if base else None
