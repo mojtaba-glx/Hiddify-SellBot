@@ -976,6 +976,24 @@ class _SubHandler(BaseHTTPRequestHandler):
                 self._write(404, "not found")
                 return
 
+            # An explicit panel-srv-* token belongs to the shared
+            # Admin/Agent/Customer route. Never let UUID/token ownership
+            # resolution divert it into UserBot/agent service builders.
+            panel_server_id = _panel_server_id_from_token(token)
+            if panel_server_id and uuid_hint:
+                panel_body, panel_service = _build_panel_uuid_subscription_body(
+                    token, uuid_hint, is_b64
+                )
+                if panel_body:
+                    self._write(
+                        200,
+                        panel_body,
+                        headers=self._subscription_headers(panel_service, is_b64),
+                    )
+                    return
+                self._write(404, "subscription is empty")
+                return
+
             sid = userbot_db.get_service_id_by_sub_token(token)
             if not sid and uuid_hint:
                 owner = userbot_db.get_service_owner_by_panel_uuid(uuid_hint)
