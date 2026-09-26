@@ -280,10 +280,11 @@ async def _login(server: Dict[str, Any], *, force: bool = False) -> str:
         lock_fd = await _acquire_cross_process_login_lock(server)
         try:
             # Another bot process may have logged in while we were waiting.
-            if not force:
-                cached = _get_cached_jwt(server)
-                if cached:
-                    return cached
+            # Even a forced refresh should reuse a *new* shared token written
+            # after this process cleared the stale cache.
+            cached = _get_cached_jwt(server)
+            if cached:
+                return cached
 
             url = f"{_base_url(server)}/api/auth/login"
             payload = {"username": _username(server), "password": password}
@@ -391,6 +392,7 @@ async def _request_json(
                     f"{detail or 'username/password fallback required'}"
                 )
             token = await _login(server, force=False)
+            using_api_token = False
             try:
                 response = await _send(token)
             except httpx.RequestError as exc:
