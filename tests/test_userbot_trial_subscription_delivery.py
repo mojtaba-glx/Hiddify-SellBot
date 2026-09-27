@@ -19,7 +19,7 @@ def _function_source(name: str) -> str:
 
 class UserBotTrialDeliveryRegressionTests(unittest.TestCase):
     def test_trial_uses_paid_delivery_helper_for_link_and_qr(self):
-        src = _function_source("handle_text")
+        src = _function_source("receipt_handler")
         trial_pos = src.index('if step == "WAIT_TRIAL_SERVICE_NAME":')
         trial_src = src[trial_pos:]
         self.assertIn(
@@ -41,7 +41,7 @@ class UserBotTrialDeliveryRegressionTests(unittest.TestCase):
         )
 
     def test_trial_db_failure_removes_partial_local_and_panel_state(self):
-        src = _function_source("handle_text")
+        src = _function_source("receipt_handler")
         trial_pos = src.index('if step == "WAIT_TRIAL_SERVICE_NAME":')
         trial_src = src[trial_pos:]
         marker = 'logger.exception("Failed persisting free trial'
