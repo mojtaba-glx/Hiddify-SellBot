@@ -46,12 +46,12 @@ from CustomerBot.database import (
     get_user_tickets, get_ticket, get_ticket_messages,
     create_ticket, add_ticket_message, update_ticket_status, get_pending_payments,
     update_payment_status, get_payment_by_tx_code, set_got_free_trial,
-    upsert_user,
+    clear_got_free_trial, upsert_user,
     get_tx_plans_settings,
 )
 from Shared.agent_db import (
     upsert_customer, get_customer_by_telegram_id, get_services_by_customer,
-    get_service_by_id, create_service, add_service_node,
+    get_service_by_id, create_service, add_service_node, delete_service as delete_agent_service,
     set_service_active, calculate_wholesale_price,
     update_service, make_service_note,
 )
@@ -1631,6 +1631,7 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
     if not cust_id:
         cust_id = upsert_customer(agent_id, user.id, user.username or "", user.full_name or "")
 
+    svc = None
     try:
         svc = create_service(
             agent_id=agent_id,
@@ -1657,24 +1658,62 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
                 marzban_username=str(item.get("marzban_username") or ""),
             )
     except Exception as exc:
+        if svc and int(svc.get("id") or 0) > 0:
+            try:
+                delete_agent_service(int(svc["id"]))
+            except Exception:
+                logger.exception("customer trial local rollback failed service=%s", svc.get("id"))
         for item in reversed(created_nodes):
             try:
                 target = get_server_by_id(int(item.get("server_id") or 0))
                 if target:
-                    await multi_panel.delete_user(target, new_uuid)
+                    await multi_panel.delete_user(
+                        target,
+                        new_uuid,
+                        marzban_username=str(item.get("marzban_username") or "").strip(),
+                    )
             except Exception:
-                logger.exception("customer trial rollback failed")
+                logger.exception("customer trial panel rollback failed")
         logger.exception("customer trial persistence failed uid=%s: %s", user.id, exc)
         await update.message.reply_text(
-            "❌ ثبت سرویس تست کامل نشد؛ لطفاً دوباره تلاش کنید.",
+            "❌ ثبت سرویس تست کامل نشد و ساخت ناقص برگشت داده شد؛ لطفاً دوباره تلاش کنید.",
             reply_markup=main_menu_keyboard(),
         )
         return
 
     try:
-        set_got_free_trial(agent_id, user.id)
+        marked = set_got_free_trial(agent_id, user.id)
+        if not marked:
+            raise RuntimeError("free-trial used flag was not persisted")
     except Exception as e:
+        # Eligibility must commit together with the service. Otherwise the
+        # customer could retry and receive multiple free trials.
         logger.exception("customer trial mark used failed uid=%s: %s", user.id, e)
+        try:
+            clear_got_free_trial(agent_id, user.id)
+        except Exception:
+            pass
+        if svc and int(svc.get("id") or 0) > 0:
+            try:
+                delete_agent_service(int(svc["id"]))
+            except Exception:
+                logger.exception("customer trial local rollback after flag failure failed")
+        for item in reversed(created_nodes):
+            try:
+                target = get_server_by_id(int(item.get("server_id") or 0))
+                if target:
+                    await multi_panel.delete_user(
+                        target,
+                        new_uuid,
+                        marzban_username=str(item.get("marzban_username") or "").strip(),
+                    )
+            except Exception:
+                logger.exception("customer trial panel rollback after flag failure failed")
+        await update.message.reply_text(
+            "❌ ثبت نهایی تست رایگان انجام نشد و ساخت ناقص برگشت داده شد؛ لطفاً دوباره تلاش کنید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
 
     svc = get_service_by_id(svc["id"])
 
