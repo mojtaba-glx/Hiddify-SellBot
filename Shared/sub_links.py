@@ -360,14 +360,46 @@ def get_or_create_bot_sub_links(svc: dict) -> Tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
-    """لیست (server, uuid, marzban_username) برای همه نودهای سرویس + نودهای زیرمجموعه"""
+    """لیست (server, uuid, marzban_username) برای سرور اصلی + همه نودهای سرویس.
+
+    سرور اصلی همیشه authoritative است و حتی اگر service_nodes فقط شامل child
+    nodeها باشد باید در targetها حضور داشته باشد.
+    """
     targets: List[Tuple[dict, str, str]] = []
     seen: set = set()
     try:
         service_id = int(svc.get("id") or 0)
     except (TypeError, ValueError):
         service_id = 0
+    try:
+        primary_sid = int(svc.get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_sid = 0
+
     mappings = agent_db.get_service_nodes(service_id) if service_id > 0 else []
+
+    # Primary must always be present. Prefer its explicit mapping UUID when
+    # available; otherwise agent_services.panel_user_uuid is the canonical
+    # primary UUID created by the authoritative panel.
+    if primary_sid > 0:
+        primary_srv = database.get_server_by_id(primary_sid)
+        primary_map = next(
+            (
+                m for m in mappings
+                if int((m or {}).get("server_id") or 0) == primary_sid
+            ),
+            None,
+        )
+        primary_uuid = str((primary_map or {}).get("panel_user_uuid") or "").strip()
+        if not primary_uuid:
+            primary_uuid = str(svc.get("panel_user_uuid") or "").strip()
+        primary_un = str((primary_map or {}).get("marzban_username") or "").strip()
+        if primary_srv and primary_uuid:
+            key = (primary_sid, primary_uuid)
+            seen.add(key)
+            targets.append((primary_srv, primary_uuid, primary_un))
+
+    # Saved child mappings.
     for m in mappings:
         try:
             sid = int(m.get("server_id") or 0)
@@ -384,25 +416,15 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
             continue
         seen.add(key)
         targets.append((srv, uuid, str(m.get("marzban_username") or "").strip()))
-    if not targets:
-        try:
-            sid = int(svc.get("server_id") or 0)
-        except (TypeError, ValueError):
-            sid = 0
-        uuid = str(svc.get("panel_user_uuid") or "").strip()
-        srv = database.get_server_by_id(sid) if sid > 0 else None
-        if srv and uuid:
-            seen.add((sid, uuid))
-            targets.append((srv, uuid, ""))
+
     # نودهای زیرمجموعه سرور اصلی (server.nodes[] با target_server_id)
-    try:
-        primary_sid = int(svc.get("server_id") or 0)
-    except (TypeError, ValueError):
-        primary_sid = 0
     if primary_sid > 0:
         primary = database.get_server_by_id(primary_sid)
         if primary:
-            child_mappings = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+            child_mappings = {
+                int((m or {}).get("server_id") or 0): (m or {})
+                for m in mappings
+            }
             for node in (primary.get("nodes") or []):
                 if not isinstance(node, dict):
                     continue
@@ -413,7 +435,10 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
                 if child_sid <= 0:
                     continue
                 child_map = child_mappings.get(child_sid) or {}
-                child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+                child_uuid = (
+                    str(child_map.get("panel_user_uuid") or "").strip()
+                    or str(svc.get("panel_user_uuid") or "").strip()
+                )
                 child_un = str(child_map.get("marzban_username") or "").strip()
                 child_srv = database.get_server_by_id(child_sid)
                 if not child_srv or not child_uuid:
@@ -423,6 +448,7 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
                     continue
                 seen.add(key)
                 targets.append((child_srv, child_uuid, child_un))
+
         # اگر سرویس روی نود است، خوشه کامل (parent + sibling nodes) را هم برگردان
         # این حالت برای سرویس‌های قدیمی که server_id آنها خودِ نود است پیش می‌آید
         parent_ids: List[int] = []
@@ -446,10 +472,18 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
             if not parent_srv:
                 continue
             parent_uuid = str(svc.get("panel_user_uuid") or "").strip()
-            # mapping برای parent اگر وجود داشت
-            parent_map = next((m for m in mappings if int((m or {}).get("server_id") or 0) == pid), None)
+            parent_map = next(
+                (
+                    m for m in mappings
+                    if int((m or {}).get("server_id") or 0) == pid
+                ),
+                None,
+            )
             if parent_map:
-                parent_uuid = str(parent_map.get("panel_user_uuid") or "").strip() or parent_uuid
+                parent_uuid = (
+                    str(parent_map.get("panel_user_uuid") or "").strip()
+                    or parent_uuid
+                )
                 parent_un = str(parent_map.get("marzban_username") or "").strip()
             else:
                 parent_un = ""
@@ -457,8 +491,11 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
             if parent_uuid and key not in seen:
                 seen.add(key)
                 targets.append((parent_srv, parent_uuid, parent_un))
-            # sibling nodes of this parent
-            child_mappings2 = {int((m or {}).get("server_id") or 0): (m or {}) for m in mappings}
+
+            child_mappings2 = {
+                int((m or {}).get("server_id") or 0): (m or {})
+                for m in mappings
+            }
             for node in (parent_srv.get("nodes") or []):
                 if not isinstance(node, dict):
                     continue
@@ -469,7 +506,10 @@ def get_service_panel_targets(svc: dict) -> List[Tuple[dict, str, str]]:
                 if child_sid <= 0 or child_sid == primary_sid:
                     continue
                 child_map = child_mappings2.get(child_sid) or {}
-                child_uuid = str(child_map.get("panel_user_uuid") or "").strip() or str(svc.get("panel_user_uuid") or "").strip()
+                child_uuid = (
+                    str(child_map.get("panel_user_uuid") or "").strip()
+                    or str(svc.get("panel_user_uuid") or "").strip()
+                )
                 child_un = str(child_map.get("marzban_username") or "").strip()
                 child_srv = database.get_server_by_id(child_sid)
                 if not child_srv or not child_uuid:
