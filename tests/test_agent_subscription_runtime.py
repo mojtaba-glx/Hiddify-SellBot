@@ -14,6 +14,14 @@ class SubscriptionTimeFormattingTests(unittest.TestCase):
         self.assertEqual(tehran, utc)
         self.assertEqual(utc.tzinfo, timezone.utc)
 
+    def test_panel_datetime_rejects_never_connected_placeholder(self):
+        self.assertIsNone(
+            subscription_service._parse_panel_datetime("0001-01-01T00:00:00Z")
+        )
+        self.assertIsNone(
+            subscription_service._parse_panel_datetime("1970-01-01T00:00:01Z")
+        )
+
     def test_expiry_uses_absolute_end_time_and_keeps_hours(self):
         now = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
         end = now + timedelta(days=2, hours=5, minutes=40)
@@ -85,6 +93,81 @@ class SubscriptionRuntimeRefreshTests(unittest.IsolatedAsyncioTestCase):
         saved = update.call_args.args[1]
         self.assertAlmostEqual(saved["usage_current"], 4.75)
         self.assertNotEqual(saved["days_left"], 30)
+
+    async def test_never_connected_xnet_user_does_not_render_huge_days_ago(self):
+        now = datetime.now(timezone.utc)
+        server = {"id": 21, "title": "X-Net", "panel_type": "xnet"}
+        service = {
+            "id": 81,
+            "server_id": 21,
+            "panel_user_uuid": "fresh-xnet",
+            "usage_current": 0,
+            "usage_limit": 10,
+            "days_left": 30,
+            "is_active": 1,
+        }
+        panel_user = {
+            "uuid": "fresh-xnet",
+            "current_usage_GB": 0,
+            "usage_limit_GB": 10,
+            "expire_date": (now + timedelta(days=30)).isoformat(),
+            "last_online": "0001-01-01T00:00:00Z",
+            "is_active": True,
+            "_source": "xnet",
+            "_user_list_status": "offline",
+        }
+        with patch.object(
+            subscription_service,
+            "get_service_panel_targets",
+            return_value=[(server, "fresh-xnet", "")],
+        ), patch.object(
+            subscription_service.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value=panel_user),
+        ), patch.object(
+            subscription_service.agent_db, "update_service", return_value=True
+        ):
+            last_online = await subscription_service.get_service_last_online(service)
+
+        self.assertEqual(last_online, "هنوز متصل نشده")
+
+    async def test_real_xnet_last_online_is_shown_after_first_connection(self):
+        now = datetime.now(timezone.utc)
+        server = {"id": 22, "title": "X-Net", "panel_type": "xnet"}
+        service = {
+            "id": 82,
+            "server_id": 22,
+            "panel_user_uuid": "used-xnet",
+            "usage_current": 0.1,
+            "usage_limit": 10,
+            "days_left": 30,
+            "is_active": 1,
+        }
+        panel_user = {
+            "uuid": "used-xnet",
+            "current_usage_GB": 0.1,
+            "usage_limit_GB": 10,
+            "expire_date": (now + timedelta(days=30)).isoformat(),
+            "last_online": (now - timedelta(minutes=12)).isoformat(),
+            "is_active": True,
+            "_source": "xnet",
+            "_user_list_status": "offline",
+        }
+        with patch.object(
+            subscription_service,
+            "get_service_panel_targets",
+            return_value=[(server, "used-xnet", "")],
+        ), patch.object(
+            subscription_service.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value=panel_user),
+        ), patch.object(
+            subscription_service.agent_db, "update_service", return_value=True
+        ):
+            last_online = await subscription_service.get_service_last_online(service)
+
+        self.assertIn("دقیقه پیش", last_online)
+        self.assertNotEqual(last_online, "هنوز متصل نشده")
 
 
 if __name__ == "__main__":
