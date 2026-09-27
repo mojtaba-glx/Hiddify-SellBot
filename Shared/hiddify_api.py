@@ -1454,6 +1454,22 @@ async def refresh_user_usage_snapshot(server: Dict[str, Any]) -> Dict[str, Any]:
         proxy = _get_admin_proxy(server)
         url = f"{base}/{proxy}/api/v2/admin/update_user_usage/"
         data = await _request("GET", url, server)
+
+        # Hiddify v11/v12's UpdateUserUsageApi returns json.dumps(...).
+        # Depending on Content-Type, httpx therefore decodes the outer JSON
+        # layer into a Python string containing the real JSON object. Unwrap
+        # that legacy layer so callers always receive the actual payload with
+        # status/comments/date.
+        if isinstance(data, str):
+            raw = data.strip()
+            if raw:
+                try:
+                    decoded = json.loads(raw)
+                except (TypeError, ValueError):
+                    decoded = None
+                if isinstance(decoded, dict):
+                    data = decoded
+
         if isinstance(data, dict):
             return data
         return {"status": "success", "raw": data}
