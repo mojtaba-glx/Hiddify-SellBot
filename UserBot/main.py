@@ -3118,7 +3118,7 @@ def _get_service_node_base_urls(service: dict) -> list[str]:
 
 
 def _is_native_subscription_url(value: Any) -> bool:
-    """True when the URL itself is the complete panel subscription endpoint."""
+    """True when the URL is already a complete panel subscription endpoint."""
     raw = str(value or "").strip()
     if not raw:
         return False
@@ -3126,10 +3126,60 @@ def _is_native_subscription_url(value: Any) -> bool:
         path = (urlparse(raw).path or "").lower()
     except Exception:
         path = raw.lower()
-    # X-NET: /api/v1/sub/{uuid}
-    # X-UI:  /sub/{token} (or a custom configured sub path handled below
-    #         through panel-type detection in the caller).
-    return "/api/v1/sub/" in path
+
+    # Management/API-style X-NET endpoint kept for backward compatibility.
+    if "/api/v1/sub/" in path:
+        return True
+
+    # Current public X-NET listener and X-UI both commonly expose /sub/<id>.
+    # Custom X-NET paths are identified through the service's panel metadata by
+    # _service_has_native_subscription_panel().
+    parts = [part for part in path.split("/") if part]
+    return len(parts) >= 2 and parts[-2] == "sub"
+
+
+def _service_has_native_subscription_panel(service: dict) -> bool:
+    """Whether any live service target is X-UI or X-NET."""
+    try:
+        from Shared import xui_api as _xui_native
+        from Shared import xnet_api as _xnet_native
+    except Exception:
+        return False
+
+    server_ids: list[int] = []
+    try:
+        primary_sid = int((service or {}).get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_sid = 0
+    if primary_sid > 0:
+        server_ids.append(primary_sid)
+
+    try:
+        service_id = int((service or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        service_id = 0
+    if service_id > 0:
+        try:
+            for mapping in userbot_db.get_service_nodes(service_id) or []:
+                sid = int((mapping or {}).get("server_id") or 0)
+                if sid > 0 and sid not in server_ids:
+                    server_ids.append(sid)
+        except Exception:
+            pass
+
+    for sid in server_ids:
+        try:
+            server = database.get_server_by_id(sid)
+        except Exception:
+            server = None
+        if not server:
+            continue
+        try:
+            if _xui_native.is_xui_server(server) or _xnet_native.is_xnet_server(server):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _sanitize_config_text(value: Any) -> str:
@@ -3278,26 +3328,12 @@ def _collect_all_direct_configs_for_service(service: dict) -> list[str]:
     out: list[str] = []
     seen_links: set[str] = set()
 
-    # Use only user-facing subscription domains to stay aligned with all.txt shown to user.
-    # X-UI detection for this service
-    _is_xui_service = False
-    try:
-        from Shared import xui_api as _xui_dc
-        sid_tmp = int(service.get("server_id") or 0)
-        srv_tmp = database.get_server_by_id(sid_tmp) if sid_tmp else None
-        if srv_tmp and _xui_dc.is_xui_server(srv_tmp):
-            _is_xui_service = True
-        else:
-            for m in (userbot_db.get_service_nodes(int(service.get("id") or 0)) if service.get("id") else []):
-                s = database.get_server_by_id(int(m.get("server_id") or 0))
-                if s and _xui_dc.is_xui_server(s):
-                    _is_xui_service = True
-                    break
-    except Exception:
-        pass
+    # X-UI/X-NET public subscription URLs are complete endpoints and must not
+    # receive Hiddify's /all.txt suffix, including custom X-NET sub paths.
+    native_panel_service = _service_has_native_subscription_panel(service)
     for base_url in _get_service_node_base_urls(service):
         seen_lines: set[str] = set()
-        is_native = _is_xui_service or _is_native_subscription_url(base_url)
+        is_native = native_panel_service or _is_native_subscription_url(base_url)
         if is_native:
             suffixes = ("", "?base64=1")
         else:
@@ -3474,7 +3510,10 @@ async def _send_service_direct_configs_shell(
         if fallback_base:
             fallback_link = (
                 fallback_base
-                if _is_native_subscription_url(fallback_base)
+                if (
+                    _service_has_native_subscription_panel(service)
+                    or _is_native_subscription_url(fallback_base)
+                )
                 else f"{fallback_base}/all.txt"
             )
             msg = (
@@ -3806,10 +3845,11 @@ async def _collect_direct_configs_map_for_service(
     result: dict[str, list[str]] = {proto: [] for proto in allowed}
     seen: dict[str, set[str]] = {proto: set() for proto in allowed}
 
+    native_panel_service = _service_has_native_subscription_panel(service)
     for base_url in _get_service_node_fetch_base_urls(service):
         candidate_lines: list[str] = []
         local_seen: set[str] = set()
-        if _is_native_subscription_url(base_url):
+        if native_panel_service or _is_native_subscription_url(base_url):
             fetch_urls = [
                 base_url,
                 f"{base_url}{'&' if '?' in base_url else '?'}base64=1",
