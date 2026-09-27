@@ -602,6 +602,14 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         except Exception as _report_e:
             logger.warning("Failed to send renew delivery report: %s", _report_e)
 
+    # عنوان سرور ممکن است بعد از ساخت سرویس توسط ادمین تغییر کرده باشد.
+    # پس از تمدید موفق، snapshot ذخیره‌شده سرویس و نودها را با عنوان فعلی sync کن.
+    try:
+        agent_db.refresh_service_server_titles(service_id)
+        updated = agent_db.get_service_by_id(service_id) or updated
+    except Exception as e:
+        logger.warning("renew title sync failed svc=%s: %s", service_id, e)
+
     updated["_renew_volume_mode"] = volume_mode
     updated["_renew_time_mode"] = time_mode
     return updated
