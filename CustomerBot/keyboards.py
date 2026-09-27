@@ -58,53 +58,27 @@ def location_keyboard(servers, columns: int = 1):
         cols = 1
     btns = []
     for s in servers:
-        title = (s.get('title') or "").strip()
-        flag = "🏳️"
-        if "ترکیه" in title: flag = "🇹🇷"
-        elif "هلند" in title: flag = "🇳🇱"
-        elif "آلمان" in title: flag = "🇩🇪"
-        elif "فرانسه" in title: flag = "🇫🇷"
-        elif "امریک" in title: flag = "🇺🇸"
-        has_location_word = "لوکیشن" in title
-        has_flag = flag != "🏳️" and flag in title
-        if has_location_word:
-            if has_flag:
-                btn_text = title
-            else:
-                btn_text = f"{title} {flag}" if flag != "🏳️" else title
-        else:
-            btn_text = f"لوکیشن {flag} {title}" if flag != "🏳️" else f"لوکیشن {title}"
-        btns.append(InlineKeyboardButton(btn_text, callback_data=f"buy:loc:{s['id']}"))
+        # نمایش عنوان دقیق ثبت‌شده توسط ادمین؛ بدون پرچم/ایموجی خودکار.
+        title = str(s.get("title") or f"سرور #{s.get('id', '')}").strip()
+        btns.append(
+            InlineKeyboardButton(title, callback_data=f"buy:loc:{s['id']}")
+        )
     for i in range(0, len(btns), cols):
         chunk = btns[i:i + cols]
         rows.append(list(reversed(chunk)))
     rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="buy:exit_main")])
     return InlineKeyboardMarkup(rows)
 
-
 def trial_location_keyboard(servers):
     rows = []
     for s in servers:
-        title = (s.get('title') or "").strip()
-        flag = "🏳️"
-        if "ترکیه" in title: flag = "🇹🇷"
-        elif "هلند" in title: flag = "🇳🇱"
-        elif "آلمان" in title: flag = "🇩🇪"
-        elif "فرانسه" in title: flag = "🇫🇷"
-        elif "امریک" in title: flag = "🇺🇸"
-        has_location_word = "لوکیشن" in title
-        has_flag = flag != "🏳️" and flag in title
-        if has_location_word:
-            if has_flag:
-                btn_text = title
-            else:
-                btn_text = f"{title} {flag}" if flag != "🏳️" else title
-        else:
-            btn_text = f"لوکیشن {flag} {title}" if flag != "🏳️" else f"لوکیشن {title}"
-        rows.append([InlineKeyboardButton(btn_text, callback_data=f"trial:loc:{s['id']}")])
+        # ایموجی فقط در صورتی می‌آید که بخشی از عنوان ذخیره‌شده باشد.
+        title = str(s.get("title") or f"سرور #{s.get('id', '')}").strip()
+        rows.append(
+            [InlineKeyboardButton(title, callback_data=f"trial:loc:{s['id']}")]
+        )
     rows.append([InlineKeyboardButton("🔙بازگشت", callback_data="trial:back")])
     return InlineKeyboardMarkup(rows)
-
 
 def category_keyboard(categories, server_id):
     rows = []
