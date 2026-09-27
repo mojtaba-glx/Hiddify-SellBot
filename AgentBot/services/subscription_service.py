@@ -41,6 +41,42 @@ class SubscriptionCreationError(RuntimeError):
         self.refunded = bool(refunded)
 
 
+def service_is_customerbot_owned(svc: Optional[Dict[str, Any]]) -> bool:
+    """True when the service belongs to a real CustomerBot customer."""
+    if not isinstance(svc, dict):
+        return False
+    try:
+        return int(svc.get("customer_id") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def get_service_activation_block_reason(svc: Optional[Dict[str, Any]]) -> str:
+    """Return a hard-expiry reason that must never be bypassed with Enable.
+
+    Manual disable is intentionally *not* a blocking reason. A valid service
+    may be disabled/re-enabled by the reseller, but an exhausted or expired
+    service must be renewed before it can become active again.
+    """
+    if not isinstance(svc, dict) or not svc:
+        return "service_not_found"
+    try:
+        from Shared import sub_aggregator
+        reason = str(
+            sub_aggregator._service_lock_reason(
+                svc,
+                check_userbot_nodes=False,
+            )
+            or ""
+        ).strip()
+    except Exception:
+        reason = ""
+
+    if reason in {"usage_limit_reached", "time_expired"}:
+        return reason
+    return ""
+
+
 def _get_cluster_servers(server_id: int) -> List[Dict[str, Any]]:
     """سرور اصلی + نودهای زیرمجموعه (child) که target_server_id دارند.
 
@@ -434,6 +470,13 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
         return None
+    if service_is_customerbot_owned(svc):
+        logger.warning(
+            "Agent renewal blocked for CustomerBot-owned service=%s agent=%s",
+            service_id,
+            agent_id,
+        )
+        return None
     server_id = int(svc.get("server_id") or 0)
     if not get_server_by_id(server_id):
         logger.error("Cannot renew service %s: primary server is missing", service_id)
@@ -707,6 +750,15 @@ async def disable_subscription(agent_id: int, service_id: int) -> bool:
 async def enable_subscription(agent_id: int, service_id: int) -> bool:
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0)) != agent_id:
+        return False
+    block_reason = get_service_activation_block_reason(svc)
+    if block_reason:
+        logger.info(
+            "Manual enable blocked for expired service=%s agent=%s reason=%s",
+            service_id,
+            agent_id,
+            block_reason,
+        )
         return False
     return await _set_subscription_active_on_all_targets(svc, True)
 
