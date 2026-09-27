@@ -173,30 +173,40 @@ def _deterministic_uuid_suffix(fallback: str, salt: str = "") -> str:
 
 
 def _unique_xui_email(base: str, existing: set, fallback: str) -> str:
-    if base not in existing and base.lower() not in existing and not _bot_has_service_name(base):
+    """Return a Sanaei-safe unique email based only on real panel collisions.
+
+    The service name already exists in the bot database by design while a node
+    is being created or synced. Treating that local row as a duplicate caused
+    perfectly unique English names such as vpn-0839886 to receive an
+    unnecessary numeric suffix on Sanaei. Only emails that actually exist on
+    the target panel should force a suffix.
+    """
+    if base not in existing and base.lower() not in existing:
         return base
-    # Deterministic uuid-derived candidate FIRST: same inputs always yield the
-    # same email, so repeated sync/create runs converge instead of creating
-    # yet another suffixed duplicate. Random suffixes remain as fallback.
+
+    # Real collision on Sanaei: use a stable uuid-derived suffix first so
+    # retries converge instead of creating a new random name each time.
     det = _deterministic_uuid_suffix(fallback)
     if det:
         max_len = 64 - len(det)
         b = base[:max_len] if len(base) > max_len else base
         cand = f"{b}{det}"
-        if cand not in existing and cand.lower() not in existing and not _bot_has_service_name(cand):
+        if cand not in existing and cand.lower() not in existing:
             return cand
+
     for _ in range(12):
         rnd = str(random.randint(100, 9999))
         max_len = 64 - len(rnd)
         b = base[:max_len] if len(base) > max_len else base
         cand = f"{b}{rnd}"
-        if cand not in existing and cand.lower() not in existing and not _bot_has_service_name(cand):
+        if cand not in existing and cand.lower() not in existing:
             return cand
+
     suffix = str(fallback or uuid4())[:8]
     max_len = 64 - len(suffix) - 1
     b = base[:max_len] if len(base) > max_len else base
     cand = f"{b}-{suffix}"
-    if cand not in existing and cand.lower() not in existing and not _bot_has_service_name(cand):
+    if cand not in existing and cand.lower() not in existing:
         return cand
     return f"{fallback}"
 
