@@ -487,10 +487,34 @@ async def _hiddify_user_list_map(server: dict) -> dict[str, dict]:
         from Shared import hiddify_api
 
         async def _refresh_and_list():
-            # Hiddify updates per-user last_online when usage collection runs.
-            # Force that official action once per short-lived server snapshot.
-            await hiddify_api.refresh_user_usage(server)
-            return await hiddify_api.list_users(server)
+            # Hiddify's official collector returns the UUIDs that actually
+            # produced traffic in this collection pass. Preserve that direct
+            # activity signal instead of relying only on delayed last_online.
+            snapshot = await hiddify_api.refresh_user_usage_snapshot(server)
+            active_uuids: set[str] = set()
+            for item in (snapshot.get("comments") or []) if isinstance(snapshot, dict) else []:
+                if not isinstance(item, dict):
+                    continue
+                uid = str(item.get("uuid") or "").strip().lower()
+                if uid:
+                    active_uuids.add(uid)
+
+            rows = await hiddify_api.list_users(server)
+            if not active_uuids:
+                return rows
+
+            out = []
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    out.append(row)
+                    continue
+                row2 = dict(row)
+                ids = _user_list_identity_keys(row2)
+                if ids & active_uuids:
+                    row2["_source"] = "hiddify"
+                    row2["_user_list_status"] = "online"
+                out.append(row2)
+            return out
 
         task = asyncio.create_task(_refresh_and_list())
         _HIDDIFY_PRESENCE_TASKS[sid] = task
@@ -545,8 +569,15 @@ async def _merge_hiddify_live_presence(server: dict, user_uuid: str, direct_user
     if list_dt and (direct_dt is None or list_dt >= direct_dt):
         merged["last_online"] = list_last_online
 
-    # Explicitly expose the same m5-style online semantics used by Hiddify's
-    # server-status fallback so AgentBot and Admin status agree.
+    # Activity returned directly by update_user_usage is stronger than the
+    # database timestamp and must not be overwritten by stale last_online.
+    forced = str(row.get("_user_list_status") or "").strip().lower()
+    if forced == "online":
+        merged["_user_list_status"] = "online"
+        return merged
+
+    # Match Hiddify's own per-user UI semantics: Online when last_online is
+    # within roughly two minutes.
     freshest = _panel_dt(merged.get("last_online"))
     if freshest is not None:
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
