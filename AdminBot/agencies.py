@@ -148,6 +148,24 @@ def _server_flag_title(title: str) -> str:
     """عنوان سرور را بدون حدس‌زدن کشور یا افزودن پرچم برگردان."""
     return str(title or "").strip()
 
+def _live_service_server_title(svc: Dict[str, Any], default: str = "—") -> str:
+    stored = str((svc or {}).get("server_title") or "").strip()
+    try:
+        sid = int((svc or {}).get("server_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid > 0:
+        try:
+            srv = database.get_server_by_id(sid)
+        except Exception:
+            srv = None
+        if srv:
+            title = str(srv.get("title") or "").strip()
+            if title:
+                return title
+    return stored or default
+
+
 def _usage_text(usage_cur: float, usage_lim: float) -> str:
     c, l = float(usage_cur or 0), float(usage_lim or 0)
     return f"{_fmt_gb(c)}/{_fmt_gb(l)}GB"
@@ -1986,7 +2004,7 @@ def _service_detail_text(
         f"شناسه: <code>{_escape(code) or '—'}</code> · نماینده: {_escape(agent_label)}",
         SEPARATOR,
         f"{parts['icon']} <b>وضعیت:</b> {_svc_status_word(svc)}",
-        f"🌐 <b>سرور:</b> {_escape(str(svc.get('server_title') or '—'))}",
+        f"🌐 <b>سرور:</b> {_escape(_live_service_server_title(svc))}",
         f"📊 <b>مصرف:</b> {usage_line}",
         f"📦 <b>حجم باقی‌مانده:</b> {remaining_line}",
         "",
