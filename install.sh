@@ -818,8 +818,9 @@ update_force_all() {
   force_sync_source_if_git
   setup_venv_and_requirements
   check_required_env 0
-  init_database
+  # Schema migrations must not race with live Telegram workers on production.
   stop_bots
+  init_database
   start_bots
   show_status
   _green "OK: force update completed."
@@ -827,13 +828,22 @@ update_force_all() {
 
 init_database() {
   [ -x "$VENV_DIR/bin/python" ] || return 0
-  _blue "Initializing database schema"
+  _blue "Initializing database schemas"
   "$VENV_DIR/bin/python" - <<'PY'
-from Shared import userbot_db
+from Shared import userbot_db, agent_db
+from CustomerBot import database as customer_db
+from AgentBot import database as agentbot_db
+
+# Run every schema/migration path serially while bots are stopped.  This is
+# especially important after mixed-panel/X-Net releases that add columns to
+# both user and agency/customer databases.
 userbot_db.init_db()
-print("db-init:ok")
+agent_db.init_db()
+customer_db.init_db()
+agentbot_db.init_db()
+print("db-init:all-ok")
 PY
-  _green "OK: database initialized."
+  _green "OK: all database schemas initialized."
 }
 
 systemd_available() {
@@ -1840,8 +1850,9 @@ update_all() {
   esac
   setup_venv_and_requirements
   check_required_env 0
-  init_database
+  # Keep the outage short, but stop workers before applying schema migrations.
   stop_bots
+  init_database
   start_bots
   show_status
   _green "OK: update completed."
