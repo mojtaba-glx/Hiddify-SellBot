@@ -8998,17 +8998,26 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "user_id": internal_user_id,
         }
         settings = _get_subscription_settings()
-        await update.message.reply_text(
-            _build_subscription_status_text(delivered_service),
-            parse_mode="Markdown",
-            reply_markup=subscription_status_keyboard(
-                service_db_id,
-                show_direct_config=settings.get("show_direct_config", True),
-                show_sub_link=settings.get("show_sub_link", True),
-                show_configs=_should_show_configs_button(settings),
-                show_detach=_is_connected_service(delivered_service),
-            ),
+        # تست رایگان باید دقیقاً از همان مسیر تحویل خرید/تمدید عبور کند تا
+        # تنظیمات «وضعیت نمایش لینک اشتراک» AdminBot برای QR/لینک روی هر سه
+        # سناریو یکسان اعمال شود. در صورت نبود خروجی مستقیم، وضعیت قبلی fallback است.
+        delivered_kind = await _send_config_and_qr_after_delivery(
+            context,
+            user_id=user_id,
+            service=delivered_service,
         )
+        if not delivered_kind:
+            await update.message.reply_text(
+                _build_subscription_status_text(delivered_service),
+                parse_mode="Markdown",
+                reply_markup=subscription_status_keyboard(
+                    service_db_id,
+                    show_direct_config=settings.get("show_direct_config", True),
+                    show_sub_link=settings.get("show_sub_link", True),
+                    show_configs=_should_show_configs_button(settings),
+                    show_detach=_is_connected_service(delivered_service),
+                ),
+            )
 
         # گزارش به ادمین (ربات ادمین): ایجاد اشتراک تستی
         if ADMIN_ID and ADMIN_BOT_TOKEN:
