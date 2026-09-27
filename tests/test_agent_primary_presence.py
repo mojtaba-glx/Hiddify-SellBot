@@ -215,5 +215,58 @@ class AgentPrimaryLastOnlineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(label, "آنلاین")
 
 
+    async def test_legacy_hiddify_activity_dict_makes_detail_online(self):
+        stale = (
+            datetime.now(timezone.utc) - timedelta(minutes=30)
+        ).isoformat()
+
+        async def get_user(server, uuid):
+            if int(server["id"]) == 1:
+                return {
+                    "uuid": uuid,
+                    "is_active": True,
+                    "last_online": stale,
+                }
+            return {
+                "uuid": uuid,
+                "is_active": True,
+                "_source": "xnet",
+                "_user_list_status": "offline",
+                "last_online": stale,
+            }
+
+        with patch.object(
+            subscription_service,
+            "get_service_panel_targets",
+            return_value=self.targets,
+        ), patch.object(
+            subscription_service.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            subscription_service.hiddify_api,
+            "refresh_user_usage_snapshot",
+            new=AsyncMock(return_value={
+                "status": "success",
+                "comments": {"shared-uuid": "0.100MB"},
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }),
+        ), patch.object(
+            subscription_service.hiddify_api,
+            "list_users",
+            new=AsyncMock(return_value=[{
+                "uuid": "shared-uuid",
+                "last_online": stale,
+            }]),
+        ), patch.object(
+            subscription_service.agent_db,
+            "update_service",
+            return_value=True,
+        ):
+            label = await subscription_service.get_service_last_online(dict(self.svc))
+
+        self.assertEqual(label, "آنلاین")
+
+
 if __name__ == "__main__":
     unittest.main()
