@@ -479,6 +479,27 @@ class ProductionUpdateSafetyTests(unittest.TestCase):
             self.assertIn(call, body)
 
 
+class SystemdStartupSafetyTests(unittest.TestCase):
+    def test_systemd_start_is_verified_before_success(self):
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(r"start_systemd_bot_checked\(\) \{.*?\n\}", src, re.S)
+        self.assertIsNotNone(match)
+        body = match.group(0)
+        self.assertIn('systemctl start "$unit"', body)
+        self.assertIn('systemctl is-active --quiet "$unit"', body)
+        self.assertIn("return 1", body)
+
+    def test_start_bots_does_not_mask_systemd_start_failures(self):
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(r"start_bots\(\) \{.*?\n\}", src, re.S)
+        self.assertIsNotNone(match)
+        body = match.group(0)
+        self.assertNotRegex(body, r"systemctl start .*\|\| true")
+        for title in ("AdminBot", "UserBot", "AgentBot", "CustomerBot"):
+            self.assertIn(f'start_systemd_bot_checked "$SYSTEMD_', body)
+            self.assertIn(f'"{title}"', body)
+
+
 class InstallerSyntaxTests(unittest.TestCase):
     def test_14_bash_n_install_sh(self):
         proc = subprocess.run(["bash", "-n", str(PROJECT_ROOT / "install.sh")],
