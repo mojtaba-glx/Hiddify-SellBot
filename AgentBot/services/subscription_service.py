@@ -1006,7 +1006,12 @@ def _parse_panel_datetime(value: Any) -> Optional[datetime]:
         if stamp > 0:
             if stamp > 10_000_000_000:
                 stamp /= 1000.0
-            return datetime.fromtimestamp(stamp, timezone.utc)
+            parsed_stamp = datetime.fromtimestamp(stamp, timezone.utc)
+            # Panels may expose epoch/default placeholders for users that have
+            # never connected. Treat obviously ancient values as "no date".
+            if parsed_stamp.year < 2000:
+                return None
+            return parsed_stamp
     except (TypeError, ValueError, OSError):
         pass
     try:
@@ -1014,8 +1019,13 @@ def _parse_panel_datetime(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    # .NET-style default timestamps such as 0001-01-01 mean "never".
+    if parsed.year < 2000:
+        return None
+    return parsed
 
 
 def _panel_expiry_datetime(user: Dict[str, Any], now: Optional[datetime] = None) -> Optional[datetime]:
@@ -1103,7 +1113,8 @@ def format_service_expiry(svc: Dict[str, Any], now: Optional[datetime] = None) -
 
 async def get_service_last_online(svc) -> str:
     """وضعیت آخرین اتصال کاربر از پنل:
-    «آنلاین» اگر در حال استفاده است، «X پیش» اگر مدتی قبل وصل شده، در غیر این صورت «هرگز»."""
+    «آنلاین» اگر در حال استفاده است، «X پیش» اگر قبلاً وصل شده و
+    «هنوز متصل نشده» اگر هیچ اتصال واقعی ثبت نشده باشد."""
     ONLINE_WINDOW = 15 * 60  # ثانیه
     CLOCK_SKEW = 120
     if not isinstance(svc, dict):
@@ -1204,7 +1215,12 @@ async def get_service_last_online(svc) -> str:
             latest_dt = candidate
             latest_source = source
     if latest_dt is None:
-        return "آفلاین" if explicit_xnet_offline else "هرگز"
+        # A fresh account commonly has zero traffic and no real last-seen
+        # timestamp. Do not turn panel placeholders into huge "days ago" values.
+        has_usage = any(float(value or 0) > 0 for value in usage_values)
+        if not has_usage:
+            return "هنوز متصل نشده"
+        return "آفلاین (زمان نامشخص)" if explicit_xnet_offline else "زمان اتصال نامشخص"
 
     seconds = (now - latest_dt).total_seconds()
     if explicit_xnet_offline:
