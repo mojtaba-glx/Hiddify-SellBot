@@ -584,6 +584,7 @@ async def _request_bytes(
                     f"{detail or 'username/password fallback required'}"
                 )
             token = await _login(server, force=False)
+            using_api_token = False
             try:
                 response = await _send(token)
             except httpx.RequestError as exc:
