@@ -1569,14 +1569,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         block_reason = get_service_activation_block_reason(svc)
         if block_reason:
+            if block_reason == "usage_limit_reached":
+                reason_text = "حجم این سرویس به پایان رسیده"
+            else:
+                reason_text = "زمان این سرویس به پایان رسیده"
             if service_is_customerbot_owned(svc):
                 warning = (
-                    "این سرویس منقضی شده و قابل فعال‌سازی نیست. "
+                    f"{reason_text} و قابل فعال‌سازی نیست. "
                     "تمدید باید توسط خود مشتری از ربات مشتری انجام شود."
                 )
             else:
                 warning = (
-                    "این سرویس منقضی شده و قابل فعال‌سازی نیست. "
+                    f"{reason_text} و قابل فعال‌سازی نیست. "
                     "ابتدا اشتراک را تمدید کنید."
                 )
             await _safe_answer(query, warning, alert=True)
