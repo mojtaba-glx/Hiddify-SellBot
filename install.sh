@@ -407,27 +407,49 @@ install_system_dependencies() {
     return 1
   fi
 
-  ${apt_cmd[@]} update
-  ${apt_cmd[@]} install -y python3 python3-venv python3-pip git ca-certificates curl ripgrep
+  ${apt_cmd[@]} update || {
+    _red "ERROR: apt update failed."
+    return 1
+  }
+  ${apt_cmd[@]} install -y python3 python3-venv python3-pip git ca-certificates curl ripgrep || {
+    _red "ERROR: required system dependency installation failed."
+    return 1
+  }
+  return 0
 }
 
 setup_venv_and_requirements() {
-  install_system_dependencies
+  install_system_dependencies || return 1
   ensure_dirs
-
   if [ ! -d "$VENV_DIR" ]; then
     _blue "Creating virtual environment"
-    python3 -m venv "$VENV_DIR"
+    python3 -m venv "$VENV_DIR" || {
+      _red "ERROR: virtual environment creation failed."
+      return 1
+    }
   fi
 
+  [ -x "$VENV_DIR/bin/python" ] || {
+    _red "ERROR: virtual environment Python is unavailable."
+    return 1
+  }
+
   _blue "Installing/updating Python dependencies"
-  "$VENV_DIR/bin/python" -m pip install --upgrade pip
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip || {
+    _red "ERROR: pip upgrade failed."
+    return 1
+  }
   if [ -f "$ROOT_DIR/requirements.txt" ]; then
-    "$VENV_DIR/bin/pip" install -r "$ROOT_DIR/requirements.txt"
+    "$VENV_DIR/bin/pip" install -r "$ROOT_DIR/requirements.txt" || {
+      _red "ERROR: Python dependency installation failed."
+      return 1
+    }
   else
-    _yellow "WARN: requirements.txt not found; skipping pip install"
+    _red "ERROR: requirements.txt not found."
+    return 1
   fi
   _green "OK: dependencies installed."
+  return 0
 }
 
 checkpoint_sqlite_db() {
@@ -700,13 +722,13 @@ update_source_if_git() {
 
 force_sync_source_if_git() {
   if ! command -v git >/dev/null 2>&1; then
-    _yellow "WARN: git is not installed; skipping source force-sync."
-    return 0
+    _red "ERROR: git is not installed; cannot force-sync source."
+    return 1
   fi
 
   if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    _yellow "WARN: project is not a git repository; skipping source force-sync."
-    return 0
+    _red "ERROR: project is not a git repository; cannot force-sync source."
+    return 1
   fi
 
   local branch target
@@ -718,14 +740,33 @@ force_sync_source_if_git() {
   [ -n "$preserve_snapshot" ] && _blue "Preserved runtime data files before force-sync."
 
   _blue "Force syncing source from git (branch: $branch)"
-  git -C "$ROOT_DIR" fetch --all --prune
+  if ! git -C "$ROOT_DIR" fetch --all --prune; then
+    _red "ERROR: git fetch failed; source was not force-synced."
+    restore_runtime_git_preserve_snapshot "$preserve_snapshot" || true
+    return 1
+  fi
+
   if ! git -C "$ROOT_DIR" show-ref --verify --quiet "refs/remotes/$target"; then
     _yellow "WARN: remote branch $target not found; fallback to origin/main."
     target="origin/main"
   fi
-  git -C "$ROOT_DIR" reset --hard "$target"
-  restore_runtime_git_preserve_snapshot "$preserve_snapshot"
+  if ! git -C "$ROOT_DIR" show-ref --verify --quiet "refs/remotes/$target"; then
+    _red "ERROR: no usable remote branch found for force-sync."
+    restore_runtime_git_preserve_snapshot "$preserve_snapshot" || true
+    return 1
+  fi
+
+  if ! git -C "$ROOT_DIR" reset --hard "$target"; then
+    _red "ERROR: git reset to $target failed."
+    restore_runtime_git_preserve_snapshot "$preserve_snapshot" || true
+    return 1
+  fi
+  restore_runtime_git_preserve_snapshot "$preserve_snapshot" || {
+    _red "ERROR: source updated but runtime data restore failed."
+    return 1
+  }
   _green "OK: source force-synced to $target."
+  return 0
 }
 
 show_diagnostics() {
@@ -834,9 +875,12 @@ update_force_all() {
 }
 
 init_database() {
-  [ -x "$VENV_DIR/bin/python" ] || return 0
+  [ -x "$VENV_DIR/bin/python" ] || {
+    _red "ERROR: virtual environment Python is unavailable; database migration aborted."
+    return 1
+  }
   _blue "Initializing database schemas"
-  "$VENV_DIR/bin/python" - <<'PY'
+  if ! "$VENV_DIR/bin/python" - <<'PY'
 from Shared import userbot_db, agent_db
 from CustomerBot import database as customer_db
 from AgentBot import database as agentbot_db
@@ -850,7 +894,12 @@ customer_db.init_db()
 agentbot_db.init_db()
 print("db-init:all-ok")
 PY
+  then
+    _red "ERROR: database schema initialization/migration failed."
+    return 1
+  fi
   _green "OK: all database schemas initialized."
+  return 0
 }
 
 systemd_available() {
