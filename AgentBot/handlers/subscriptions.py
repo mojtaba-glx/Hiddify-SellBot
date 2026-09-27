@@ -447,7 +447,7 @@ def _is_user_missing_error(exc: Exception) -> bool:
 _HIDDIFY_PRESENCE_CACHE: dict[int, tuple[float, dict[str, dict]]] = {}
 _HIDDIFY_PRESENCE_TASKS: dict[int, asyncio.Task] = {}
 _HIDDIFY_PRESENCE_TTL = 3.0
-_HIDDIFY_ONLINE_WINDOW_SECONDS = 300
+_HIDDIFY_ONLINE_WINDOW_SECONDS = 90
 
 
 def _plain_hiddify_server(server: dict) -> bool:
