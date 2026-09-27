@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 import uuid
 from html import escape as html_escape
 from datetime import datetime, timedelta, timezone
@@ -443,6 +444,114 @@ def _is_user_missing_error(exc: Exception) -> bool:
     return ("http 404" in text) or ("not found" in text) or (" پیدا نشد" in text)
 
 
+_HIDDIFY_PRESENCE_CACHE: dict[int, tuple[float, dict[str, dict]]] = {}
+_HIDDIFY_PRESENCE_TASKS: dict[int, asyncio.Task] = {}
+_HIDDIFY_PRESENCE_TTL = 3.0
+_HIDDIFY_ONLINE_WINDOW_SECONDS = 300
+
+
+def _plain_hiddify_server(server: dict) -> bool:
+    """True only for Hiddify Manager, excluding X-UI/X-Net adapters."""
+    try:
+        from Shared import hiddify_api
+        return not hiddify_api._is_xnet_server(server) and not hiddify_api._is_xui_server(server)
+    except Exception:
+        return True
+
+
+def _user_list_identity_keys(row: dict) -> set[str]:
+    keys: set[str] = set()
+    for key in ("uuid", "id"):
+        value = str((row or {}).get(key) or "").strip().lower()
+        if value:
+            keys.add(value)
+    return keys
+
+
+async def _hiddify_user_list_map(server: dict) -> dict[str, dict]:
+    """One short-lived Hiddify list snapshot shared by all AgentBot rows."""
+    try:
+        sid = int((server or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid <= 0:
+        return {}
+
+    now = time.monotonic()
+    cached = _HIDDIFY_PRESENCE_CACHE.get(sid)
+    if cached and (now - float(cached[0])) <= _HIDDIFY_PRESENCE_TTL:
+        return cached[1]
+
+    task = _HIDDIFY_PRESENCE_TASKS.get(sid)
+    if task is None or task.done():
+        from Shared import hiddify_api
+        task = asyncio.create_task(hiddify_api.list_users(server))
+        _HIDDIFY_PRESENCE_TASKS[sid] = task
+
+    try:
+        users = await task
+    except Exception as exc:
+        logger.debug(
+            "Hiddify live user-list probe failed server=%s: %s",
+            sid,
+            type(exc).__name__,
+        )
+        return {}
+    finally:
+        if _HIDDIFY_PRESENCE_TASKS.get(sid) is task and task.done():
+            _HIDDIFY_PRESENCE_TASKS.pop(sid, None)
+
+    result: dict[str, dict] = {}
+    for row in users or []:
+        if not isinstance(row, dict):
+            continue
+        for key in _user_list_identity_keys(row):
+            result[key] = row
+
+    _HIDDIFY_PRESENCE_CACHE[sid] = (time.monotonic(), result)
+    return result
+
+
+async def _merge_hiddify_live_presence(server: dict, user_uuid: str, direct_user: dict) -> dict:
+    """Merge Hiddify's fresher list-row last_online into direct user details."""
+    merged = dict(direct_user or {})
+    merged["_source"] = "hiddify"
+
+    if not _plain_hiddify_server(server):
+        return merged
+
+    needle = str(user_uuid or "").strip().lower()
+    if not needle:
+        return merged
+
+    live_map = await _hiddify_user_list_map(server)
+    row = live_map.get(needle)
+    if not isinstance(row, dict):
+        return merged
+
+    # Keep direct user metadata authoritative, but the list endpoint is the
+    # fresher source for per-user presence on Hiddify Manager.
+    list_last_online = row.get("last_online")
+    direct_last_online = merged.get("last_online")
+    list_dt = _panel_dt(list_last_online)
+    direct_dt = _panel_dt(direct_last_online)
+    if list_dt and (direct_dt is None or list_dt >= direct_dt):
+        merged["last_online"] = list_last_online
+
+    # Explicitly expose the same m5-style online semantics used by Hiddify's
+    # server-status fallback so AgentBot and Admin status agree.
+    freshest = _panel_dt(merged.get("last_online"))
+    if freshest is not None:
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        delta = (now_utc - freshest).total_seconds()
+        merged["_user_list_status"] = (
+            "online"
+            if -30 <= delta <= _HIDDIFY_ONLINE_WINDOW_SECONDS
+            else "offline"
+        )
+    return merged
+
+
 async def _panel_user_status(svc) -> Optional[str]:
     """Return the aggregate runtime status across primary server + all nodes.
 
@@ -516,20 +625,26 @@ async def _panel_user_status(svc) -> Optional[str]:
         except Exception:
             pass
 
-        # X-NET/X-UI adapters may expose an explicit live user-list status.
+        # X-NET/X-UI expose live status directly. Hiddify gets the equivalent
+        # signal from the fresher list_users snapshot merged above.
         forced = str(u.get("_user_list_status") or "").strip().lower()
         if forced == "online":
             return "online"
-        if forced == "offline" and source in {"xnet", "xui"}:
+        if forced == "offline" and source in {"xnet", "xui", "hiddify"}:
             return "offline"
 
-        # Panels without an explicit online map fall back to a recent
-        # last-online timestamp. Keep the existing windows for compatibility.
+        # Fallback for panels without an explicit presence signal.
         lo = _panel_dt(u.get("last_online"))
         if lo:
             try:
-                window = 90 if source in {"xui", "xnet"} else 15 * 60
-                if abs((now_utc - lo).total_seconds()) <= window:
+                if source in {"xui", "xnet"}:
+                    window = 90
+                elif source == "hiddify":
+                    window = _HIDDIFY_ONLINE_WINDOW_SECONDS
+                else:
+                    window = 5 * 60
+                delta = (now_utc - lo).total_seconds()
+                if -30 <= delta <= window:
                     return "online"
             except Exception:
                 pass
@@ -545,6 +660,8 @@ async def _panel_user_status(svc) -> Optional[str]:
         try:
             user = await hiddify_api.get_user_by_uuid(server, uuid)
             if isinstance(user, dict) and user:
+                if _plain_hiddify_server(server):
+                    user = await _merge_hiddify_live_presence(server, uuid, user)
                 return sid, user, ""
             return sid, None, "missing"
         except Exception as exc:
