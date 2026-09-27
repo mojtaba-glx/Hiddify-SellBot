@@ -105,8 +105,16 @@ async def handle_main_menu_callback(update: Update, context: ContextTypes.DEFAUL
         return
     parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
-    # Avoid pre-answering callbacks that intend to show alerts (e.g. "*:help").
-    if action != "custpay" and not data.endswith(":help"):
+    sub_action = parts[2] if len(parts) > 2 else ""
+    # Avoid pre-answering callbacks that may need to show their own alert.
+    # Telegram only allows one answerCallbackQuery response; pre-answering here
+    # would swallow the real warning from the subscriptions handler.
+    owns_callback_answer = (
+        action == "custpay"
+        or data.endswith(":help")
+        or (action == "subs" and sub_action in {"enable", "renew"})
+    )
+    if not owns_callback_answer:
         try:
             await query.answer()
         except Exception:
