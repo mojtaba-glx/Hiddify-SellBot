@@ -1,5 +1,20 @@
 # Changelog
 
+## Hiddify-SellBot v5.4.0 — Stable
+
+- افزودن پشتیبانی کامل **X-Net** به‌عنوان پنل مستقل در کنار Hiddify و X-UI
+- تکمیل احراز هویت X-Net با Bearer API Token، fallback امن JWT، کش مشترک بین پردازش‌ها و circuit breaker برای جلوگیری از قفل‌شدن login
+- جداسازی آدرس داخلی API، آدرس وب پنل و endpoint عمومی Subscription در X-Net و اصلاح لینک کاربر/سابسکریپشن
+- افزودن تشخیص خودکار نسخه و لایه سازگاری **Hiddify v11/v12/v13** بدون حذف پشتیبانی نسخه‌های قدیمی
+- یکسان‌سازی منطق انقضای دقیق سرویس در Hiddify، Sanaei و Alireza X-UI؛ پس از انقضا کانفیگ واقعی مخفی و فقط کانفیگ وضعیت Trojan نمایش داده می‌شود
+- قفل‌کردن Smart Subscription Link دقیقاً در زمان انقضای پنل و جلوگیری از نشت کانفیگ X-UI از لینک‌های مدیریت‌شده
+- اصلاح CustomerBot برای مخفی‌کردن سرویس حذف‌شده از پنل، نگهداری دوره grace برای بازیابی و پاک‌سازی فوری پس از حذف صریح ادمین
+- ترمیم خودکار mappingهای گمشده X-UI، retry عملیات disable هنگام انقضا و گزارش نودهای pending در AdminBot/AgentBot
+- همسان‌سازی رفتار تمدید AgentBot و CustomerBot با UserBot، شامل reset صحیح allowance و گزارش مصرف
+- اصلاح انتشار rename، فعال/غیرفعال‌سازی و عملیات سرویس روی تمام targetهای پنل و نودها
+- تکمیل مدیریت ارسال پست کانال برای Admin/UserBot و AgentBot، شامل متن، عکس/ویدیو، دکمه‌ها و ویرایش Draft
+- بهبود updater برای الزام fetch تازه از origin قبل از restart و افزودن تست‌های رگرسیون برای مسیرهای جدید X-Net، expiry و cleanup
+
 ## Hiddify-SellBot v5.3.0 — Stable
 
 - انتشار پایدار مجموعه تغییرات پس از v5.2.18
