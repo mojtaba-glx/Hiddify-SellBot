@@ -1036,6 +1036,55 @@ def _parse_panel_datetime(value: Any) -> Optional[datetime]:
     return parsed
 
 
+def _parse_panel_wallclock(value: Any) -> Optional[datetime]:
+    """Parse a panel timestamp while preserving naive wall-clock values.
+
+    Hiddify serializes datetimes without timezone information. Those values
+    must be compared with Hiddify's own response timestamp, not UTC.
+    """
+    if value is None or value == "":
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        stamp = float(raw)
+        if stamp > 0:
+            if stamp > 10_000_000_000:
+                stamp /= 1000.0
+            parsed = datetime.fromtimestamp(stamp, timezone.utc).replace(tzinfo=None)
+            return parsed if parsed.year >= 2000 else None
+    except (TypeError, ValueError, OSError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed if parsed.year >= 2000 else None
+
+
+def _last_online_age_seconds(user: Dict[str, Any], now: Optional[datetime] = None) -> Optional[float]:
+    """Return last-online age without mixing Hiddify local time with UTC."""
+    source = str((user or {}).get("_source") or "").strip().lower()
+    if source == "hiddify":
+        last_wall = _parse_panel_wallclock((user or {}).get("last_online"))
+        panel_now = _parse_panel_wallclock((user or {}).get("_hiddify_panel_now"))
+        if last_wall is not None and panel_now is not None:
+            return (panel_now - last_wall).total_seconds()
+
+    last = _parse_panel_datetime((user or {}).get("last_online"))
+    if last is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    return (current - last).total_seconds()
+
+
 def _panel_expiry_datetime(user: Dict[str, Any], now: Optional[datetime] = None) -> Optional[datetime]:
     for key in ("expire", "expire_date", "end_date", "expires_at", "expiry_date", "expiration_date"):
         end = _parse_panel_datetime((user or {}).get(key))
@@ -1183,6 +1232,11 @@ async def get_service_last_online(svc) -> str:
                     rows = []
                 user = dict(user)
                 user["_source"] = "hiddify"
+                if isinstance(snapshot, dict) and snapshot.get("date"):
+                    # Hiddify emits naive server-local last_online values. Keep
+                    # the panel's own wall-clock timestamp so age calculations
+                    # never mix Turkey/Iran local time with UTC.
+                    user["_hiddify_panel_now"] = snapshot.get("date")
                 if needle in active_uuids:
                     user["_user_list_status"] = "online"
                 for row in rows or []:
@@ -1293,8 +1347,8 @@ async def get_service_last_online(svc) -> str:
 
     # Primary is the authoritative last-connection clock for the service card.
     primary_user = authoritative_pair[1] if authoritative_pair else None
-    primary_dt = (
-        _parse_panel_datetime(primary_user.get("last_online"))
+    primary_age = (
+        _last_online_age_seconds(primary_user, now)
         if isinstance(primary_user, dict)
         else None
     )
@@ -1304,8 +1358,8 @@ async def get_service_last_online(svc) -> str:
         else ""
     )
 
-    if primary_dt is not None:
-        seconds = (now - primary_dt).total_seconds()
+    if primary_age is not None:
+        seconds = primary_age
         primary_forced = str(
             (primary_user or {}).get("_user_list_status") or ""
         ).strip().lower()
@@ -1326,7 +1380,7 @@ async def get_service_last_online(svc) -> str:
 
     # Only when the primary has no real last-online timestamp, fall back to
     # child history. Explicitly-offline child timestamps are history only.
-    latest_dt: Optional[datetime] = None
+    latest_age: Optional[float] = None
     latest_source = ""
     explicit_child_offline = False
     for target, user in available:
@@ -1336,18 +1390,20 @@ async def get_service_last_online(svc) -> str:
         forced = str(user.get("_user_list_status") or "").strip().lower()
         if forced == "offline":
             explicit_child_offline = True
-        candidate = _parse_panel_datetime(user.get("last_online"))
-        if candidate is not None and (latest_dt is None or candidate > latest_dt):
-            latest_dt = candidate
+        candidate_age = _last_online_age_seconds(user, now)
+        if candidate_age is not None and (
+            latest_age is None or candidate_age < latest_age
+        ):
+            latest_age = candidate_age
             latest_source = source
 
-    if latest_dt is None:
+    if latest_age is None:
         has_usage = any(float(value or 0) > 0 for value in usage_values)
         if not has_usage:
             return "هنوز متصل نشده"
         return "آفلاین (زمان نامشخص)" if explicit_child_offline else "زمان اتصال نامشخص"
 
-    seconds = (now - latest_dt).total_seconds()
+    seconds = latest_age
     if explicit_child_offline:
         return _human_duration(seconds)
     window = CHILD_ONLINE_WINDOW if latest_source in {"xui", "xnet"} else HIDDIFY_ONLINE_WINDOW
