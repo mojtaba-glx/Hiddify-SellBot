@@ -1332,73 +1332,91 @@ stop_single_bot() {
     rm -f "$pid_file"
   fi
 
-  if command -v pgrep >/dev/null 2>&1; then
-    local matched_pids
-    matched_pids="$(pgrep -f "$main_py" || true)"
-    if [ -n "$matched_pids" ]; then
-      while IFS= read -r mpid; do
-        [ -n "$mpid" ] || continue
-        kill "$mpid" 2>/dev/null || true
-      done <<< "$matched_pids"
-      sleep 2
-      matched_pids="$(pgrep -f "$main_py" || true)"
-      if [ -n "$matched_pids" ]; then
-        while IFS= read -r mpid; do
-          [ -n "$mpid" ] || continue
-          kill -9 "$mpid" 2>/dev/null || true
-        done <<< "$matched_pids"
-      fi
-    fi
-  else
-    pkill -f "$main_py" 2>/dev/null || true
-    sleep 2
-    pkill -9 -f "$main_py" 2>/dev/null || true
-  fi
+  _kill_all_botProcesses "$main_py"
 
   local wait_i=0
-  while pgrep -f "$main_py" >/dev/null 2>&1; do
+  while command -v pgrep >/dev/null 2>&1 && pgrep -f "$main_py" >/dev/null 2>&1; do
     wait_i=$((wait_i + 1))
     if [ "$wait_i" -ge 15 ]; then
-      break
+      _red "ERROR: $title process is still running after stop attempts."
+      pgrep -af "$main_py" 2>/dev/null || true
+      return 1
     fi
     sleep 1
   done
 
   rm -f "$pid_file"
-  _green "OK: $title stopped (if running)."
+  _green "OK: $title stopped."
+  return 0
 }
 
 stop_bots() {
   ensure_dirs
+  local stop_failures=0
+
   if systemd_units_installed; then
     if [ "${EUID:-$(id -u)}" -ne 0 ]; then
       _red "ERROR: systemd autostart is installed; use sudo to stop services."
       return 1
     fi
     _blue "Stopping bots via systemd"
-    # فقط unit هایی که واقعاً وجود دارند را stop کن
-    [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && systemctl stop "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true
-    [ -f "$SYSTEMD_USER_UNIT_FILE" ] && systemctl stop "$SYSTEMD_USER_UNIT" 2>/dev/null || true
-    [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && systemctl stop "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true
-    [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ] && systemctl stop "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
+
+    local unit
+    for unit in       "$SYSTEMD_ADMIN_UNIT_FILE:$SYSTEMD_ADMIN_UNIT:AdminBot"       "$SYSTEMD_USER_UNIT_FILE:$SYSTEMD_USER_UNIT:UserBot"       "$SYSTEMD_AGENT_UNIT_FILE:$SYSTEMD_AGENT_UNIT:AgentBot"       "$SYSTEMD_CUSTOMER_UNIT_FILE:$SYSTEMD_CUSTOMER_UNIT:CustomerBot"
+    do
+      local unit_file="${unit%%:*}"
+      local rest="${unit#*:}"
+      local unit_name="${rest%%:*}"
+      local unit_title="${rest#*:}"
+      [ -f "$unit_file" ] || continue
+
+      if ! systemctl stop "$unit_name"; then
+        _red "ERROR: systemd failed to stop $unit_title."
+        stop_failures=$((stop_failures + 1))
+        continue
+      fi
+      if systemctl is-active --quiet "$unit_name"; then
+        _red "ERROR: $unit_title systemd unit is still active after stop."
+        stop_failures=$((stop_failures + 1))
+      fi
+    done
+
     rm -f "$ADMIN_PID_FILE" "$USER_PID_FILE" "$AGENT_PID_FILE" "$CUSTOMER_PID_FILE"
 
-    # سیستم‌ک‌ت فقط unit ها را می‌بندد؛ اگر پروسه‌ی orphan از جلسه‌ی قبلیِ nohup هنوز
-    # در حال اجرا باشد (مثل AdminBot=3866355 قدیمی) نمی‌تواند آن را ببندد. پس همه‌ی
-    # پروسه‌های مطابق با entrypoint را هم صریحاً بکش تا هیچ leftover polling نکند.
+    # Also kill stale nohup/orphan workers from older installs.
     _kill_all_botProcesses "$ADMIN_MAIN"
     _kill_all_botProcesses "$USER_MAIN"
     _kill_all_botProcesses "$AGENT_MAIN"
     _kill_all_botProcesses "$CUSTOMER_MAIN"
 
-    _green "OK: all bots stopped (systemd)."
+    local main_py
+    for main_py in "$ADMIN_MAIN" "$USER_MAIN" "$AGENT_MAIN" "$CUSTOMER_MAIN"; do
+      if command -v pgrep >/dev/null 2>&1 && pgrep -f "$main_py" >/dev/null 2>&1; then
+        _red "ERROR: orphan bot process is still alive: $main_py"
+        pgrep -af "$main_py" 2>/dev/null || true
+        stop_failures=$((stop_failures + 1))
+      fi
+    done
+
+    if [ "$stop_failures" -gt 0 ]; then
+      _red "ERROR: $stop_failures bot stop verification(s) failed."
+      return 1
+    fi
+    _green "OK: all bots stopped and verified (systemd)."
     return 0
   fi
+
   _blue "Stopping bots"
-  stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot"
-  stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot"
-  stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot"
-  stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot"
+  stop_single_bot "$ADMIN_PID_FILE" "$ADMIN_MAIN" "AdminBot" || stop_failures=$((stop_failures + 1))
+  stop_single_bot "$USER_PID_FILE" "$USER_MAIN" "UserBot" || stop_failures=$((stop_failures + 1))
+  stop_single_bot "$AGENT_PID_FILE" "$AGENT_MAIN" "AgentBot" || stop_failures=$((stop_failures + 1))
+  stop_single_bot "$CUSTOMER_PID_FILE" "$CUSTOMER_MAIN" "CustomerBot" || stop_failures=$((stop_failures + 1))
+
+  if [ "$stop_failures" -gt 0 ]; then
+    _red "ERROR: $stop_failures bot process(es) could not be stopped."
+    return 1
+  fi
+  return 0
 }
 
 start_single_bot() {
