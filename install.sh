@@ -802,26 +802,33 @@ show_live_logs() {
 }
 
 reinstall_all() {
-  create_snapshot_backup "PreReinstall"
-  stop_bots
+  create_snapshot_backup "PreReinstall" || return 1
+  stop_bots || return 1
   rm -rf "$VENV_DIR"
-  setup_venv_and_requirements
-  check_required_env 0
-  init_database
-  start_bots
+  setup_venv_and_requirements || return 1
+  check_required_env 0 || return 1
+  init_database || return 1
+  start_bots || return 1
   show_status
   _green "OK: reinstall completed."
 }
 
 update_force_all() {
-  create_snapshot_backup "PreForceUpdate"
-  force_sync_source_if_git
-  setup_venv_and_requirements
-  check_required_env 0
-  # Schema migrations must not race with live Telegram workers on production.
-  stop_bots
-  init_database
-  start_bots
+  create_snapshot_backup "PreForceUpdate" || {
+    _red "ERROR: pre-force-update backup failed; update aborted."
+    return 1
+  }
+  force_sync_source_if_git || return 1
+  setup_venv_and_requirements || return 1
+  check_required_env 0 || return 1
+  stop_bots || return 1
+  init_database || return 1
+  if ! start_bots; then
+    show_status || true
+    _red "ERROR: force update completed but one or more bots failed to start."
+    _yellow "Use ./install.sh diag and the PreForceUpdate backup before retrying."
+    return 1
+  fi
   show_status
   _green "OK: force update completed."
 }
@@ -1502,7 +1509,7 @@ start_systemd_bot_checked() {
 
 start_bots() {
   ensure_dirs
-  check_required_env 0
+  check_required_env 0 || return 1
   [ -x "$VENV_DIR/bin/python" ] || {
     _red "ERROR: virtual environment is missing. Run ./install.sh install first."
     return 1
@@ -1515,37 +1522,44 @@ start_bots() {
   fi
 
   _blue "Starting bots"
+  local start_failures=0
 
-  # AdminBot: systemd یا nohup
+  # Start every configured bot so one broken unit does not leave the other
+  # production bots offline. Return failure after all attempts are complete.
   if [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && systemd_available; then
-    start_systemd_bot_checked "$SYSTEMD_ADMIN_UNIT" "AdminBot"
+    start_systemd_bot_checked "$SYSTEMD_ADMIN_UNIT" "AdminBot" || start_failures=$((start_failures + 1))
   else
-    start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot"
+    start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot" || start_failures=$((start_failures + 1))
   fi
 
-  # UserBot: systemd یا nohup
   if [ -f "$SYSTEMD_USER_UNIT_FILE" ] && systemd_available; then
-    start_systemd_bot_checked "$SYSTEMD_USER_UNIT" "UserBot"
+    start_systemd_bot_checked "$SYSTEMD_USER_UNIT" "UserBot" || start_failures=$((start_failures + 1))
   else
-    start_single_bot "$USER_MAIN" "$USER_PID_FILE" "$USER_LOG_FILE" "UserBot"
+    start_single_bot "$USER_MAIN" "$USER_PID_FILE" "$USER_LOG_FILE" "UserBot" || start_failures=$((start_failures + 1))
   fi
 
-  # AgentBot و CustomerBot
   if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
     if [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && systemd_available; then
-      start_systemd_bot_checked "$SYSTEMD_AGENT_UNIT" "AgentBot"
+      start_systemd_bot_checked "$SYSTEMD_AGENT_UNIT" "AgentBot" || start_failures=$((start_failures + 1))
     else
-      start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot"
+      start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot" || start_failures=$((start_failures + 1))
     fi
+
     if [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ] && systemd_available; then
-      start_systemd_bot_checked "$SYSTEMD_CUSTOMER_UNIT" "CustomerBot"
+      start_systemd_bot_checked "$SYSTEMD_CUSTOMER_UNIT" "CustomerBot" || start_failures=$((start_failures + 1))
     else
-      start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot"
+      start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot" || start_failures=$((start_failures + 1))
     fi
   else
     _yellow "SKIP: AgentBot (AGENT_BOT_TOKEN not set)"
     _yellow "SKIP: CustomerBot (AGENT_BOT_TOKEN not set)"
   fi
+
+  if [ "$start_failures" -gt 0 ]; then
+    _red "ERROR: $start_failures bot service(s) failed to start."
+    return 1
+  fi
+  return 0
 }
 
 status_single_bot() {
@@ -1831,17 +1845,18 @@ uninstall_all() {
 }
 
 install_all() {
-  setup_venv_and_requirements
+  setup_venv_and_requirements || return 1
   local allow_prompt=0
   if [ ! -f "$ENV_FILE" ]; then
     allow_prompt=1
   fi
-  check_required_env "$allow_prompt"
-  init_database
-  stop_bots
-  start_bots
+  check_required_env "$allow_prompt" || return 1
+  # Existing installs may have live workers; stop them before schema changes.
+  stop_bots || return 1
+  init_database || return 1
+  start_bots || return 1
   if [ "$ENV_WAS_MISSING" -eq 1 ] || [ "$ENV_CONFIGURED_IN_RUN" -eq 1 ]; then
-    send_first_install_welcome
+    send_first_install_welcome || true
   fi
   show_status
   _green "OK: install completed."
@@ -1852,12 +1867,16 @@ install_all() {
 }
 
 update_all() {
-  create_snapshot_backup "PreUpdate"
-  update_source_if_git
+  create_snapshot_backup "PreUpdate" || {
+    _red "ERROR: pre-update backup failed; update aborted."
+    return 1
+  }
+  update_source_if_git || return 1
   case "$UPDATE_SOURCE_STATUS" in
-    skipped-local-changes)
-      _yellow "WARN: source code update skipped due to local code changes."
-      _yellow "If this server should track GitHub exactly, run: ./install.sh update-force"
+    skipped-local-changes|skipped-no-git|skipped-not-repo)
+      _red "ERROR: source code was not updated safely; update aborted."
+      _yellow "Resolve the Git state first. Do not continue with a false successful update."
+      return 1
       ;;
     fetch-failed|pull-failed)
       _red "ERROR: source update failed; update aborted before dependency install/restart."
@@ -1870,13 +1889,22 @@ update_all() {
     updated)
       _green "Source sync done. Continuing update pipeline..."
       ;;
+    *)
+      _red "ERROR: unexpected source update state: ${UPDATE_SOURCE_STATUS:-unknown}"
+      return 1
+      ;;
   esac
-  setup_venv_and_requirements
-  check_required_env 0
+  setup_venv_and_requirements || return 1
+  check_required_env 0 || return 1
   # Keep the outage short, but stop workers before applying schema migrations.
-  stop_bots
-  init_database
-  start_bots
+  stop_bots || return 1
+  init_database || return 1
+  if ! start_bots; then
+    show_status || true
+    _red "ERROR: source/schema update completed but one or more bots failed to start."
+    _yellow "Use ./install.sh diag and the PreUpdate backup before retrying."
+    return 1
+  fi
   show_status
   _green "OK: update completed."
 }
