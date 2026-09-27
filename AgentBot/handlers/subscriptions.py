@@ -447,7 +447,7 @@ def _is_user_missing_error(exc: Exception) -> bool:
 _HIDDIFY_PRESENCE_CACHE: dict[int, tuple[float, dict[str, dict]]] = {}
 _HIDDIFY_PRESENCE_TASKS: dict[int, asyncio.Task] = {}
 _HIDDIFY_PRESENCE_TTL = 3.0
-_HIDDIFY_ONLINE_WINDOW_SECONDS = 90
+_HIDDIFY_ONLINE_WINDOW_SECONDS = 120
 
 
 def _plain_hiddify_server(server: dict) -> bool:
@@ -485,7 +485,14 @@ async def _hiddify_user_list_map(server: dict) -> dict[str, dict]:
     task = _HIDDIFY_PRESENCE_TASKS.get(sid)
     if task is None or task.done():
         from Shared import hiddify_api
-        task = asyncio.create_task(hiddify_api.list_users(server))
+
+        async def _refresh_and_list():
+            # Hiddify updates per-user last_online when usage collection runs.
+            # Force that official action once per short-lived server snapshot.
+            await hiddify_api.refresh_user_usage(server)
+            return await hiddify_api.list_users(server)
+
+        task = asyncio.create_task(_refresh_and_list())
         _HIDDIFY_PRESENCE_TASKS[sid] = task
 
     try:
