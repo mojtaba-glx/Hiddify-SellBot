@@ -129,15 +129,6 @@ _FA_MONTHS = {
     7: "ژوئیه", 8: "آگوست", 9: "سپتامبر", 10: "اکتبر", 11: "نوامبر", 12: "دسامبر",
 }
 
-_LOCATION_FLAGS = {
-    "ترکیه": "🇹🇷",
-    "آلمان": "🇩🇪",
-    "هلند": "🇳🇱",
-    "فنلاند": "🇫🇮",
-    "هند": "🇮🇳",
-}
-
-
 def _fmt_fa_date(ts: str) -> str:
     """تبدیل تاریخ ISO به «روز ماه» مثل «06 سپتامبر»."""
     try:
@@ -154,25 +145,8 @@ def _fmt_fa_date(ts: str) -> str:
 
 
 def _server_flag_title(title: str) -> str:
-    """از عنوان سرور یک برچسب کوتاه با flag می‌سازد؛ مثل «🇩🇪 آلمان»."""
-    raw = str(title or "").strip()
-    if not raw:
-        return ""
-    flag = ""
-    for word, fl in _LOCATION_FLAGS.items():
-        if word in raw:
-            flag = fl
-            break
-    location = raw.replace("لوکیشن", "")
-    for fl in set(_LOCATION_FLAGS.values()):
-        location = location.replace(fl, "")
-    location = location.strip()
-    if flag and location:
-        return f"{flag} {location}"
-    if flag:
-        return flag
-    return raw.strip()
-
+    """عنوان سرور را بدون حدس‌زدن کشور یا افزودن پرچم برگردان."""
+    return str(title or "").strip()
 
 def _usage_text(usage_cur: float, usage_lim: float) -> str:
     c, l = float(usage_cur or 0), float(usage_lim or 0)
