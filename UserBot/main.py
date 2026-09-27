@@ -2580,23 +2580,47 @@ async def _create_service_users_on_targets(
 
 
 async def _deactivate_created_users(created_nodes: list[dict]) -> None:
+    """Rollback panel users created by an operation that did not commit locally.
+
+    Prefer deleting the just-created identity so retries cannot leave ghost
+    Hiddify/X-UI/X-Net users. If a panel cannot delete, disable it as a safe
+    fallback.
+    """
     for item in created_nodes:
+        sid = int(item.get("server_id") or 0)
+        uuid = str(item.get("panel_user_uuid") or "").strip()
+        marzban_un = str(item.get("marzban_username") or "").strip()
+        if sid <= 0 or not uuid:
+            continue
+        server = database.get_server_by_id(sid)
+        if not server:
+            continue
         try:
-            sid = int(item.get("server_id") or 0)
-            uuid = str(item.get("panel_user_uuid") or "").strip()
-            marzban_un = str(item.get("marzban_username") or "").strip()
-            if sid <= 0 or not uuid:
-                continue
-            server = database.get_server_by_id(sid)
-            if not server:
-                continue
-            await hiddify_api.disable_user(server, uuid)
-        except Exception as e:
+            await multi_panel.delete_user(
+                server,
+                uuid,
+                marzban_username=marzban_un,
+            )
+            continue
+        except Exception as delete_error:
             logger.warning(
-                "Rollback deactivate failed for sid=%s uuid=%s: %s",
-                item.get("server_id"),
-                item.get("panel_user_uuid"),
-                e,
+                "Rollback delete failed for sid=%s uuid=%s: %s",
+                sid,
+                uuid,
+                delete_error,
+            )
+        try:
+            await multi_panel.disable_user(
+                server,
+                uuid,
+                marzban_username=marzban_un,
+            )
+        except Exception as disable_error:
+            logger.warning(
+                "Rollback disable also failed for sid=%s uuid=%s: %s",
+                sid,
+                uuid,
+                disable_error,
             )
 
 
@@ -8938,8 +8962,28 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         except Exception as e:
             logger.exception("Failed persisting free trial for telegram_id=%s", user_id)
+
+            # The panel create already succeeded. Roll back both local and
+            # remote state so a retry cannot create ghost/duplicate trial users.
+            if service_db_id:
+                try:
+                    userbot_db.delete_service(int(service_db_id))
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Failed removing partial trial DB service id=%s: %s",
+                        service_db_id,
+                        cleanup_error,
+                    )
+            try:
+                userbot_db.set_free_trial_used(internal_user_id, 0)
+            except Exception:
+                pass
+            if created_nodes:
+                await _deactivate_created_users(created_nodes)
+
             await update.message.reply_text(
-                f"⚠️ اکانت تست ساخته شد ولی ثبت نهایی در ربات خطا داد: {e}",
+                "⚠️ ثبت نهایی تست رایگان انجام نشد و ساخت ناقص برگشت داده شد. "
+                "لطفاً دوباره تلاش کنید.",
                 reply_markup=_main_menu_keyboard(),
             )
             set_user_step(context, user_id, None)
