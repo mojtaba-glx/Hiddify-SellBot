@@ -1216,11 +1216,24 @@ async def get_service_last_online(svc) -> str:
             if is_plain_hiddify and isinstance(user, dict):
                 snapshot = await hiddify_api.refresh_user_usage_snapshot(server)
                 needle = str(uuid or "").strip().lower()
-                active_uuids = {
-                    str(item.get("uuid") or "").strip().lower()
-                    for item in (snapshot.get("comments") or [])
-                    if isinstance(item, dict) and str(item.get("uuid") or "").strip()
-                }
+                comments = snapshot.get("comments") if isinstance(snapshot, dict) else None
+                if isinstance(comments, dict):
+                    # Hiddify v11/v12 reports activity as {uuid: usage_label}.
+                    active_uuids = {
+                        str(uid).strip().lower()
+                        for uid, value in comments.items()
+                        if str(uid).strip()
+                        and str(value or "").strip().lower() not in {"", "no usage"}
+                    }
+                elif isinstance(comments, list):
+                    active_uuids = {
+                        str(item.get("uuid") or "").strip().lower()
+                        for item in comments
+                        if isinstance(item, dict)
+                        and str(item.get("uuid") or "").strip()
+                    }
+                else:
+                    active_uuids = set()
                 try:
                     # Re-read the direct row after the forced usage collection,
                     # then use list_users as the cross-version freshness source.
