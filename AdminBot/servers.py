@@ -225,37 +225,8 @@ def _server_title(server: Dict[str, Any]) -> str:
 
 
 def _format_server_location_title(title: str) -> str:
-    """
-    Normalize server title to look like: «لوکیشن 🇩🇪 آلمان»
-    while avoiding duplicate location word/flag.
-    """
-    raw = str(title or "").strip()
-    if not raw:
-        return "لوکیشن نامشخص"
-
-    flag = ""
-    if "ترکیه" in raw:
-        flag = "🇹🇷"
-    elif "آلمان" in raw:
-        flag = "🇩🇪"
-    elif "هلند" in raw:
-        flag = "🇳🇱"
-    elif "فنلاند" in raw:
-        flag = "🇫🇮"
-    elif "هند" in raw:
-        flag = "🇮🇳"
-
-    has_location_word = "لوکیشن" in raw
-    has_flag = bool(flag) and (flag in raw)
-    if has_location_word:
-        if has_flag:
-            return raw
-        return f"{raw} {flag}".strip()
-
-    if flag:
-        return f"لوکیشن {flag} {raw}".strip()
-    return f"لوکیشن {raw}".strip()
-
+    """عنوان سرور را دقیقاً همان‌طور که ادمین ذخیره کرده نمایش بده."""
+    return str(title or "").strip() or "سرور نامشخص"
 
 def _build_full_backup_zip(
     bot_backup_path: Path,
@@ -2343,25 +2314,12 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
             continue
         if sid_int in child_ids:
             continue
-        title = (s.get("title", f"سرور #{sid}") or "").strip()
-        flag = ""
-        if "ترکیه" in title:
-            flag = "🇹🇷"
-        elif "آلمان" in title:
-            flag = "🇩🇪"
-        elif "هلند" in title:
-            flag = "🇳🇱"
-        elif "فنلاند" in title:
-            flag = "🇫🇮"
-        elif "هند" in title:
-            flag = "🇮🇳"
 
-        if "لوکیشن" in title:
-            btn_text = title
-        else:
-            btn_text = f"لوکیشن {flag} {title}".strip()
-
-        keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")])
+        # عنوان دقیق ثبت‌شده توسط ادمین؛ بدون «لوکیشن» یا پرچم خودکار.
+        btn_text = str(s.get("title") or f"سرور #{sid_int}").strip()
+        keyboard.append([
+            InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")
+        ])
 
     keyboard.append([InlineKeyboardButton("افزودن سرور➕", callback_data="servers:add")])
     return InlineKeyboardMarkup(keyboard)
@@ -2673,7 +2631,7 @@ async def send_frozen_nodes_report(
             await context.bot.send_message(chat_id, text, reply_markup=kb)
         return
 
-    location_title = "همه لوکیشن‌ها"
+    location_title = "همه سرورها"
     related_ids: set[int] = set()
     if server_id:
         related = _get_related_server_targets(int(server_id))
@@ -2744,7 +2702,7 @@ async def send_frozen_nodes_report(
     button_rows: List[List[InlineKeyboardButton]] = []
     if not selected:
         lines.extend([
-            "✅ رکورد یخ‌زده‌ای برای این لوکیشن وجود ندارد.",
+            "✅ رکورد یخ‌زده‌ای برای این سرور وجود ندارد.",
             "رکوردهای صفر مصرف و خطاهای تأییدنشده نمایش داده نمی‌شوند.",
         ])
     else:
@@ -3513,7 +3471,7 @@ def build_server_detail_keyboard(server_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🗑️حذف سرور", callback_data=f"serverdel:{server_id}")],
         [InlineKeyboardButton("⚙️لیست نودها", callback_data=f"server:{server_id}:nodes")],
         [InlineKeyboardButton("🔄همگام سازی نودها", callback_data=f"server:{server_id}:sync_nodes")],
-        [InlineKeyboardButton("❄️ کاربران یخ‌زده این لوکیشن", callback_data=f"server:{server_id}:frozen:1")],
+        [InlineKeyboardButton("❄️ کاربران یخ‌زده این سرور", callback_data=f"server:{server_id}:frozen:1")],
     ]
     if is_xui or is_xnet:
         keyboard.insert(4, [InlineKeyboardButton("➕ ساخت اینباند از لینک", callback_data=f"server:{server_id}:create_inbound_from_link")])
@@ -4313,7 +4271,7 @@ async def send_user_configs_menu(
     if not user_data.get("name") and not user_data.get("username"):
         user_data["name"] = f"User_{user_uuid}"
 
-    # نمایش عنوان سرور با قالب «لوکیشن 🇩🇪 آلمان»
+    # نمایش عنوان دقیق سرور بدون افزودن پیشوند/پرچم خودکار
     server_for_display = dict(server)
     server_for_display["title"] = _format_server_location_title(server.get("title") or "")
 
@@ -9594,26 +9552,11 @@ async def send_status_servers_list(chat_id: int, context: ContextTypes.DEFAULT_T
             sid_int = 0
         if sid_int <= 0:
             continue
-        title = (s.get("title") or "Server").strip()
-        # تلاش برای اضافه کردن پرچم (سلیقه‌ای طبق عکس)
-        flag = "🏳️"
-        if "ترکیه" in title: flag = "🇹🇷"
-        elif "آلمان" in title: flag = "🇩🇪"
-        elif "هلند" in title: flag = "🇳🇱"
-        elif "فنلاند" in title: flag = "🇫🇮"
 
-        # جلوگیری از تکرار «لوکیشن/پرچم» اگر در title از قبل باشد
-        has_location_word = "لوکیشن" in title
-        has_flag = flag != "🏳️" and flag in title
-        if has_location_word:
-            if has_flag:
-                btn_text = title
-            else:
-                btn_text = f"{title} {flag}" if flag != "🏳️" else title
-        else:
-            btn_text = f"لوکیشن {flag} {title}" if flag != "🏳️" else f"لوکیشن {title}"
-
+        # نام سرور دقیقاً همان عنوان ذخیره‌شده باشد.
+        btn_text = str(s.get("title") or f"سرور #{sid_int}").strip()
         rows.append([InlineKeyboardButton(btn_text, callback_data=f"status_srv:{sid_int}")])
+
 
     if not rows:
         text = "❌ سروری یافت نشد."
@@ -9702,20 +9645,9 @@ async def send_server_status_detail(chat_id: int, context: ContextTypes.DEFAULT_
             logger.debug("daily X-UI traffic snapshot failed server=%s: %s", server_id, exc)
     net_now_sent_mb = stats.get('now_net_sent_mb', 0)
 
-    # نام سرور + پرچم (بدون تکرار)
-    title = (server.get('title') or 'Server').strip()
-    flag = ""
-    if "ترکیه" in title: flag = "🇹🇷"
-    elif "آلمان" in title: flag = "🇩🇪"
-    elif "هلند" in title: flag = "🇳🇱"
-    elif "فنلاند" in title: flag = "🇫🇮"
+    # عنوان دقیق ثبت‌شده توسط ادمین؛ بدون پرچم یا پیشوند خودکار.
+    title_line = str(server.get("title") or f"سرور #{server_id}").strip()
 
-    has_location_word = "لوکیشن" in title
-    has_flag = bool(flag) and (flag in title)
-    if has_location_word:
-        title_line = title if has_flag else (f"{title} {flag}" if flag else title)
-    else:
-        title_line = f"لوکیشن {flag} {title}" if flag else f"لوکیشن {title}"
 
     # فرمت بندی دقیق متن (طبق عکس)
     text = (
@@ -9738,7 +9670,7 @@ async def send_server_status_detail(chat_id: int, context: ContextTypes.DEFAULT_
         f"Total Upload (Server): {ul_total:.2f} GB"
     )
     
-    # دکمه بازگشت به لیست لوکیشن‌ها
+    # دکمه بازگشت به لیست سرورها
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("بازگشت🔙", callback_data=f"status:back_to_list")]
     ])
