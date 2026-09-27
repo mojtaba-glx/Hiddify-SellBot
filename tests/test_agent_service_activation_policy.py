@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from AgentBot.handlers import subscriptions
+from AgentBot.handlers import subscriptions, main_menu
 from AgentBot.services import subscription_service
 
 
@@ -132,6 +132,53 @@ class AgentServiceActivationPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         deduct.assert_not_called()
+
+    async def test_main_router_does_not_swallow_customer_enable_warning(self):
+        svc = {
+            "id": 17,
+            "agent_id": 1,
+            "customer_id": 77,
+            "is_active": 0,
+            "usage_current": 1.2,
+            "usage_limit": 1,
+            "days_left": 29,
+            "end_date": "2099-01-01 00:00:00",
+        }
+        query = AsyncMock()
+        query.data = "agbot:subs:enable:17"
+        update = SimpleNamespace(callback_query=query)
+        context = SimpleNamespace(user_data={})
+
+        with patch.object(
+            main_menu,
+            "authenticate",
+            new=AsyncMock(return_value={"id": 1}),
+        ), patch.object(
+            main_menu,
+            "_tariff_ready",
+            return_value=True,
+        ), patch.object(
+            subscriptions,
+            "get_agent_id",
+            return_value=1,
+        ), patch.object(
+            subscriptions.agent_db,
+            "get_service_by_id",
+            return_value=svc,
+        ), patch.object(
+            subscriptions,
+            "enable_subscription",
+            new=AsyncMock(return_value=True),
+        ) as enable:
+            await main_menu.handle_main_menu_callback(update, context)
+
+        enable.assert_not_awaited()
+        self.assertEqual(query.answer.await_count, 1)
+        args, kwargs = query.answer.await_args
+        self.assertIn("حجم این سرویس به پایان رسیده", args[0])
+        self.assertIn("ربات مشتری", args[0])
+        self.assertTrue(kwargs.get("show_alert"))
+
 
     async def test_expired_customer_enable_callback_shows_customerbot_warning(self):
         svc = {
