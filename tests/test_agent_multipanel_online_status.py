@@ -227,6 +227,52 @@ class AgentMultiPanelOnlineStatusTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status, "online")
 
+    async def test_hiddify_naive_local_time_uses_panel_clock(self):
+        from datetime import datetime, timedelta, timezone
+
+        targets = [(self.primary, "shared-uuid", "")]
+        # Hiddify time_to_json() serializes naive server-local time. Simulate
+        # a Turkey panel (UTC+3) with a user active 30 seconds ago.
+        panel_now = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=3)
+        last_online = panel_now - timedelta(seconds=30)
+        panel_now_text = panel_now.strftime("%Y-%m-%d %H:%M:%S")
+        last_online_text = last_online.strftime("%Y-%m-%d %H:%M:%S")
+
+        with patch(
+            "Shared.sub_links.get_service_panel_targets",
+            return_value=targets,
+        ), patch.object(
+            hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value={
+                "uuid": "shared-uuid",
+                "is_active": True,
+                "last_online": last_online_text,
+            }),
+        ), patch.object(
+            hiddify_api,
+            "refresh_user_usage_snapshot",
+            new=AsyncMock(return_value={
+                "status": "success",
+                "comments": [],
+                "date": panel_now_text,
+            }),
+        ), patch.object(
+            hiddify_api,
+            "list_users",
+            new=AsyncMock(return_value=[{
+                "uuid": "shared-uuid",
+                "is_active": True,
+                "last_online": last_online_text,
+            }]),
+        ), patch.object(
+            subscriptions.agent_db,
+            "mark_service_seen",
+        ):
+            status = await subscriptions._panel_user_status(self.service)
+
+        self.assertEqual(status, "online")
+
     async def test_all_reachable_active_targets_offline_stays_offline(self):
         targets = [
             (self.primary, "shared-uuid", ""),
