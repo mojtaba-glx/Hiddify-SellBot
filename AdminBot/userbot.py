@@ -1684,36 +1684,39 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
     last_online_raw = service.get("last_online")
     comment = _service_public_note_text(service)
     if comment == "-":
-        comment = _synthetic_hiddify_note(service)
+        # متادیتای داخلی HiddifyBot/UUID در نمای کاربر ادمین نمایش داده نشود.
+        comment = "🔥 تست رایگان" if _comment_has_flag(str(service.get("comment") or ""), "test") else "—"
     comment = _display_safe_note(comment)
 
     if usage_current is None:
-        usage_line = "📊مصرف: نامشخص"
+        usage_line = "📊 مصرف: نامشخص"
     elif usage_limit is None:
-        usage_line = f"📊مصرف: {usage_current:.2f} گیگابایت (نامحدود)"
+        usage_line = f"📊 مصرف: {usage_current:.2f} گیگابایت (نامحدود)"
     else:
-        usage_line = f"📊مصرف: {usage_current:.2f} از {usage_limit:.1f} گیگابایت (مجموع سرورها)"
+        usage_line = f"📊 مصرف کل: {usage_current:.2f} از {usage_limit:.1f} گیگابایت"
 
     is_display_expired = _is_display_expired_service(service)
     if is_display_expired:
-        expire_line = "📆انقضا: منقضی/غیرفعال در پنل"
+        expire_line = "📅 انقضا: منقضی / غیرفعال"
     elif days_left is None:
-        expire_line = "📆انقضا: نامشخص"
+        expire_line = "📅 انقضا: نامشخص"
     elif days_left < 0:
-        expire_line = f"📆انقضا: منقضی شده ({abs(int(days_left))} روز پیش)"
+        expire_line = f"📅 انقضا: {abs(int(days_left))} روز پیش"
     else:
-        expire_line = f"📆انقضا: {int(days_left)} روز دیگر"
+        expire_line = f"📅 انقضا: {int(days_left)} روز دیگر"
 
     if is_display_expired:
-        last_online_line = "📶آخرین اتصال: غیرفعال/منقضی"
+        last_online_line = "📶 آخرین اتصال: غیرفعال / منقضی"
+    elif not last_online_raw and (usage_current is None or float(usage_current or 0.0) <= 0.0):
+        last_online_line = "📶 آخرین اتصال: هنوز متصل نشده"
     else:
-        last_online_line = _service_last_online_line(last_online_raw)
+        last_online_line = _service_last_online_line(last_online_raw).replace("📶آخرین", "📶 آخرین", 1)
 
-    header_line = f"👤 کاربر:  {service_name}"
-    sep_line = "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖"
-    server_line = f"⬖ سرور:  {server_title}"
+    header_line = f"👤 کاربر: {service_name}"
+    sep_line = "━━━━━━━━━━━━━━━━━━"
+    server_line = f"🛰 سرورها: {server_title}"
 
-    # بخش نودها: نمایش وضعیت یخ‌زده / حذف‌شده به‌تفکیک هر نود
+    # وضعیت هر نود؛ snapshot سرور حذف‌شده هم واضح اما جمع‌وجور نمایش داده می‌شود.
     node_lines: List[str] = []
     frozen_count = 0
     deleted_count = 0
@@ -1731,7 +1734,6 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
                     _srv = database.get_server_by_id(int(_sid))
             except Exception:
                 _srv = None
-            # fallback به server_title ذخیره‌شده در خود نود اگر سرور از servers.json حذف شده باشد
             _stored_title = str(_nd.get("server_title") or "").strip()
             if _srv and (_srv.get("name") or _srv.get("title")):
                 _title = str(_srv.get("name") or _srv.get("title"))
@@ -1739,19 +1741,21 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
                 _title = _stored_title
             else:
                 _title = f"سرور #{_sid}" if _sid is not None else "ناشناخته"
+
             _is_deleted = bool(_nd.get("deleted"))
             _is_frozen = bool(_nd.get("frozen"))
             if _is_deleted:
                 deleted_count += 1
-                _status = "🗑 حذف‌شده"
+                _icon, _status = "🗑", "حذف‌شده"
             elif _is_frozen:
                 frozen_count += 1
-                _status = "🧊 یخ‌زده"
+                _icon, _status = "🧊", "یخ‌زده"
             else:
-                _status = "✅ فعال"
+                _icon, _status = "✅", "فعال"
+
             _nu = _to_float(_nd.get("usage_current"))
-            _nu_s = f"{_nu:.2f}GB" if _nu is not None else "—"
-            node_lines.append(f"  • {_title}: {_status} ({_nu_s})")
+            _nu_s = f"{_nu:.2f} GB" if _nu is not None else "—"
+            node_lines.append(f"{_icon} {_title} — {_status} | {_nu_s}")
 
     lines = [
         header_line,
@@ -1760,16 +1764,22 @@ def build_service_detail_text(user: Dict[str, Any], service: Dict[str, Any]) -> 
         usage_line,
         expire_line,
         last_online_line,
-        f"📝یادداشت: {comment if str(comment).strip() else '—'}",
+        f"📝 یادداشت: {comment if str(comment).strip() else '—'}",
     ]
     if node_lines:
-        lines.append("❄️ نودها:")
-        lines.extend(node_lines)
-    if frozen_count or deleted_count:
-        lines.append(
-            f"⚠️ {frozen_count} نود یخ‌زده، {deleted_count} نود حذف‌شده "
-            f"(حجم مصرف‌شده تا زمان تمدید فریز شد)"
-        )
+        lines.extend(["", "🧩 وضعیت نودها", *node_lines])
+
+    problem_parts: List[str] = []
+    if frozen_count:
+        problem_parts.append(f"{frozen_count} نود یخ‌زده")
+    if deleted_count:
+        problem_parts.append(f"{deleted_count} نود حذف‌شده")
+    if problem_parts:
+        lines.extend([
+            "",
+            f"⚠️ {'، '.join(problem_parts)}",
+            "💾 مصرف ذخیره‌شده این نودها تا تمدید بعدی محفوظ می‌ماند.",
+        ])
     return "\n".join(lines)
 
 
@@ -9042,6 +9052,79 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             await send_service_detail(service_id, cid, context, message=msg)
             return
 
+        # Local import to avoid module-load circular dependency.
+        from AdminBot import servers as server_ops
+
+        # حذف از پروفایل ادمین یک عملیات صریح و authoritative است. برای حذف،
+        # وجود داشتن سرور قدیمی شرط نیست؛ helper همه مقصدهای هنوز موجود را حذف
+        # می‌کند و اگر فقط mapping مربوط به سرور حذف‌شده مانده باشد، رکورد شبح
+        # را از دیتابیس محلی پاک می‌کند.
+        if action == "delete":
+            await query.answer()
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ بله، حذف شود",
+                            callback_data=f"userbot:svc:{service_id}:delete_yes",
+                        ),
+                        InlineKeyboardButton(
+                            "لغو❌",
+                            callback_data=f"userbot:svc:{service_id}:delete_no",
+                        ),
+                    ]
+                ]
+            )
+            await msg.edit_text(
+                "❓ آیا از حذف کامل این سرویس مطمئن هستید؟\n"
+                "پنل‌های موجود بررسی می‌شوند و داده‌های باقی‌مانده سرورهای حذف‌شده نیز پاک خواهند شد.\n"
+                "⚠️ این عملیات قابل بازگشت نیست.",
+                reply_markup=kb,
+            )
+            return
+
+        if action == "delete_no":
+            await query.answer("❌ حذف لغو شد.", show_alert=True)
+            await send_service_detail(service_id, cid, context, message=msg)
+            return
+
+        if action == "delete_yes":
+            user_id = int(service.get("user_id") or 0)
+            target_server_id, target_user_uuid = _service_primary_target(service)
+            deleted_count, failed_servers = await server_ops._delete_userbot_service_everywhere(
+                service_id
+            )
+
+            if failed_servers:
+                details = "\n".join(failed_servers[:3])
+                await msg.edit_text(
+                    "⚠️ حذف روی همه پنل‌های موجود کامل نشد؛ رکورد محلی برای تلاش دوباره حفظ شد."
+                    + (f"\n\n{details}" if details else "")
+                )
+                return
+
+            # رفتار قدیمی برای mirror احتمالی نمایندگی حفظ شود.
+            if target_user_uuid:
+                try:
+                    from Shared import agent_db as _agn
+                    _agn.soft_delete_service_by_uuid(target_user_uuid, target_server_id)
+                except Exception:
+                    pass
+
+            if deleted_count > 0:
+                await query.answer("✅ سرویس از پنل‌های موجود و دیتابیس حذف شد.", show_alert=True)
+            else:
+                await query.answer(
+                    "✅ رکورد باقی‌مانده سرور حذف‌شده از دیتابیس پاک شد.",
+                    show_alert=True,
+                )
+
+            if user_id > 0:
+                await send_user_profile(user_id, cid, context, message=msg)
+            else:
+                await msg.edit_text("✅ سرویس با موفقیت حذف شد.")
+            return
+
         target_server_id, target_user_uuid = _service_primary_target(service)
         if target_server_id <= 0 or not target_user_uuid:
             await query.answer(
@@ -9049,9 +9132,6 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 show_alert=True,
             )
             return
-
-        # Local import to avoid module-load circular dependency.
-        from AdminBot import servers as server_ops
 
         if action == "configs":
             await query.answer()
@@ -9084,75 +9164,6 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
                 context,
                 message=msg,
             )
-            return
-
-        if action == "delete":
-            await query.answer()
-            kb = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "✅ بله، حذف شود",
-                            callback_data=f"userbot:svc:{service_id}:delete_yes",
-                        ),
-                        InlineKeyboardButton(
-                            "لغو❌",
-                            callback_data=f"userbot:svc:{service_id}:delete_no",
-                        ),
-                    ]
-                ]
-            )
-            await msg.edit_text(
-                "❓ آیا از حذف کامل این کاربر مطمئن هستید؟\n"
-                "این عملیات قابل بازگشت نیست.",
-                reply_markup=kb,
-            )
-            return
-
-        if action == "delete_no":
-            await query.answer("❌ حذف لغو شد.", show_alert=True)
-            await send_service_detail(service_id, cid, context, message=msg)
-            return
-
-        if action == "delete_yes":
-            user_id = int(service.get("user_id") or 0)
-            deleted_server_ids, failed_servers = await server_ops._delete_user_across_related_servers(
-                target_server_id,
-                target_user_uuid,
-            )
-
-            if not deleted_server_ids:
-                details = "\n".join(failed_servers[:3])
-                if details:
-                    await msg.edit_text(f"❌ حذف سرویس روی هیچ سروری موفق نشد:\n{details}")
-                else:
-                    await msg.edit_text("❌ حذف سرویس روی هیچ سروری موفق نشد.")
-                return
-
-            try:
-                userbot_db.delete_service(service_id)
-            except Exception:
-                pass
-
-            # حذف نرم اشتراک از سیستم نمایندگی/مشتری (ردیف دیتابیس تا ۷ روز می‌ماند)
-            try:
-                from Shared import agent_db as _agn
-                _agn.soft_delete_service_by_uuid(target_user_uuid, target_server_id)
-            except Exception:
-                pass
-
-            if failed_servers:
-                await query.answer(
-                    f"✅ حذف شد، اما {len(failed_servers)} سرور خطا داشت.",
-                    show_alert=True,
-                )
-            else:
-                await query.answer("✅ سرویس با موفقیت حذف شد.", show_alert=True)
-
-            if user_id > 0:
-                await send_user_profile(user_id, cid, context, message=msg)
-            else:
-                await msg.edit_text("✅ سرویس با موفقیت حذف شد.")
             return
 
         await query.answer("❌ گزینه نامعتبر است.", show_alert=True)
