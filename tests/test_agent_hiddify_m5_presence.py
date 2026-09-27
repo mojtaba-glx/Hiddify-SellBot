@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -72,6 +73,72 @@ class AgentHiddifyPresenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_usage_snapshot_overrides_stale_last_online(self):
         status = await self._status_for_age(timedelta(minutes=6), active_snapshot=True)
         self.assertEqual(status, "online")
+
+
+    async def test_legacy_v11_v12_comments_dict_marks_user_online(self):
+        stale = (
+            datetime.now(timezone.utc) - timedelta(minutes=30)
+        ).isoformat().replace("+00:00", "Z")
+        snapshot = {
+            "status": "success",
+            "comments": {"shared-uuid": "0.123MB"},
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        with patch(
+            "Shared.sub_links.get_service_panel_targets",
+            return_value=[(self.primary, "shared-uuid", "")],
+        ), patch.object(
+            hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value={
+                "uuid": "shared-uuid",
+                "is_active": True,
+                "last_online": stale,
+            }),
+        ), patch.object(
+            hiddify_api,
+            "refresh_user_usage_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ), patch.object(
+            hiddify_api,
+            "list_users",
+            new=AsyncMock(return_value=[{
+                "uuid": "shared-uuid",
+                "is_active": True,
+                "last_online": stale,
+            }]),
+        ), patch.object(
+            subscriptions.agent_db,
+            "mark_service_seen",
+        ):
+            status = await subscriptions._panel_user_status(self.service)
+
+        self.assertEqual(status, "online")
+
+    async def test_legacy_usage_snapshot_json_string_is_unwrapped(self):
+        payload = {
+            "status": "success",
+            "comments": {"shared-uuid": "0.250MB"},
+            "date": "2026-09-27 11:45:00",
+        }
+        with patch.object(
+            hiddify_api,
+            "_get_panel_url",
+            return_value="https://panel.example",
+        ), patch.object(
+            hiddify_api,
+            "_get_admin_proxy",
+            return_value="admin-proxy",
+        ), patch.object(
+            hiddify_api,
+            "_request",
+            new=AsyncMock(return_value=json.dumps(payload)),
+        ):
+            result = await hiddify_api.refresh_user_usage_snapshot(self.primary)
+
+        self.assertEqual(result, payload)
+        self.assertEqual(result["comments"]["shared-uuid"], "0.250MB")
 
 
 if __name__ == "__main__":
