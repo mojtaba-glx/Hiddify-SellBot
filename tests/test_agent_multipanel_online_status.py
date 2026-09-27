@@ -16,6 +16,8 @@ class AgentMultiPanelOnlineStatusTests(unittest.IsolatedAsyncioTestCase):
         }
         self.primary = {"id": 1, "title": "سرور اصلی", "panel_type": "hiddify"}
         self.xnet_node = {"id": 2, "title": "X-Net", "panel_type": "xnet"}
+        subscriptions._HIDDIFY_PRESENCE_CACHE.clear()
+        subscriptions._HIDDIFY_PRESENCE_TASKS.clear()
 
     async def test_xnet_node_online_makes_mixed_service_online(self):
         targets = [
