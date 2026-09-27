@@ -49,6 +49,27 @@ class CustomerBotRenewalMatchesUserBotTests(unittest.TestCase):
         self.assertIn("primary_target = next(", src)
         self.assertIn("None,", src)
 
+    def test_legacy_customer_renewal_uses_new_expiry_and_real_primary(self):
+        legacy_source = (
+            ROOT / "CustomerBot" / "services.py"
+        ).read_text(encoding="utf-8")
+        src = _function_source(legacy_source, "renew_service")
+        self.assertIn("primary_panel_target_not_found", src)
+        self.assertIn("agent_db.renew_service(service_id, extra_days=extra_days)", src)
+        self.assertIn('new_end = str(updated.get("end_date")', src)
+        self.assertIn('patch = {"expire_date": new_end.split(" ")[0]}', src)
+        self.assertNotIn("targets[0]", src)
+
+    def test_legacy_customer_renewal_refunds_only_before_primary_commit(self):
+        legacy_source = (
+            ROOT / "CustomerBot" / "services.py"
+        ).read_text(encoding="utf-8")
+        src = _function_source(legacy_source, "renew_service")
+        primary_patch = src.index("await multi_panel.patch_user(")
+        last_refund = src.rfind("agent_db.refund_wallet(")
+        self.assertLess(last_refund, primary_patch)
+        self.assertIn('"pending_nodes": failed_nodes', src)
+
     def test_admin_report_shows_purchased_renewal_package(self):
         src = _function_source(
             CUSTOMER_RENEW_SOURCE, "_renew_subscription_from_order"
