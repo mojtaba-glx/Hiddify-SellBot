@@ -500,6 +500,48 @@ class SystemdStartupSafetyTests(unittest.TestCase):
             self.assertIn(f'"{title}"', body)
 
 
+class ProductionFailurePropagationTests(unittest.TestCase):
+    def _func(self, name: str) -> str:
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(rf"{re.escape(name)}\(\) \{{.*?\n\}}", src, re.S)
+        self.assertIsNotNone(match, f"{name} not found")
+        return match.group(0)
+
+    def test_update_requires_backup_dependencies_stop_migration_and_start(self):
+        body = self._func("update_all")
+        self.assertIn('create_snapshot_backup "PreUpdate" ||', body)
+        self.assertIn("setup_venv_and_requirements || return 1", body)
+        self.assertIn("stop_bots || return 1", body)
+        self.assertIn("init_database || return 1", body)
+        self.assertIn("if ! start_bots; then", body)
+
+    def test_start_bots_aggregates_failures_instead_of_masking_them(self):
+        body = self._func("start_bots")
+        self.assertIn("local start_failures=0", body)
+        self.assertIn("start_failures=$((start_failures + 1))", body)
+        self.assertIn('if [ "$start_failures" -gt 0 ]; then', body)
+        self.assertIn("return 1", body)
+
+    def test_dependency_setup_has_explicit_failure_returns(self):
+        body = self._func("setup_venv_and_requirements")
+        self.assertIn("install_system_dependencies || return 1", body)
+        self.assertIn("virtual environment creation failed", body)
+        self.assertIn("pip upgrade failed", body)
+        self.assertIn("Python dependency installation failed", body)
+
+    def test_database_migration_failure_is_not_reported_as_success(self):
+        body = self._func("init_database")
+        self.assertIn('if ! "$VENV_DIR/bin/python" - <<\'PY\'', body)
+        self.assertIn("database schema initialization/migration failed", body)
+        self.assertIn("return 1", body)
+
+    def test_force_sync_requires_git_and_verified_remote(self):
+        body = self._func("force_sync_source_if_git")
+        self.assertIn("cannot force-sync source", body)
+        self.assertIn("if ! git -C", body)
+        self.assertIn("return 1", body)
+
+
 class InstallerSyntaxTests(unittest.TestCase):
     def test_14_bash_n_install_sh(self):
         proc = subprocess.run(["bash", "-n", str(PROJECT_ROOT / "install.sh")],
