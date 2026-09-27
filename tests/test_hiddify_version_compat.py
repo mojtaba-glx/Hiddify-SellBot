@@ -81,6 +81,45 @@ class HiddifyVersionCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sent["enable"])
         self.assertNotIn("is_active", sent)
 
+    async def test_live_usage_refresh_uses_official_admin_action(self):
+        req = AsyncMock(return_value={"status": "success"})
+        with patch.object(hiddify_api, "_request", new=req):
+            ok = await hiddify_api.refresh_user_usage(self.server)
+
+        self.assertTrue(ok)
+        self.assertEqual(req.await_args.args[0], "GET")
+        self.assertTrue(
+            req.await_args.args[1].endswith(
+                "/admin-secret/api/v2/admin/update_user_usage/"
+            )
+        )
+
+    async def test_live_usage_refresh_is_best_effort(self):
+        with patch.object(
+            hiddify_api,
+            "_request",
+            new=AsyncMock(side_effect=RuntimeError("legacy panel")),
+        ):
+            ok = await hiddify_api.refresh_user_usage(self.server)
+
+        self.assertFalse(ok)
+
+    async def test_live_usage_refresh_skips_xnet_and_xui(self):
+        req = AsyncMock()
+        with patch.object(hiddify_api, "_request", new=req):
+            self.assertFalse(
+                await hiddify_api.refresh_user_usage(
+                    {**self.server, "panel_type": "xnet"}
+                )
+            )
+            self.assertFalse(
+                await hiddify_api.refresh_user_usage(
+                    {**self.server, "panel_type": "xui"}
+                )
+            )
+
+        req.assert_not_awaited()
+
     async def test_backup_prefers_cross_version_backupfile_route(self):
         body = b'{"users": []}'
         headers = {"content-type": "application/json"}
