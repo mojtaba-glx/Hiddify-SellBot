@@ -1127,7 +1127,7 @@ async def get_service_last_online(svc) -> str:
     - در حالت آفلاین، زمان primary مرجع است و timestamp نود آفلاین نباید
       زمان سرویس اصلی را تازه‌تر جلوه دهد.
     """
-    HIDDIFY_ONLINE_WINDOW = 90
+    HIDDIFY_ONLINE_WINDOW = 120
     CHILD_ONLINE_WINDOW = 90
     CLOCK_SKEW = 30
 
@@ -1166,6 +1166,15 @@ async def get_service_last_online(svc) -> str:
 
             if is_plain_hiddify and isinstance(user, dict):
                 try:
+                    await hiddify_api.refresh_user_usage(server)
+                except Exception:
+                    pass
+                try:
+                    # Re-read the direct row after the forced usage collection,
+                    # then use list_users as the cross-version freshness source.
+                    refreshed = await hiddify_api.get_user_by_uuid(server, uuid)
+                    if isinstance(refreshed, dict) and refreshed:
+                        user = refreshed
                     rows = await hiddify_api.list_users(server)
                 except Exception:
                     rows = []
