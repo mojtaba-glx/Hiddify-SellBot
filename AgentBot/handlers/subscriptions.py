@@ -32,7 +32,8 @@ from AgentBot.services.subscription_service import (
     change_subscription_link, get_subs_link_settings, get_sub_link_for_type,
     rename_service_on_panels, InsufficientWalletError, SubscriptionCreationError,
     WholesalePricingNotConfiguredError,
-    format_service_expiry,
+    format_service_expiry, get_service_activation_block_reason,
+    service_is_customerbot_owned,
 )
 from AgentBot.database import create_order as db_create_order, get_setting as db_get_setting
 from Shared.qr_utils import make_qr_image
@@ -265,6 +266,19 @@ def _service_detail_text(svc, last_online: str = "هنوز متصل نشده") -
         f"\U0001f4f6 آخرین اتصال: {online_line}\n"
         f"\U0001f4dd یادداشت: {_escape(note)}\n"
         f"\U0001f511 شناسه: <code>{_escape(code or '—')}</code>"
+    )
+
+
+def _service_detail_keyboard_for(svc: dict):
+    service_id = int((svc or {}).get("id") or 0)
+    is_active = bool(int((svc or {}).get("is_active", 0) or 0))
+    customer_owned = service_is_customerbot_owned(svc)
+    is_expired = bool(get_service_activation_block_reason(svc))
+    return service_detail_keyboard(
+        service_id,
+        is_active,
+        allow_agent_renew=not customer_owned,
+        is_expired=is_expired,
     )
 
 
@@ -1026,7 +1040,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         is_active = bool(int(svc.get("is_active", 0) or 0))
         await query.edit_message_text(
             _service_detail_text(svc, last_online),
-            reply_markup=service_detail_keyboard(svc_id, is_active),
+            reply_markup=_service_detail_keyboard_for(svc),
             parse_mode="HTML",
         )
         return
@@ -1354,6 +1368,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not svc or int(svc.get("agent_id", 0)) != agent_id:
             await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
             return
+        if service_is_customerbot_owned(svc):
+            await _safe_answer(
+                query,
+                "تمدید این سرویس فقط باید توسط خود مشتری از ربات مشتری انجام شود.",
+                alert=True,
+            )
+            return
         server_id = int(svc.get("server_id") or 0)
         context.user_data[UD_SELECTED_SERVICE] = svc_id
         gb, months = _get_wizard_defaults(agent_id)
@@ -1412,9 +1433,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.edit_message_text(
                         "❌ تعرفه خرید برای نمایندگی شما توسط ادمین تنظیم نشده است.\n\n"
                         "لطفاً برای فعال‌سازی خرید و تمدید با پشتیبانی/ادمین تماس بگیرید.",
-                        reply_markup=service_detail_keyboard(
-                            svc_id, bool(int(svc.get("is_active", 0) or 0))
-                        ),
+                        reply_markup=_service_detail_keyboard_for(svc),
                     )
                 except Exception:
                     pass
@@ -1470,7 +1489,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     f"💴 کسر از کیف پول: {_fmt_toman(wholesale)} تومان\n\n"
                     f"📈 کل حجم: {_fmt_gb(updated.get('usage_limit', 0))}GB\n"
                     f"⏳ روز باقی‌مانده: {updated.get('days_left') or updated.get('days') or 0}",
-                    reply_markup=service_detail_keyboard(svc_id, bool(int(updated.get("is_active", 0) or 0))),
+                    reply_markup=_service_detail_keyboard_for(updated),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1533,7 +1552,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     _lo = await get_service_last_online(svc)
                     await query.edit_message_text(
                         _service_detail_text(svc, _lo),
-                        reply_markup=service_detail_keyboard(svc_id, False),
+                        reply_markup=_service_detail_keyboard_for(svc),
                         parse_mode="HTML",
                     )
                 except Exception:
@@ -1542,25 +1561,44 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "enable":
         svc_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        svc = agent_db.get_service_by_id(svc_id)
+        if not svc or int(svc.get("agent_id", 0)) != agent_id:
+            await _safe_answer(query, "سرویس پیدا نشد.", alert=True)
+            return
+
+        block_reason = get_service_activation_block_reason(svc)
+        if block_reason:
+            if service_is_customerbot_owned(svc):
+                warning = (
+                    "این سرویس منقضی شده و قابل فعال‌سازی نیست. "
+                    "تمدید باید توسط خود مشتری از ربات مشتری انجام شود."
+                )
+            else:
+                warning = (
+                    "این سرویس منقضی شده و قابل فعال‌سازی نیست. "
+                    "ابتدا اشتراک را تمدید کنید."
+                )
+            await _safe_answer(query, warning, alert=True)
+            return
+
         try:
             await query.edit_message_text("⏳ در حال فعال کردن سرویس... لطفاً صبر کنید.", parse_mode="HTML")
         except Exception:
             pass
         ok = await enable_subscription(agent_id, svc_id)
-        await _safe_answer(query, "فعال شد ✅" if ok else "خطا!", alert=not ok)
-        if ok:
-            svc = agent_db.get_service_by_id(svc_id)
-            if svc:
-                try:
-                    from AgentBot.services.subscription_service import get_service_last_online
-                    _lo = await get_service_last_online(svc)
-                    await query.edit_message_text(
-                        _service_detail_text(svc, _lo),
-                        reply_markup=service_detail_keyboard(svc_id, True),
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    pass
+        await _safe_answer(query, "فعال شد ✅" if ok else "خطا در فعال‌سازی!", alert=not ok)
+        svc = agent_db.get_service_by_id(svc_id)
+        if svc:
+            try:
+                from AgentBot.services.subscription_service import get_service_last_online
+                _lo = await get_service_last_online(svc)
+                await query.edit_message_text(
+                    _service_detail_text(svc, _lo),
+                    reply_markup=_service_detail_keyboard_for(svc),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
         return
 
     if action == "delete":
@@ -1676,7 +1714,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 await query.edit_message_text(
                     _service_detail_text(svc, last_online),
-                    reply_markup=service_detail_keyboard(svc_id, is_active),
+                    reply_markup=_service_detail_keyboard_for(svc),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1705,7 +1743,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "\U0001f447 \u0644\u06cc\u0646\u06a9 \u062c\u062f\u06cc\u062f \u0647\u0645\u0631\u0627\u0647 \u0628\u0627 QR \u062f\u0631 \u067e\u06cc\u0627\u0645 \u0628\u0639\u062f\u06cc \u0627\u0631\u0633\u0627\u0644 \u0645\u06cc\u0634\u0648\u062f."
             )
             try:
-                await query.edit_message_text(text, reply_markup=service_detail_keyboard(svc_id, is_active), parse_mode="HTML")
+                await query.edit_message_text(text, reply_markup=_service_detail_keyboard_for(svc), parse_mode="HTML")
             except Exception:
                 pass
             try:
@@ -1729,7 +1767,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             await query.edit_message_text(
                 "\u274c \u062e\u0637\u0627 \u062f\u0631 \u062a\u063a\u06cc\u06cc\u0631 \u0644\u06cc\u0646\u06a9. \u0644\u0637\u0641\u0627 \u062f\u0648\u0628\u0627\u0631\u0647 \u062a\u0644\u0627\u0634 \u06a9\u0646\u06cc\u062f.",
-                reply_markup=service_detail_keyboard(svc_id, bool(int(svc.get("is_active", 0) or 0))),
+                reply_markup=_service_detail_keyboard_for(svc),
                 parse_mode="HTML",
             )
         return
@@ -1760,7 +1798,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             _lo = "هنوز متصل نشده"
         is_active = bool(int(svc.get("is_active", 0) or 0))
         detail = f"✅ <b>اشتراک یافت شد</b>\n\n" + _service_detail_text(svc, _lo)
-        await update.message.reply_text(detail, reply_markup=service_detail_keyboard(int(svc["id"]), is_active), parse_mode="HTML")
+        await update.message.reply_text(detail, reply_markup=_service_detail_keyboard_for(svc), parse_mode="HTML")
         return True
 
     if state == STATE_SEARCH_NAME:
@@ -1787,7 +1825,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                     is_active = bool(int(svc_cancel.get("is_active", 0) or 0))
                     await update.message.reply_text(
                         _service_detail_text(svc_cancel, last_online),
-                        reply_markup=service_detail_keyboard(svc_id_cancel, is_active),
+                        reply_markup=_service_detail_keyboard_for(svc_cancel),
                         parse_mode="HTML",
                     )
             return True
@@ -1837,7 +1875,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             is_active = bool(int(refreshed.get("is_active", 0) or 0))
             await update.message.reply_text(
                 _service_detail_text(refreshed, last_online),
-                reply_markup=service_detail_keyboard(svc_id, is_active),
+                reply_markup=_service_detail_keyboard_for(svc),
                 parse_mode="HTML",
             )
         return True
@@ -1951,7 +1989,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         # پیام دوم: جزئیات اکانت + دکمه‌ها
         await update.message.reply_text(
             _service_detail_card_text(svc, note, last_online),
-            reply_markup=service_detail_keyboard(svc_id, is_active),
+            reply_markup=_service_detail_keyboard_for(svc),
             parse_mode="HTML",
         )
         return True
