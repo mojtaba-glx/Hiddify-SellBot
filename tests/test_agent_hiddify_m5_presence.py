@@ -6,7 +6,7 @@ from AgentBot.handlers import subscriptions
 from Shared import hiddify_api
 
 
-class AgentHiddifyM5PresenceTests(unittest.IsolatedAsyncioTestCase):
+class AgentHiddifyPresenceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.service = {
             "id": 901,
@@ -22,10 +22,14 @@ class AgentHiddifyM5PresenceTests(unittest.IsolatedAsyncioTestCase):
         subscriptions._HIDDIFY_PRESENCE_CACHE.clear()
         subscriptions._HIDDIFY_PRESENCE_TASKS.clear()
 
-    async def _status_for_age(self, age: timedelta) -> str | None:
+    async def _status_for_age(self, age: timedelta, *, active_snapshot: bool = False):
         last_online = (
             datetime.now(timezone.utc) - age
         ).isoformat().replace("+00:00", "Z")
+        snapshot = {
+            "status": "success",
+            "comments": [{"uuid": "shared-uuid", "usage": 1234}] if active_snapshot else [],
+        }
 
         with patch(
             "Shared.sub_links.get_service_panel_targets",
@@ -40,8 +44,8 @@ class AgentHiddifyM5PresenceTests(unittest.IsolatedAsyncioTestCase):
             }),
         ), patch.object(
             hiddify_api,
-            "refresh_user_usage",
-            new=AsyncMock(return_value=True),
+            "refresh_user_usage_snapshot",
+            new=AsyncMock(return_value=snapshot),
         ), patch.object(
             hiddify_api,
             "list_users",
@@ -56,14 +60,18 @@ class AgentHiddifyM5PresenceTests(unittest.IsolatedAsyncioTestCase):
         ):
             return await subscriptions._panel_user_status(self.service)
 
-    async def test_three_minutes_ago_is_online_like_hiddify_m5(self):
-        self.assertEqual(subscriptions._HIDDIFY_ONLINE_WINDOW_SECONDS, 5 * 60)
-        status = await self._status_for_age(timedelta(minutes=3))
+    async def test_two_minute_window_matches_hiddify_user_ui(self):
+        self.assertEqual(subscriptions._HIDDIFY_ONLINE_WINDOW_SECONDS, 120)
+        status = await self._status_for_age(timedelta(seconds=90))
         self.assertEqual(status, "online")
 
-    async def test_six_minutes_ago_is_offline(self):
-        status = await self._status_for_age(timedelta(minutes=6))
+    async def test_three_minutes_without_activity_is_offline(self):
+        status = await self._status_for_age(timedelta(minutes=3))
         self.assertEqual(status, "offline")
+
+    async def test_live_usage_snapshot_overrides_stale_last_online(self):
+        status = await self._status_for_age(timedelta(minutes=3), active_snapshot=True)
+        self.assertEqual(status, "online")
 
 
 if __name__ == "__main__":
