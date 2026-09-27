@@ -20,6 +20,24 @@ def _report_volume(gb) -> str:
         return "0.0"
 
 
+def _customer_profile_button_title(customer: dict, user_tg_id: int) -> str:
+    """Build a compact customer label for the profile shortcut button."""
+    full_name = " ".join(str((customer or {}).get("full_name") or "").split())
+    username = str((customer or {}).get("username") or "").strip().lstrip("@")
+
+    if full_name:
+        label = full_name
+    elif username:
+        label = f"@{username}"
+    else:
+        label = str(user_tg_id or (customer or {}).get("telegram_id") or "کاربر")
+
+    # Keep the inline button readable when Telegram names are unusually long.
+    if len(label) > 42:
+        label = label[:39].rstrip() + "..."
+    return f"👤 {label}"
+
+
 def build_subscription_report_text(action: str, svc: dict, amount: int) -> str:
     """متن گزارش ایجاد/تمدید اشتراک برای نماینده."""
     title = "\u06af\u0632\u0627\u0631\u0634 \u0627\u06cc\u062c\u0627\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if action == "create" else "\u06af\u0632\u0627\u0631\u0634 \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9"
@@ -40,7 +58,7 @@ def build_subscription_report_text(action: str, svc: dict, amount: int) -> str:
 
 
 async def send_subscription_report(bot, chat_id: int, agent_id: int, user_tg_id: int, svc: dict, action: str, amount: int) -> None:
-    """ارسال گزارش ایجاد/تمدید اشتراک + دکمه «پروفایل کاربر» برای نماینده."""
+    """ارسال گزارش ایجاد/تمدید اشتراک + میانبر پروفایل با نام واقعی مشتری."""
     try:
         from telegram import InlineKeyboardMarkup
         from Shared.tg_button_styles import inline_button as IButton
@@ -57,7 +75,7 @@ async def send_subscription_report(bot, chat_id: int, agent_id: int, user_tg_id:
         if customer:
             customer_id = int(customer.get("id") or 0)
             kb = InlineKeyboardMarkup(
-                [[IButton("\U0001f464 \u067e\u0631\u0648\u0641\u0627\u06cc\u0644 \u06a9\u0627\u0631\u0628\u0631", callback_data=f"agbot:set:users:detail:{customer_id}")]]
+                [[IButton(_customer_profile_button_title(customer, user_tg_id), callback_data=f"agbot:set:users:detail:{customer_id}")]]
             )
         await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=kb)
 
