@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from Shared import agent_db, agent_enforcer
@@ -277,14 +278,16 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
             frozen_at="2026-09-20 12:00:00",
             frozen_reason="network_error",
         )
+        period_start = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+        period_end = period_start + timedelta(days=30)
         agent_db.update_service(
             1,
             {
                 "usage_current": 0,
                 "usage_limit": 30,
                 "days_left": 30,
-                "start_date": "2026-09-21 00:00:00",
-                "end_date": "2026-10-21 00:00:00",
+                "start_date": period_start.strftime("%Y-%m-%d %H:%M:%S"),
+                "end_date": period_end.strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
         agent_db.reset_service_nodes_on_renew(
@@ -335,7 +338,7 @@ class AgentFrozenNodeAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(float(patch_payload["usage_limit_GB"]), 30.0)
         self.assertEqual(int(patch_payload["package_days"]), 30)
         self.assertEqual(float(patch_payload["current_usage_GB"]), 0.0)
-        self.assertEqual(patch_payload["start_date"], "2026-09-21")
+        self.assertEqual(patch_payload["start_date"], period_start.strftime("%Y-%m-%d"))
 
         nodes = {int(n["server_id"]): n for n in agent_db.get_service_nodes(1)}
         self.assertEqual(int(nodes[2]["frozen"]), 0)
