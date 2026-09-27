@@ -77,6 +77,10 @@ class AgentMultiPanelOnlineStatusTests(unittest.IsolatedAsyncioTestCase):
             }),
         ), patch.object(
             hiddify_api,
+            "refresh_user_usage_snapshot",
+            new=AsyncMock(return_value={"status": "success", "comments": []}),
+        ), patch.object(
+            hiddify_api,
             "list_users",
             new=AsyncMock(return_value=[{
                 "uuid": "shared-uuid",
@@ -124,6 +128,10 @@ class AgentMultiPanelOnlineStatusTests(unittest.IsolatedAsyncioTestCase):
             hiddify_api,
             "get_user_by_uuid",
             new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            hiddify_api,
+            "refresh_user_usage_snapshot",
+            new=AsyncMock(return_value={"status": "success", "comments": []}),
         ), patch.object(
             hiddify_api,
             "list_users",
