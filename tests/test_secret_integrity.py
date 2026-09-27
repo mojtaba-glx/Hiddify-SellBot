@@ -427,7 +427,7 @@ class _StubHelper:
                   "MessageHandler", "CallbackQueryHandler"):
             setattr(ext, n, _Any)
         ext.filters = types.SimpleNamespace(
-            ALL=_Any(), TEXT=_Any(), PHOTO=_Any(), COMMAND=_Any(),
+            ALL=_Any(), TEXT=_Any(), PHOTO=_Any(), VIDEO=_Any(), COMMAND=_Any(),
             Regex=lambda pattern, **kw: _Any(),
         )
         req = types.ModuleType("telegram.request")
