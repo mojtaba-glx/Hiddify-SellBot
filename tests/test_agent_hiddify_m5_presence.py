@@ -60,17 +60,17 @@ class AgentHiddifyPresenceTests(unittest.IsolatedAsyncioTestCase):
         ):
             return await subscriptions._panel_user_status(self.service)
 
-    async def test_two_minute_window_matches_hiddify_user_ui(self):
-        self.assertEqual(subscriptions._HIDDIFY_ONLINE_WINDOW_SECONDS, 120)
-        status = await self._status_for_age(timedelta(seconds=90))
+    async def test_five_minute_window_matches_hiddify_m5_metric(self):
+        self.assertEqual(subscriptions._HIDDIFY_ONLINE_WINDOW_SECONDS, 5 * 60)
+        status = await self._status_for_age(timedelta(minutes=3))
         self.assertEqual(status, "online")
 
-    async def test_three_minutes_without_activity_is_offline(self):
-        status = await self._status_for_age(timedelta(minutes=3))
+    async def test_six_minutes_without_activity_is_offline(self):
+        status = await self._status_for_age(timedelta(minutes=6))
         self.assertEqual(status, "offline")
 
     async def test_live_usage_snapshot_overrides_stale_last_online(self):
-        status = await self._status_for_age(timedelta(minutes=3), active_snapshot=True)
+        status = await self._status_for_age(timedelta(minutes=6), active_snapshot=True)
         self.assertEqual(status, "online")
 
 
