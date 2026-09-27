@@ -47,7 +47,7 @@ class UserBotXnetConfigDeliveryTests(unittest.TestCase):
 
         self.assertEqual(
             url,
-            "https://xnet.speedll.ir/api/v1/sub/user-uuid",
+            "https://xnet.speedll.ir:2096/sub/user-uuid",
         )
         self.assertNotIn("/all.txt", url)
 
@@ -55,6 +55,9 @@ class UserBotXnetConfigDeliveryTests(unittest.TestCase):
         ns = _load_functions("_is_native_subscription_url")
         is_native = ns["_is_native_subscription_url"]
 
+        self.assertTrue(
+            is_native("https://xnet.speedll.ir:2096/sub/user-uuid")
+        )
         self.assertTrue(
             is_native("https://xnet.speedll.ir/api/v1/sub/user-uuid")
         )
@@ -89,7 +92,7 @@ class UserBotXnetConfigDeliveryTests(unittest.TestCase):
             SOURCE,
         )
         self.assertIn(
-            "if _is_native_subscription_url(fallback_base)",
+            "_service_has_native_subscription_panel(service)",
             SOURCE,
         )
         self.assertIn(
