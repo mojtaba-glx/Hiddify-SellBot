@@ -1148,6 +1148,66 @@ async def _show_customer_profile(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning("custpay profile send failed user=%s: %s", user_tg_id, edit_err)
 
 
+async def _report_customer_purchase_to_admin(
+    *,
+    agent_id: int,
+    user_tg_id: int,
+    customer: dict,
+    svc: dict,
+    server: dict,
+    targets: list,
+    created_nodes: list,
+    order: dict,
+) -> None:
+    """Report a completed CustomerBot purchase to the central admin/event channel."""
+    try:
+        from Shared.admin_reports import notify_admin_delivery_report
+
+        customer_name = (
+            str((customer or {}).get("full_name") or "").strip()
+            or str((customer or {}).get("username") or "").strip()
+            or str(user_tg_id)
+        )
+        created_server_ids = {
+            int(item.get("server_id") or 0)
+            for item in (created_nodes or [])
+            if int(item.get("server_id") or 0) > 0
+        }
+        pending_servers = [
+            str(item.get("title") or f"سرور #{item.get('id')}")
+            for item in (targets or [])
+            if int(item.get("id") or 0) not in created_server_ids
+        ]
+        amount = int(
+            (order or {}).get("amount")
+            or (order or {}).get("price")
+            or (svc or {}).get("sale_price")
+            or 0
+        )
+
+        await notify_admin_delivery_report(
+            action_title="خرید سرویس مشتری",
+            agent=agent_db.get_agent_by_id(agent_id),
+            customer_name=customer_name,
+            service_name=str((svc or {}).get("name") or ""),
+            server_title=str((server or {}).get("title") or ""),
+            volume_gb=float((order or {}).get("volume_gb") or (svc or {}).get("usage_limit") or 0),
+            days=int((order or {}).get("days") or (svc or {}).get("days_left") or 0),
+            amount=amount,
+            status="partial" if pending_servers else "success",
+            pending_servers=pending_servers or None,
+            sync_primary_server_id=int((server or {}).get("id") or 0) if pending_servers else 0,
+        )
+    except Exception as report_error:
+        logger.warning(
+            "Customer purchase completed but admin report failed agent=%s user=%s service=%s: %s",
+            agent_id,
+            user_tg_id,
+            (svc or {}).get("id"),
+            report_error,
+        )
+
+
 async def _create_subscription_from_order(
     context: ContextTypes.DEFAULT_TYPE,
     agent_id: int,
@@ -1287,6 +1347,21 @@ async def _create_subscription_from_order(
                     "Service created but node mapping failed (service=%s server=%s): %s",
                     svc.get("id"), item.get("server_id"), mapping_error,
                 )
+
+    # Central admin/event-channel report for every successful CustomerBot
+    # purchase. Both manual approval and SMS auto-approval use this function,
+    # so keeping the report here prevents one payment path from silently
+    # skipping the admin notification.
+    await _report_customer_purchase_to_admin(
+        agent_id=agent_id,
+        user_tg_id=user_tg_id,
+        customer=shared_cust or cust or {},
+        svc=svc,
+        server=server,
+        targets=targets,
+        created_nodes=created_nodes,
+        order=order,
+    )
 
     # Notify customer
     notify = (
