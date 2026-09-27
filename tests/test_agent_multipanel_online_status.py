@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -53,6 +54,94 @@ class AgentMultiPanelOnlineStatusTests(unittest.IsolatedAsyncioTestCase):
             status = await subscriptions._panel_user_status(self.service)
 
         self.assertEqual(status, "online")
+
+    async def test_hiddify_list_presence_overrides_stale_direct_last_online(self):
+        from datetime import datetime, timezone
+
+        targets = [(self.primary, "shared-uuid", "")]
+        fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        subscriptions._HIDDIFY_PRESENCE_CACHE.clear()
+        subscriptions._HIDDIFY_PRESENCE_TASKS.clear()
+
+        with patch(
+            "Shared.sub_links.get_service_panel_targets",
+            return_value=targets,
+        ), patch.object(
+            hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value={
+                "uuid": "shared-uuid",
+                "is_active": True,
+                "last_online": "2020-01-01T00:00:00Z",
+            }),
+        ), patch.object(
+            hiddify_api,
+            "list_users",
+            new=AsyncMock(return_value=[{
+                "uuid": "shared-uuid",
+                "is_active": True,
+                "last_online": fresh,
+            }]),
+        ) as list_users, patch.object(
+            subscriptions.agent_db,
+            "mark_service_seen",
+        ):
+            status = await subscriptions._panel_user_status(self.service)
+
+        self.assertEqual(status, "online")
+        list_users.assert_awaited_once()
+
+    async def test_hiddify_presence_snapshot_is_shared_between_service_checks(self):
+        from datetime import datetime, timezone
+
+        service2 = dict(self.service)
+        service2["id"] = 502
+        service2["panel_user_uuid"] = "second-uuid"
+        targets_by_uuid = {
+            "shared-uuid": [(self.primary, "shared-uuid", "")],
+            "second-uuid": [(self.primary, "second-uuid", "")],
+        }
+        fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        subscriptions._HIDDIFY_PRESENCE_CACHE.clear()
+        subscriptions._HIDDIFY_PRESENCE_TASKS.clear()
+
+        def target_side_effect(svc):
+            return targets_by_uuid[str(svc["panel_user_uuid"])]
+
+        async def get_user(server, uuid):
+            return {
+                "uuid": uuid,
+                "is_active": True,
+                "last_online": "2020-01-01T00:00:00Z",
+            }
+
+        with patch(
+            "Shared.sub_links.get_service_panel_targets",
+            side_effect=target_side_effect,
+        ), patch.object(
+            hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            hiddify_api,
+            "list_users",
+            new=AsyncMock(return_value=[
+                {"uuid": "shared-uuid", "is_active": True, "last_online": fresh},
+                {"uuid": "second-uuid", "is_active": True, "last_online": fresh},
+            ]),
+        ) as list_users, patch.object(
+            subscriptions.agent_db,
+            "mark_service_seen",
+        ):
+            statuses = await asyncio.gather(
+                subscriptions._panel_user_status(self.service),
+                subscriptions._panel_user_status(service2),
+            )
+
+        self.assertEqual(statuses, ["online", "online"])
+        list_users.assert_awaited_once()
 
     async def test_all_reachable_active_targets_offline_stays_offline(self):
         targets = [
