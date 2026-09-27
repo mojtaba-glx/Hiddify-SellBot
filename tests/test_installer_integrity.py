@@ -542,6 +542,27 @@ class ProductionFailurePropagationTests(unittest.TestCase):
         self.assertIn("return 1", body)
 
 
+class StopVerificationSafetyTests(unittest.TestCase):
+    def _func(self, name: str) -> str:
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(rf"{re.escape(name)}\(\) \{{.*?\n\}}", src, re.S)
+        self.assertIsNotNone(match)
+        return match.group(0)
+
+    def test_systemd_stop_is_verified(self):
+        body = self._func("stop_bots")
+        self.assertIn('if ! systemctl stop "$unit_name"; then', body)
+        self.assertIn('systemctl is-active --quiet "$unit_name"', body)
+        self.assertIn("stop_failures=$((stop_failures + 1))", body)
+        self.assertIn("return 1", body)
+
+    def test_nohup_stop_checks_for_surviving_process(self):
+        body = self._func("stop_single_bot")
+        self.assertIn('pgrep -f "$main_py"', body)
+        self.assertIn("process is still running after stop attempts", body)
+        self.assertIn("return 1", body)
+
+
 class InstallerSyntaxTests(unittest.TestCase):
     def test_14_bash_n_install_sh(self):
         proc = subprocess.run(["bash", "-n", str(PROJECT_ROOT / "install.sh")],
