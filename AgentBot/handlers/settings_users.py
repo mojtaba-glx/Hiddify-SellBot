@@ -166,13 +166,42 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not services:
             text += "\n\n❌ سرویسی برای نمایش این کاربر یافت نشد."
         else:
+            # وضعیت دکمه بر اساس وضعیت واقعی سرویس است، نه نوع سرویس:
+            # 🟡 فعال ولی هنوز مصرفی ثبت نشده | 🟢 فعال و دارای مصرف | 🔴 غیرفعال/منقضی
+            # تست رایگان با 🔥 جداگانه مشخص می‌شود تا با وضعیت اشتباه نشود.
+            current_row = []
             for s in services:
-                name = s.get("name") or f"Service #{s['id']}"
-                if int(s.get("is_active", 0) or 0) == 1:
-                    emoji = "🟡" if int(s.get("is_trial", 0) or 0) == 1 else "🔵"
+                name = str(s.get("name") or f"Service #{s['id']}").strip()
+                is_active = int(s.get("is_active", 0) or 0) == 1
+                try:
+                    usage_current = float(s.get("usage_current") or 0)
+                except (TypeError, ValueError):
+                    usage_current = 0.0
+
+                if not is_active:
+                    status_emoji = "🔴"
+                elif usage_current > 0:
+                    status_emoji = "🟢"
                 else:
-                    emoji = "🔴"
-                rows.append([IButton(f"{emoji} |{name}", callback_data=f"agbot:subs:detail:{s['id']}")])
+                    status_emoji = "🟡"
+
+                trial_mark = "🔥" if int(s.get("is_trial", 0) or 0) == 1 else ""
+                # سه دکمه در هر ردیف؛ نام‌های خیلی بلند کوتاه می‌شوند تا چیدمان به‌هم نریزد.
+                display_name = name if len(name) <= 18 else name[:15].rstrip() + "..."
+                label = f"{status_emoji}{trial_mark} {display_name}"
+                current_row.append(
+                    IButton(label, callback_data=f"agbot:subs:detail:{s['id']}")
+                )
+                if len(current_row) == 3:
+                    rows.append(current_row)
+                    current_row = []
+            if current_row:
+                rows.append(current_row)
+
+            text += (
+                "\n\n🟡 بدون مصرف  |  🟢 دارای مصرف  |  🔴 غیرفعال/منقضی"
+                "\n🔥 = تست رایگان"
+            )
         rows.append([IButton("بازگشت🔙", callback_data=f"agbot:set:users:detail:{customer_id}")])
         await query.edit_message_text(
             text,
