@@ -1,5 +1,33 @@
 # Changelog
 
+## Hiddify-SellBot v6.0.4 — Stable / Production Hardening
+
+### Multi-Panel / X-Net
+- اصلاح وضعیت آنلاین AgentBot برای بررسی سرور اصلی و تمام نودهای سرویس؛ آنلاین بودن هر target واقعی باعث نمایش آنلاین سرویس می‌شود
+- حفظ سرور اصلی به‌عنوان مرجع authoritative برای وضعیت تمدید و انقضا
+- الزام وجود و موفقیت primary panel در تمدید پولی UserBot و CustomerBot؛ جلوگیری از local-only/node-only renewal
+- اصلاح consistency UUID در child panelها و جلوگیری از پذیرش UUID قدیمی/متعلق به identity دیگر هنگام برگشت UUID متفاوت از create
+- اصلاح تشخیص Public Subscription فعلی X-Net و جلوگیری از افزودن اشتباه `/all.txt`
+- اصلاح refresh احراز هویت در دانلود باینری/Backup X-Net پس از رد API Token و JWT کش‌شده
+
+### UserBot / CustomerBot / AgentBot
+- یکسان‌سازی تحویل لینک و QR تست رایگان UserBot با مسیر خرید/تمدید و تنظیمات AdminBot
+- rollback کامل‌تر ساخت تست رایگان UserBot در خطای ثبت DB
+- اتمیک‌تر شدن تست رایگان CustomerBot؛ شکست ثبت eligibility یا mapping باعث پاک‌سازی سرویس محلی و کاربر پنل می‌شود
+- rollback امن خرید جدید UserBot پس از خطای commit؛ refund کیف پول فقط بعد از تأیید حذف/غیرفعال شدن کاربران ساخته‌شده
+- عدم refund کورکورانه تمدید در خطای ثبت نهایی پس از تغییر موفق پنل
+- نمایش عنوان فعلی سرور در پروفایل‌ها و گزارش‌های سرویس‌های قدیمی و sync عنوان هنگام تمدید
+- حذف پرچم و پیشوند «لوکیشن» خودکار از عنوان سرورها
+
+### Installer / Production Safety
+- ایجاد Snapshot اجباری قبل از Update/Force Update و توقف عملیات در صورت شکست Backup
+- توقف و راستی‌آزمایی واقعی AdminBot/UserBot/AgentBot/CustomerBot پیش از migration
+- اجرای migration تمام دیتابیس‌های UserBot، AgentBot، CustomerBot و Shared/Agency به‌صورت سریالی در زمان توقف workerها
+- تأیید واقعی startup هر systemd unit و failure صریح در صورت بالا نیامدن ربات
+- propagation صریح خطاهای Git، apt، virtualenv، pip و migration؛ حذف success کاذب updater
+- اضافه‌شدن GitHub Actions production-safety روی Python 3.10 و 3.12
+- عبور موفق **502 تست** در هر دو نسخه Python و عبور `bash -n install.sh`
+
 ## Hiddify-SellBot v6.0.3 — Bugfix
 
 - اصلاح وضعیت آخرین اتصال در AgentBot برای سرویس‌هایی که هنوز اولین اتصال را نداشته‌اند
