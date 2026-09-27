@@ -2579,21 +2579,24 @@ async def _create_service_users_on_targets(
     return created_nodes[0]["created"], created_nodes
 
 
-async def _deactivate_created_users(created_nodes: list[dict]) -> None:
+async def _deactivate_created_users(created_nodes: list[dict]) -> bool:
     """Rollback panel users created by an operation that did not commit locally.
 
-    Prefer deleting the just-created identity so retries cannot leave ghost
-    Hiddify/X-UI/X-Net users. If a panel cannot delete, disable it as a safe
-    fallback.
+    Returns True only when every valid created target was deleted or at least
+    disabled. Callers may safely refund money only after this returns True.
     """
+    all_safe = True
     for item in created_nodes:
         sid = int(item.get("server_id") or 0)
         uuid = str(item.get("panel_user_uuid") or "").strip()
         marzban_un = str(item.get("marzban_username") or "").strip()
         if sid <= 0 or not uuid:
+            all_safe = False
             continue
         server = database.get_server_by_id(sid)
         if not server:
+            all_safe = False
+            logger.warning("Rollback target server missing sid=%s uuid=%s", sid, uuid)
             continue
         try:
             await multi_panel.delete_user(
@@ -2616,12 +2619,14 @@ async def _deactivate_created_users(created_nodes: list[dict]) -> None:
                 marzban_username=marzban_un,
             )
         except Exception as disable_error:
+            all_safe = False
             logger.warning(
                 "Rollback disable also failed for sid=%s uuid=%s: %s",
                 sid,
                 uuid,
                 disable_error,
             )
+    return all_safe
 
 
 def _get_service_targets_for_renew(service: dict) -> list[tuple[dict, str]]:
@@ -5729,9 +5734,56 @@ async def _process_wallet_purchase(
                     )
     except Exception as e:
         logger.exception("Failed to persist wallet purchase for telegram_id=%s", user_id)
+
+        if not is_renew_flow:
+            # New purchases are safely reversible: remove/disable every just-
+            # created panel identity first, then refund a wallet debit only if
+            # no usable orphan subscription can remain.
+            rollback_ok = await _deactivate_created_users(created_nodes) if created_nodes else False
+            refunded = False
+            if wallet_charged and rollback_ok:
+                try:
+                    userbot_db.increase_user_wallet(internal_user_id, amount)
+                    refunded = True
+                except Exception:
+                    logger.exception(
+                        "Refund after purchase persistence failure failed (user=%s)",
+                        internal_user_id,
+                    )
+
+            if skip_wallet_charge and rollback_ok:
+                # Card/SMS payment stays approved and the direct-delivery loop
+                # can retry fulfillment without creating a duplicate panel user.
+                msg = (
+                    "⚠️ ثبت نهایی خرید انجام نشد و سرویس ناقص برگشت داده شد. "
+                    "تحویل پرداخت دوباره به‌صورت خودکار تلاش می‌شود."
+                )
+            elif refunded:
+                msg = (
+                    "⚠️ ثبت نهایی خرید انجام نشد؛ سرویس ناقص حذف و مبلغ به کیف پول شما برگشت داده شد. "
+                    "لطفاً دوباره تلاش کنید."
+                )
+            else:
+                msg = (
+                    "⚠️ ثبت نهایی خرید انجام نشد و rollback کامل تأیید نشد. "
+                    "برای جلوگیری از مغایرت مالی، وضعیت برای بررسی پشتیبانی نگه داشته شد."
+                )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=msg,
+                reply_markup=_main_menu_keyboard(),
+            )
+            return False
+
+        # Renewal already changed the authoritative panel. Do not refund or
+        # blindly undo it here; that could grant a free renewal. Keep it for
+        # recovery/manual reconciliation.
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"⚠️ سرویس روی سرور ساخته شد اما ثبت نهایی خرید خطا داد: {e}\nمبلغ از کیف پول شما کسر شده و تا رفع مشکل نزد پشتیبانی نگاهداری می‌شود. لطفاً به پشتیبانی پیام دهید.",
+            text=(
+                "⚠️ تمدید روی پنل انجام شد اما ثبت نهایی در ربات خطا داد. "
+                "برای جلوگیری از تمدید رایگان یا دوباره‌کاری، وضعیت برای بررسی ایمن نگه داشته شد."
+            ),
             reply_markup=_main_menu_keyboard(),
         )
         return False
