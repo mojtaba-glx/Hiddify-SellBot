@@ -2363,6 +2363,15 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
 
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")])
 
+    # گزارش سراسری برای رکوردهایی که ممکن است به سرور حذف‌شده تعلق داشته باشند.
+    # این مسیر باعث می‌شود orphan/frozenهای سروری که دیگر در لیست لوکیشن‌ها نیست
+    # همچنان قابل مشاهده و پاک‌سازی باشند.
+    keyboard.append([
+        InlineKeyboardButton(
+            "❄️ یخ‌زده‌ها و سرورهای حذف‌شده",
+            callback_data="servers:frozen:1",
+        )
+    ])
     keyboard.append([InlineKeyboardButton("افزودن سرور➕", callback_data="servers:add")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -2772,14 +2781,16 @@ async def send_frozen_nodes_report(
                 f"   💾 مصرف محفوظ: <b>{_frozen_fmt_usage(usage)}</b>",
                 "",
             ])
-            detail_server_id = int(server_id or sample.get("server_id") or 0)
-            if detail_server_id > 0:
-                button_rows.append([
-                    InlineKeyboardButton(
-                        f"👤 {service_name[:28]}",
-                        callback_data=f"server:{detail_server_id}:fzsvc:{source}:{int(group['service_id'])}:{page}",
-                    )
-                ])
+            # در گزارش سراسری از context=0 استفاده می‌کنیم تا حتی اگر
+            # server_id رکورد قبلاً از تنظیمات حذف شده، دکمه جزئیات و بازگشت
+            # همچنان به گزارش سراسری معتبر برگردند.
+            detail_server_id = int(server_id or 0)
+            button_rows.append([
+                InlineKeyboardButton(
+                    f"👤 {service_name[:28]}",
+                    callback_data=f"server:{detail_server_id}:fzsvc:{source}:{int(group['service_id'])}:{page}",
+                )
+            ])
 
     nav: List[InlineKeyboardButton] = []
     cb_prefix = f"server:{server_id}:frozen" if server_id else "servers:frozen"
