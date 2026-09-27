@@ -1450,10 +1450,10 @@ async def refresh_user_usage(server: Dict[str, Any]) -> bool:
     if _is_xnet_server(server) or _is_xui_server(server):
         return False
 
-    base = _get_panel_url(server)
-    proxy = _get_admin_proxy(server)
-    url = f"{base}/{proxy}/api/v2/admin/update_user_usage/"
     try:
+        base = _get_panel_url(server)
+        proxy = _get_admin_proxy(server)
+        url = f"{base}/{proxy}/api/v2/admin/update_user_usage/"
         await _request("GET", url, server)
         return True
     except Exception as exc:
