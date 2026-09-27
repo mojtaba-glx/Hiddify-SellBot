@@ -198,11 +198,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if current_row:
                 rows.append(current_row)
 
-            text += (
-                "\n\n<b>راهنمای وضعیت</b>"
-                "\n🟡 بدون مصرف     🟢 دارای مصرف"
-                "\n🔴 غیرفعال/منقضی     🔥 تست رایگان"
-            )
         rows.append([IButton("بازگشت🔙", callback_data=f"agbot:set:users:detail:{customer_id}")])
         await query.edit_message_text(
             text,
