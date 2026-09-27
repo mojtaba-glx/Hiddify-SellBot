@@ -29,11 +29,12 @@ class AdminServerTitleUiTests(unittest.TestCase):
     def test_server_formatter_does_not_invent_location_or_flag(self):
         src = _function_source("_format_server_location_title")
         self.assertNotIn("🇹🇷", src)
-        self.assertNotIn("_location", src.lower())
+        self.assertNotIn("لوکیشن", src)
+        self.assertNotIn("🇹🇷", src)
         self.assertIn('str(title or "")', src)
 
     def test_status_list_does_not_auto_add_country_flag(self):
-        src = _function_source("send_server_status")
+        src = _function_source("send_status_servers_list")
         self.assertNotIn('if "ترکیه" in title', src)
         self.assertNotIn('🇹🇷', src)
         self.assertNotIn('f"لوکیشن', src)
