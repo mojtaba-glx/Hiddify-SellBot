@@ -225,7 +225,7 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 
-def _service_detail_text(svc, last_online: str = "هرگز") -> str:
+def _service_detail_text(svc, last_online: str = "هنوز متصل نشده") -> str:
     """متن کارت جزئیات سرویس (بدون قیمت و بدون UUID)."""
     raw_name = str(svc.get('name') or 'سرویس').strip()
     name = _escape(raw_name)
@@ -236,7 +236,7 @@ def _service_detail_text(svc, last_online: str = "هرگز") -> str:
     used = _fmt_gb(svc.get('usage_current', 0))
     code = agent_db._service_code_from_comment(svc.get("comment") or "")
     note = agent_db._service_note_from_comment(svc.get("comment") or "") or '—'
-    online_line = _escape(last_online or 'هرگز')
+    online_line = _escape(last_online or 'هنوز متصل نشده')
     return (
         f"\U0001f464 کاربر: {name_html}\n"
         f"❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
@@ -262,7 +262,7 @@ def _service_created_text(svc) -> str:
     )
 
 
-def _service_detail_card_text(svc, note: str = "", last_online: str = "هرگز") -> str:
+def _service_detail_card_text(svc, note: str = "", last_online: str = "هنوز متصل نشده") -> str:
     """متن جزئیات کامل اکانت — پیام دوم (بالای دکمه‌ها)."""
     name = _escape(svc.get('name') or 'سرویس')
     server = _escape(svc.get('server_title') or '—')
@@ -272,7 +272,7 @@ def _service_detail_card_text(svc, note: str = "", last_online: str = "هرگز"
     wholesale = _fmt_toman(svc.get('wholesale_price') or 0)
     sale = _fmt_toman(svc.get('sale_price') or 0)
     note_line = _escape(note or '—')
-    online_line = _escape(last_online or 'هرگز')
+    online_line = _escape(last_online or 'هنوز متصل نشده')
     return (
         f"\U0001f464 کاربر: <b>{name}</b>\n"
         f"❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖\n"
@@ -736,12 +736,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not svc:
             await query.answer("سرویس پیدا نشد.", show_alert=True)
             return
-        last_online = "هرگز"
+        last_online = "هنوز متصل نشده"
         try:
             from AgentBot.services.subscription_service import get_service_last_online
             last_online = await get_service_last_online(svc)
         except Exception:
-            last_online = "هرگز"
+            last_online = "هنوز متصل نشده"
         is_active = bool(int(svc.get("is_active", 0) or 0))
         await query.edit_message_text(
             _service_detail_text(svc, last_online),
@@ -1390,7 +1390,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 from AgentBot.services.subscription_service import get_service_last_online
                 last_online = await get_service_last_online(svc)
             except Exception:
-                last_online = "هرگز"
+                last_online = "هنوز متصل نشده"
             is_active = bool(int(svc.get("is_active", 0) or 0))
             try:
                 await query.edit_message_text(
@@ -1476,7 +1476,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             from AgentBot.services.subscription_service import get_service_last_online
             _lo = await get_service_last_online(svc)
         except Exception:
-            _lo = "هرگز"
+            _lo = "هنوز متصل نشده"
         is_active = bool(int(svc.get("is_active", 0) or 0))
         detail = f"✅ <b>اشتراک یافت شد</b>\n\n" + _service_detail_text(svc, _lo)
         await update.message.reply_text(detail, reply_markup=service_detail_keyboard(int(svc["id"]), is_active), parse_mode="HTML")
@@ -1502,7 +1502,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                         from AgentBot.services.subscription_service import get_service_last_online
                         last_online = await get_service_last_online(svc_cancel)
                     except Exception:
-                        last_online = "هرگز"
+                        last_online = "هنوز متصل نشده"
                     is_active = bool(int(svc_cancel.get("is_active", 0) or 0))
                     await update.message.reply_text(
                         _service_detail_text(svc_cancel, last_online),
@@ -1552,7 +1552,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 from AgentBot.services.subscription_service import get_service_last_online
                 last_online = await get_service_last_online(refreshed)
             except Exception:
-                last_online = "هرگز"
+                last_online = "هنوز متصل نشده"
             is_active = bool(int(refreshed.get("is_active", 0) or 0))
             await update.message.reply_text(
                 _service_detail_text(refreshed, last_online),
@@ -1658,13 +1658,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             import random
             note = f"{random.randint(0, 9999999):07d}"
 
-        # آخرین اتصال: از پنل (بلافاصله بعد از ساخت «هرگز» است)
-        last_online = "هرگز"
+        # آخرین اتصال: از پنل (بلافاصله بعد از ساخت «هنوز متصل نشده» است)
+        last_online = "هنوز متصل نشده"
         try:
             from AgentBot.services.subscription_service import get_service_last_online
             last_online = await get_service_last_online(svc)
         except Exception:
-            last_online = "هرگز"
+            last_online = "هنوز متصل نشده"
         is_active = bool(int(svc.get("is_active", 0) or 0))
 
         # پیام دوم: جزئیات اکانت + دکمه‌ها
