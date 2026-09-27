@@ -40,7 +40,7 @@ class SubscriptionTimeFormattingTests(unittest.TestCase):
 
 
 class SubscriptionRuntimeRefreshTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runtime_refresh_uses_panel_expiry_and_latest_node_connection(self):
+    async def test_runtime_refresh_uses_panel_expiry_and_primary_connection_time(self):
         now = datetime.now(timezone.utc)
         primary = {"id": 10, "title": "primary"}
         node = {"id": 11, "title": "node"}
@@ -86,7 +86,9 @@ class SubscriptionRuntimeRefreshTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(subscription_service.agent_db, "update_service", return_value=True) as update:
             last_online = await subscription_service.get_service_last_online(service)
 
-        self.assertTrue(last_online.startswith("3 ساعت و 25 دقیقه پیش"), last_online)
+        # Primary Hiddify is authoritative for the service card. A fresher
+        # offline child timestamp must not make the whole service look newer.
+        self.assertTrue(last_online.startswith("2 روز و 4 ساعت پیش"), last_online)
         self.assertAlmostEqual(service["usage_current"], 4.75)
         self.assertIn("9 روز و 6 ساعت دیگر", subscription_service.format_service_expiry(service))
         update.assert_called_once()
