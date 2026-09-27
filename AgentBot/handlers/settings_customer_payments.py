@@ -1454,12 +1454,20 @@ async def _renew_subscription_from_order(
 
     # ── پنل‌ها ── (payload مطابق مسیر تمدید نماینده در AgentBot.services.subscription_service)
     targets = get_service_panel_targets(svc)
+    if not targets:
+        # A paid renewal must never become local-only. The caller refunds the
+        # wholesale debit when this fails before the authoritative panel patch.
+        raise RuntimeError("panel_targets_not_found")
+
+    primary_sid = int(svc.get("server_id") or 0)
+    primary_target = next(
+        (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
+        None,
+    )
+    if primary_target is None:
+        raise RuntimeError("primary_panel_target_not_found")
+
     if targets:
-        primary_sid = int(svc.get("server_id") or 0)
-        primary_target = next(
-            (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
-            targets[0],
-        )
         patch_data = {
             "usage_limit_GB": new_usage_limit,
             "package_days": int(new_days_left),
