@@ -66,7 +66,7 @@ class AgentPrimaryLastOnlineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_offline_card_uses_primary_time_not_fresher_xnet_history(self):
         now = datetime.now(timezone.utc)
-        primary_last = (now - timedelta(minutes=3)).isoformat()
+        primary_last = (now - timedelta(minutes=6)).isoformat()
         child_last = (now - timedelta(seconds=5)).isoformat()
 
         async def get_user(server, uuid):
@@ -110,13 +110,13 @@ class AgentPrimaryLastOnlineTests(unittest.IsolatedAsyncioTestCase):
         ):
             label = await subscription_service.get_service_last_online(dict(self.svc))
 
-        self.assertIn("3 دقیقه", label)
+        self.assertIn("6 دقیقه", label)
         self.assertNotIn("چند ثانیه", label)
         self.assertNotEqual(label, "آنلاین")
 
-    async def test_recent_primary_hiddify_activity_is_online(self):
+    async def test_hiddify_m5_primary_activity_is_online(self):
         now = datetime.now(timezone.utc)
-        primary_last = (now - timedelta(seconds=10)).isoformat()
+        primary_last = (now - timedelta(minutes=3)).isoformat()
         child_last = (now - timedelta(minutes=2)).isoformat()
 
         async def get_user(server, uuid):
