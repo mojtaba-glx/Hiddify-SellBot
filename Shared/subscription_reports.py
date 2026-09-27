@@ -1,7 +1,7 @@
 import logging
 from html import escape
 
-from Shared import agent_db
+from Shared import agent_db, database
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,29 @@ def _customer_profile_button_title(customer: dict, user_tg_id: int) -> str:
     return f"👤 {label}"
 
 
+def _live_server_title(svc: dict, default: str = "—") -> str:
+    stored = str((svc or {}).get("server_title") or "").strip()
+    try:
+        sid = int((svc or {}).get("server_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid > 0:
+        try:
+            srv = database.get_server_by_id(sid)
+        except Exception:
+            srv = None
+        if srv:
+            title = str(srv.get("title") or "").strip()
+            if title:
+                return title
+    return stored or default
+
+
 def build_subscription_report_text(action: str, svc: dict, amount: int) -> str:
     """متن گزارش ایجاد/تمدید اشتراک برای نماینده."""
     title = "\u06af\u0632\u0627\u0631\u0634 \u0627\u06cc\u062c\u0627\u062f \u0627\u0634\u062a\u0631\u0627\u06a9" if action == "create" else "\u06af\u0632\u0627\u0631\u0634 \u062a\u0645\u062f\u06cc\u062f \u0627\u0634\u062a\u0631\u0627\u06a9"
     name = escape(str(svc.get("name") or "\u0633\u0631\u0648\u06cc\u0633"))
-    server = escape(str(svc.get("server_title") or "\u2014"))
+    server = escape(_live_server_title(svc))
     gb = _report_volume(svc.get("usage_limit"))
     days = int(svc.get("days_left") or svc.get("days") or 0)
     code = agent_db._service_code_from_comment(svc.get("comment") or "") or str(svc.get("id") or "")
