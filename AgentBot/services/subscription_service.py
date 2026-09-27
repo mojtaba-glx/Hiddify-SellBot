@@ -1120,13 +1120,20 @@ def format_service_expiry(svc: Dict[str, Any], now: Optional[datetime] = None) -
 
 
 async def get_service_last_online(svc) -> str:
-    """وضعیت آخرین اتصال کاربر از پنل:
-    «آنلاین» اگر در حال استفاده است، «X پیش» اگر قبلاً وصل شده و
-    «هنوز متصل نشده» اگر هیچ اتصال واقعی ثبت نشده باشد."""
-    ONLINE_WINDOW = 15 * 60  # ثانیه
-    CLOCK_SKEW = 120
+    """وضعیت آخرین اتصال سرویس با primary-authoritative semantics.
+
+    - اگر هر target سیگنال live صریح داشته باشد: آنلاین
+    - اگر primary Hiddify اخیراً activity داشته باشد: آنلاین
+    - در حالت آفلاین، زمان primary مرجع است و timestamp نود آفلاین نباید
+      زمان سرویس اصلی را تازه‌تر جلوه دهد.
+    """
+    HIDDIFY_ONLINE_WINDOW = 90
+    CHILD_ONLINE_WINDOW = 90
+    CLOCK_SKEW = 30
+
     if not isinstance(svc, dict):
         return "نامشخص"
+
     targets = get_service_panel_targets(svc)
     if not targets:
         sid = int(svc.get("server_id") or 0)
@@ -1137,10 +1144,49 @@ async def get_service_last_online(svc) -> str:
     if not targets:
         return "نامشخص"
 
+    primary_id = int(svc.get("server_id") or 0)
+
     async def _fetch(target):
         server, uuid, _marzban_username = target
         try:
-            return target, await hiddify_api.get_user_by_uuid(server, uuid)
+            user = await hiddify_api.get_user_by_uuid(server, uuid)
+
+            # Hiddify's list endpoint has fresher presence information than the
+            # direct user endpoint on some panel versions. Refresh only the
+            # authoritative primary here; this is a single detail request, not
+            # a bulk list scan.
+            try:
+                is_plain_hiddify = (
+                    int((server or {}).get("id") or 0) == primary_id
+                    and not hiddify_api._is_xnet_server(server)
+                    and not hiddify_api._is_xui_server(server)
+                )
+            except Exception:
+                is_plain_hiddify = False
+
+            if is_plain_hiddify and isinstance(user, dict):
+                try:
+                    rows = await hiddify_api.list_users(server)
+                except Exception:
+                    rows = []
+                needle = str(uuid or "").strip().lower()
+                for row in rows or []:
+                    if not isinstance(row, dict):
+                        continue
+                    ids = {
+                        str(row.get("uuid") or "").strip().lower(),
+                        str(row.get("id") or "").strip().lower(),
+                    }
+                    if needle not in ids:
+                        continue
+                    direct_dt = _parse_panel_datetime(user.get("last_online"))
+                    list_dt = _parse_panel_datetime(row.get("last_online"))
+                    if list_dt and (direct_dt is None or list_dt >= direct_dt):
+                        user = dict(user)
+                        user["last_online"] = row.get("last_online")
+                    user["_source"] = "hiddify"
+                    break
+            return target, user
         except Exception as exc:
             logger.warning(
                 "Agent runtime refresh failed svc=%s server=%s: %s",
@@ -1151,15 +1197,24 @@ async def get_service_last_online(svc) -> str:
             return target, None
 
     fetched = await asyncio.gather(*[_fetch(target) for target in targets])
-    available = [(target, user) for target, user in fetched if isinstance(user, dict) and user]
+    available = [
+        (target, user)
+        for target, user in fetched
+        if isinstance(user, dict) and user
+    ]
     if not available:
         return "نامشخص"
 
-    primary_id = int(svc.get("server_id") or 0)
-    authoritative = next(
-        (user for (server, _uuid, _name), user in available if int((server or {}).get("id") or 0) == primary_id),
-        available[0][1],
+    authoritative_pair = next(
+        (
+            (target, user)
+            for target, user in available
+            if int((target[0] or {}).get("id") or 0) == primary_id
+        ),
+        None,
     )
+    authoritative = authoritative_pair[1] if authoritative_pair else available[0][1]
+
     now = datetime.now(timezone.utc)
     updates: Dict[str, Any] = {}
     usage_values = []
@@ -1175,21 +1230,34 @@ async def get_service_last_online(svc) -> str:
             updates["usage_limit"] = float(authoritative.get("usage_limit_GB") or 0)
     except (TypeError, ValueError):
         pass
+
     end = _panel_expiry_datetime(authoritative, now)
     if end is not None:
         remaining = (end - now).total_seconds()
-        updates["end_date"] = end.astimezone(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-        updates["days_left"] = math.ceil(remaining / 86400) if remaining >= 0 else math.floor(remaining / 86400)
+        updates["end_date"] = (
+            end.astimezone(timezone.utc)
+            .replace(tzinfo=None)
+            .strftime("%Y-%m-%d %H:%M:%S")
+        )
+        updates["days_left"] = (
+            math.ceil(remaining / 86400)
+            if remaining >= 0
+            else math.floor(remaining / 86400)
+        )
         svc["_panel_end_date"] = end.isoformat()
         svc["_panel_days_left"] = updates["days_left"]
+
     if "is_active" in authoritative:
         active_raw = authoritative.get("is_active")
         if active_raw is not None:
             if isinstance(active_raw, str):
-                active = active_raw.strip().lower() not in {"0", "false", "off", "inactive", "disabled"}
+                active = active_raw.strip().lower() not in {
+                    "0", "false", "off", "inactive", "disabled",
+                }
             else:
                 active = bool(active_raw)
             updates["is_active"] = 1 if active else 0
+
     if updates:
         svc.update(updates)
         try:
@@ -1197,44 +1265,79 @@ async def get_service_last_online(svc) -> str:
             if service_id > 0:
                 agent_db.update_service(service_id, updates)
         except Exception as exc:
-            logger.warning("Agent runtime cache update failed svc=%s: %s", svc.get("id"), type(exc).__name__)
+            logger.warning(
+                "Agent runtime cache update failed svc=%s: %s",
+                svc.get("id"),
+                type(exc).__name__,
+            )
 
-    # X-NET reports online/offline explicitly. Prefer that signal instead of
-    # treating a recent last_seen timestamp as online for 15 minutes.
-    explicit_online = any(
+    # True live signal from X-Net/X-UI wins immediately.
+    if any(
         str((user or {}).get("_user_list_status") or "").strip().lower() == "online"
         for _target, user in available
-    )
-    if explicit_online:
+    ):
         return "آنلاین"
 
+    # Primary is the authoritative last-connection clock for the service card.
+    primary_user = authoritative_pair[1] if authoritative_pair else None
+    primary_dt = (
+        _parse_panel_datetime(primary_user.get("last_online"))
+        if isinstance(primary_user, dict)
+        else None
+    )
+    primary_source = (
+        str(primary_user.get("_source") or "").strip().lower()
+        if isinstance(primary_user, dict)
+        else ""
+    )
+
+    if primary_dt is not None:
+        seconds = (now - primary_dt).total_seconds()
+        primary_forced = str(
+            (primary_user or {}).get("_user_list_status") or ""
+        ).strip().lower()
+
+        if primary_forced == "online":
+            return "آنلاین"
+        if primary_forced == "offline":
+            return _human_duration(seconds)
+
+        window = (
+            CHILD_ONLINE_WINDOW
+            if primary_source in {"xui", "xnet"}
+            else HIDDIFY_ONLINE_WINDOW
+        )
+        if -CLOCK_SKEW <= seconds <= window:
+            return "آنلاین"
+        return _human_duration(seconds)
+
+    # Only when the primary has no real last-online timestamp, fall back to
+    # child history. Explicitly-offline child timestamps are history only.
     latest_dt: Optional[datetime] = None
     latest_source = ""
-    explicit_xnet_offline = False
-    for _target, user in available:
+    explicit_child_offline = False
+    for target, user in available:
+        if authoritative_pair and target is authoritative_pair[0]:
+            continue
         source = str(user.get("_source") or "").strip().lower()
-        if (
-            source == "xnet"
-            and str(user.get("_user_list_status") or "").strip().lower() == "offline"
-        ):
-            explicit_xnet_offline = True
+        forced = str(user.get("_user_list_status") or "").strip().lower()
+        if forced == "offline":
+            explicit_child_offline = True
         candidate = _parse_panel_datetime(user.get("last_online"))
         if candidate is not None and (latest_dt is None or candidate > latest_dt):
             latest_dt = candidate
             latest_source = source
+
     if latest_dt is None:
-        # A fresh account commonly has zero traffic and no real last-seen
-        # timestamp. Do not turn panel placeholders into huge "days ago" values.
         has_usage = any(float(value or 0) > 0 for value in usage_values)
         if not has_usage:
             return "هنوز متصل نشده"
-        return "آفلاین (زمان نامشخص)" if explicit_xnet_offline else "زمان اتصال نامشخص"
+        return "آفلاین (زمان نامشخص)" if explicit_child_offline else "زمان اتصال نامشخص"
 
     seconds = (now - latest_dt).total_seconds()
-    if explicit_xnet_offline:
+    if explicit_child_offline:
         return _human_duration(seconds)
-
-    online_window = 90 if latest_source in {"xui", "xnet"} else ONLINE_WINDOW
-    if -CLOCK_SKEW <= seconds <= online_window:
+    window = CHILD_ONLINE_WINDOW if latest_source in {"xui", "xnet"} else HIDDIFY_ONLINE_WINDOW
+    if -CLOCK_SKEW <= seconds <= window:
         return "آنلاین"
     return _human_duration(seconds)
