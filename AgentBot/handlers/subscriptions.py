@@ -225,13 +225,31 @@ async def _send_direct_configs(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 
+def _resolve_live_server_title(svc: dict, default: str = "—") -> str:
+    stored = str((svc or {}).get("server_title") or "").strip()
+    try:
+        sid = int((svc or {}).get("server_id") or 0)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid > 0:
+        try:
+            srv = shared_db.get_server_by_id(sid)
+        except Exception:
+            srv = None
+        if srv:
+            title = str(srv.get("title") or "").strip()
+            if title:
+                return title
+    return stored or default
+
+
 def _service_detail_text(svc, last_online: str = "هنوز متصل نشده") -> str:
     """متن کارت جزئیات سرویس (بدون قیمت و بدون UUID)."""
     raw_name = str(svc.get('name') or 'سرویس').strip()
     name = _escape(raw_name)
     # AgentBot must not expose panel/subscriber URLs from the service name.
     name_html = f"<b>{name}</b>"
-    server = _escape(svc.get('server_title') or '—')
+    server = _escape(_resolve_live_server_title(svc))
     gb = _fmt_gb(svc.get('usage_limit', 0))
     used = _fmt_gb(svc.get('usage_current', 0))
     code = agent_db._service_code_from_comment(svc.get("comment") or "")
