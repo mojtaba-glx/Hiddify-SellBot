@@ -447,7 +447,8 @@ def _is_user_missing_error(exc: Exception) -> bool:
 _HIDDIFY_PRESENCE_CACHE: dict[int, tuple[float, dict[str, dict]]] = {}
 _HIDDIFY_PRESENCE_TASKS: dict[int, asyncio.Task] = {}
 _HIDDIFY_PRESENCE_TTL = 3.0
-_HIDDIFY_ONLINE_WINDOW_SECONDS = 120
+_HIDDIFY_ONLINE_WINDOW_SECONDS = 5 * 60
+_HIDDIFY_CLOCK_SKEW_SECONDS = 120
 
 
 def _plain_hiddify_server(server: dict) -> bool:
@@ -576,15 +577,16 @@ async def _merge_hiddify_live_presence(server: dict, user_uuid: str, direct_user
         merged["_user_list_status"] = "online"
         return merged
 
-    # Match Hiddify's own per-user UI semantics: Online when last_online is
-    # within roughly two minutes.
+    # Keep AgentBot aligned with Hiddify's own m5 online metric. Hiddify can
+    # update last_online a little late, so classify recent activity within
+    # five minutes as online.
     freshest = _panel_dt(merged.get("last_online"))
     if freshest is not None:
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         delta = (now_utc - freshest).total_seconds()
         merged["_user_list_status"] = (
             "online"
-            if -30 <= delta <= _HIDDIFY_ONLINE_WINDOW_SECONDS
+            if -_HIDDIFY_CLOCK_SKEW_SECONDS <= delta <= _HIDDIFY_ONLINE_WINDOW_SECONDS
             else "offline"
         )
     return merged
