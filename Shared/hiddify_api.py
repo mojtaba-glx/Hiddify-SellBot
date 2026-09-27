@@ -1439,6 +1439,32 @@ async def get_user_configs(
 
 # در Shared/hiddify_api.py جایگزین تابع قبلی شود
 
+async def refresh_user_usage(server: Dict[str, Any]) -> bool:
+    """Force Hiddify Manager to collect live usage/last_online from its drivers.
+
+    Hiddify's normal user API reads the database, while the panel's
+    /update_user_usage/ system action first pulls fresh counters from
+    Xray/Sing-box and updates user.last_online. This is best-effort because
+    older/custom panels or non-super-admin API keys may not expose the action.
+    """
+    if _is_xnet_server(server) or _is_xui_server(server):
+        return False
+
+    base = _get_panel_url(server)
+    proxy = _get_admin_proxy(server)
+    url = f"{base}/{proxy}/api/v2/admin/update_user_usage/"
+    try:
+        await _request("GET", url, server)
+        return True
+    except Exception as exc:
+        logger.debug(
+            "Hiddify live usage refresh unavailable server=%s: %s",
+            (server or {}).get("id"),
+            type(exc).__name__,
+        )
+        return False
+
+
 async def get_server_stats(server: Dict[str, Any]) -> Dict[str, Any]:
     """دریافت آمار سیستم (System Stats) و کاربران"""
     if _is_xnet_server(server):
