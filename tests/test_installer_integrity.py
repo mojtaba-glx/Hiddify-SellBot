@@ -450,6 +450,35 @@ class GitHygieneTests(unittest.TestCase):
         self.assertEqual(bad, [], f"runtime artifacts tracked in git: {bad}")
 
 
+class ProductionUpdateSafetyTests(unittest.TestCase):
+    def test_update_stops_bots_before_schema_migration(self):
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(r"update_all\(\) \{.*?\n\}", src, re.S)
+        self.assertIsNotNone(match)
+        body = match.group(0)
+        self.assertLess(body.index("stop_bots"), body.index("init_database"))
+
+    def test_force_update_stops_bots_before_schema_migration(self):
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(r"update_force_all\(\) \{.*?\n\}", src, re.S)
+        self.assertIsNotNone(match)
+        body = match.group(0)
+        self.assertLess(body.index("stop_bots"), body.index("init_database"))
+
+    def test_preflight_initializes_all_runtime_databases(self):
+        src = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        match = re.search(r"init_database\(\) \{.*?\n\}", src, re.S)
+        self.assertIsNotNone(match)
+        body = match.group(0)
+        for call in (
+            "userbot_db.init_db()",
+            "agent_db.init_db()",
+            "customer_db.init_db()",
+            "agentbot_db.init_db()",
+        ):
+            self.assertIn(call, body)
+
+
 class InstallerSyntaxTests(unittest.TestCase):
     def test_14_bash_n_install_sh(self):
         proc = subprocess.run(["bash", "-n", str(PROJECT_ROOT / "install.sh")],
