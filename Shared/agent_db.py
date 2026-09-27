@@ -2262,6 +2262,71 @@ def update_service(service_id: int, updates: Dict[str, Any]) -> bool:
     return True
 
 
+def refresh_service_server_titles(service_id: int) -> bool:
+    """Sync stored service/node titles from the current server configuration.
+
+    Existing server IDs are authoritative. If a server was removed completely,
+    its stored title is preserved as a historical fallback.
+    """
+    init_db()
+    sid = int(service_id or 0)
+    if sid <= 0:
+        return False
+    try:
+        from Shared import database as _shared_db
+    except Exception:
+        return False
+
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT server_id FROM agent_services WHERE id = ?",
+            (sid,),
+        ).fetchone()
+        if not row:
+            return False
+
+        changed = False
+        primary_id = int(row["server_id"] or 0)
+        if primary_id > 0:
+            srv = _shared_db.get_server_by_id(primary_id)
+            if srv:
+                title = str(srv.get("title") or "").strip()
+                if title:
+                    conn.execute(
+                        "UPDATE agent_services SET server_title = ?, updated_at = ? WHERE id = ?",
+                        (title, _now(), sid),
+                    )
+                    changed = True
+
+        node_rows = conn.execute(
+            "SELECT DISTINCT server_id FROM agent_service_nodes WHERE service_id = ?",
+            (sid,),
+        ).fetchall()
+        for node_row in node_rows:
+            node_sid = int(node_row["server_id"] or 0)
+            if node_sid <= 0:
+                continue
+            srv = _shared_db.get_server_by_id(node_sid)
+            if not srv:
+                continue
+            title = str(srv.get("title") or "").strip()
+            if not title:
+                continue
+            conn.execute(
+                "UPDATE agent_service_nodes SET server_title = ?, updated_at = ? "
+                "WHERE service_id = ? AND server_id = ?",
+                (title, _now(), sid, node_sid),
+            )
+            changed = True
+
+        if changed:
+            conn.commit()
+        return changed
+    finally:
+        conn.close()
+
+
 def renew_service(service_id: int, extra_days: int, extra_gb: float = 0) -> bool:
     """
     تمدید سرویس: اضافه کردن روز و حجم.
