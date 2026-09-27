@@ -2625,10 +2625,12 @@ async def _deactivate_created_users(created_nodes: list[dict]) -> None:
 
 
 def _get_service_targets_for_renew(service: dict) -> list[tuple[dict, str]]:
-    """
-    تارگت‌های تمدید سرویس:
-    - همه نودهای ثبت‌شده در service_nodes
-    - fallback: سرور اصلی + uuid کامنت
+    """Resolve renewal targets with the configured primary server first.
+
+    Saved node mappings are preferred. Legacy services may have only child
+    mappings, so the primary target is reconstructed from the UUID stored in
+    the service comment (or the shared node UUID). A paid renewal must never
+    silently become node-only.
     """
     targets: list[tuple[dict, str]] = []
     seen: set[tuple[int, str]] = set()
@@ -2637,6 +2639,10 @@ def _get_service_targets_for_renew(service: dict) -> list[tuple[dict, str]]:
         service_id = int(service.get("id") or 0)
     except (TypeError, ValueError):
         service_id = 0
+    try:
+        primary_sid = int(service.get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_sid = 0
 
     mappings = userbot_db.get_service_nodes(service_id) if service_id > 0 else []
     for m in mappings:
@@ -2656,17 +2662,24 @@ def _get_service_targets_for_renew(service: dict) -> list[tuple[dict, str]]:
         seen.add(key)
         targets.append((srv, uuid))
 
-    if targets:
-        return targets
+    # Make the authoritative primary explicit even for legacy services whose
+    # service_nodes table contains only X-UI/X-Net child mappings.
+    if primary_sid > 0 and not any(int((srv or {}).get("id") or 0) == primary_sid for srv, _ in targets):
+        primary_srv = database.get_server_by_id(primary_sid)
+        primary_uuid = _extract_uuid_from_comment(service.get("comment") or "")
+        if not primary_uuid and targets:
+            # Current cluster creation uses one shared UUID across all nodes.
+            primary_uuid = str(targets[0][1] or "").strip()
+        if primary_srv and primary_uuid:
+            targets.insert(0, (primary_srv, primary_uuid))
 
-    try:
-        sid = int(service.get("server_id") or 0)
-    except (TypeError, ValueError):
-        sid = 0
-    uuid = _extract_uuid_from_comment(service.get("comment") or "")
-    srv = database.get_server_by_id(sid) if sid > 0 else None
-    if srv and uuid:
-        targets.append((srv, uuid))
+    # Always patch the primary before any child. If the primary cannot be
+    # resolved, _apply_service_renewal_on_targets will reject the renewal.
+    targets.sort(
+        key=lambda item: 0
+        if int((item[0] or {}).get("id") or 0) == primary_sid
+        else 1
+    )
     return targets
 
 
@@ -2777,6 +2790,18 @@ async def _apply_service_renewal_on_targets(
     if not targets:
         raise RuntimeError("شناسه UUID سرویس برای تمدید پیدا نشد.")
 
+    try:
+        primary_sid = int(service.get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_sid = 0
+    primary_target = next(
+        (item for item in targets if int((item[0] or {}).get("id") or 0) == primary_sid),
+        None,
+    )
+    if primary_target is None:
+        raise RuntimeError("سرور اصلی سرویس برای تمدید پیدا نشد.")
+    targets = [primary_target] + [item for item in targets if item is not primary_target]
+
     payload, final_limit, final_days = _build_renew_patch_payload(
         service,
         package_gb=package_gb,
@@ -2825,6 +2850,10 @@ async def _apply_service_renewal_on_targets(
             )
             errors_primary.append(str(e))
             failed_servers.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
+            if int(srv.get("id") or 0) == primary_sid:
+                raise RuntimeError(
+                    "تمدید روی سرور اصلی انجام نشد: " + str(e)[:160]
+                ) from e
             continue
 
         ok_count += 1
