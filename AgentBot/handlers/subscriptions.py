@@ -493,12 +493,23 @@ async def _hiddify_user_list_map(server: dict) -> dict[str, dict]:
             # activity signal instead of relying only on delayed last_online.
             snapshot = await hiddify_api.refresh_user_usage_snapshot(server)
             active_uuids: set[str] = set()
-            for item in (snapshot.get("comments") or []) if isinstance(snapshot, dict) else []:
-                if not isinstance(item, dict):
-                    continue
-                uid = str(item.get("uuid") or "").strip().lower()
-                if uid:
-                    active_uuids.add(uid)
+            comments = snapshot.get("comments") if isinstance(snapshot, dict) else None
+            if isinstance(comments, dict):
+                # Hiddify v11/v12: {uuid: "0.123MB", ...}
+                active_uuids.update(
+                    str(uid).strip().lower()
+                    for uid, value in comments.items()
+                    if str(uid).strip()
+                    and str(value or "").strip().lower() not in {"", "no usage"}
+                )
+            elif isinstance(comments, list):
+                # Newer Hiddify: [{"uuid": "...", "usage": ...}, ...]
+                for item in comments:
+                    if not isinstance(item, dict):
+                        continue
+                    uid = str(item.get("uuid") or "").strip().lower()
+                    if uid:
+                        active_uuids.add(uid)
 
             rows = await hiddify_api.list_users(server)
             panel_now = (
