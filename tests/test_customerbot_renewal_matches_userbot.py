@@ -40,6 +40,15 @@ class CustomerBotRenewalMatchesUserBotTests(unittest.TestCase):
         self.assertIn('"last_reset_time": now.strftime', src)
         self.assertIn("reset_usage=True", src)
 
+    def test_paid_customer_renewal_requires_real_primary_panel_target(self):
+        src = _function_source(
+            CUSTOMER_RENEW_SOURCE, "_renew_subscription_from_order"
+        )
+        self.assertIn('raise RuntimeError("panel_targets_not_found")', src)
+        self.assertIn('raise RuntimeError("primary_panel_target_not_found")', src)
+        self.assertIn("primary_target = next(", src)
+        self.assertIn("None,", src)
+
     def test_admin_report_shows_purchased_renewal_package(self):
         src = _function_source(
             CUSTOMER_RENEW_SOURCE, "_renew_subscription_from_order"
