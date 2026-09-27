@@ -1165,10 +1165,13 @@ async def get_service_last_online(svc) -> str:
                 is_plain_hiddify = False
 
             if is_plain_hiddify and isinstance(user, dict):
-                try:
-                    await hiddify_api.refresh_user_usage(server)
-                except Exception:
-                    pass
+                snapshot = await hiddify_api.refresh_user_usage_snapshot(server)
+                needle = str(uuid or "").strip().lower()
+                active_uuids = {
+                    str(item.get("uuid") or "").strip().lower()
+                    for item in (snapshot.get("comments") or [])
+                    if isinstance(item, dict) and str(item.get("uuid") or "").strip()
+                }
                 try:
                     # Re-read the direct row after the forced usage collection,
                     # then use list_users as the cross-version freshness source.
@@ -1178,7 +1181,10 @@ async def get_service_last_online(svc) -> str:
                     rows = await hiddify_api.list_users(server)
                 except Exception:
                     rows = []
-                needle = str(uuid or "").strip().lower()
+                user = dict(user)
+                user["_source"] = "hiddify"
+                if needle in active_uuids:
+                    user["_user_list_status"] = "online"
                 for row in rows or []:
                     if not isinstance(row, dict):
                         continue
@@ -1191,9 +1197,7 @@ async def get_service_last_online(svc) -> str:
                     direct_dt = _parse_panel_datetime(user.get("last_online"))
                     list_dt = _parse_panel_datetime(row.get("last_online"))
                     if list_dt and (direct_dt is None or list_dt >= direct_dt):
-                        user = dict(user)
                         user["last_online"] = row.get("last_online")
-                    user["_source"] = "hiddify"
                     break
             return target, user
         except Exception as exc:
