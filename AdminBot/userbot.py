@@ -1126,33 +1126,9 @@ def _subscription_tracking_prompt_text() -> str:
     return " 🀄️لطفا شناسه اشتراک را وارد کنید:"
 
 
-def _location_flag_from_title(title: str) -> str:
-    t = str(title or "")
-    if "ترکیه" in t:
-        return "🇹🇷"
-    if "هلند" in t:
-        return "🇳🇱"
-    if "آلمان" in t:
-        return "🇩🇪"
-    if "فرانسه" in t:
-        return "🇫🇷"
-    if "امریک" in t or "آمریک" in t:
-        return "🇺🇸"
-    return "🏳️"
-
-
 def _format_server_location_title(raw_title: str) -> str:
-    title = str(raw_title or "").strip() or "نامشخص"
-    flag = _location_flag_from_title(title)
-    has_location_word = "لوکیشن" in title
-    has_flag = flag != "🏳️" and flag in title
-    if has_location_word:
-        if has_flag or flag == "🏳️":
-            return title
-        return f"{title} {flag}"
-    if flag == "🏳️":
-        return f"لوکیشن {title}"
-    return f"لوکیشن {flag} {title}"
+    """عنوان سرور را دقیقاً همان‌طور که ادمین ذخیره کرده نمایش بده."""
+    return str(raw_title or "").strip() or "نامشخص"
 
 
 def _resolve_live_server_title(service: Dict[str, Any], default: str = "سرور") -> str:
