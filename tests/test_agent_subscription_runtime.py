@@ -131,6 +131,118 @@ class SubscriptionRuntimeRefreshTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(last_online, "هنوز متصل نشده")
 
+    async def test_hiddify_primary_with_xnet_node_never_connected(self):
+        now = datetime.now(timezone.utc)
+        primary = {"id": 31, "title": "Hiddify", "panel_type": "hiddify"}
+        node = {"id": 32, "title": "X-Net", "panel_type": "xnet"}
+        service = {
+            "id": 91,
+            "server_id": 31,
+            "panel_user_uuid": "mixed-uuid",
+            "usage_current": 0,
+            "usage_limit": 10,
+            "days_left": 30,
+            "is_active": 1,
+        }
+        panel_users = {
+            31: {
+                "uuid": "mixed-uuid",
+                "current_usage_GB": 0,
+                "usage_limit_GB": 10,
+                "expire_date": (now + timedelta(days=30)).isoformat(),
+                "last_online": None,
+                "is_active": True,
+                "_source": "hiddify",
+            },
+            32: {
+                "uuid": "mixed-uuid",
+                "current_usage_GB": 0,
+                "usage_limit_GB": 10,
+                "expire_date": (now + timedelta(days=30)).isoformat(),
+                "last_online": "0001-01-01T00:00:00Z",
+                "is_active": True,
+                "_source": "xnet",
+                "_user_list_status": "offline",
+            },
+        }
+
+        async def get_user(server, _uuid):
+            return panel_users[server["id"]]
+
+        with patch.object(
+            subscription_service,
+            "get_service_panel_targets",
+            return_value=[
+                (primary, "mixed-uuid", ""),
+                (node, "mixed-uuid", ""),
+            ],
+        ), patch.object(
+            subscription_service.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            subscription_service.agent_db, "update_service", return_value=True
+        ):
+            last_online = await subscription_service.get_service_last_online(service)
+
+        self.assertEqual(last_online, "هنوز متصل نشده")
+
+    async def test_hiddify_primary_with_xnet_node_uses_latest_real_connection(self):
+        now = datetime.now(timezone.utc)
+        primary = {"id": 41, "title": "Hiddify", "panel_type": "hiddify"}
+        node = {"id": 42, "title": "X-Net", "panel_type": "xnet"}
+        service = {
+            "id": 92,
+            "server_id": 41,
+            "panel_user_uuid": "mixed-used-uuid",
+            "usage_current": 0,
+            "usage_limit": 10,
+            "days_left": 30,
+            "is_active": 1,
+        }
+        panel_users = {
+            41: {
+                "uuid": "mixed-used-uuid",
+                "current_usage_GB": 0,
+                "usage_limit_GB": 10,
+                "expire_date": (now + timedelta(days=30)).isoformat(),
+                "last_online": None,
+                "is_active": True,
+                "_source": "hiddify",
+            },
+            42: {
+                "uuid": "mixed-used-uuid",
+                "current_usage_GB": 0.25,
+                "usage_limit_GB": 10,
+                "expire_date": (now + timedelta(days=30)).isoformat(),
+                "last_online": (now - timedelta(minutes=8)).isoformat(),
+                "is_active": True,
+                "_source": "xnet",
+                "_user_list_status": "offline",
+            },
+        }
+
+        async def get_user(server, _uuid):
+            return panel_users[server["id"]]
+
+        with patch.object(
+            subscription_service,
+            "get_service_panel_targets",
+            return_value=[
+                (primary, "mixed-used-uuid", ""),
+                (node, "mixed-used-uuid", ""),
+            ],
+        ), patch.object(
+            subscription_service.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            subscription_service.agent_db, "update_service", return_value=True
+        ):
+            last_online = await subscription_service.get_service_last_online(service)
+
+        self.assertIn("8 دقیقه پیش", last_online)
+
     async def test_real_xnet_last_online_is_shown_after_first_connection(self):
         now = datetime.now(timezone.utc)
         server = {"id": 22, "title": "X-Net", "panel_type": "xnet"}
