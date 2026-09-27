@@ -2363,15 +2363,6 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
 
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")])
 
-    # گزارش سراسری برای رکوردهایی که ممکن است به سرور حذف‌شده تعلق داشته باشند.
-    # این مسیر باعث می‌شود orphan/frozenهای سروری که دیگر در لیست لوکیشن‌ها نیست
-    # همچنان قابل مشاهده و پاک‌سازی باشند.
-    keyboard.append([
-        InlineKeyboardButton(
-            "❄️ یخ‌زده‌ها و سرورهای حذف‌شده",
-            callback_data="servers:frozen:1",
-        )
-    ])
     keyboard.append([InlineKeyboardButton("افزودن سرور➕", callback_data="servers:add")])
     return InlineKeyboardMarkup(keyboard)
 
