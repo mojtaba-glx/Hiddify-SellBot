@@ -1127,9 +1127,9 @@ async def get_service_last_online(svc) -> str:
     - در حالت آفلاین، زمان primary مرجع است و timestamp نود آفلاین نباید
       زمان سرویس اصلی را تازه‌تر جلوه دهد.
     """
-    HIDDIFY_ONLINE_WINDOW = 120
+    HIDDIFY_ONLINE_WINDOW = 5 * 60
     CHILD_ONLINE_WINDOW = 90
-    CLOCK_SKEW = 30
+    CLOCK_SKEW = 120
 
     if not isinstance(svc, dict):
         return "نامشخص"
