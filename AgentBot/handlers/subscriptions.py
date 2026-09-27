@@ -501,8 +501,11 @@ async def _hiddify_user_list_map(server: dict) -> dict[str, dict]:
                     active_uuids.add(uid)
 
             rows = await hiddify_api.list_users(server)
-            if not active_uuids:
-                return rows
+            panel_now = (
+                snapshot.get("date")
+                if isinstance(snapshot, dict)
+                else None
+            )
 
             out = []
             for row in rows or []:
@@ -510,9 +513,14 @@ async def _hiddify_user_list_map(server: dict) -> dict[str, dict]:
                     out.append(row)
                     continue
                 row2 = dict(row)
+                row2["_source"] = "hiddify"
+                if panel_now:
+                    # Hiddify serializes last_online without timezone. Keep the
+                    # panel's own wall-clock "now" beside each row so presence
+                    # age is calculated in the same clock domain.
+                    row2["_hiddify_panel_now"] = panel_now
                 ids = _user_list_identity_keys(row2)
                 if ids & active_uuids:
-                    row2["_source"] = "hiddify"
                     row2["_user_list_status"] = "online"
                 out.append(row2)
             return out
@@ -565,6 +573,8 @@ async def _merge_hiddify_live_presence(server: dict, user_uuid: str, direct_user
     # fresher source for per-user presence on Hiddify Manager.
     list_last_online = row.get("last_online")
     direct_last_online = merged.get("last_online")
+    if row.get("_hiddify_panel_now"):
+        merged["_hiddify_panel_now"] = row.get("_hiddify_panel_now")
     list_dt = _panel_dt(list_last_online)
     direct_dt = _panel_dt(direct_last_online)
     if list_dt and (direct_dt is None or list_dt >= direct_dt):
@@ -582,8 +592,17 @@ async def _merge_hiddify_live_presence(server: dict, user_uuid: str, direct_user
     # five minutes as online.
     freshest = _panel_dt(merged.get("last_online"))
     if freshest is not None:
-        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-        delta = (now_utc - freshest).total_seconds()
+        # Hiddify's time_to_json() emits naive server-local timestamps. Comparing
+        # them directly to UTC makes Turkey/Iran panels look hours in the
+        # future. Prefer the wall-clock timestamp returned by the same Hiddify
+        # update_user_usage response; both values then share the same timezone.
+        panel_now = _panel_dt(merged.get("_hiddify_panel_now"))
+        reference_now = (
+            panel_now
+            if panel_now is not None
+            else datetime.now(timezone.utc).replace(tzinfo=None)
+        )
+        delta = (reference_now - freshest).total_seconds()
         merged["_user_list_status"] = (
             "online"
             if -_HIDDIFY_CLOCK_SKEW_SECONDS <= delta <= _HIDDIFY_ONLINE_WINDOW_SECONDS
