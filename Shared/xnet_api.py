@@ -650,12 +650,19 @@ def _parse_dt(value: Any) -> Optional[datetime]:
         dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+        dt = dt.astimezone(timezone.utc)
+        # X-NET/.NET can use year 0001 as a "never connected" sentinel.
+        if dt.year < 2000:
+            return None
+        return dt
     except ValueError:
         pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            if dt.year < 2000:
+                return None
+            return dt
         except ValueError:
             continue
     return None
