@@ -692,6 +692,57 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("REALITY", str(ctx.exception))
         self.assertIn("کلید خصوصی", str(ctx.exception))
 
+    async def test_binary_request_refreshes_jwt_after_api_token_and_cached_jwt_are_rejected(self):
+        server = dict(self.server)
+        server["xnet_api_token"] = "api-token"
+
+        class FakeResponse:
+            def __init__(self, status_code, content=b"", text=""):
+                self.status_code = status_code
+                self.content = content
+                self.text = text
+                self.headers = {"content-type": "application/octet-stream"}
+
+        responses = [
+            FakeResponse(401, text="api token rejected"),
+            FakeResponse(401, text="cached jwt expired"),
+            FakeResponse(200, content=b"backup-ok"),
+        ]
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def request(self, *args, **kwargs):
+                return responses.pop(0)
+
+        login = AsyncMock(side_effect=["cached-jwt", "fresh-jwt"])
+        with patch.object(
+            xnet_api, "_management_token", new=AsyncMock(return_value="api-token")
+        ), patch.object(
+            xnet_api, "_login", new=login
+        ), patch.object(
+            xnet_api, "_clear_cached_jwt"
+        ) as clear_cached, patch.object(
+            xnet_api.httpx, "AsyncClient", FakeClient
+        ):
+            body, headers = await xnet_api._request_bytes(
+                "GET", "/api/backups/bk-1/download", server
+            )
+
+        self.assertEqual(body, b"backup-ok")
+        self.assertEqual(headers["content-type"], "application/octet-stream")
+        self.assertEqual(login.await_args_list[0].kwargs, {"force": False})
+        self.assertEqual(login.await_args_list[1].kwargs, {"force": True})
+        clear_cached.assert_called_once_with(server)
+
+
     async def test_download_server_backup_creates_downloads_and_cleans_up(self):
         request_json = AsyncMock(
             side_effect=[
