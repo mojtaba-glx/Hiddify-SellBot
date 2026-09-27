@@ -1402,6 +1402,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         except Exception:
             pass
+        await _safe_answer(query)
         return
 
     if action == "rewiz":
