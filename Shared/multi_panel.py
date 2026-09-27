@@ -208,12 +208,12 @@ async def create_user_with_uuid(
     server: Dict[str, Any],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Create a panel user while keeping one canonical UUID across the cluster.
+    """Create a child-panel user while enforcing the cluster UUID.
 
-    A lost create response is recovered by reading the requested UUID instead
-    of repeating POST. Successful creates are verified with a short grace
-    period so Hiddify's eventual persistence does not turn a valid creation
-    into a false failure.
+    If the panel explicitly returns a different UUID, that identity must be
+    corrected before any lookup of the requested UUID is trusted. Otherwise a
+    pre-existing user with the requested UUID could be mistaken for the newly
+    created row while the panel-generated duplicate remains behind.
     """
     requested_uuid = str((payload or {}).get("uuid") or "").strip()
     if not requested_uuid:
@@ -229,7 +229,6 @@ async def create_user_with_uuid(
     except Exception:
         if is_xui:
             # X-UI may create a subset of configured inbounds before an error.
-            # Best-effort cleanup is safer than retrying the same create POST.
             try:
                 await delete_user(server, requested_uuid)
             except Exception:
@@ -249,8 +248,64 @@ async def create_user_with_uuid(
     if not isinstance(created, dict):
         raise PanelUuidMismatchError("panel returned an invalid create response")
 
-    # First try the UUID we explicitly asked the panel to persist. This avoids
-    # false negatives when Hiddify needs a moment before GET sees the new row.
+    explicit_uuid = str(created.get("uuid") or "").strip()
+    fallback_id = str(created.get("id") or "").strip()
+    returned_uuid = explicit_uuid
+    if not returned_uuid and _looks_like_panel_uuid(fallback_id):
+        returned_uuid = fallback_id
+
+    async def _cleanup_candidates(*values: str) -> None:
+        seen: set[str] = set()
+        for raw in values:
+            candidate = str(raw or "").strip()
+            if (
+                not candidate
+                or candidate in seen
+                or not _looks_like_panel_uuid(candidate)
+            ):
+                continue
+            seen.add(candidate)
+            try:
+                await delete_user(server, candidate)
+            except Exception:
+                pass
+
+    # An explicit mismatching UUID in the create response is authoritative
+    # evidence that the new identity is not the requested one. Correct that
+    # exact row first; do not accept a possibly pre-existing requested UUID.
+    if returned_uuid and returned_uuid != requested_uuid:
+        try:
+            await patch_user(
+                server,
+                returned_uuid,
+                {"uuid": requested_uuid},
+            )
+            verified = await _probe_requested_user(
+                server,
+                requested_uuid,
+                is_xui=is_xui,
+                attempts=3,
+            )
+            if verified is None:
+                raise PanelUuidMismatchError(
+                    "panel UUID correction could not be verified "
+                    f"(requested={requested_uuid}, returned={returned_uuid})"
+                )
+            result = dict(created)
+            result.update(verified)
+            result["uuid"] = requested_uuid
+            return result
+        except Exception as exc:
+            await _cleanup_candidates(returned_uuid, requested_uuid)
+            if isinstance(exc, PanelUuidMismatchError):
+                raise
+            raise PanelUuidMismatchError(
+                f"could not correct panel UUID to {requested_uuid}: {exc}"
+            ) from exc
+
+    # When the panel returned the requested UUID (or no usable UUID at all),
+    # verify the requested identity with the normal eventual-consistency grace
+    # period. Hiddify numeric DB ids intentionally fall through this path.
     verified = await _probe_requested_user(
         server,
         requested_uuid,
@@ -263,60 +318,18 @@ async def create_user_with_uuid(
         result["uuid"] = requested_uuid
         return result
 
-    explicit_uuid = str(created.get("uuid") or "").strip()
-    fallback_id = str(created.get("id") or "").strip()
-    returned_uuid = explicit_uuid
-    if not returned_uuid and _looks_like_panel_uuid(fallback_id):
-        returned_uuid = fallback_id
-
-    # If the panel response itself explicitly confirms the requested UUID,
-    # accept it even when the immediate read endpoint is still catching up.
+    # A create response that explicitly echoed the requested UUID is accepted
+    # even if the immediate read endpoint is still catching up.
     if returned_uuid == requested_uuid:
         result = dict(created)
         result["uuid"] = requested_uuid
         return result
 
-    cleanup_uuids: List[str] = []
-    if returned_uuid and _looks_like_panel_uuid(returned_uuid):
-        cleanup_uuids.append(returned_uuid)
-
-    try:
-        if returned_uuid and returned_uuid != requested_uuid:
-            await patch_user(server, returned_uuid, {"uuid": requested_uuid})
-            verified = await _probe_requested_user(
-                server,
-                requested_uuid,
-                is_xui=is_xui,
-                attempts=3,
-            )
-            if verified is not None:
-                result = dict(created)
-                result.update(verified)
-                result["uuid"] = requested_uuid
-                return result
-
-        raise PanelUuidMismatchError(
-            "panel UUID mismatch "
-            f"(requested={requested_uuid}, returned={returned_uuid or 'unverified'})"
-        )
-    except Exception as exc:
-        # This operation is being failed/refunded, so remove any identity that
-        # may have been created. Never use a numeric DB id as a UUID cleanup key.
-        cleanup_uuids.append(requested_uuid)
-        seen = set()
-        for candidate in cleanup_uuids:
-            if not _looks_like_panel_uuid(candidate) or candidate in seen:
-                continue
-            seen.add(candidate)
-            try:
-                await delete_user(server, candidate)
-            except Exception:
-                pass
-        if isinstance(exc, PanelUuidMismatchError):
-            raise
-        raise PanelUuidMismatchError(
-            f"could not verify requested UUID {requested_uuid}: {exc}"
-        ) from exc
+    await _cleanup_candidates(requested_uuid)
+    raise PanelUuidMismatchError(
+        "panel UUID mismatch "
+        f"(requested={requested_uuid}, returned={returned_uuid or 'unverified'})"
+    )
 
 
 async def patch_user(
