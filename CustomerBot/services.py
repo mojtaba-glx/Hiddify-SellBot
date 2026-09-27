@@ -286,85 +286,75 @@ async def buy_service(
 
 
 async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]:
-    """Renew: proportional cost deducted from agent wallet."""
+    """Legacy customer renewal helper with primary-authoritative semantics.
+
+    The active payment flow uses _renew_subscription_from_order, but this
+    exported helper is kept safe for callers outside that flow: local state is
+    staged first, the real primary panel must accept the new expiry, and wallet
+    refunds occur only when the authoritative panel was not changed.
+    """
     svc = agent_db.get_service_by_id(service_id)
     if not svc:
         return {"ok": False, "error": "service_not_found"}
 
-    agent_id = int(svc["agent_id"])
-    server_id = int(svc["server_id"])
+    try:
+        extra_days = int(extra_days)
+    except (TypeError, ValueError):
+        extra_days = 0
+    if extra_days <= 0:
+        return {"ok": False, "error": "invalid_days"}
+
+    agent_id = int(svc.get("agent_id") or 0)
+    server_id = int(svc.get("server_id") or 0)
     server = database.get_server_by_id(server_id)
     if not server:
         return {"ok": False, "error": "server_not_found"}
-    panel_uuid = str(svc.get("panel_user_uuid", "")).strip()
-    wholesale = int(svc.get("wholesale_price", 0))
-    original_days = int(svc.get("days_left", 0)) or int(svc.get("days", 0)) or 30
 
-    cost = wholesale  # full period
+    panel_uuid = str(svc.get("panel_user_uuid") or "").strip()
+    if not panel_uuid:
+        return {"ok": False, "error": "no_uuid"}
+
+    targets = get_service_panel_targets(svc) or []
+    primary_target = next(
+        (t for t in targets if int((t[0] or {}).get("id") or 0) == server_id),
+        None,
+    )
+    if primary_target is None:
+        return {"ok": False, "error": "primary_panel_target_not_found"}
+
+    wholesale = int(svc.get("wholesale_price") or 0)
+    original_days = int(svc.get("days_left") or 0) or 30
+    cost = wholesale
     if extra_days < original_days:
         cost = int(wholesale * extra_days / max(original_days, 1))
 
     wallet = agent_db.get_wallet(agent_id)
-    if int(wallet.get("balance", 0)) < cost:
+    if int(wallet.get("balance") or 0) < cost:
         return {"ok": False, "error": "agent_no_balance"}
 
-    ok, wallet = agent_db.deduct_wallet(agent_id, cost, description=f"Renew svc #{service_id}")
+    ok, wallet = agent_db.deduct_wallet(
+        agent_id,
+        cost,
+        description=f"Renew svc #{service_id}",
+    )
     if not ok:
         return {"ok": False, "error": "deduct_failed"}
 
-    if panel_uuid:
-        try:
-            current_svc = agent_db.get_service_by_id(service_id) or svc
-            new_end = str(current_svc.get("end_date", "")).strip()
-            if new_end:
-                targets = get_service_panel_targets(current_svc)
-                if not targets:
-                    targets = [(server, panel_uuid, "")]
+    old_state = {
+        key: svc.get(key)
+        for key in (
+            "days_left",
+            "usage_limit",
+            "usage_current",
+            "start_date",
+            "end_date",
+            "is_active",
+        )
+    }
 
-                # سرور اصلی (primary) اول و جدا؛ اگر در دسترس نبود پول کسر نشود.
-                primary_sid = server_id
-                primary_target = next(
-                    (t for t in targets if int(t[0].get("id") or 0) == primary_sid),
-                    targets[0],
-                )
-                try:
-                    await multi_panel.patch_user(
-                        primary_target[0], primary_target[1],
-                        {"expire_date": new_end.split(" ")[0]},
-                        marzban_username=primary_target[2],
-                    )
-                except Exception as e:
-                    logger.warning("renew primary patch failed svc=%s: %s", service_id, e)
-                    agent_db.refund_wallet(agent_id, cost, description=f"Refund: renew svc #{service_id}", service_id=service_id)
-                    return {"ok": False, "error": f"api_error: {str(e)[:100]}"}
-
-                # بقیه نودها: best-effort؛ نود down نباید تمدید را خراب کند.
-                failed_nodes: List[str] = []
-                failed_node_ids: List[int] = []
-                for srv, uuid, marzban_un in targets:
-                    if int(srv.get("id") or 0) == primary_sid:
-                        continue
-                    try:
-                        await multi_panel.patch_user(
-                            srv, uuid,
-                            {"expire_date": new_end.split(" ")[0]},
-                            marzban_username=marzban_un,
-                        )
-                    except Exception as e:
-                        failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
-                        failed_sid = int(srv.get("id") or 0)
-                        if failed_sid > 0 and failed_sid not in failed_node_ids:
-                            failed_node_ids.append(failed_sid)
-                        logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
-                if failed_nodes:
-                    logger.warning(
-                        "Renew applied on primary but some nodes are pending sync (service_id=%s): %s",
-                        service_id,
-                        ", ".join(failed_nodes),
-                    )
-        except Exception as e:
-            logger.warning("renew patch failed svc=%s: %s", service_id, e)
-
+    # Stage the local expiry first so the panel receives the NEW expiry rather
+    # than the pre-renewal value. Nothing remote has changed at this point, so
+    # a local failure is safe to refund immediately.
     if not agent_db.renew_service(service_id, extra_days=extra_days):
         agent_db.refund_wallet(
             agent_id,
@@ -374,20 +364,80 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
         )
         return {"ok": False, "error": "local_renew_failed"}
 
-    # Renewal is confirmed on primary + local DB. This path extends time only,
-    # so existing traffic snapshots remain valid; failed child nodes stay
-    # renew_pending until they receive the new expiry.
+    updated = agent_db.get_service_by_id(service_id) or {}
+    new_end = str(updated.get("end_date") or "").strip()
+    if not new_end:
+        agent_db.update_service(service_id, old_state)
+        agent_db.refund_wallet(
+            agent_id,
+            cost,
+            description=f"Refund: missing renewal expiry svc #{service_id}",
+            service_id=service_id,
+        )
+        return {"ok": False, "error": "missing_new_expiry"}
+
+    patch = {"expire_date": new_end.split(" ")[0]}
+    try:
+        await multi_panel.patch_user(
+            primary_target[0],
+            primary_target[1],
+            patch,
+            marzban_username=primary_target[2],
+        )
+    except Exception as exc:
+        # Primary never accepted the renewal, therefore rolling back local state
+        # and refunding is financially safe.
+        agent_db.update_service(service_id, old_state)
+        agent_db.refund_wallet(
+            agent_id,
+            cost,
+            description=f"Refund: renew svc #{service_id}",
+            service_id=service_id,
+        )
+        logger.warning("legacy renew primary patch failed svc=%s: %s", service_id, exc)
+        return {"ok": False, "error": f"api_error: {str(exc)[:100]}"}
+
+    failed_nodes: List[str] = []
+    failed_node_ids: List[int] = []
+    for srv, uuid, marzban_un in targets:
+        if int((srv or {}).get("id") or 0) == server_id:
+            continue
+        try:
+            await multi_panel.patch_user(
+                srv,
+                uuid,
+                patch,
+                marzban_username=marzban_un,
+            )
+        except Exception as exc:
+            failed_nodes.append(str(srv.get("title") or f"سرور #{srv.get('id')}"))
+            failed_sid = int(srv.get("id") or 0)
+            if failed_sid > 0 and failed_sid not in failed_node_ids:
+                failed_node_ids.append(failed_sid)
+            logger.warning(
+                "legacy renew child patch pending svc=%s server=%s: %s",
+                service_id,
+                srv.get("id"),
+                exc,
+            )
+
+    # Primary + local DB are committed. Child failures are recoverable and must
+    # not refund a completed renewal.
     try:
         agent_db.reset_service_nodes_on_renew(
             service_id,
             reset_usage=False,
             reset_time=False,
-            pending_server_ids=locals().get("failed_node_ids", []),
+            pending_server_ids=failed_node_ids,
         )
-    except Exception as e:
-        logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
+    except Exception as exc:
+        logger.warning("legacy renew frozen reset failed svc=%s: %s", service_id, exc)
 
-    return {"ok": True, "wallet_balance": wallet.get("balance", 0)}
+    return {
+        "ok": True,
+        "wallet_balance": int((wallet or {}).get("balance") or 0),
+        "pending_nodes": failed_nodes,
+    }
 
 
 async def get_configs(service_id: int) -> Dict[str, Any]:
