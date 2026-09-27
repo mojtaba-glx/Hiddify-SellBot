@@ -1473,6 +1473,33 @@ _kill_all_botProcesses() {
   fi
 }
 
+start_systemd_bot_checked() {
+  local unit="$1"
+  local title="$2"
+
+  if ! systemctl start "$unit"; then
+    _red "ERROR: $title failed to start via systemd."
+    systemctl status "$unit" --no-pager -l 2>/dev/null | tail -n 20 || true
+    return 1
+  fi
+
+  # Give Python/import errors a brief chance to surface before declaring success.
+  sleep 1
+  if ! systemctl is-active --quiet "$unit"; then
+    local state
+    state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    _red "ERROR: $title is not active after start (systemd: ${state:-unknown})."
+    systemctl status "$unit" --no-pager -l 2>/dev/null | tail -n 20 || true
+    return 1
+  fi
+
+  local pid
+  pid="$(systemctl show -p MainPID --value "$unit" 2>/dev/null || true)"
+  _green "OK: $title started (systemd, PID=${pid:-unknown})"
+  return 0
+}
+
+
 start_bots() {
   ensure_dirs
   check_required_env 0
@@ -1491,16 +1518,14 @@ start_bots() {
 
   # AdminBot: systemd یا nohup
   if [ -f "$SYSTEMD_ADMIN_UNIT_FILE" ] && systemd_available; then
-    systemctl start "$SYSTEMD_ADMIN_UNIT" 2>/dev/null || true
-    _green "OK: AdminBot started (systemd)"
+    start_systemd_bot_checked "$SYSTEMD_ADMIN_UNIT" "AdminBot"
   else
     start_single_bot "$ADMIN_MAIN" "$ADMIN_PID_FILE" "$ADMIN_LOG_FILE" "AdminBot"
   fi
 
   # UserBot: systemd یا nohup
   if [ -f "$SYSTEMD_USER_UNIT_FILE" ] && systemd_available; then
-    systemctl start "$SYSTEMD_USER_UNIT" 2>/dev/null || true
-    _green "OK: UserBot started (systemd)"
+    start_systemd_bot_checked "$SYSTEMD_USER_UNIT" "UserBot"
   else
     start_single_bot "$USER_MAIN" "$USER_PID_FILE" "$USER_LOG_FILE" "UserBot"
   fi
@@ -1508,14 +1533,12 @@ start_bots() {
   # AgentBot و CustomerBot
   if [ -n "${AGENT_BOT_TOKEN:-}" ]; then
     if [ -f "$SYSTEMD_AGENT_UNIT_FILE" ] && systemd_available; then
-      systemctl start "$SYSTEMD_AGENT_UNIT" 2>/dev/null || true
-      _green "OK: AgentBot started (systemd)"
+      start_systemd_bot_checked "$SYSTEMD_AGENT_UNIT" "AgentBot"
     else
       start_single_bot "$AGENT_MAIN" "$AGENT_PID_FILE" "$AGENT_LOG_FILE" "AgentBot"
     fi
     if [ -f "$SYSTEMD_CUSTOMER_UNIT_FILE" ] && systemd_available; then
-      systemctl start "$SYSTEMD_CUSTOMER_UNIT" 2>/dev/null || true
-      _green "OK: CustomerBot started (systemd)"
+      start_systemd_bot_checked "$SYSTEMD_CUSTOMER_UNIT" "CustomerBot"
     else
       start_single_bot "$CUSTOMER_MAIN" "$CUSTOMER_PID_FILE" "$CUSTOMER_LOG_FILE" "CustomerBot"
     fi
