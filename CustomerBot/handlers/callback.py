@@ -1571,8 +1571,7 @@ async def _notify_agent_new_trial(agent_id: int, user, service_id: int, customer
 
 
 async def _build_trial_service(update, context, agent_id, user, service_name: str):
-    """ساخت سرویس تست رایگان با نام کاربری ارسال‌شده (مثل UserBot) و نمایش اشتراک."""
-    from CustomerBot.keyboards import subscription_status_keyboard
+    """ساخت سرویس تست رایگان و تحویل لینک/QR دقیقاً مثل خرید موفق CustomerBot."""
     server_id = int(context.user_data.get("pending_trial_server_id") or 0)
     server = context.user_data.get("pending_trial_server")
     if not server:
@@ -1678,19 +1677,6 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         logger.exception("customer trial mark used failed uid=%s: %s", user.id, e)
 
     svc = get_service_by_id(svc["id"])
-    link = ""
-    try:
-        managed_link, _ = get_or_create_bot_sub_links(svc or {})
-        if managed_link:
-            link = managed_link
-    except Exception:
-        pass
-    if not link:
-        domains = server.get("domains", [])
-        domain = domains[0]["domain"] if domains else server.get("host", "?")
-        if domain and not (domain.startswith("http://") or domain.startswith("https://")):
-            domain = f"https://{domain}"
-        link = f"{domain.rstrip('/')}/{new_uuid}"
 
     # گزارش ساخت اکانت تست رایگان به ربات نماینده
     await _notify_agent_new_trial(
@@ -1710,21 +1696,20 @@ async def _build_trial_service(update, context, agent_id, user, service_name: st
         reply_markup=main_menu_keyboard(),
     )
 
+    # همان مسیر تحویل خرید موفق را استفاده کن تا تنظیمات لینک نماینده،
+    # Smart Subscription، QR/بارکد و fallbackها برای تست رایگان هم یکسان باشند.
     if svc:
-        from CustomerBot.database import get_subs_settings
         try:
-            subs_settings = get_subs_settings(agent_id)
-            await update.message.reply_text(
-                build_subscription_status_text(svc, subs_settings, None),
-                parse_mode="Markdown",
-                reply_markup=subscription_status_keyboard(
-                    svc["id"],
-                    show_direct_config=subs_settings.get("show_direct_config", True),
-                    show_sub_link=subs_settings.get("show_sub_link", True),
-                ),
+            from AgentBot.handlers.settings_customer_payments import _send_subscription_delivery
+            await _send_subscription_delivery(context, agent_id, user.id, int(svc["id"]))
+        except Exception as delivery_error:
+            logger.warning(
+                "Trial service created but subscription delivery failed agent=%s user=%s service=%s: %s",
+                agent_id,
+                user.id,
+                svc.get("id"),
+                delivery_error,
             )
-        except Exception:
-            pass
 
 
 def _random_active_agent_card(agent_id: int) -> dict:
