@@ -22,6 +22,10 @@ class XnetApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(xnet_api.is_xnet_server({"panel_type": "X-NET"}))
         self.assertFalse(xnet_api.is_xnet_server({"panel_type": "hiddify"}))
 
+    def test_parse_dt_rejects_dotnet_never_connected_sentinel(self):
+        self.assertIsNone(xnet_api._parse_dt("0001-01-01T00:00:00Z"))
+        self.assertIsNone(xnet_api._parse_dt("0001-01-01 00:00:00"))
+
     def test_management_api_token_accepts_canonical_and_compat_aliases(self):
         self.assertEqual(
             xnet_api._api_token({"xnet_api_token": "xnet_primary"}),
