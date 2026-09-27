@@ -444,87 +444,163 @@ def _is_user_missing_error(exc: Exception) -> bool:
 
 
 async def _panel_user_status(svc) -> Optional[str]:
-    """بررسی وجود سرویس روی سرور و برگرداندن وضعیت: online / offline / expired.
-    اگر روی سرور پیدا نشود → None (نمایش داده نمی‌شود) و در probe ثبت می‌شود."""
+    """Return the aggregate runtime status across primary server + all nodes.
+
+    A service is online when *any* configured panel target reports a real
+    online signal. The primary server remains authoritative for expired /
+    inactive state when it is reachable, so a stale secondary node cannot
+    revive an expired subscription.
+    """
     try:
-        sid = int(svc.get("server_id") or 0)
+        service_id = int((svc or {}).get("id") or 0)
     except (TypeError, ValueError):
-        sid = 0
-    uuid = str(svc.get("panel_user_uuid") or "").strip()
-    service_id = int(svc.get("id") or 0)
-    if sid <= 0 or not uuid:
-        return None
-    server = shared_db.get_server_by_id(sid)
-    if not server:
-        return None
-    from Shared import hiddify_api
+        service_id = 0
     try:
-        u = await hiddify_api.get_user_by_uuid(server, uuid)
-    except Exception as e:
-        if service_id and _is_user_missing_error(e):
+        primary_sid = int((svc or {}).get("server_id") or 0)
+    except (TypeError, ValueError):
+        primary_sid = 0
+
+    from Shared import hiddify_api
+    from Shared.sub_links import get_service_panel_targets
+
+    try:
+        targets = get_service_panel_targets(svc) or []
+    except Exception as exc:
+        logger.warning(
+            "Agent status target resolution failed svc=%s: %s",
+            service_id,
+            type(exc).__name__,
+        )
+        targets = []
+
+    # Legacy fallback for services that predate node mappings.
+    if not targets:
+        uuid = str((svc or {}).get("panel_user_uuid") or "").strip()
+        server = shared_db.get_server_by_id(primary_sid) if primary_sid > 0 else None
+        if server and uuid:
+            targets = [(server, uuid, "")]
+
+    if not targets:
+        return None
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    def _classify_user(u: dict) -> str:
+        try:
+            active_raw = u.get("is_active", True)
+            if isinstance(active_raw, str):
+                is_active = active_raw.strip().lower() not in {
+                    "0", "false", "off", "inactive", "disabled", "no",
+                }
+            else:
+                is_active = bool(active_raw)
+        except Exception:
+            is_active = True
+
+        source = str(u.get("_source") or "").strip().lower()
+        if not is_active:
+            return "inactive" if source == "xnet" else "expired"
+
+        expiry_dt = _panel_expiry_dt(u)
+        days_left = _panel_days_left(u)
+        if expiry_dt is not None and expiry_dt <= now_utc:
+            return "expired"
+        if expiry_dt is None and days_left is not None and days_left < 0:
+            return "expired"
+
+        try:
+            limit = float(u.get("usage_limit_GB") or 0)
+            used = float(u.get("current_usage_GB") or 0)
+            if limit > 0 and used >= limit:
+                return "expired"
+        except Exception:
+            pass
+
+        # X-NET/X-UI adapters may expose an explicit live user-list status.
+        forced = str(u.get("_user_list_status") or "").strip().lower()
+        if forced == "online":
+            return "online"
+        if forced == "offline" and source in {"xnet", "xui"}:
+            return "offline"
+
+        # Panels without an explicit online map fall back to a recent
+        # last-online timestamp. Keep the existing windows for compatibility.
+        lo = _panel_dt(u.get("last_online"))
+        if lo:
+            try:
+                window = 90 if source in {"xui", "xnet"} else 15 * 60
+                if abs((now_utc - lo).total_seconds()) <= window:
+                    return "online"
+            except Exception:
+                pass
+        return "offline"
+
+    async def _fetch_target(target):
+        server, uuid, _marzban_username = target
+        sid = 0
+        try:
+            sid = int((server or {}).get("id") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            user = await hiddify_api.get_user_by_uuid(server, uuid)
+            if isinstance(user, dict) and user:
+                return sid, user, ""
+            return sid, None, "missing"
+        except Exception as exc:
+            if _is_user_missing_error(exc):
+                return sid, None, "missing"
+            logger.debug(
+                "Agent status probe failed svc=%s server=%s: %s",
+                service_id,
+                sid,
+                type(exc).__name__,
+            )
+            return sid, None, "error"
+
+    fetched = await asyncio.gather(*[_fetch_target(target) for target in targets])
+    available = [(sid, user) for sid, user, _err in fetched if isinstance(user, dict) and user]
+
+    if not available:
+        # Mark missing only when every target confirmed the user is absent.
+        if service_id and fetched and all(err == "missing" for _sid, _user, err in fetched):
             try:
                 agent_db.mark_service_missing(service_id)
             except Exception:
                 pass
         return None
-    if not isinstance(u, dict) or not u:
-        if service_id:
-            try:
-                agent_db.mark_service_missing(service_id)
-            except Exception:
-                pass
-        return None
+
     if service_id:
         try:
             agent_db.mark_service_seen(service_id)
         except Exception:
             pass
-    # منقضی / غیرفعال
-    try:
-        active_raw = u.get("is_active", True)
-        if isinstance(active_raw, str):
-            is_active = active_raw.strip().lower() not in {
-                "0", "false", "off", "inactive", "disabled", "no",
-            }
-        else:
-            is_active = bool(active_raw)
-    except Exception:
-        is_active = True
-    if not is_active:
-        if str(u.get("_source") or "").strip().lower() == "xnet":
-            return "inactive"
-        return "expired"
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-    expiry_dt = _panel_expiry_dt(u)
-    days_left = _panel_days_left(u)
-    if expiry_dt is not None and expiry_dt <= now_utc:
-        return "expired"
-    if expiry_dt is None and days_left is not None and days_left < 0:
-        return "expired"
-    try:
-        limit = float(u.get("usage_limit_GB") or 0)
-        used = float(u.get("current_usage_GB") or 0)
-        if limit > 0 and used >= limit:
-            return "expired"
-    except Exception:
-        pass
-    # آنلاین؟ X-NET وضعیت لحظه‌ای را صریحاً از API برمی‌گرداند.
-    forced = str(u.get("_user_list_status") or "").strip().lower()
-    if forced == "online":
+
+    classified = [(sid, _classify_user(user)) for sid, user in available]
+
+    # Mixed-panel rule: one real online target means the subscription is online.
+    if any(status == "online" for _sid, status in classified):
         return "online"
-    if str(u.get("_source") or "").strip().lower() == "xnet" and forced == "offline":
+
+    # Preserve the primary server as authority for disabled/expired state when
+    # it answered. This avoids a stale child node overriding subscription state.
+    primary_status = next(
+        (status for sid, status in classified if sid == primary_sid),
+        None,
+    )
+    if primary_status in {"expired", "inactive"}:
+        return primary_status
+    if primary_status == "offline":
         return "offline"
 
-    lo = _panel_dt(u.get("last_online"))
-    if lo:
-        try:
-            source = str(u.get("_source") or "").strip().lower()
-            window = 90 if source in {"xui", "xnet"} else 15 * 60
-            if abs((now_utc - lo).total_seconds()) <= window:
-                return "online"
-        except Exception:
-            pass
-    return "offline"
+    # Primary unavailable: derive the best status from reachable nodes.
+    if any(status == "offline" for _sid, status in classified):
+        return "offline"
+    if any(status == "inactive" for _sid, status in classified):
+        return "inactive"
+    if any(status == "expired" for _sid, status in classified):
+        return "expired"
+    return None
 
 
 async def _fetch_services_with_status(agent_id: int):
