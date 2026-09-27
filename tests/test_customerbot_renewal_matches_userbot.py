@@ -65,9 +65,9 @@ class CustomerBotRenewalMatchesUserBotTests(unittest.TestCase):
             ROOT / "CustomerBot" / "services.py"
         ).read_text(encoding="utf-8")
         src = _function_source(legacy_source, "renew_service")
-        primary_patch = src.index("await multi_panel.patch_user(")
-        last_refund = src.rfind("agent_db.refund_wallet(")
-        self.assertLess(last_refund, primary_patch)
+        primary_commit = src.index("# Primary + local DB are committed.")
+        self.assertNotIn("agent_db.refund_wallet(", src[primary_commit:])
+        self.assertIn("agent_db.refund_wallet(", src[:primary_commit])
         self.assertIn('"pending_nodes": failed_nodes', src)
 
     def test_admin_report_shows_purchased_renewal_package(self):
