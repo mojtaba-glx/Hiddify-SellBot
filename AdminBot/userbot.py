@@ -5092,6 +5092,24 @@ async def send_users_page(page: int, chat_id: int, context: ContextTypes.DEFAULT
         await context.bot.send_message(chat_id, text, reply_markup=kb)
 
 
+def _expired_service_age_line(service: Dict[str, Any]) -> str:
+    """متن انقضا برای لیست منقضی‌ها؛ مستقل از «آخرین اتصال»."""
+    expired_days = _to_int_or_none((service or {}).get("_expired_days"))
+    if expired_days is None:
+        days_left = _to_int_or_none((service or {}).get("days_left"))
+        if days_left is not None and days_left < 0:
+            expired_days = abs(days_left)
+
+    if expired_days is None:
+        # انقضای حجمی یا رکوردی که زمان دقیق انقضا در آن موجود نیست.
+        return "📆انقضا: منقضی/غیرفعال در پنل"
+
+    expired_days = max(0, int(expired_days))
+    if expired_days == 0:
+        return "📆انقضا: منقضی شده (امروز)"
+    return f"📆انقضا: منقضی شده ({expired_days} روز پیش)"
+
+
 async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
     """جزئیات سرویس منقضی با جمع زنده مصرف و آخرین اتصال همه نودها."""
     svc = dict(service or {})
@@ -5134,7 +5152,7 @@ async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
     if note == "-": note = _synthetic_hiddify_note(svc)
     name = str(svc.get("name") or "اشتراک").strip()
     server_title = " + ".join(titles) if titles else _format_server_location_title(_resolve_all_server_titles(svc, default="سرور"))
-    lines = [f"👤 کاربر:  {name}", "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖", f"⬖ سرور:  {server_title}", usage_line, "📆انقضا: منقضی/غیرفعال در پنل", last_line, f"📝یادداشت: {_display_safe_note(note) or '—'}"]
+    lines = [f"👤 کاربر:  {name}", "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖", f"⬖ سرور:  {server_title}", usage_line, _expired_service_age_line(svc), last_line, f"📝یادداشت: {_display_safe_note(note) or '—'}"]
     if node_lines:
         lines.append("❄️ نودها:"); lines.extend(node_lines)
     return "\n".join(lines)
@@ -5179,7 +5197,7 @@ async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
     owner=str(svc.get("customer_full_name") or svc.get("customer_username") or svc.get("agent_full_name") or svc.get("agent_username") or svc.get("name") or "نمایندگی").strip()
     kind="مشتری نماینده" if svc.get("customer_id") else "نماینده"; limit=_to_float(svc.get("usage_limit")) or 0.0
     last=_relative_last_online(latest.strftime("%Y-%m-%d %H:%M:%S")) if latest else "📶آخرین اتصال: نامشخص"
-    lines=[f"👤 کاربر:  {owner}",f"🤝 منبع: {kind}","❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",f"⬖ سرور:  {' + '.join(titles) if titles else svc.get('server_title') or 'سرور'}",f"📊مصرف: {total:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)","📆انقضا: منقضی/غیرفعال در پنل",last,f"📝نام اشتراک: {svc.get('name') or '—'}"]
+    lines=[f"👤 کاربر:  {owner}",f"🤝 منبع: {kind}","❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",f"⬖ سرور:  {' + '.join(titles) if titles else svc.get('server_title') or 'سرور'}",f"📊مصرف: {total:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)",_expired_service_age_line(svc),last,f"📝نام اشتراک: {svc.get('name') or '—'}"]
     if node_lines: lines += ["❄️ نودها:"] + node_lines
     return "\n".join(lines)
 
