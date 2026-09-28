@@ -5249,7 +5249,7 @@ async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
     for n in nodes:
         pair=(int(n.get("server_id") or 0),str(n.get("panel_user_uuid") or "").strip())
         if pair[0]>0 and pair[1] and pair not in targets: targets.append(pair)
-    total=0.0; latest=None; node_lines=[]; titles=[]
+    total=0.0; latest=None; node_lines=[]; titles=[]; panel_note="-"
     for sid,uid in targets:
         server=database.get_server_by_id(sid); title=str((server or {}).get("name") or (server or {}).get("title") or f"سرور #{sid}")
         if title not in titles: titles.append(title)
@@ -5261,15 +5261,29 @@ async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
                 total += usage or 0.0
                 dt=_parse_last_online_dt(pu.get("last_online") or pu.get("last_online_at"))
                 if dt and (latest is None or dt>latest): latest=dt
+                live_note=_extract_note_from_panel_user(pu)
+                if panel_note=="-" and live_note and live_note!="-": panel_note=live_note
                 status="🔴 منقضی/غیرفعال" if _panel_user_is_expired_or_inactive(pu) else "🟢 فعال"
         except hiddify_api.HiddifyApiError as e:
             status="🗑 حذف‌شده" if ("HTTP 404" in str(e) or "HTTP 410" in str(e)) else "⚠️ خطای پنل"
         except Exception: status="⚠️ عدم دسترسی"
         node_lines.append(f"  • {title}: {status} ({f'{usage:.2f}GB' if usage is not None else '—'})")
+
+    local_note=_agn._service_note_from_comment(str(svc.get("comment") or "")).strip()
+    note=panel_note if panel_note and panel_note!="-" else (local_note or "-")
+    if note=="-":
+        try:
+            ag=_agn.get_agent_by_id(int(svc.get("agent_id") or 0)) or {}
+            ag_name=str(ag.get("username") or ag.get("full_name") or "").strip()
+            if ag_name:
+                note=f"@{ag_name.lstrip('@')}"
+        except Exception:
+            pass
+
     owner=_expired_item_label({**svc, "_source": "agent"})
     limit=_to_float(svc.get("usage_limit")) or 0.0
     last=_relative_last_online(latest.strftime("%Y-%m-%d %H:%M:%S")) if latest else "📶آخرین اتصال: نامشخص"
-    lines=[f"👤 کاربر:  {owner}","❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",f"⬖ سرور:  {' + '.join(titles) if titles else svc.get('server_title') or 'سرور'}",f"📊مصرف: {total:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)",_expired_service_age_line(svc),last,f"📝نام اشتراک: {svc.get('name') or '—'}"]
+    lines=[f"👤 کاربر:  {owner}","❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",f"⬖ سرور:  {' + '.join(titles) if titles else svc.get('server_title') or 'سرور'}",f"📊مصرف: {total:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)",_expired_service_age_line(svc),last,f"📝یادداشت: {_display_safe_note(note)}"]
     if node_lines: lines += ["❄️ نودها:"] + node_lines
     return "\n".join(lines)
 
