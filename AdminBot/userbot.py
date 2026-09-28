@@ -5158,78 +5158,87 @@ async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _all_expired_items(days: int = 0) -> List[Dict[str, Any]]:
-    from Shared import agent_db as _agn
-    items = []
-    for s in userbot_db.get_expired_services(days):
-        if not _is_locally_deleted_service(s):
-            d = dict(s); d["_source"] = "user"; items.append(d)
-    for s in _agn.get_all_expired_services(days):
-        d = dict(s); d["_source"] = "agent"; items.append(d)
-    return items
-
-
-def _expired_profile_identity(service: Dict[str, Any]) -> tuple[str, int]:
-    """کلید پایدار صاحب سرویس برای جلوگیری از نمایش چندباره یک پروفایل."""
+def _expired_item_uuid(service: Dict[str, Any]) -> str:
+    """UUID اصلی سرویس برای حذف رکوردهای تکراری بین دیتابیس‌ها."""
     svc = service or {}
     source = str(svc.get("_source") or "user").strip().lower()
-
-    def _positive_int(value: Any) -> int:
-        try:
-            parsed = int(value or 0)
-        except (TypeError, ValueError):
-            return 0
-        return parsed if parsed > 0 else 0
-
-    if source == "user":
-        owner_id = _positive_int(svc.get("user_id"))
-        if owner_id:
-            return "user", owner_id
-    else:
-        customer_id = _positive_int(svc.get("customer_id"))
-        if customer_id:
-            return "customer", customer_id
-        agent_id = _positive_int(svc.get("agent_id"))
-        if agent_id:
-            return "agent", agent_id
-
-    # رکوردهای legacy بدون owner-id نباید تصادفی با پروفایل دیگری ادغام شوند.
-    return f"{source}_service", _positive_int(svc.get("id"))
+    if source == "agent":
+        return str(svc.get("panel_user_uuid") or "").strip().lower()
+    try:
+        return str(_service_primary_target(svc)[1] or "").strip().lower()
+    except Exception:
+        return str(_extract_service_uuid(svc) or "").strip().lower()
 
 
-def _expired_profile_label(service: Dict[str, Any]) -> str:
+def _expired_item_label(service: Dict[str, Any]) -> str:
+    """نام ساده برای لیست منقضی‌ها؛ بدون نمایش منبع نمایندگی/کاربران."""
     svc = service or {}
-    if str(svc.get("_source") or "user").strip().lower() == "user":
-        profile = str(svc.get("full_name") or svc.get("username") or "").strip()
-    else:
-        profile = str(
-            svc.get("customer_full_name")
-            or svc.get("customer_username")
-            or svc.get("agent_full_name")
-            or svc.get("agent_username")
-            or ""
-        ).strip()
-    return profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
+    source = str(svc.get("_source") or "user").strip().lower()
+    if source == "agent":
+        customer = str(svc.get("customer_full_name") or svc.get("customer_username") or "").strip()
+        if customer:
+            return customer
+        # سرویس مستقیم نماینده معمولاً نام مشتری/اشتراک را در name دارد؛
+        # آن را به نام خود نماینده ترجیح می‌دهیم تا لیست مدیریتی تکراری/گیج‌کننده نشود.
+        name = str(svc.get("name") or "").strip()
+        if name:
+            return name
+        return str(svc.get("agent_full_name") or svc.get("agent_username") or "اشتراک").strip()
+    return str(svc.get("full_name") or svc.get("username") or svc.get("name") or "اشتراک").strip()
 
 
-def _group_expired_profiles(services: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """سرویس‌های منقضی را بر اساس صاحب پروفایل گروه‌بندی می‌کند."""
-    grouped: Dict[tuple[str, int], Dict[str, Any]] = {}
-    order: List[tuple[str, int]] = []
-    for raw in services or []:
+def _expired_item_priority(service: Dict[str, Any]) -> int:
+    """در رکوردهای تکراری، ردیفی را نگه می‌داریم که صاحب نهایی واضح‌تری دارد."""
+    svc = service or {}
+    source = str(svc.get("_source") or "user").strip().lower()
+    if source == "agent":
+        try:
+            if int(svc.get("customer_id") or 0) > 0:
+                return 30
+        except Exception:
+            pass
+        return 10
+    return 20
+
+
+def _dedupe_expired_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """هر اشتراک واقعی فقط یک‌بار؛ حتی اگر در UserBot/AgentBot رکورد تکراری داشته باشد."""
+    chosen: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for raw in items or []:
         svc = dict(raw or {})
-        key = _expired_profile_identity(svc)
-        if key not in grouped:
-            grouped[key] = {
-                "kind": key[0],
-                "owner_id": key[1],
-                "label": _expired_profile_label(svc),
-                "source": str(svc.get("_source") or "user"),
-                "services": [],
-            }
+        uuid = _expired_item_uuid(svc)
+        if uuid:
+            key = f"uuid:{uuid}"
+        else:
+            # Legacy بدون UUID را ادغام حدسی نمی‌کنیم تا سرویس واقعی اشتباهی حذف/مخفی نشود.
+            key = f"{svc.get('_source','user')}:{svc.get('id',0)}"
+
+        current = chosen.get(key)
+        if current is None:
+            chosen[key] = svc
             order.append(key)
-        grouped[key]["services"].append(svc)
-    return [grouped[key] for key in order]
+            continue
+
+        if _expired_item_priority(svc) > _expired_item_priority(current):
+            chosen[key] = svc
+
+    return [chosen[key] for key in order]
+
+
+def _all_expired_items(days: int = 0) -> List[Dict[str, Any]]:
+    from Shared import agent_db as _agn
+    items: List[Dict[str, Any]] = []
+    for s in userbot_db.get_expired_services(days):
+        if not _is_locally_deleted_service(s):
+            d = dict(s)
+            d["_source"] = "user"
+            items.append(d)
+    for s in _agn.get_all_expired_services(days):
+        d = dict(s)
+        d["_source"] = "agent"
+        items.append(d)
+    return _dedupe_expired_items(items)
 
 
 async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
@@ -5267,31 +5276,24 @@ async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
 
 async def send_expired_services_page(page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     services = _all_expired_items(0)
-    profiles = _group_expired_profiles(services)
     page_size = 15
-    total = len(profiles)
+    total = len(services)
     total_pages = max(1, math.ceil(total / page_size))
     page = min(max(1, int(page or 1)), total_pages)
-    items = profiles[(page - 1) * page_size:page * page_size]
+    items = services[(page - 1) * page_size:page * page_size]
+
     rows = []
     buttons = []
-
-    uc = sum(1 for p in profiles if p.get("kind") == "user")
-    ac = total - uc
-
-    for profile in items:
-        svc_items = list(profile.get("services") or [])
-        first = svc_items[0] if svc_items else {}
-        icon = "🔴" if profile.get("kind") == "user" else "🤝"
-        label = str(profile.get("label") or "").strip()[:10].rstrip()
+    for svc in items:
+        label = _expired_item_label(svc)[:12].rstrip()
         if not "".join(ch for ch in label if ch.isalnum() or ("\u0600" <= ch <= "\u06ff")):
-            label = str(first.get("name") or f"اشتراک #{first.get('id')}")[:10].rstrip()
-
-        if len(svc_items) <= 1:
-            callback = f"userbot:expired:detail:{first.get('_source', 'user')}:{first.get('id')}:{page}"
-        else:
-            callback = f"userbot:expired:profile:{profile.get('kind')}:{profile.get('owner_id')}:{page}"
-        buttons.append(InlineKeyboardButton(f"{icon} {label}", callback_data=callback))
+            label = str(svc.get("name") or f"اشتراک #{svc.get('id')}")[:12].rstrip()
+        buttons.append(
+            InlineKeyboardButton(
+                f"🔴 {label}",
+                callback_data=f"userbot:expired:detail:{svc.get('_source','user')}:{svc.get('id')}:{page}",
+            )
+        )
 
     for i in range(0, len(buttons), 3):
         rows.append(list(reversed(buttons[i:i + 3])))
@@ -5303,15 +5305,16 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
     if page < total_pages:
         nav.append(InlineKeyboardButton("▶️", callback_data=f"userbot:expired:{page+1}"))
     rows.append(nav)
+
     rows += [
         [InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده", callback_data="userbot:expired:bulk:0")],
         [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز", callback_data="userbot:expired:bulk:3")],
         [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز", callback_data="userbot:expired:bulk:7")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="searchmenu:back")],
     ]
+
     text = (
         f"♻️ اشتراک‌های منقضی‌شده\n"
-        f"👤 کاربران اصلی: {uc} | 🤝 نمایندگی/مشتری: {ac}\n"
         f"تعداد کل: {total}\n"
         f"صفحه: {page}/{total_pages}"
     )
@@ -5323,54 +5326,6 @@ async def send_expired_services_page(page: int, chat_id: int, context: ContextTy
         except BadRequest:
             pass
     await context.bot.send_message(chat_id, text, reply_markup=kb)
-
-
-async def send_expired_profile_detail(kind: str, owner_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    wanted = (str(kind or "").strip().lower(), int(owner_id or 0))
-    profile = next(
-        (p for p in _group_expired_profiles(_all_expired_items(0))
-         if (str(p.get("kind") or "").strip().lower(), int(p.get("owner_id") or 0)) == wanted),
-        None,
-    )
-    if not profile:
-        if message:
-            await message.edit_text(
-                "❌ پروفایل منقضی یافت نشد.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:expired:{page}")]]),
-            )
-        return
-
-    services = list(profile.get("services") or [])
-    rows = []
-    service_buttons = []
-    for svc in services:
-        name = str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
-        if len(name) > 18:
-            name = name[:17].rstrip() + "…"
-        service_buttons.append(
-            InlineKeyboardButton(
-                f"🔴 {name}",
-                callback_data=f"userbot:expired:detail:{svc.get('_source', 'user')}:{svc.get('id')}:{page}",
-            )
-        )
-    for i in range(0, len(service_buttons), 2):
-        rows.append(service_buttons[i:i + 2])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:expired:{page}")])
-
-    text = (
-        f"👤 {profile.get('label') or 'کاربر'}\n"
-        f"♻️ اشتراک‌های منقضی‌شده: {len(services)}\n\n"
-        "یک اشتراک را برای مشاهده جزئیات انتخاب کنید:"
-    )
-    kb = InlineKeyboardMarkup(rows)
-    if message:
-        try:
-            await message.edit_text(text, reply_markup=kb)
-            return
-        except BadRequest:
-            pass
-    await context.bot.send_message(chat_id, text, reply_markup=kb)
-
 
 
 async def send_stale_zero_review_page(page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
@@ -5488,7 +5443,10 @@ async def _delete_expired_service(service: Dict[str, Any], source: str="user") -
 
     # failedهایی که باقی مانده‌اند همگی «وجود ندارد» هستند و از نظر حذف امن‌اند.
     failed=[]
-    if source=="agent": _agn.delete_service(service_id)
+    if source=="agent":
+        # یک UUID ممکن است از نسخه‌های قدیمی هم به‌صورت مستقیم نماینده و هم مشتری
+        # رکورد شده باشد؛ پس بعد از حذف موفق پنل همه کپی‌های همان سرویس پاک شوند.
+        _agn.hard_delete_service_by_uuid(target_uuid)
     else:
         userbot_db.delete_service(service_id)
         _agn.hard_delete_service_by_uuid(target_uuid)
@@ -9016,7 +8974,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data.startswith("userbot:expired:"):
         parts=data.split(":"); action=parts[2] if len(parts)>2 else "1"
         if action=="profile" and len(parts)>=6:
-            await query.answer(); await send_expired_profile_detail(parts[3],int(parts[4]),int(parts[5]),cid,context,message=msg); return
+            await query.answer(); await send_expired_services_page(int(parts[5]),cid,context,message=msg); return
         if action=="detail" and len(parts)>=6:
             await query.answer(); await send_expired_service_detail(parts[3],int(parts[4]),int(parts[5]),cid,context,message=msg); return
         if action=="delete" and len(parts)>=6:
