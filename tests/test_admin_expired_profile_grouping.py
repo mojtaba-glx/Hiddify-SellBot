@@ -110,6 +110,20 @@ class ExpiredListDedupTests(unittest.TestCase):
         self.assertIn("connected_comment", receipt)
         self.assertIn("current_comment", receipt)
 
+    def test_mirrored_userbot_expired_detail_falls_back_to_reseller_note(self):
+        source = USERBOT.read_text(encoding="utf-8")
+        func = _function_source(source, "_build_expired_service_live_detail")
+        self.assertIn("_extract_note_from_panel_user", func)
+        self.assertIn("_reseller_note_for_panel_uuids", func)
+        self.assertIn("target_uuids", func)
+
+    def test_reseller_note_helper_can_fallback_to_agent_identity(self):
+        source = USERBOT.read_text(encoding="utf-8")
+        func = _function_source(source, "_reseller_note_for_panel_uuids")
+        self.assertIn("_service_note_from_comment", func)
+        self.assertIn("get_agent_by_id", func)
+        self.assertIn("fallback_agent", func)
+
 
 if __name__ == "__main__":
     unittest.main()
