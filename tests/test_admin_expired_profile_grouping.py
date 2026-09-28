@@ -97,6 +97,19 @@ class ExpiredListDedupTests(unittest.TestCase):
         )
         self.assertEqual(label, "Hadis")
 
+    def test_expired_agent_detail_resolves_panel_or_local_note(self):
+        source = USERBOT.read_text(encoding="utf-8")
+        func = _function_source(source, "_build_agent_expired_detail")
+        self.assertIn("_extract_note_from_panel_user", func)
+        self.assertIn("_service_note_from_comment", func)
+        self.assertIn("📝یادداشت:", func)
+
+    def test_customer_link_keeps_existing_service_note(self):
+        receipt = (ROOT / "CustomerBot" / "handlers" / "receipt.py").read_text(encoding="utf-8")
+        self.assertNotIn('update_service(svc["id"], {"comment": "connected"})', receipt)
+        self.assertIn("connected_comment", receipt)
+        self.assertIn("current_comment", receipt)
+
 
 if __name__ == "__main__":
     unittest.main()
