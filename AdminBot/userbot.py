@@ -5110,6 +5110,44 @@ def _expired_service_age_line(service: Dict[str, Any]) -> str:
     return f"📆انقضا: منقضی شده ({expired_days} روز پیش)"
 
 
+def _reseller_note_for_panel_uuids(uuids: List[str]) -> str:
+    """Resolve reseller ownership note from agency DB, even for mirrored UserBot rows."""
+    from Shared import agent_db as _agn
+
+    seen: Set[str] = set()
+    fallback_agent = ""
+    for raw_uuid in uuids or []:
+        panel_uuid = str(raw_uuid or "").strip()
+        if not panel_uuid or panel_uuid.lower() in seen:
+            continue
+        seen.add(panel_uuid.lower())
+        try:
+            agent_svc = _agn.get_service_by_uuid(panel_uuid) or {}
+        except Exception:
+            agent_svc = {}
+        if not agent_svc:
+            continue
+
+        local_note = _agn._service_note_from_comment(str(agent_svc.get("comment") or "")).strip()
+        if local_note:
+            return local_note
+
+        try:
+            agent_id = int(agent_svc.get("agent_id") or 0)
+        except Exception:
+            agent_id = 0
+        if agent_id > 0 and not fallback_agent:
+            try:
+                ag = _agn.get_agent_by_id(agent_id) or {}
+                agent_name = str(ag.get("username") or ag.get("full_name") or "").strip()
+                if agent_name:
+                    fallback_agent = f"@{agent_name.lstrip('@')}"
+            except Exception:
+                pass
+
+    return fallback_agent or "-"
+
+
 async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
     """جزئیات سرویس منقضی با جمع زنده مصرف و آخرین اتصال همه نودها."""
     svc = dict(service or {})
@@ -5118,7 +5156,11 @@ async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
     latest_dt = None
     node_lines: List[str] = []
     titles: List[str] = []
+    panel_note = "-"
+    target_uuids: List[str] = []
     for sid, uuid in _service_panel_targets(svc):
+        if str(uuid or "").strip():
+            target_uuids.append(str(uuid).strip())
         server = database.get_server_by_id(int(sid))
         title = str((server or {}).get("name") or (server or {}).get("title") or f"سرور #{sid}")
         if title not in titles:
@@ -5137,6 +5179,9 @@ async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
                 dt = _parse_last_online_dt(panel_user.get("last_online") or panel_user.get("last_online_at"))
                 if dt and (latest_dt is None or dt > latest_dt):
                     latest_dt = dt
+                live_note = _extract_note_from_panel_user(panel_user)
+                if panel_note == "-" and live_note and live_note != "-":
+                    panel_note = live_note
                 status = "🔴 منقضی/غیرفعال" if _panel_user_is_expired_or_inactive(panel_user) else "🟢 فعال"
         except hiddify_api.HiddifyApiError as e:
             status = "🗑 حذف‌شده" if ("HTTP 404" in str(e) or "HTTP 410" in str(e)) else "⚠️ خطای پنل"
@@ -5149,7 +5194,12 @@ async def _build_expired_service_live_detail(service: Dict[str, Any]) -> str:
     usage_line = f"📊مصرف: {total_usage:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)" if limit and limit > 0 else f"📊مصرف: {total_usage:.2f} گیگابایت (مجموع سرورها)"
     last_line = _relative_last_online(latest_dt.strftime("%Y-%m-%d %H:%M:%S")) if latest_dt else _service_last_online_line(svc.get("last_online"))
     note = _service_public_note_text(svc)
-    if note == "-": note = _synthetic_hiddify_note(svc)
+    if note == "-" and panel_note != "-":
+        note = panel_note
+    if note == "-":
+        note = _reseller_note_for_panel_uuids(target_uuids)
+    if note == "-":
+        note = _synthetic_hiddify_note(svc)
     name = str(svc.get("name") or "اشتراک").strip()
     server_title = " + ".join(titles) if titles else _format_server_location_title(_resolve_all_server_titles(svc, default="سرور"))
     lines = [f"👤 کاربر:  {name}", "❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖", f"⬖ سرور:  {server_title}", usage_line, _expired_service_age_line(svc), last_line, f"📝یادداشت: {_display_safe_note(note) or '—'}"]
