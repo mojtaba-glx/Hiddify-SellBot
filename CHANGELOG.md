@@ -19,6 +19,19 @@
 - نمایش عنوان فعلی سرور در پروفایل‌ها و گزارش‌های سرویس‌های قدیمی و sync عنوان هنگام تمدید
 - حذف پرچم و پیشوند «لوکیشن» خودکار از عنوان سرورها
 
+### Hiddify Presence / Legacy Compatibility
+- تکمیل تشخیص آنلاین Hiddify در AgentBot با refresh رسمی usage، snapshot فعالیت و semantics پنجره native `m5`
+- همسان‌سازی محاسبه آخرین اتصال با ساعت محلی خود پنل برای جلوگیری از خطای clock skew
+- پشتیبانی از payloadهای legacy Hiddify v11/v12 شامل active UUID map و usage snapshot JSON قدیمی
+- حفظ سرور اصلی Hiddify به‌عنوان مرجع authoritative برای زمان آخرین اتصال، همراه با درنظرگرفتن حضور واقعی در معماری multi-panel
+
+### Expiry / Renewal Ownership / Admin Cleanup
+- جداسازی مالکیت تمدید در AgentBot: سرویس‌های CustomerBot توسط نماینده تمدید نمی‌شوند و تمدید آن‌ها فقط در CustomerBot انجام می‌شود
+- جلوگیری از فعال‌سازی مجدد سرویس منقضی بدون تمدید؛ برای سرویس نماینده نیز expiry ابتدا باید با renewal رفع شود
+- اصلاح callbackها و هشدارهای AgentBot تا دلیل مسدودبودن فعال‌سازی/تمدید به کاربر نمایش داده شود
+- بازطراحی لیست منقضی‌های AdminBot با گروه‌بندی پروفایل، flatten/deduplicate رکوردهای mirrored و نمایش سن واقعی انقضا
+- حفظ و بازیابی یادداشت نماینده هنگام link شدن سرویس CustomerBot و نمایش آن در جزئیات سرویس‌های منقضی، حتی برای رکوردهای mirrored
+
 ### Installer / Production Safety
 - ایجاد Snapshot اجباری قبل از Update/Force Update و توقف عملیات در صورت شکست Backup
 - توقف و راستی‌آزمایی واقعی AdminBot/UserBot/AgentBot/CustomerBot پیش از migration
@@ -26,7 +39,7 @@
 - تأیید واقعی startup هر systemd unit و failure صریح در صورت بالا نیامدن ربات
 - propagation صریح خطاهای Git، apt، virtualenv، pip و migration؛ حذف success کاذب updater
 - اضافه‌شدن GitHub Actions production-safety روی Python 3.10 و 3.12
-- عبور موفق **502 تست** در هر دو نسخه Python و عبور `bash -n install.sh`
+- عبور موفق **535 تست** در هر دو نسخه Python و عبور `bash -n install.sh`
 
 ## Hiddify-SellBot v6.0.3 — Bugfix
 
