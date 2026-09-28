@@ -790,7 +790,12 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 panel_user_uuid=parsed_uuid,
             )
             from Shared.agent_db import update_service
-            update_service(svc["id"], {"comment": "connected"})
+            # علامت connected را نگه دار، اما code/note ساخته‌شده را از بین نبر.
+            current_comment = str(svc.get("comment") or "").strip()
+            connected_comment = current_comment
+            if "connected" not in {part.strip().lower() for part in current_comment.split("|") if part.strip()}:
+                connected_comment = f"connected|{current_comment}" if current_comment else "connected"
+            update_service(svc["id"], {"comment": connected_comment})
         await update.message.reply_text(
             "✅ اشتراک با موفقیت متصل شد.",
             reply_markup=main_menu_keyboard(),
