@@ -5169,6 +5169,69 @@ def _all_expired_items(days: int = 0) -> List[Dict[str, Any]]:
     return items
 
 
+def _expired_profile_identity(service: Dict[str, Any]) -> tuple[str, int]:
+    """کلید پایدار صاحب سرویس برای جلوگیری از نمایش چندباره یک پروفایل."""
+    svc = service or {}
+    source = str(svc.get("_source") or "user").strip().lower()
+
+    def _positive_int(value: Any) -> int:
+        try:
+            parsed = int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+        return parsed if parsed > 0 else 0
+
+    if source == "user":
+        owner_id = _positive_int(svc.get("user_id"))
+        if owner_id:
+            return "user", owner_id
+    else:
+        customer_id = _positive_int(svc.get("customer_id"))
+        if customer_id:
+            return "customer", customer_id
+        agent_id = _positive_int(svc.get("agent_id"))
+        if agent_id:
+            return "agent", agent_id
+
+    # رکوردهای legacy بدون owner-id نباید تصادفی با پروفایل دیگری ادغام شوند.
+    return f"{source}_service", _positive_int(svc.get("id"))
+
+
+def _expired_profile_label(service: Dict[str, Any]) -> str:
+    svc = service or {}
+    if str(svc.get("_source") or "user").strip().lower() == "user":
+        profile = str(svc.get("full_name") or svc.get("username") or "").strip()
+    else:
+        profile = str(
+            svc.get("customer_full_name")
+            or svc.get("customer_username")
+            or svc.get("agent_full_name")
+            or svc.get("agent_username")
+            or ""
+        ).strip()
+    return profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
+
+
+def _group_expired_profiles(services: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """سرویس‌های منقضی را بر اساس صاحب پروفایل گروه‌بندی می‌کند."""
+    grouped: Dict[tuple[str, int], Dict[str, Any]] = {}
+    order: List[tuple[str, int]] = []
+    for raw in services or []:
+        svc = dict(raw or {})
+        key = _expired_profile_identity(svc)
+        if key not in grouped:
+            grouped[key] = {
+                "kind": key[0],
+                "owner_id": key[1],
+                "label": _expired_profile_label(svc),
+                "source": str(svc.get("_source") or "user"),
+                "services": [],
+            }
+            order.append(key)
+        grouped[key]["services"].append(svc)
+    return [grouped[key] for key in order]
+
+
 async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
     from Shared import agent_db as _agn
     nodes = _agn.get_service_nodes(int(svc.get("id") or 0))
@@ -5203,30 +5266,110 @@ async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
 
 
 async def send_expired_services_page(page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
-    services=_all_expired_items(0); page_size=15; total=len(services); total_pages=max(1,math.ceil(total/page_size)); page=min(max(1,int(page or 1)),total_pages)
-    items=services[(page-1)*page_size:page*page_size]; rows=[]; buttons=[]
-    uc=sum(1 for s in services if s["_source"]=="user"); ac=total-uc
-    for svc in items:
-        if svc["_source"] in {"agent","stale"}:
-            profile=str(svc.get("customer_full_name") or svc.get("customer_username") or svc.get("agent_full_name") or svc.get("agent_username") or "").strip(); icon="🤝"
+    services = _all_expired_items(0)
+    profiles = _group_expired_profiles(services)
+    page_size = 15
+    total = len(profiles)
+    total_pages = max(1, math.ceil(total / page_size))
+    page = min(max(1, int(page or 1)), total_pages)
+    items = profiles[(page - 1) * page_size:page * page_size]
+    rows = []
+    buttons = []
+
+    uc = sum(1 for p in profiles if p.get("kind") == "user")
+    ac = total - uc
+
+    for profile in items:
+        svc_items = list(profile.get("services") or [])
+        first = svc_items[0] if svc_items else {}
+        icon = "🔴" if profile.get("kind") == "user" else "🤝"
+        label = str(profile.get("label") or "").strip()[:10].rstrip()
+        if not "".join(ch for ch in label if ch.isalnum() or ("\u0600" <= ch <= "\u06ff")):
+            label = str(first.get("name") or f"اشتراک #{first.get('id')}")[:10].rstrip()
+
+        if len(svc_items) <= 1:
+            callback = f"userbot:expired:detail:{first.get('_source', 'user')}:{first.get('id')}:{page}"
         else:
-            profile=str(svc.get("full_name") or svc.get("username") or "").strip(); icon="🔴"
-        label=(profile or str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip())[:10].rstrip()
-        if not "".join(ch for ch in label if ch.isalnum() or ("\u0600"<=ch<="\u06ff")): label=str(svc.get("name") or f"اشتراک #{svc.get('id')}")[:10].rstrip()
-        buttons.append(InlineKeyboardButton(f"{icon} {label}",callback_data=f"userbot:expired:detail:{svc['_source']}:{svc['id']}:{page}"))
-    for i in range(0,len(buttons),3): rows.append(list(reversed(buttons[i:i+3])))
-    nav=[]
-    if page>1: nav.append(InlineKeyboardButton("◀️",callback_data=f"userbot:expired:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page}/{total_pages}",callback_data="userbot:noop"))
-    if page<total_pages: nav.append(InlineKeyboardButton("▶️",callback_data=f"userbot:expired:{page+1}"))
+            callback = f"userbot:expired:profile:{profile.get('kind')}:{profile.get('owner_id')}:{page}"
+        buttons.append(InlineKeyboardButton(f"{icon} {label}", callback_data=callback))
+
+    for i in range(0, len(buttons), 3):
+        rows.append(list(reversed(buttons[i:i + 3])))
+
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"userbot:expired:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="userbot:noop"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"userbot:expired:{page+1}"))
     rows.append(nav)
-    rows += [[InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده",callback_data="userbot:expired:bulk:0")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز",callback_data="userbot:expired:bulk:3")],[InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز",callback_data="userbot:expired:bulk:7")],[InlineKeyboardButton("🔙 بازگشت",callback_data="searchmenu:back")]]
-    text=f"♻️ اشتراک‌های منقضی‌شده\n👤 کاربران اصلی: {uc} | 🤝 نمایندگی/مشتری: {ac}\nتعداد کل: {total}\nصفحه: {page}/{total_pages}"
-    kb=InlineKeyboardMarkup(rows)
+    rows += [
+        [InlineKeyboardButton("🗑 حذف همه اشتراک‌های منقضی‌شده", callback_data="userbot:expired:bulk:0")],
+        [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۳ روز", callback_data="userbot:expired:bulk:3")],
+        [InlineKeyboardButton("🗑 حذف منقضی‌شده‌های بیشتر از ۷ روز", callback_data="userbot:expired:bulk:7")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="searchmenu:back")],
+    ]
+    text = (
+        f"♻️ اشتراک‌های منقضی‌شده\n"
+        f"👤 کاربران اصلی: {uc} | 🤝 نمایندگی/مشتری: {ac}\n"
+        f"تعداد کل: {total}\n"
+        f"صفحه: {page}/{total_pages}"
+    )
+    kb = InlineKeyboardMarkup(rows)
     if message:
-        try: await message.edit_text(text,reply_markup=kb); return
-        except BadRequest: pass
-    await context.bot.send_message(chat_id,text,reply_markup=kb)
+        try:
+            await message.edit_text(text, reply_markup=kb)
+            return
+        except BadRequest:
+            pass
+    await context.bot.send_message(chat_id, text, reply_markup=kb)
+
+
+async def send_expired_profile_detail(kind: str, owner_id: int, page: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
+    wanted = (str(kind or "").strip().lower(), int(owner_id or 0))
+    profile = next(
+        (p for p in _group_expired_profiles(_all_expired_items(0))
+         if (str(p.get("kind") or "").strip().lower(), int(p.get("owner_id") or 0)) == wanted),
+        None,
+    )
+    if not profile:
+        if message:
+            await message.edit_text(
+                "❌ پروفایل منقضی یافت نشد.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:expired:{page}")]]),
+            )
+        return
+
+    services = list(profile.get("services") or [])
+    rows = []
+    service_buttons = []
+    for svc in services:
+        name = str(svc.get("name") or f"اشتراک #{svc.get('id')}").strip()
+        if len(name) > 18:
+            name = name[:17].rstrip() + "…"
+        service_buttons.append(
+            InlineKeyboardButton(
+                f"🔴 {name}",
+                callback_data=f"userbot:expired:detail:{svc.get('_source', 'user')}:{svc.get('id')}:{page}",
+            )
+        )
+    for i in range(0, len(service_buttons), 2):
+        rows.append(service_buttons[i:i + 2])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data=f"userbot:expired:{page}")])
+
+    text = (
+        f"👤 {profile.get('label') or 'کاربر'}\n"
+        f"♻️ اشتراک‌های منقضی‌شده: {len(services)}\n\n"
+        "یک اشتراک را برای مشاهده جزئیات انتخاب کنید:"
+    )
+    kb = InlineKeyboardMarkup(rows)
+    if message:
+        try:
+            await message.edit_text(text, reply_markup=kb)
+            return
+        except BadRequest:
+            pass
+    await context.bot.send_message(chat_id, text, reply_markup=kb)
 
 
 
@@ -8872,6 +9015,8 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     # --- اشتراک‌های منقضی‌شده ---
     if data.startswith("userbot:expired:"):
         parts=data.split(":"); action=parts[2] if len(parts)>2 else "1"
+        if action=="profile" and len(parts)>=6:
+            await query.answer(); await send_expired_profile_detail(parts[3],int(parts[4]),int(parts[5]),cid,context,message=msg); return
         if action=="detail" and len(parts)>=6:
             await query.answer(); await send_expired_service_detail(parts[3],int(parts[4]),int(parts[5]),cid,context,message=msg); return
         if action=="delete" and len(parts)>=6:
