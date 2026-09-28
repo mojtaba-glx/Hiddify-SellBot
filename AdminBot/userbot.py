@@ -5266,10 +5266,10 @@ async def _build_agent_expired_detail(svc: Dict[str, Any]) -> str:
             status="🗑 حذف‌شده" if ("HTTP 404" in str(e) or "HTTP 410" in str(e)) else "⚠️ خطای پنل"
         except Exception: status="⚠️ عدم دسترسی"
         node_lines.append(f"  • {title}: {status} ({f'{usage:.2f}GB' if usage is not None else '—'})")
-    owner=str(svc.get("customer_full_name") or svc.get("customer_username") or svc.get("agent_full_name") or svc.get("agent_username") or svc.get("name") or "نمایندگی").strip()
-    kind="مشتری نماینده" if svc.get("customer_id") else "نماینده"; limit=_to_float(svc.get("usage_limit")) or 0.0
+    owner=_expired_item_label({**svc, "_source": "agent"})
+    limit=_to_float(svc.get("usage_limit")) or 0.0
     last=_relative_last_online(latest.strftime("%Y-%m-%d %H:%M:%S")) if latest else "📶آخرین اتصال: نامشخص"
-    lines=[f"👤 کاربر:  {owner}",f"🤝 منبع: {kind}","❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",f"⬖ سرور:  {' + '.join(titles) if titles else svc.get('server_title') or 'سرور'}",f"📊مصرف: {total:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)",_expired_service_age_line(svc),last,f"📝نام اشتراک: {svc.get('name') or '—'}"]
+    lines=[f"👤 کاربر:  {owner}","❖⬩╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍⬩❖",f"⬖ سرور:  {' + '.join(titles) if titles else svc.get('server_title') or 'سرور'}",f"📊مصرف: {total:.2f} از {limit:.1f} گیگابایت (مجموع سرورها)",_expired_service_age_line(svc),last,f"📝نام اشتراک: {svc.get('name') or '—'}"]
     if node_lines: lines += ["❄️ نودها:"] + node_lines
     return "\n".join(lines)
 
@@ -8996,7 +8996,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             days=max(0,int(parts[3])); await query.answer(); count=len(_all_expired_items(days))
             title="همه اشتراک‌های منقضی‌شده" if days==0 else f"اشتراک‌های منقضی‌شده بیش از {days} روز"
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید حذف",callback_data=f"userbot:expired:bulk_yes:{days}"),InlineKeyboardButton("لغو ❌",callback_data="userbot:expired:1")]])
-            await msg.edit_text(f"⚠️ حذف گروهی {title}\nتعداد فعلی: {count}\n\nشامل کاربران اصلی و نمایندگی‌هاست. فقط سرویس و نودهای آن حذف می‌شود؛ پروفایل‌ها، سفارش‌ها، تراکنش‌ها و کیف پول باقی می‌مانند.",reply_markup=kb); return
+            await msg.edit_text(f"⚠️ حذف گروهی {title}\nتعداد فعلی: {count}\n\nفقط سرویس و نودهای آن حذف می‌شود؛ پروفایل‌ها، سفارش‌ها، تراکنش‌ها و کیف پول باقی می‌مانند.",reply_markup=kb); return
         if action=="bulk_yes" and len(parts)>=4:
             days=max(0,int(parts[3])); await query.answer("⏳ حذف گروهی شروع شد..."); deleted=failed_count=0
             for svc in _all_expired_items(days):
