@@ -189,7 +189,7 @@ async def run_agent_reminder_cycle(bot, agent_id):
                 new_days_state = days_left
             elif not should_days and last_days_notified != -1:
                 new_days_state = -1
-            if should_usage and remaining_bucket != last_usage_notified:
+            if should_usage and (last_usage_notified < 0 or remaining_bucket < last_usage_notified):
                 usage_key = (telegram_id, service_id, remaining_bucket)
                 if usage_key not in sent_usage_keys:
                     await bot.send_message(
@@ -201,6 +201,9 @@ async def run_agent_reminder_cycle(bot, agent_id):
                     summary["usage_sent"] += 1
                 new_usage_state = remaining_bucket
             elif not should_usage and last_usage_notified != -1:
+                # A healthy/renewed service rearms volume reminders. While the
+                # service stays inside the warning window, buckets are monotonic:
+                # 3 -> 2 -> 1, never 2 -> 3 because of transient usage jitter.
                 new_usage_state = -1
             if (
                 new_days_state != last_days_notified
