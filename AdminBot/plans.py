@@ -785,14 +785,14 @@ async def _send_discount_settings_menu(
             [
                 InlineKeyboardButton(
                     f"{'خاموش کن' if simple_enabled else 'روشن کن'} تخفیف حجمی ساده",
-                    callback_data=f"plans:{server_id}:dyn_toggle:discount",
+                    callback_data=f"plans:{server_id}:dyn_toggle:discount:{'off' if simple_enabled else 'on'}",
                     style="danger" if simple_enabled else "success",
                 )
             ],
             [
                 InlineKeyboardButton(
                     f"{'خاموش کن' if tiered_enabled else 'روشن کن'} تخفیف پلاکانی",
-                    callback_data=f"plans:{server_id}:dyn_toggle:discount_tiers",
+                    callback_data=f"plans:{server_id}:dyn_toggle:discount_tiers:{'off' if tiered_enabled else 'on'}",
                     style="danger" if tiered_enabled else "success",
                 )
             ],
@@ -909,20 +909,31 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if action == "dyn_toggle":
         dyn_action = rest[1] if len(rest) > 1 else ""
+        desired_state = rest[2] if len(rest) > 2 else ""
         s = plans_storage.get_plan_dynamic_settings(server_id)
         discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
         simple_enabled = _is_simple_discount_enabled(s)
         tiered_enabled = _is_tiered_discount_enabled(s)
 
         if dyn_action == "discount":
-            if simple_enabled:
+            # New buttons carry the intended action explicitly (on/off).
+            # This prevents a timer-expiry race from turning a discount back
+            # on when the user clicked a button that said "خاموش کن".
+            should_enable = (
+                desired_state == "on"
+                or (desired_state not in {"on", "off"} and not simple_enabled)
+            )
+            if not should_enable:
                 plans_storage.set_plan_dynamic_settings(
                     server_id,
                     discount_simple_enabled=False,
                     discount_simple_expire_at=0,
                 )
             else:
-                update_kwargs = {"discount_simple_enabled": True, "discount_simple_expire_at": 0}
+                update_kwargs = {
+                    "discount_simple_enabled": True,
+                    "discount_simple_expire_at": 0,
+                }
                 if (
                     int(s.get("discount_step_gb", 0)) <= 0
                     or int(s.get("discount_percent_step", 0)) <= 0
@@ -940,7 +951,11 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         if dyn_action == "discount_tiers":
-            if tiered_enabled:
+            should_enable = (
+                desired_state == "on"
+                or (desired_state not in {"on", "off"} and not tiered_enabled)
+            )
+            if not should_enable:
                 plans_storage.set_plan_dynamic_settings(
                     server_id,
                     discount_tiered_enabled=False,
