@@ -117,6 +117,14 @@ def _active_discount_simple(settings) -> bool:
     return _plans_storage.is_simple_discount_active(settings) if settings else False
 
 
+def _active_discount_tiered(settings) -> bool:
+    """تخفیف پلاکانی را با احترام به تایمر و حالت ذخیره‌شده فعال محسوب می‌کند."""
+    global _plans_storage
+    if _plans_storage is None:
+        from Shared import plans_storage as _plans_storage
+    return _plans_storage.is_tiered_discount_active(settings) if settings else False
+
+
 def _normalized_discount_tiers(settings) -> list:
     global _plans_storage
     if _plans_storage is None:
@@ -198,7 +206,7 @@ def _calc_dynamic_price(gb, months, dyn_settings) -> tuple[int, int]:
     discount_step_gb = max(0, safe_int(settings.get("discount_step_gb"), 0))
     discount_percent_step = max(0, safe_int(settings.get("discount_percent_step"), 0))
     discount_percent_max = max(0, safe_int(settings.get("discount_percent_max"), 0))
-    discount_tiered_enabled = bool(settings.get("discount_tiered_enabled", False))
+    discount_tiered_enabled = _active_discount_tiered(settings)
 
     off_percent = 0
     tiers = _normalized_discount_tiers(settings)
