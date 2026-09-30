@@ -250,13 +250,21 @@ async def _roleme_discount_menu(context: ContextTypes.DEFAULT_TYPE, update: Upda
         pass
 
 
-async def _discount_simple_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+async def _discount_simple_toggle(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    desired_state: str = "",
+) -> None:
     agent_id = get_agent_id(context)
     settings = _get_discount_settings(agent_id)
     simple_enabled = plans_storage.is_simple_discount_enabled(settings)
+    desired = str(desired_state or "").strip().lower()
+    should_enable = (
+        desired == "on"
+        or (desired not in {"on", "off"} and not simple_enabled)
+    )
 
-    if simple_enabled:
+    if not should_enable:
         _set_discount_settings(
             agent_id,
             discount_simple_enabled=False,
@@ -277,13 +285,22 @@ async def _discount_simple_toggle(update: Update, context: ContextTypes.DEFAULT_
     await _render_discount_menu(update, context)
 
 
-async def _discount_tiers_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _discount_tiers_toggle(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    desired_state: str = "",
+) -> None:
     query = update.callback_query
     agent_id = get_agent_id(context)
     settings = _get_discount_settings(agent_id)
     tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
+    desired = str(desired_state or "").strip().lower()
+    should_enable = (
+        desired == "on"
+        or (desired not in {"on", "off"} and not tiered_enabled)
+    )
 
-    if tiered_enabled:
+    if not should_enable:
         _set_discount_settings(
             agent_id,
             discount_tiered_enabled=False,
@@ -686,10 +703,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         if sub == "toggle":
             which = parts[4] if len(parts) > 4 else ""
+            desired_state = parts[5] if len(parts) > 5 else ""
             if which == "simple":
-                await _discount_simple_toggle(update, context)
+                await _discount_simple_toggle(update, context, desired_state)
             elif which == "tiers":
-                await _discount_tiers_toggle(update, context)
+                await _discount_tiers_toggle(update, context, desired_state)
             return
 
         if sub == "edit":
