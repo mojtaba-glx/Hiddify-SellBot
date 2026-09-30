@@ -2,6 +2,7 @@ import unittest
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from telegram.error import NetworkError
 
 from AdminBot import userbot
 
@@ -29,7 +30,8 @@ class AdminBroadcastMediaTests(unittest.IsolatedAsyncioTestCase):
                 context, [101, 102], "hello", "admin-owned-file-id"
             )
 
-        self.assertEqual(result, (2, 0))
+        self.assertEqual(result[:2], (2, 0))
+        self.assertEqual(result[2]["recovered"], 0)
         context.bot.get_file.assert_awaited_once_with("admin-owned-file-id")
         self.assertEqual(target_bot.send_photo.await_count, 2)
         first_photo = target_bot.send_photo.await_args_list[0].kwargs["photo"]
@@ -59,7 +61,8 @@ class AdminBroadcastMediaTests(unittest.IsolatedAsyncioTestCase):
                 context, [101, 102, 103], "hello", "admin-owned-file-id"
             )
 
-        self.assertEqual(result, (2, 1))
+        self.assertEqual(result[:2], (2, 1))
+        self.assertEqual(result[2]["other"], 1)
         self.assertIsInstance(
             target_bot.send_photo.await_args_list[0].kwargs["photo"], BytesIO
         )
@@ -91,12 +94,41 @@ class AdminBroadcastMediaTests(unittest.IsolatedAsyncioTestCase):
         target_bot.send_photo.assert_not_awaited()
         self.assertEqual(target_bot.send_message.await_count, 2)
 
+    async def test_transient_network_error_is_retried_and_recovered(self):
+        context = SimpleNamespace(
+            bot=SimpleNamespace(get_file=AsyncMock())
+        )
+        target_bot = SimpleNamespace(
+            send_photo=AsyncMock(),
+            send_message=AsyncMock(side_effect=[
+                NetworkError("temporary"),
+                SimpleNamespace(),
+            ]),
+        )
+
+        with patch.object(userbot, "USER_BOT_TOKEN", "fake-user-token"), \
+             patch.object(userbot, "Bot", return_value=target_bot), \
+             patch.object(userbot.asyncio, "sleep", new=AsyncMock()):
+            result = await userbot._send_broadcast_to_targets(
+                context, [101], "hello"
+            )
+
+        self.assertEqual(result[:2], (1, 0))
+        self.assertEqual(result[2]["recovered"], 1)
+        self.assertEqual(target_bot.send_message.await_count, 2)
+
     def test_result_text_reports_real_delivery_counts(self):
         self.assertIn("3", userbot._broadcast_result_text(3, 0))
         self.assertIn("4", userbot._broadcast_result_text(0, 4))
-        partial = userbot._broadcast_result_text(3, 2)
+        partial = userbot._broadcast_result_text(
+            3,
+            2,
+            {"unreachable": 1, "temporary": 1},
+        )
         self.assertIn("موفق: 3", partial)
         self.assertIn("ناموفق: 2", partial)
+        self.assertIn("غیرقابل دسترس/مسدود: 1", partial)
+        self.assertIn("خطای موقت پس از تلاش مجدد: 1", partial)
         self.assertIn("پیدا نشد", userbot._broadcast_result_text(0, 0))
 
 
