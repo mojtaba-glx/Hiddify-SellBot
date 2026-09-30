@@ -90,6 +90,8 @@ async def notify_admin_delivery_report(
     volume_gb: float = 0.0,
     days: int = 0,
     amount: int = 0,
+    sale_amount: int = 0,
+    wholesale_amount: int = 0,
     status: str = "success",
     error: str = "",
     pending_servers: list[str] | None = None,
@@ -125,7 +127,12 @@ async def notify_admin_delivery_report(
             lines.append(f"📊 حجم: {_fmt_gb(volume_gb)}")
         if days > 0:
             lines.append(f"⏳ مدت: {days} روز")
-        if amount > 0:
+        if sale_amount > 0:
+            lines.append(f"💳 قیمت فروش به مشتری: {sale_amount:,} تومان")
+        if wholesale_amount > 0:
+            lines.append(f"🏷 هزینه عمده نماینده: {wholesale_amount:,} تومان")
+        if sale_amount <= 0 and wholesale_amount <= 0 and amount > 0:
+            # Backward-compatible display for direct reseller/admin reports.
             lines.append(f"💴 مبلغ: {amount:,} تومان")
 
         if status == "success":

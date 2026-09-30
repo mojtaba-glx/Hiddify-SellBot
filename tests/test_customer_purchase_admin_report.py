@@ -34,6 +34,20 @@ class CustomerPurchaseAdminReportRegressionTests(unittest.TestCase):
         self.assertIn('action_title="خرید سرویس مشتری"', source)
         self.assertIn('status="partial" if pending_servers else "success"', source)
         self.assertIn("sync_primary_server_id=", source)
+        self.assertIn("sale_amount=", source)
+        self.assertIn("wholesale_amount=", source)
+
+    def test_customer_renewal_report_includes_sale_and_wholesale_amounts(self):
+        source = self._function_source("_renew_subscription_from_order")
+        self.assertIn('action_title="تمدید سرویس مشتری"', source)
+        self.assertIn("sale_amount=sale_amount", source)
+        self.assertIn("wholesale_amount=wholesale_amount", source)
+
+    def test_admin_report_has_separate_customer_sale_and_wholesale_labels(self):
+        report_path = Path(__file__).resolve().parents[1] / "Shared" / "admin_reports.py"
+        source = report_path.read_text(encoding="utf-8")
+        self.assertIn("قیمت فروش به مشتری", source)
+        self.assertIn("هزینه عمده نماینده", source)
 
     def test_manual_and_sms_purchase_paths_share_create_function(self):
         manual = self._function_source("_approve_payment")

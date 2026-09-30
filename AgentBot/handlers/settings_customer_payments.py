@@ -1178,12 +1178,23 @@ async def _report_customer_purchase_to_admin(
             for item in (targets or [])
             if int(item.get("id") or 0) not in created_server_ids
         ]
-        amount = int(
+        sale_amount = int(
             (order or {}).get("amount")
             or (order or {}).get("price")
             or (svc or {}).get("sale_price")
             or 0
         )
+        wholesale_amount = int((svc or {}).get("wholesale_price") or 0)
+        if wholesale_amount <= 0:
+            wholesale_amount = int(
+                agent_db.calculate_wholesale_price(
+                    agent_id,
+                    float((order or {}).get("volume_gb") or (svc or {}).get("usage_limit") or 0),
+                    int((order or {}).get("days") or (svc or {}).get("days_left") or 0),
+                    int((server or {}).get("id") or (svc or {}).get("server_id") or 0),
+                )
+                or 0
+            )
 
         await notify_admin_delivery_report(
             action_title="خرید سرویس مشتری",
@@ -1193,7 +1204,8 @@ async def _report_customer_purchase_to_admin(
             server_title=str((server or {}).get("title") or ""),
             volume_gb=float((order or {}).get("volume_gb") or (svc or {}).get("usage_limit") or 0),
             days=int((order or {}).get("days") or (svc or {}).get("days_left") or 0),
-            amount=amount,
+            sale_amount=sale_amount,
+            wholesale_amount=wholesale_amount,
             status="partial" if pending_servers else "success",
             pending_servers=pending_servers or None,
             sync_primary_server_id=int((server or {}).get("id") or 0) if pending_servers else 0,
@@ -1557,6 +1569,16 @@ async def _renew_subscription_from_order(
             or str(user_tg_id)
         )
         primary_server = (primary_target[0] if targets else {})
+        sale_amount = int(order.get("amount") or order.get("price") or 0)
+        wholesale_amount = int(
+            agent_db.calculate_wholesale_price(
+                agent_id,
+                float(extra_gb or 0),
+                int(extra_days or 0),
+                int(primary_server.get("id") or svc.get("server_id") or 0),
+            )
+            or 0
+        )
         await notify_admin_delivery_report(
             action_title="تمدید سرویس مشتری",
             agent=agent,
@@ -1567,7 +1589,8 @@ async def _renew_subscription_from_order(
             # UserBot's renewal report, not the post-renewal total allowance.
             volume_gb=float(extra_gb or 0),
             days=int(extra_days or 0),
-            amount=int(order.get("amount") or order.get("price") or 0),
+            sale_amount=sale_amount,
+            wholesale_amount=wholesale_amount,
             status="success",
         )
     except Exception as report_error:
