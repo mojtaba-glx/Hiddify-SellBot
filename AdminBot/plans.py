@@ -78,9 +78,7 @@ def _is_simple_discount_enabled(settings: Dict[str, Any]) -> bool:
 
 
 def _is_tiered_discount_enabled(settings: Dict[str, Any]) -> bool:
-    if "discount_tiered_enabled" in settings:
-        return bool(settings.get("discount_tiered_enabled"))
-    return bool(plans_storage.normalize_discount_tiers(settings.get("discount_tiers", [])))
+    return plans_storage.is_tiered_discount_enabled(settings)
 
 
 def _parse_discount_tiers_text(text: str) -> List[Dict[str, int]]:
@@ -698,27 +696,41 @@ async def _send_discount_settings_menu(
 ) -> None:
     """منوی اختصاصی مدیریت روشن/خاموش کردن تخفیف‌ها."""
     s = plans_storage.get_plan_dynamic_settings(server_id)
+    now = time.time()
+
+    def _as_expire_at(key: str) -> float:
+        value = s.get(key) or 0
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0
+
+    simple_expire_at = _as_expire_at("discount_simple_expire_at")
+    tiered_expire_at = _as_expire_at("discount_tiered_expire_at")
+    expired_updates = {}
+    if simple_expire_at > 0 and now >= simple_expire_at:
+        expired_updates.update(
+            discount_simple_enabled=False,
+            discount_simple_expire_at=0,
+        )
+    if tiered_expire_at > 0 and now >= tiered_expire_at:
+        expired_updates.update(
+            discount_tiered_enabled=False,
+            discount_tiered_expire_at=0,
+        )
+    if expired_updates:
+        plans_storage.set_plan_dynamic_settings(server_id, **expired_updates)
+        s = plans_storage.get_plan_dynamic_settings(server_id)
+        simple_expire_at = _as_expire_at("discount_simple_expire_at")
+        tiered_expire_at = _as_expire_at("discount_tiered_expire_at")
+
     discount_tiers = plans_storage.normalize_discount_tiers(s.get("discount_tiers", []))
     simple_enabled = _is_simple_discount_enabled(s)
     tiered_enabled = _is_tiered_discount_enabled(s)
 
-    # اگر تایمر منقضی شده، خودکار غیرفعال کن و تنظیم را به حالت قبل برگردان
-    expire_at = s.get("discount_simple_expire_at") or 0
-    try:
-        expire_at = float(expire_at)
-    except (TypeError, ValueError):
-        expire_at = 0
-    if expire_at > 0 and time.time() >= expire_at:
-        plans_storage.set_plan_dynamic_settings(
-            server_id,
-            discount_simple_enabled=False,
-            discount_simple_expire_at=0,
-        )
-        s = plans_storage.get_plan_dynamic_settings(server_id)
-        simple_enabled = False
-        expire_at = 0
-
-    if expire_at > 0:
+    def _timer_line(expire_at: float, label: str) -> str:
+        if expire_at <= 0 or time.time() >= expire_at:
+            return ""
         remaining = int(expire_at - time.time())
         days = remaining // 86400
         hours = (remaining % 86400) // 3600
@@ -731,12 +743,13 @@ async def _send_discount_settings_menu(
         if minutes > 0:
             parts.append(f"{minutes} دقیقه")
         remaining_txt = " و ".join(parts) if parts else "کمتر از یک دقیقه"
-        timer_line = (
-            f"⏱ تایمر تخفیف حجمی ساده: {remaining_txt} مانده "
+        return (
+            f"⏱ تایمر {label}: {remaining_txt} مانده "
             f"(پایان: {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')})"
         )
-    else:
-        timer_line = ""
+
+    simple_timer_line = _timer_line(simple_expire_at, "تخفیف حجمی ساده")
+    tiered_timer_line = _timer_line(tiered_expire_at, "تخفیف پلاکانی")
 
     lines = [
         "🎛 مدیریت حرفه‌ای تخفیف‌ها",
@@ -746,8 +759,10 @@ async def _send_discount_settings_menu(
         "",
         "در این بخش می‌توانی تنظیمات ذخیره‌شده هر نوع تخفیف را ببینی و تنها در صورت نیاز آن را تغییر بدهی.",
     ]
-    if timer_line:
-        lines.append(timer_line)
+    if simple_timer_line:
+        lines.append(simple_timer_line)
+    if tiered_timer_line:
+        lines.append(tiered_timer_line)
 
     if simple_enabled:
         lines.append(
@@ -797,6 +812,12 @@ async def _send_discount_settings_menu(
                 InlineKeyboardButton(
                     "⏱ تنظیم تایمر تخفیف حجمی ساده",
                     callback_data=f"plans:{server_id}:dyn_edit:discount_timer",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⏱ تنظیم تایمر تخفیف پلاکانی",
+                    callback_data=f"plans:{server_id}:dyn_edit:discount_tiers_timer",
                 )
             ],
             [
@@ -923,6 +944,7 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 plans_storage.set_plan_dynamic_settings(
                     server_id,
                     discount_tiered_enabled=False,
+                    discount_tiered_expire_at=0,
                 )
                 await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
                 return
@@ -931,6 +953,7 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 plans_storage.set_plan_dynamic_settings(
                     server_id,
                     discount_tiered_enabled=True,
+                    discount_tiered_expire_at=0,
                 )
                 await _send_discount_settings_menu(server_id, chat_id, context, message=msg)
                 return
@@ -987,6 +1010,12 @@ async def handle_plans_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 "⏱ تنظیم تایمر تخفیف حجمی ساده\n"
                 "مدت زمان را به ساعت ارسال کنید (مثلاً 12 یا 24).\n"
                 "برای اتمام تایمر و خاموش شدن خودکار تخفیف، عدد 0 بفرستید."
+            )
+        elif dyn_action == "discount_tiers_timer":
+            prompt = (
+                "⏱ تنظیم تایمر تخفیف پلاکانی\n"
+                "مدت زمان را به ساعت ارسال کنید (مثلاً 12 یا 24).\n"
+                "برای اتمام تایمر و خاموش شدن خودکار تخفیف پلاکانی، عدد 0 بفرستید."
             )
         else:
             prompt = "لطفاً مقدار جدید را ارسال کنید:"
@@ -1402,6 +1431,54 @@ async def handle_plans_message(
             context.user_data.pop("state", None)
             return
 
+        if dyn_action == "discount_tiers_timer":
+            try:
+                hours = int(text)
+            except ValueError:
+                await message.reply_text(
+                    "❌ لطفاً مدت زمان را به ساعت به صورت عددی ارسال کنید (مثلاً 12).",
+                    reply_markup=_cancel_kb(),
+                )
+                return
+
+            current = plans_storage.get_plan_dynamic_settings(server_id)
+            tiers = plans_storage.normalize_discount_tiers(current.get("discount_tiers", []))
+            if hours > 0 and not tiers:
+                await message.reply_text(
+                    "⚠️ ابتدا پله‌های تخفیف پلاکانی را تنظیم کنید، سپس تایمر را فعال کنید.",
+                    reply_markup=_cancel_kb(),
+                )
+                return
+
+            if hours <= 0:
+                plans_storage.set_plan_dynamic_settings(
+                    server_id,
+                    discount_tiered_enabled=False,
+                    discount_tiered_expire_at=0,
+                )
+                await message.reply_text(
+                    "✅ تایمر تخفیف پلاکانی حذف شد و تخفیف پلاکانی خاموش شد.",
+                    reply_markup=_finish_reply_kb(),
+                )
+            else:
+                expire_at = int(time.time()) + hours * 3600
+                plans_storage.set_plan_dynamic_settings(
+                    server_id,
+                    discount_tiered_enabled=True,
+                    discount_tiered_expire_at=expire_at,
+                )
+                await message.reply_text(
+                    "✅ تایمر تخفیف پلاکانی تنظیم شد.\n"
+                    f"تخفیف به مدت {hours} ساعت (تا {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')}) فعال است "
+                    "و پس از اتمام، به‌صورت خودکار خاموش می‌شود.",
+                    reply_markup=_finish_reply_kb(),
+                )
+
+            await _send_discount_settings_menu(server_id, chat_id, context)
+            context.user_data.pop("plans_dyn_action", None)
+            context.user_data.pop("state", None)
+            return
+
         if dyn_action == "discount_tiers":
             try:
                 tiers = _parse_discount_tiers_text(text)
@@ -1415,7 +1492,8 @@ async def handle_plans_message(
             plans_storage.set_plan_dynamic_settings(
                 server_id,
                 discount_tiers=tiers,
-                discount_tiered_enabled=True,
+                discount_tiered_enabled=bool(tiers),
+                discount_tiered_expire_at=0,
             )
             if tiers:
                 await message.reply_text(
