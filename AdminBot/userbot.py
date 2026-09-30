@@ -1935,6 +1935,31 @@ def broadcast_skip_cancel_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def build_broadcast_preview_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ انتشار و ارسال",
+                    callback_data="userbot:broadcast:preview:send",
+                    style="success",
+                ),
+                InlineKeyboardButton(
+                    "✏️ ویرایش",
+                    callback_data="userbot:broadcast:preview:edit",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ لغو",
+                    callback_data="userbot:broadcast:preview:cancel",
+                    style="danger",
+                )
+            ],
+        ]
+    )
+
+
 def build_tickets_list_keyboard(
     tickets: List[Dict[str, Any]],
     *,
@@ -5785,30 +5810,35 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             if not body_text:
                 st["step"] = "wait_text"
                 context.user_data[BROADCAST_SEND_STATE] = st
-                await msg.reply_text("❌ متن پیام خالی است. لطفاً دوباره متن را ارسال کنید.", reply_markup=userbot_cancel_keyboard())
+                await msg.reply_text(
+                    "❌ متن پیام خالی است. لطفاً دوباره متن را ارسال کنید.",
+                    reply_markup=userbot_cancel_keyboard(),
+                )
                 return
 
-            target_ids = userbot_db.get_broadcast_target_telegram_ids(segment)
+            st["photo_file_id"] = photo_file_id
+            st["step"] = "preview"
+            context.user_data[BROADCAST_SEND_STATE] = st
             try:
-                sent_count, fail_count, delivery_details = await _send_broadcast_to_targets(
-                    context, target_ids, body_text, photo_file_id)
+                await _send_broadcast_preview(context, msg.chat_id, st)
             except Exception as e:
                 logger.warning(
-                    "Broadcast setup failed (segment=%s): %s",
+                    "Broadcast preview failed (segment=%s): %s",
                     segment,
                     secure_io.safe_exception_name(e),
                 )
+                st["step"] = "wait_photo"
+                context.user_data[BROADCAST_SEND_STATE] = st
                 await msg.reply_text(
-                    "❌ آماده‌سازی یا ارسال پیام همگانی با خطا مواجه شد.",
-                    reply_markup=admin_main_keyboard(),
+                    "❌ ساخت پیش‌نمایش ناموفق بود. لطفاً عکس را دوباره ارسال کنید یا رد کنید.",
+                    reply_markup=broadcast_skip_cancel_keyboard(),
                 )
-                context.user_data.pop(BROADCAST_SEND_STATE, None)
-                return
+            return
 
-            context.user_data.pop(BROADCAST_SEND_STATE, None)
+        if step in {"preview", "sending"}:
             await msg.reply_text(
-                _broadcast_result_text(sent_count, fail_count, delivery_details),
-                reply_markup=admin_main_keyboard(),
+                "👁 پیش‌نمایش آماده است. از دکمه‌های زیر همان پیش‌نمایش برای ارسال، ویرایش یا لغو استفاده کنید.",
+                reply_markup=ReplyKeyboardRemove(),
             )
             return
 
@@ -8632,6 +8662,44 @@ async def send_tickets_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, me
     await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
 
 
+async def _send_broadcast_preview(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    state: Dict[str, Any],
+) -> None:
+    body = str(state.get("text") or "").strip()
+    photo_file_id = str(state.get("photo_file_id") or "").strip()
+    segment = str(state.get("segment") or "all").strip().lower()
+    target_count = len(userbot_db.get_broadcast_target_telegram_ids(segment))
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "👁 <b>پیش‌نمایش انتشار</b>\n"
+            f"گروه: {_broadcast_segment_label(segment)}\n"
+            f"تعداد گیرنده فعلی: {target_count}\n\n"
+            "پیام زیر هنوز ارسال نشده است. در صورت تایید روی «✅ انتشار و ارسال» بزنید."
+        ),
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+    kb = build_broadcast_preview_keyboard()
+    if photo_file_id:
+        if len(body) <= 1024:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_file_id,
+                caption=body,
+                reply_markup=kb,
+            )
+        else:
+            await context.bot.send_photo(chat_id=chat_id, photo=photo_file_id)
+            await context.bot.send_message(chat_id=chat_id, text=body, reply_markup=kb)
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=body, reply_markup=kb)
+
+
 async def send_broadcast_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, message=None) -> None:
     stats = userbot_db.get_broadcast_stats()
     text = _build_broadcast_stats_text(stats)
@@ -11389,6 +11457,98 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         await send_broadcast_menu(cid, context, message=msg)
         return
 
+    if data.startswith("userbot:broadcast:preview:"):
+        action = str(data.rsplit(":", 1)[-1] or "").strip().lower()
+        st = context.user_data.get(BROADCAST_SEND_STATE)
+        if not isinstance(st, dict):
+            await query.answer("پیش‌نمایش منقضی شده است.", show_alert=True)
+            return
+
+        if action == "cancel":
+            context.user_data.pop(BROADCAST_SEND_STATE, None)
+            await query.answer("ارسال لغو شد.")
+            try:
+                await msg.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=cid,
+                text="❌ ارسال همگانی لغو شد.",
+                reply_markup=admin_main_keyboard(),
+            )
+            return
+
+        if action == "edit":
+            st["step"] = "wait_text"
+            context.user_data[BROADCAST_SEND_STATE] = st
+            await query.answer("ویرایش پیام")
+            try:
+                await msg.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=cid,
+                text=(
+                    "✏️ متن جدید پیام را ارسال کنید.\n"
+                    "بعد از متن، دوباره می‌توانید عکس را انتخاب یا رد کنید و پیش‌نمایش جدید می‌بینید."
+                ),
+                reply_markup=userbot_cancel_keyboard(),
+            )
+            return
+
+        if action == "send":
+            if str(st.get("step") or "").strip().lower() != "preview":
+                await query.answer("این پیش‌نمایش قبلاً پردازش شده است.", show_alert=True)
+                return
+            body_text = str(st.get("text") or "").strip()
+            if not body_text:
+                st["step"] = "wait_text"
+                context.user_data[BROADCAST_SEND_STATE] = st
+                await query.answer("متن پیام خالی است.", show_alert=True)
+                return
+
+            st["step"] = "sending"
+            context.user_data[BROADCAST_SEND_STATE] = st
+            await query.answer("ارسال شروع شد…")
+            try:
+                await msg.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
+            segment = str(st.get("segment") or "all").strip().lower()
+            target_ids = userbot_db.get_broadcast_target_telegram_ids(segment)
+            try:
+                sent_count, fail_count, delivery_details = await _send_broadcast_to_targets(
+                    context,
+                    target_ids,
+                    body_text,
+                    str(st.get("photo_file_id") or ""),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Broadcast setup failed (segment=%s): %s",
+                    segment,
+                    secure_io.safe_exception_name(e),
+                )
+                context.user_data.pop(BROADCAST_SEND_STATE, None)
+                await context.bot.send_message(
+                    chat_id=cid,
+                    text="❌ آماده‌سازی یا ارسال پیام همگانی با خطا مواجه شد.",
+                    reply_markup=admin_main_keyboard(),
+                )
+                return
+
+            context.user_data.pop(BROADCAST_SEND_STATE, None)
+            await context.bot.send_message(
+                chat_id=cid,
+                text=_broadcast_result_text(sent_count, fail_count, delivery_details),
+                reply_markup=admin_main_keyboard(),
+            )
+            return
+
+        await query.answer("گزینه نامعتبر است.", show_alert=True)
+        return
+
     if data.startswith("userbot:broadcast:segment:"):
         segment = str(data.rsplit(":", 1)[-1] or "").strip().lower()
         allowed_segments = {
@@ -11407,6 +11567,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             "segment": segment,
             "step": "wait_text",
             "text": "",
+            "photo_file_id": "",
         }
         await query.answer()
         await msg.reply_text(
