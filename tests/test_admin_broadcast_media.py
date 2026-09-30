@@ -89,10 +89,46 @@ class AdminBroadcastMediaTests(unittest.IsolatedAsyncioTestCase):
                 context, [101, 102], "hello"
             )
 
-        self.assertEqual(result, (2, 0))
+        self.assertEqual(result[:2], (2, 0))
+        self.assertEqual(result[2]["recovered"], 0)
         context.bot.get_file.assert_not_awaited()
         target_bot.send_photo.assert_not_awaited()
         self.assertEqual(target_bot.send_message.await_count, 2)
+
+    async def test_broadcast_preview_shows_photo_and_confirmation_buttons(self):
+        bot = SimpleNamespace(
+            send_message=AsyncMock(),
+            send_photo=AsyncMock(),
+        )
+        context = SimpleNamespace(bot=bot)
+        state = {
+            "segment": "all",
+            "text": "preview body",
+            "photo_file_id": "admin-photo-id",
+        }
+
+        with patch.object(
+            userbot.userbot_db,
+            "get_broadcast_target_telegram_ids",
+            return_value=[101, 102, 103],
+        ):
+            await userbot._send_broadcast_preview(context, 999, state)
+
+        self.assertEqual(bot.send_message.await_count, 1)
+        self.assertEqual(bot.send_photo.await_count, 1)
+        self.assertEqual(
+            bot.send_photo.await_args.kwargs["caption"],
+            "preview body",
+        )
+        markup = bot.send_photo.await_args.kwargs["reply_markup"]
+        callback_data = [
+            button.callback_data
+            for row in markup.inline_keyboard
+            for button in row
+        ]
+        self.assertIn("userbot:broadcast:preview:send", callback_data)
+        self.assertIn("userbot:broadcast:preview:edit", callback_data)
+        self.assertIn("userbot:broadcast:preview:cancel", callback_data)
 
     async def test_transient_network_error_is_retried_and_recovered(self):
         context = SimpleNamespace(
