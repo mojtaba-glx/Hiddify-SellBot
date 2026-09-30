@@ -27,7 +27,7 @@ from telegram import (
     Bot 
 )
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut
 from dotenv import load_dotenv
 
 from AdminBot.keyboards import admin_main_keyboard
@@ -5790,7 +5790,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
             target_ids = userbot_db.get_broadcast_target_telegram_ids(segment)
             try:
-                sent_count, fail_count = await _send_broadcast_to_targets(
+                sent_count, fail_count, delivery_details = await _send_broadcast_to_targets(
                     context, target_ids, body_text, photo_file_id)
             except Exception as e:
                 logger.warning(
@@ -5807,7 +5807,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
             context.user_data.pop(BROADCAST_SEND_STATE, None)
             await msg.reply_text(
-                _broadcast_result_text(sent_count, fail_count),
+                _broadcast_result_text(sent_count, fail_count, delivery_details),
                 reply_markup=admin_main_keyboard(),
             )
             return
@@ -8645,12 +8645,53 @@ async def send_broadcast_menu(chat_id: int, context: ContextTypes.DEFAULT_TYPE, 
     await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
 
 
+def _broadcast_retry_after_seconds(exc: Exception, fallback: float = 1.0) -> float:
+    value = getattr(exc, "retry_after", None)
+    try:
+        if hasattr(value, "total_seconds"):
+            value = value.total_seconds()
+        seconds = float(value)
+        if seconds > 0:
+            return min(seconds + 0.25, 30.0)
+    except (TypeError, ValueError):
+        pass
+    return max(0.25, float(fallback))
+
+
+async def _broadcast_send_with_retry(factory, *, max_attempts: int = 3):
+    retries = 0
+    last_error: Optional[Exception] = None
+    for attempt in range(max(1, int(max_attempts))):
+        try:
+            result = await factory()
+            return True, result, "", retries, None
+        except RetryAfter as exc:
+            last_error = exc
+            if attempt + 1 >= max_attempts:
+                return False, None, "temporary", retries, exc
+            retries += 1
+            await asyncio.sleep(_broadcast_retry_after_seconds(exc, fallback=1.0))
+        except (TimedOut, NetworkError) as exc:
+            last_error = exc
+            if attempt + 1 >= max_attempts:
+                return False, None, "temporary", retries, exc
+            retries += 1
+            await asyncio.sleep(0.75 * (attempt + 1))
+        except (Forbidden, BadRequest) as exc:
+            return False, None, "unreachable", retries, exc
+        except TelegramError as exc:
+            return False, None, "telegram", retries, exc
+        except Exception as exc:
+            return False, None, "other", retries, exc
+    return False, None, "other", retries, last_error
+
+
 async def _send_broadcast_to_targets(
     context: ContextTypes.DEFAULT_TYPE,
     telegram_ids: List[int],
     text: str,
     photo_file_id: str = "",
-) -> Tuple[int, int]:
+) -> Tuple[int, int, Dict[str, int]]:
     if not USER_BOT_TOKEN:
         raise RuntimeError("USER_BOT_TOKEN تنظیم نشده است.")
 
@@ -8660,8 +8701,7 @@ async def _send_broadcast_to_targets(
     if photo_id:
         try:
             # Telegram file_id values belong to the bot that received the
-            # file.  The admin bot must download the image before UserBot can
-            # upload it under its own identity.
+            # file. The admin bot downloads once and UserBot uploads it.
             file_obj = await context.bot.get_file(photo_id)
             photo_bytes = bytes(await file_obj.download_as_bytearray())
         except Exception:
@@ -8673,55 +8713,122 @@ async def _send_broadcast_to_targets(
     reusable_userbot_photo_id = ""
     sent_count = 0
     fail_count = 0
+    details: Dict[str, int] = {
+        "unreachable": 0,
+        "temporary": 0,
+        "telegram": 0,
+        "other": 0,
+        "recovered": 0,
+    }
 
     for tg_id in telegram_ids:
-        try:
-            if photo_id:
-                outgoing_photo: Any
+        recipient_retried = False
+        category = ""
+        final_error: Optional[Exception] = None
+
+        if photo_id:
+            async def _send_photo():
                 if reusable_userbot_photo_id:
-                    outgoing_photo = reusable_userbot_photo_id
+                    outgoing_photo: Any = reusable_userbot_photo_id
                 else:
                     outgoing_photo = BytesIO(photo_bytes)
                     outgoing_photo.name = "broadcast.jpg"
                 if len(body) <= 1024:
-                    sent = await user_bot.send_photo(
-                        chat_id=tg_id, photo=outgoing_photo, caption=body)
-                else:
-                    sent = await user_bot.send_photo(
-                        chat_id=tg_id, photo=outgoing_photo)
-                if not reusable_userbot_photo_id:
-                    photos = getattr(sent, "photo", None) or []
-                    if photos:
-                        reusable_userbot_photo_id = str(
-                            getattr(photos[-1], "file_id", "") or ""
-                        ).strip()
-                if len(body) > 1024:
-                    await user_bot.send_message(chat_id=tg_id, text=body)
-            else:
-                await user_bot.send_message(chat_id=tg_id, text=body)
+                    return await user_bot.send_photo(
+                        chat_id=tg_id,
+                        photo=outgoing_photo,
+                        caption=body,
+                    )
+                return await user_bot.send_photo(
+                    chat_id=tg_id,
+                    photo=outgoing_photo,
+                )
+
+            ok, sent, category, retries, final_error = await _broadcast_send_with_retry(_send_photo)
+            recipient_retried = recipient_retried or retries > 0
+            if ok and not reusable_userbot_photo_id:
+                photos = getattr(sent, "photo", None) or []
+                if photos:
+                    reusable_userbot_photo_id = str(
+                        getattr(photos[-1], "file_id", "") or ""
+                    ).strip()
+
+            if ok and len(body) > 1024:
+                async def _send_long_text():
+                    return await user_bot.send_message(chat_id=tg_id, text=body)
+
+                ok, _, category, retries, final_error = await _broadcast_send_with_retry(_send_long_text)
+                recipient_retried = recipient_retried or retries > 0
+        else:
+            async def _send_text():
+                return await user_bot.send_message(chat_id=tg_id, text=body)
+
+            ok, _, category, retries, final_error = await _broadcast_send_with_retry(_send_text)
+            recipient_retried = recipient_retried or retries > 0
+
+        if ok:
             sent_count += 1
-        except Exception:
+            if recipient_retried:
+                details["recovered"] += 1
+        else:
             fail_count += 1
-        await asyncio.sleep(0.03)
+            details[category if category in details else "other"] += 1
+            logger.warning(
+                "broadcast delivery failed tg_id=%s category=%s error=%s",
+                tg_id,
+                category or "other",
+                type(final_error).__name__ if final_error else "unknown",
+            )
 
-    return sent_count, fail_count
+        # Keep enough headroom below Telegram's bulk delivery rate. RetryAfter
+        # still takes precedence when Telegram explicitly asks us to slow down.
+        await asyncio.sleep(0.06)
+
+    return sent_count, fail_count, details
 
 
-def _broadcast_result_text(sent_count: int, fail_count: int) -> str:
+def _broadcast_result_text(
+    sent_count: int,
+    fail_count: int,
+    details: Optional[Dict[str, int]] = None,
+) -> str:
     sent = max(0, int(sent_count or 0))
     failed = max(0, int(fail_count or 0))
     total = sent + failed
+    info = details or {}
     if total == 0:
         return "ℹ️ کاربری در گروه انتخاب‌شده برای ارسال پیدا نشد."
     if failed == 0:
-        return f"✅ پیام برای {sent} کاربر ارسال شد."
+        text = f"✅ پیام برای {sent} کاربر ارسال شد."
+        recovered = max(0, int(info.get("recovered") or 0))
+        if recovered:
+            text += f"\n🔁 {recovered} ارسال موقتاً خطا داشت و با تلاش مجدد موفق شد."
+        return text
     if sent == 0:
-        return f"❌ ارسال پیام برای هر {failed} کاربر ناموفق بود."
-    return (
-        "⚠️ ارسال همگانی به‌صورت ناقص انجام شد.\n"
-        f"✅ موفق: {sent}\n"
-        f"❌ ناموفق: {failed}"
-    )
+        lines = [f"❌ ارسال پیام برای هر {failed} کاربر ناموفق بود."]
+    else:
+        lines = [
+            "⚠️ ارسال همگانی به‌صورت ناقص انجام شد.",
+            f"✅ موفق: {sent}",
+            f"❌ ناموفق: {failed}",
+        ]
+
+    unreachable = max(0, int(info.get("unreachable") or 0))
+    temporary = max(0, int(info.get("temporary") or 0))
+    telegram_error = max(0, int(info.get("telegram") or 0))
+    other = max(0, int(info.get("other") or 0))
+    recovered = max(0, int(info.get("recovered") or 0))
+    if unreachable:
+        lines.append(f"🚫 غیرقابل دسترس/مسدود: {unreachable}")
+    if temporary:
+        lines.append(f"🌐 خطای موقت پس از تلاش مجدد: {temporary}")
+    if telegram_error:
+        lines.append(f"⚠️ سایر خطاهای تلگرام: {telegram_error}")
+    if other:
+        lines.append(f"🛠 سایر خطاها: {other}")
+    if recovered:
+        lines.append(f"🔁 بازیابی‌شده با تلاش مجدد: {recovered}")
+    return "\n".join(lines)
 
 
 async def send_tickets_list(
