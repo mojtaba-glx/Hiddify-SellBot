@@ -91,20 +91,14 @@ class DailyAdminReportAccountingTests(unittest.TestCase):
         self._exec(
             self.agency_db,
             """
-            CREATE TABLE agent_services (
-                id INTEGER, customer_id INTEGER, is_trial INTEGER,
-                wholesale_price INTEGER, created_at TEXT
-            );
             CREATE TABLE agent_transactions (
                 id INTEGER, amount INTEGER, tx_type TEXT, description TEXT,
                 service_id INTEGER, created_at TEXT
             );
-            INSERT INTO agent_services VALUES
-                (1, NULL, 0, 70000, '2026-09-28 08:00:00'),
-                (2, 44, 0, 50000, '2026-09-28 09:00:00');
             INSERT INTO agent_transactions VALUES
                 (1, 50000, 'purchase', 'کسر عمده سفارش مشتری #123', 2, '2026-09-28 09:00:00'),
-                (2, 30000, 'purchase', 'تمدید سرویس: direct-user', 1, '2026-09-28 10:00:00');
+                (2, 70000, 'purchase', 'خرید سرویس: direct-user', 1, '2026-09-28 08:00:00'),
+                (3, 30000, 'purchase', 'تمدید سرویس: direct-user', 1, '2026-09-28 10:00:00');
             """,
         )
         data = report._agent_activity("2026-09-28 00:00:00", "2026-09-29 00:00:00")
@@ -112,6 +106,32 @@ class DailyAdminReportAccountingTests(unittest.TestCase):
         self.assertEqual(data["buy_wholesale"], 70000)
         self.assertEqual(data["renew_count"], 1)
         self.assertEqual(data["renew_wholesale"], 30000)
+
+
+    def test_legacy_customer_order_can_recover_wholesale_from_wallet_debit(self):
+        self._exec(
+            self.customer_db,
+            """
+            CREATE TABLE customer_orders (
+                order_id INTEGER, price INTEGER, wholesale_price INTEGER,
+                renew_service_id INTEGER, status TEXT, created_at TEXT, updated_at TEXT
+            );
+            INSERT INTO customer_orders VALUES
+                (777, 120000, 0, 0, 'approved', '2026-09-28 08:00:00', '2026-09-28 08:01:00');
+            """,
+        )
+        self._exec(
+            self.agency_db,
+            """
+            CREATE TABLE agent_transactions (
+                amount INTEGER, description TEXT, tx_type TEXT, created_at TEXT
+            );
+            INSERT INTO agent_transactions VALUES
+                (50000, 'کسر عمده سفارش مشتری #777', 'purchase', '2026-09-28 08:01:00');
+            """,
+        )
+        data = report._customer_sales("2026-09-28 00:00:00", "2026-09-29 00:00:00")
+        self.assertEqual(data["buy_wholesale"], 50000)
 
     def test_failed_direct_renewal_refund_is_excluded(self):
         self._exec(

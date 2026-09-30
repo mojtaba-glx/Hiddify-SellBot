@@ -201,7 +201,7 @@ def _customer_wholesale_fallback(start: str, end: str) -> dict[int, int]:
             return result
         rows = conn.execute(
             "SELECT amount, description FROM agent_transactions "
-            "WHERE tx_type='purchase' AND description LIKE 'کسر عمده سفارش مشتری #%'" 
+            "WHERE tx_type='purchase' AND description LIKE 'کسر عمده سفارش مشتری #%' "
             "AND created_at>=? AND created_at<?",
             (start, end),
         ).fetchall()
@@ -271,43 +271,54 @@ def _customer_sales(start: str, end: str) -> dict:
 def _agent_activity(start: str, end: str) -> dict:
     """Successful direct representative operations at wholesale cost.
 
-    CustomerBot wholesale debits are intentionally excluded here because those
-    are already counted from customer_orders. This prevents double counting.
+    The wallet ledger is authoritative here. Only explicit direct purchase /
+    renewal debits are counted; CustomerBot wholesale debits use a different
+    description and are therefore never counted twice.
     """
     out = {"buy_count": 0, "buy_wholesale": 0, "renew_count": 0, "renew_wholesale": 0}
     conn = _connect(AGENCY_DB)
     if not conn:
         return out
     try:
-        if _has_table(conn, "agent_services"):
-            out["buy_count"], out["buy_wholesale"] = _one(
-                conn,
-                "SELECT COUNT(*), COALESCE(SUM(wholesale_price),0) FROM agent_services "
-                "WHERE customer_id IS NULL AND COALESCE(is_trial,0)=0 "
-                "AND created_at>=? AND created_at<?",
-                (start, end),
-            )
-        if _has_table(conn, "agent_transactions"):
-            out["renew_count"], out["renew_wholesale"] = _one(
-                conn,
-                """
-                SELECT COUNT(*), COALESCE(SUM(t.amount),0)
-                FROM agent_transactions t
-                WHERE t.tx_type='purchase'
-                  AND t.description LIKE 'تمدید سرویس:%'
-                  AND t.created_at>=? AND t.created_at<?
-                  AND NOT EXISTS (
-                      SELECT 1 FROM agent_transactions r
-                      WHERE r.tx_type='refund'
-                        AND r.service_id=t.service_id
-                        AND r.amount=t.amount
-                        AND r.created_at>=t.created_at
-                        AND r.created_at<datetime(t.created_at, '+1 hour')
-                        AND r.description LIKE 'بازگشت وجه تمدید ناموفق%'
-                  )
-                """,
-                (start, end),
-            )
+        if not _has_table(conn, "agent_transactions"):
+            return out
+
+        # A successful direct creation links its purchase ledger row to the
+        # resulting service_id. Failed creations remain unlinked and are refunded.
+        out["buy_count"], out["buy_wholesale"] = _one(
+            conn,
+            """
+            SELECT COUNT(*), COALESCE(SUM(t.amount),0)
+            FROM agent_transactions t
+            WHERE t.tx_type='purchase'
+              AND t.description LIKE 'خرید سرویس:%'
+              AND COALESCE(t.service_id,0)>0
+              AND t.created_at>=? AND t.created_at<?
+            """,
+            (start, end),
+        )
+
+        out["renew_count"], out["renew_wholesale"] = _one(
+            conn,
+            """
+            SELECT COUNT(*), COALESCE(SUM(t.amount),0)
+            FROM agent_transactions t
+            WHERE t.tx_type='purchase'
+              AND t.description LIKE 'تمدید سرویس:%'
+              AND COALESCE(t.service_id,0)>0
+              AND t.created_at>=? AND t.created_at<?
+              AND NOT EXISTS (
+                  SELECT 1 FROM agent_transactions r
+                  WHERE r.tx_type='refund'
+                    AND r.service_id=t.service_id
+                    AND r.amount=t.amount
+                    AND r.created_at>=t.created_at
+                    AND r.created_at<datetime(t.created_at, '+1 hour')
+                    AND r.description LIKE 'بازگشت وجه تمدید ناموفق%'
+              )
+            """,
+            (start, end),
+        )
     except Exception:
         logger.exception("daily report: agent direct activity query failed")
     finally:
