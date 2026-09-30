@@ -480,6 +480,7 @@ async def _process_service(svc: dict) -> Dict[str, str]:
         # periodic enforcer keeps retrying them until remote disable succeeds.
         agent_db.set_service_active(service_id, False)
         updates["is_active"] = 0
+        updates["expired_at"] = str(svc.get("expired_at") or "").strip() or now_str
         reason = "usage_limit_reached" if usage_exceeded else "time_expired"
         result["status"] = "disabled"
         result["reason"] = reason
@@ -491,6 +492,7 @@ async def _process_service(svc: dict) -> Dict[str, str]:
         )
     else:
         updates["is_active"] = 1
+        updates["expired_at"] = ""
         result["status"] = "synced"
         result["reason"] = "ok"
         result["frozen_nodes"] = str(frozen_count)

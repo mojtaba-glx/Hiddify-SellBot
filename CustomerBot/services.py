@@ -348,6 +348,7 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
             "usage_current",
             "start_date",
             "end_date",
+            "expired_at",
             "is_active",
         )
     }

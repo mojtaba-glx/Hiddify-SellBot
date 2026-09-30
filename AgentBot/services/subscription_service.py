@@ -516,7 +516,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     # paid renewal in the database without a real subscription.
     old_state = {
         key: svc.get(key)
-        for key in ("days_left", "usage_limit", "usage_current", "start_date", "end_date", "is_active")
+        for key in ("days_left", "usage_limit", "usage_current", "start_date", "end_date", "expired_at", "is_active")
     }
     if not agent_db.renew_service_with_policy(service_id, extra_days, extra_gb, volume_mode, time_mode):
         if cost > 0:

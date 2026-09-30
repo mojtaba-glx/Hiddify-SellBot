@@ -110,6 +110,7 @@ def init_db() -> None:
             days_left INTEGER DEFAULT 0,
             start_date TEXT DEFAULT '',
             end_date TEXT DEFAULT '',
+            expired_at TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
             comment TEXT DEFAULT '',
             wholesale_price INTEGER DEFAULT 0,
@@ -330,6 +331,15 @@ def _migrate_db():
         except sqlite3.OperationalError:
             pass
 
+    # Exact service-expiry timestamp used by safe bulk cleanup.
+    try:
+        cur.execute("SELECT expired_at FROM agent_services LIMIT 1")
+    except sqlite3.OperationalError:
+        try:
+            cur.execute("ALTER TABLE agent_services ADD COLUMN expired_at TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+
     for column in ("payment_operation_key", "last_payment_operation_key"):
         try:
             cur.execute(f"SELECT {column} FROM agent_services LIMIT 1")
@@ -357,6 +367,57 @@ def _migrate_db():
             cur.execute("ALTER TABLE agent_service_reminder_state ADD COLUMN expired_sent INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+
+    # Backfill only services that are already actually expired. For legacy
+    # volume exhaustion updated_at is a conservative approximation; it is never
+    # used unless usage >= limit. Mere inactivity is not an expiry signal.
+    try:
+        _now_exp = datetime.now(timezone.utc).replace(tzinfo=None)
+        _rows = cur.execute(
+            "SELECT id, usage_current, usage_limit, days_left, end_date, updated_at, expired_at "
+            "FROM agent_services WHERE COALESCE(expired_at, '') = ''"
+        ).fetchall()
+        for _row in _rows:
+            _expired_dt = None
+            _end_raw = str(_row["end_date"] or "").strip()
+            if _end_raw:
+                try:
+                    _end_dt = datetime.strptime(_end_raw[:19], "%Y-%m-%d %H:%M:%S")
+                    if _end_dt <= _now_exp:
+                        _expired_dt = _end_dt
+                except Exception:
+                    pass
+            if _expired_dt is None and not _end_raw:
+                try:
+                    _days_left = int(_row["days_left"]) if _row["days_left"] is not None else None
+                except Exception:
+                    _days_left = None
+                if _days_left is not None and _days_left < 0:
+                    _expired_dt = _now_exp - timedelta(days=abs(_days_left))
+            if _expired_dt is None:
+                try:
+                    _used = float(_row["usage_current"] or 0)
+                    _limit = float(_row["usage_limit"] or 0)
+                except Exception:
+                    _used, _limit = 0.0, 0.0
+                if _limit > 0 and _used >= _limit:
+                    _updated_raw = str(_row["updated_at"] or "").strip()
+                    if _updated_raw:
+                        try:
+                            _candidate = datetime.strptime(_updated_raw[:19], "%Y-%m-%d %H:%M:%S")
+                            if _candidate <= _now_exp:
+                                _expired_dt = _candidate
+                        except Exception:
+                            pass
+                    if _expired_dt is None:
+                        _expired_dt = _now_exp
+            if _expired_dt is not None:
+                cur.execute(
+                    "UPDATE agent_services SET expired_at = ? WHERE id = ? AND COALESCE(expired_at, '') = ''",
+                    (_expired_dt.strftime("%Y-%m-%d %H:%M:%S"), int(_row["id"])),
+                )
+    except Exception:
+        pass
 
     # Older schemas did not declare a foreign key on service-node mappings.
     # Remove orphan mappings during startup so they cannot be served as real
@@ -410,6 +471,7 @@ def _migrate_service_customer_nullable() -> None:
                 days_left INTEGER DEFAULT 0,
                 start_date TEXT DEFAULT '',
                 end_date TEXT DEFAULT '',
+                expired_at TEXT DEFAULT '',
                 is_active INTEGER DEFAULT 1,
                 comment TEXT DEFAULT '',
                 wholesale_price INTEGER DEFAULT 0,
@@ -430,7 +492,7 @@ def _migrate_service_customer_nullable() -> None:
             INSERT INTO agent_services (
                 id, agent_id, customer_id, server_id, server_title, name,
                 panel_user_uuid, usage_current, usage_limit, days_left,
-                start_date, end_date, is_active, comment, wholesale_price,
+                start_date, end_date, expired_at, is_active, comment, wholesale_price,
                 sale_price, is_trial, created_at, updated_at, deleted_at,
                 payment_operation_key, last_payment_operation_key
             )
@@ -444,7 +506,7 @@ def _migrate_service_customer_nullable() -> None:
                 END,
                 s.server_id, s.server_title, s.name, s.panel_user_uuid,
                 s.usage_current, s.usage_limit, s.days_left, s.start_date,
-                s.end_date, s.is_active, s.comment, s.wholesale_price,
+                s.end_date, s.expired_at, s.is_active, s.comment, s.wholesale_price,
                 s.sale_price, s.is_trial, s.created_at, s.updated_at,
                 s.deleted_at, s.payment_operation_key,
                 s.last_payment_operation_key
@@ -2082,7 +2144,12 @@ def get_all_active_services() -> List[Dict[str, Any]]:
 
 
 def get_all_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
-    """همه سرویس‌های منقضی نمایندگی/مشتری که هنوز حذف نشده‌اند."""
+    """همه سرویس‌های واقعاً منقضی نمایندگی/مشتری که هنوز حذف نشده‌اند.
+
+    سن حذف از expired_at محاسبه می‌شود. برای رکوردهای legacy فقط بعد از
+    اثبات اتمام زمان/حجم از end_date/days_left/updated_at fallback می‌گیریم؛
+    عدم اتصال کاربر به‌تنهایی هرگز معیار انقضا نیست.
+    """
     init_db()
     days = max(0, int(min_days_expired or 0))
     conn = _get_conn()
@@ -2103,45 +2170,66 @@ def get_all_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
         out = []
         for row in rows:
             d = dict(row)
-            expired_days = None
+            expired_dt = None
+            raw_expired_at = str(d.get("expired_at") or "").strip()
+            if raw_expired_at:
+                try:
+                    expired_dt = datetime.strptime(raw_expired_at[:19], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    expired_dt = None
+
             end_raw = str(d.get("end_date") or "").strip()
+            time_expired = False
             if end_raw:
                 try:
                     end_dt = datetime.strptime(end_raw[:19], "%Y-%m-%d %H:%M:%S")
-                    expired_days = (now - end_dt).days
+                    time_expired = end_dt <= now
+                    if time_expired and expired_dt is None:
+                        expired_dt = end_dt
                 except Exception:
                     pass
-            # end_date آینده یعنی سرویس هنوز منقضی نشده است.
-            # در سرویس‌های نمایندگی که هنوز شروع نشده‌اند days_left=0
-            # به معنی «زمان نامشخص/شروع‌نشده» است، نه انقضا.
-            if expired_days is not None and expired_days < 0:
-                expired_days = None
-            if expired_days is None and not end_raw:
-                dl = d.get("days_left")
+            else:
                 try:
-                    dl = int(dl) if dl is not None else None
+                    dl = int(d.get("days_left")) if d.get("days_left") is not None else None
                 except Exception:
                     dl = None
                 if dl is not None and dl < 0:
-                    expired_days = abs(dl)
-            volume_expired = False
+                    time_expired = True
+                    if expired_dt is None:
+                        expired_dt = now - timedelta(days=abs(dl))
+
             try:
                 limit = float(d.get("usage_limit") or 0)
                 used = float(d.get("usage_current") or 0)
-                volume_expired = limit > 0 and used >= limit
             except Exception:
-                pass
-            if days == 0:
-                if expired_days is None and not volume_expired:
-                    continue
-            elif expired_days is None or expired_days < days:
+                limit, used = 0.0, 0.0
+            volume_expired = limit > 0 and used >= limit
+
+            # expired_at is written only by the enforcer after a real expiry.
+            actually_expired = bool(raw_expired_at) or time_expired or volume_expired
+            if not actually_expired:
+                continue
+
+            if expired_dt is None and volume_expired:
+                updated_raw = str(d.get("updated_at") or "").strip()
+                if updated_raw:
+                    try:
+                        candidate = datetime.strptime(updated_raw[:19], "%Y-%m-%d %H:%M:%S")
+                        if candidate <= now:
+                            expired_dt = candidate
+                    except Exception:
+                        pass
+                if expired_dt is None:
+                    expired_dt = now
+
+            expired_days = max(0, int((now - expired_dt).total_seconds() // 86400)) if expired_dt else 0
+            if days > 0 and expired_days < days:
                 continue
             d["_expired_days"] = expired_days
             out.append(d)
         return out
     finally:
         conn.close()
-
 
 
 def get_old_unstarted_services(min_age_days: int = 7) -> List[Dict[str, Any]]:
@@ -2241,7 +2329,7 @@ def update_service(service_id: int, updates: Dict[str, Any]) -> bool:
     cur = conn.cursor()
     allowed = {
         "name", "panel_user_uuid", "usage_current", "usage_limit",
-        "days_left", "start_date", "end_date", "is_active",
+        "days_left", "start_date", "end_date", "expired_at", "is_active",
         "comment", "sale_price", "wholesale_price", "server_title",
     }
     set_parts = []
@@ -2353,7 +2441,7 @@ def renew_service(service_id: int, extra_days: int, extra_gb: float = 0) -> bool
     new_end = (current_end + timedelta(days=int(extra_days))).strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute(
-        "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, updated_at = ? WHERE id = ?",
+        "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, expired_at = '', updated_at = ? WHERE id = ?",
         (new_days_left, new_usage_limit, new_end, _now(), service_id),
     )
     conn.commit()
@@ -2415,7 +2503,7 @@ def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float 
     new_end_str = new_end.strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
         "UPDATE agent_services SET days_left = ?, usage_limit = ?, usage_current = 0, "
-        "start_date = ?, end_date = ?, last_payment_operation_key = ?, updated_at = ? WHERE id = ?",
+        "start_date = ?, end_date = ?, expired_at = '', last_payment_operation_key = ?, updated_at = ? WHERE id = ?",
         (
             new_days_left,
             new_usage_limit,
@@ -2744,6 +2832,10 @@ def reset_service_nodes_on_renew(
     now = _now()
     conn = _get_conn()
     try:
+        conn.execute(
+            "UPDATE agent_services SET expired_at = '', updated_at = ? WHERE id = ?",
+            (now, sid),
+        )
         # Deleted/removed nodes only belong to the old accounting period when
         # traffic itself is reset. For add-mode renewals their held usage must
         # remain part of the service total.

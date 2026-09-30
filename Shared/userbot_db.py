@@ -279,7 +279,7 @@ def init_db() -> None:
     cur.execute("""CREATE TABLE IF NOT EXISTS userbot_services (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, server_id INTEGER,
             server_title TEXT, usage_current REAL, usage_limit REAL, days_left INTEGER,
-            last_online TEXT, comment TEXT)""")
+            last_online TEXT, comment TEXT, expired_at TEXT DEFAULT '')""")
 
     # نگاشت سرویس مرکزی به یوزرهای همان سرویس روی چند سرور (نود)
     cur.execute(
@@ -602,6 +602,64 @@ def _migrate_db():
         )
         """
     )
+
+    # Track the moment a service actually becomes unusable.  This is separate
+    # from last_online: a user who simply has not connected for days must never
+    # become eligible for expired-service cleanup.
+    try:
+        cur.execute("PRAGMA table_info(userbot_services)")
+        _svc_cols = {str(r[1]) for r in cur.fetchall()}
+    except Exception:
+        _svc_cols = set()
+    if "expired_at" not in _svc_cols:
+        try:
+            cur.execute("ALTER TABLE userbot_services ADD COLUMN expired_at TEXT DEFAULT ''")
+            print("Migrated: expired_at column added to userbot_services.")
+        except sqlite3.OperationalError:
+            pass
+
+    # Backfill only rows that are ALREADY actually expired.  last_online is
+    # used only for legacy volume-exhausted rows after proving usage >= limit;
+    # it is never an expiry condition by itself.
+    try:
+        _now_exp = datetime.now(timezone.utc).replace(tzinfo=None)
+        _rows = cur.execute(
+            "SELECT id, usage_current, usage_limit, days_left, last_online, expired_at "
+            "FROM userbot_services WHERE COALESCE(expired_at, '') = ''"
+        ).fetchall()
+        for _row in _rows:
+            try:
+                _used = float(_row["usage_current"] or 0)
+                _limit = float(_row["usage_limit"] or 0)
+            except Exception:
+                _used, _limit = 0.0, 0.0
+            try:
+                _days_left = int(_row["days_left"]) if _row["days_left"] is not None else None
+            except Exception:
+                _days_left = None
+            _inferred = None
+            if _days_left is not None and _days_left < 0:
+                _inferred = _now_exp - timedelta(days=abs(_days_left))
+            elif _limit > 0 and _used >= _limit:
+                _raw_last = str(_row["last_online"] or "").strip()
+                if _raw_last:
+                    try:
+                        _dt = datetime.fromisoformat(_raw_last.replace("Z", "+00:00"))
+                        if _dt.tzinfo is not None:
+                            _dt = _dt.astimezone(timezone.utc).replace(tzinfo=None)
+                        if 2000 <= _dt.year <= _now_exp.year + 1 and _dt <= _now_exp:
+                            _inferred = _dt
+                    except Exception:
+                        pass
+                if _inferred is None:
+                    _inferred = _now_exp
+            if _inferred is not None:
+                cur.execute(
+                    "UPDATE userbot_services SET expired_at = ? WHERE id = ? AND COALESCE(expired_at, '') = ''",
+                    (_inferred.strftime("%Y-%m-%d %H:%M:%S"), int(_row["id"])),
+                )
+    except Exception:
+        pass
 
     # probe table migrations
     try:
@@ -2376,46 +2434,81 @@ def get_services_for_user(user_id: int) -> List[Dict[str, Any]]:
 
 
 def get_expired_services(min_days_expired: int = 0) -> List[Dict[str, Any]]:
-    """Return expired UserBot services without touching orders/payments/history.
+    """Return actually-expired UserBot services without touching history.
 
-    min_days_expired=0 -> all fully expired (days_left < 0)
-    min_days_expired=3 -> expired at least 3 full days ago (days_left <= -3)
-
-    days_left=0 means the service is on its last/current day and must NOT be
-    treated as expired until the panel/bot actually closes it.
+    Cleanup age is based on the moment the service became unusable, never on
+    inactivity alone. A service is expired only when days_left < 0 or its
+    traffic usage has reached the configured limit. last_online is consulted
+    only as a legacy timestamp fallback *after* volume exhaustion is proven.
     """
     init_db()
+    days = max(0, int(min_days_expired or 0))
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     conn = _get_conn()
     cur = conn.cursor()
-    threshold = -max(0, int(min_days_expired or 0))
     try:
-        if int(min_days_expired or 0) <= 0:
-            cur.execute(
-                """
-                SELECT s.*, u.telegram_id, u.username, u.full_name
-                FROM userbot_services s
-                LEFT JOIN userbot_users u ON u.id = s.user_id
-                WHERE (s.days_left IS NOT NULL AND s.days_left < 0)
-                   OR (COALESCE(s.usage_limit, 0) > 0
-                       AND COALESCE(s.usage_current, 0) >= COALESCE(s.usage_limit, 0))
-                ORDER BY COALESCE(s.days_left, 0) ASC, s.id DESC
-                """
-            )
-        else:
-            cur.execute(
-                """
-                SELECT s.*, u.telegram_id, u.username, u.full_name
-                FROM userbot_services s
-                LEFT JOIN userbot_users u ON u.id = s.user_id
-                WHERE s.days_left IS NOT NULL AND s.days_left <= ?
-                ORDER BY s.days_left ASC, s.id DESC
-                """,
-                (threshold,),
-            )
-        return [dict(row) for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT s.*, u.telegram_id, u.username, u.full_name
+            FROM userbot_services s
+            LEFT JOIN userbot_users u ON u.id = s.user_id
+            ORDER BY s.id DESC
+            """
+        )
+        out: List[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            svc = dict(row)
+            try:
+                days_left = int(svc.get("days_left")) if svc.get("days_left") is not None else None
+            except Exception:
+                days_left = None
+            try:
+                used = float(svc.get("usage_current") or 0)
+                limit = float(svc.get("usage_limit") or 0)
+            except Exception:
+                used, limit = 0.0, 0.0
+
+            time_expired = days_left is not None and days_left < 0
+            volume_expired = limit > 0 and used >= limit
+            if not time_expired and not volume_expired:
+                continue
+
+            expired_dt: Optional[datetime] = None
+            raw_expired_at = str(svc.get("expired_at") or "").strip()
+            if raw_expired_at:
+                try:
+                    expired_dt = datetime.fromisoformat(raw_expired_at.replace("Z", "+00:00"))
+                    if expired_dt.tzinfo is not None:
+                        expired_dt = expired_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                except Exception:
+                    expired_dt = None
+
+            # Legacy rows created before expired_at existed.
+            if expired_dt is None and time_expired and days_left is not None:
+                expired_dt = now - timedelta(days=abs(days_left))
+            elif expired_dt is None and volume_expired:
+                raw_last = str(svc.get("last_online") or "").strip()
+                if raw_last:
+                    try:
+                        candidate = datetime.fromisoformat(raw_last.replace("Z", "+00:00"))
+                        if candidate.tzinfo is not None:
+                            candidate = candidate.astimezone(timezone.utc).replace(tzinfo=None)
+                        if 2000 <= candidate.year <= now.year + 1 and candidate <= now:
+                            expired_dt = candidate
+                    except Exception:
+                        pass
+                if expired_dt is None:
+                    # Safe/conservative fallback: start the age clock now.
+                    expired_dt = now
+
+            expired_days = max(0, int((now - expired_dt).total_seconds() // 86400)) if expired_dt else 0
+            if days > 0 and expired_days < days:
+                continue
+            svc["_expired_days"] = expired_days
+            out.append(svc)
+        return out
     finally:
         conn.close()
-
 
 
 def get_stale_zero_day_services() -> List[Dict[str, Any]]:
@@ -3392,7 +3485,8 @@ def update_service_runtime(
     if not parts:
         return
 
-    params.append(int(service_id))
+    sid = int(service_id)
+    params.append(sid)
     conn = _get_conn()
     cur = conn.cursor()
     try:
@@ -3400,6 +3494,36 @@ def update_service_runtime(
             f"UPDATE userbot_services SET {', '.join(parts)} WHERE id = ?",
             params,
         )
+        row = cur.execute(
+            "SELECT usage_current, usage_limit, days_left, expired_at "
+            "FROM userbot_services WHERE id = ?",
+            (sid,),
+        ).fetchone()
+        if row:
+            try:
+                used = float(row["usage_current"] or 0)
+                limit = float(row["usage_limit"] or 0)
+            except Exception:
+                used, limit = 0.0, 0.0
+            try:
+                current_days = int(row["days_left"]) if row["days_left"] is not None else None
+            except Exception:
+                current_days = None
+            actually_expired = (
+                (current_days is not None and current_days < 0)
+                or (limit > 0 and used >= limit)
+            )
+            old_expired_at = str(row["expired_at"] or "").strip()
+            if actually_expired and not old_expired_at:
+                cur.execute(
+                    "UPDATE userbot_services SET expired_at = ? WHERE id = ?",
+                    (datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"), sid),
+                )
+            elif not actually_expired and old_expired_at:
+                cur.execute(
+                    "UPDATE userbot_services SET expired_at = '' WHERE id = ?",
+                    (sid,),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -3764,7 +3888,7 @@ def reset_service_nodes_on_renew(service_id: int) -> None:
         # ریست کامل حجم سرویس (حتی اگر همه نودها حذف‌شده بودند و انفورسر دیگر
         # نمی‌توانست آن را بازخوانی کند). days_left هم NULL تا انفورسر از پنل سینک کند.
         cur.execute(
-            "UPDATE userbot_services SET usage_current = 0, days_left = NULL WHERE id = ?",
+            "UPDATE userbot_services SET usage_current = 0, days_left = NULL, expired_at = '' WHERE id = ?",
             (sid,),
         )
         conn.commit()
