@@ -4,7 +4,7 @@ from io import BytesIO
 from typing import Any, Dict, List, Tuple
 
 from telegram import Bot, ReplyKeyboardRemove, Update
-from telegram.error import BadRequest
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import ContextTypes
 
 from AgentBot.constants import STATE_BROADCAST_MESSAGE, UD_STATE
@@ -81,51 +81,131 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(text, reply_markup=broadcast_menu_keyboard())
 
 
+def _broadcast_retry_after_seconds(exc: Exception, fallback: float = 1.0) -> float:
+    value = getattr(exc, "retry_after", None)
+    try:
+        if hasattr(value, "total_seconds"):
+            value = value.total_seconds()
+        seconds = float(value)
+        if seconds > 0:
+            return min(seconds + 0.25, 30.0)
+    except (TypeError, ValueError):
+        pass
+    return max(0.25, float(fallback))
+
+
+async def _broadcast_send_with_retry(factory, *, max_attempts: int = 3):
+    retries = 0
+    last_error = None
+    for attempt in range(max(1, int(max_attempts))):
+        try:
+            result = await factory()
+            return True, result, "", retries, None
+        except RetryAfter as exc:
+            last_error = exc
+            if attempt + 1 >= max_attempts:
+                return False, None, "temporary", retries, exc
+            retries += 1
+            await asyncio.sleep(_broadcast_retry_after_seconds(exc, fallback=1.0))
+        except (TimedOut, NetworkError) as exc:
+            last_error = exc
+            if attempt + 1 >= max_attempts:
+                return False, None, "temporary", retries, exc
+            retries += 1
+            await asyncio.sleep(0.75 * (attempt + 1))
+        except (Forbidden, BadRequest) as exc:
+            return False, None, "unreachable", retries, exc
+        except TelegramError as exc:
+            return False, None, "telegram", retries, exc
+        except Exception as exc:
+            return False, None, "other", retries, exc
+    return False, None, "other", retries, last_error
+
+
 async def _send_broadcast_to_targets(
     context: ContextTypes.DEFAULT_TYPE,
     token: str,
     telegram_ids: List[int],
     text: str,
     photo_file_id: str = "",
-) -> Tuple[int, int]:
+) -> Tuple[int, int, Dict[str, int]]:
     sender_bot = Bot(token=token)
     body = str(text or "").strip()
     photo_id = str(photo_file_id or "").strip()
     sent_count = 0
     fail_count = 0
-    photo_bytes = None
+    photo_data = b""
+    details: Dict[str, int] = {
+        "unreachable": 0,
+        "temporary": 0,
+        "telegram": 0,
+        "other": 0,
+        "recovered": 0,
+    }
 
     if photo_id:
         try:
             tg_file = await context.bot.get_file(photo_id)
             bio = BytesIO()
             await tg_file.download_to_memory(out=bio)
-            bio.seek(0)
-            bio.name = "broadcast.jpg"
-            photo_bytes = bio
+            photo_data = bio.getvalue()
         except Exception:
-            photo_bytes = None
+            photo_data = b""
 
     for tg_id in telegram_ids:
-        try:
-            if photo_id and photo_bytes is not None:
-                photo_bytes.seek(0)
-                if len(body) <= 1024:
-                    await sender_bot.send_photo(chat_id=tg_id, photo=photo_bytes, caption=body)
-                else:
-                    await sender_bot.send_photo(chat_id=tg_id, photo=photo_bytes)
-                    await sender_bot.send_message(chat_id=tg_id, text=body)
-            elif photo_id:
-                fallback_text = body or "📷 تصویر ضمیمه شده بود ولی ارسال تصویر ممکن نشد."
-                await sender_bot.send_message(chat_id=tg_id, text=fallback_text)
-            else:
-                await sender_bot.send_message(chat_id=tg_id, text=body)
-            sent_count += 1
-        except Exception:
-            fail_count += 1
-        await asyncio.sleep(0.03)
+        recipient_retried = False
+        category = ""
+        final_error = None
 
-    return sent_count, fail_count
+        if photo_id and photo_data:
+            async def _send_photo():
+                outgoing = BytesIO(photo_data)
+                outgoing.name = "broadcast.jpg"
+                if len(body) <= 1024:
+                    return await sender_bot.send_photo(
+                        chat_id=tg_id,
+                        photo=outgoing,
+                        caption=body,
+                    )
+                return await sender_bot.send_photo(chat_id=tg_id, photo=outgoing)
+
+            ok, _, category, retries, final_error = await _broadcast_send_with_retry(_send_photo)
+            recipient_retried = recipient_retried or retries > 0
+
+            if ok and len(body) > 1024:
+                async def _send_long_text():
+                    return await sender_bot.send_message(chat_id=tg_id, text=body)
+
+                ok, _, category, retries, final_error = await _broadcast_send_with_retry(_send_long_text)
+                recipient_retried = recipient_retried or retries > 0
+        else:
+            fallback_text = body
+            if photo_id and not photo_data and not fallback_text:
+                fallback_text = "📷 تصویر ضمیمه شده بود ولی ارسال تصویر ممکن نشد."
+
+            async def _send_text():
+                return await sender_bot.send_message(chat_id=tg_id, text=fallback_text)
+
+            ok, _, category, retries, final_error = await _broadcast_send_with_retry(_send_text)
+            recipient_retried = recipient_retried or retries > 0
+
+        if ok:
+            sent_count += 1
+            if recipient_retried:
+                details["recovered"] += 1
+        else:
+            fail_count += 1
+            details[category if category in details else "other"] += 1
+            logger.warning(
+                "agent broadcast delivery failed tg_id=%s category=%s error=%s",
+                tg_id,
+                category or "other",
+                type(final_error).__name__ if final_error else "unknown",
+            )
+
+        await asyncio.sleep(0.06)
+
+    return sent_count, fail_count, details
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -256,7 +336,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
         await _restore_main_menu(update.message)
         return True
 
-    sent_count, fail_count = await _send_broadcast_to_targets(
+    sent_count, fail_count, delivery_details = await _send_broadcast_to_targets(
         context,
         token,
         telegram_ids,
@@ -265,8 +345,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     )
 
     clear_state(context)
+    result_lines = [
+        "✅ پیام همگانی ارسال شد.",
+        "",
+        f"گروه: {_broadcast_segment_label(segment)}",
+        f"موفق: {sent_count}",
+        f"ناموفق: {fail_count}",
+    ]
+    if int(delivery_details.get("unreachable") or 0):
+        result_lines.append(f"🚫 غیرقابل دسترس/مسدود: {delivery_details['unreachable']}")
+    if int(delivery_details.get("temporary") or 0):
+        result_lines.append(f"🌐 خطای موقت پس از تلاش مجدد: {delivery_details['temporary']}")
+    if int(delivery_details.get("telegram") or 0):
+        result_lines.append(f"⚠️ سایر خطاهای تلگرام: {delivery_details['telegram']}")
+    if int(delivery_details.get("other") or 0):
+        result_lines.append(f"🛠 سایر خطاها: {delivery_details['other']}")
+    if int(delivery_details.get("recovered") or 0):
+        result_lines.append(f"🔁 بازیابی‌شده با تلاش مجدد: {delivery_details['recovered']}")
     await update.message.reply_text(
-        f"✅ پیام همگانی ارسال شد.\n\nگروه: {_broadcast_segment_label(segment)}\nموفق: {sent_count}\nناموفق: {fail_count}",
+        "\n".join(result_lines),
         reply_markup=ReplyKeyboardRemove(),
     )
     await _restore_main_menu(update.message)
