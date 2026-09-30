@@ -67,6 +67,16 @@ def broadcast_skip_cancel_keyboard():
     )
 
 
+def broadcast_preview_keyboard():
+    return _ikb([
+        [
+            IButton("✅ انتشار و ارسال", callback_data="agbot:broadcast:preview:send", style="success"),
+            IButton("✏️ ویرایش", callback_data="agbot:broadcast:preview:edit"),
+        ],
+        [IButton("❌ لغو", callback_data="agbot:broadcast:preview:cancel", style="danger")],
+    ])
+
+
 # Subscription keyboards
 def subs_menu_keyboard():
     return _ikb([
