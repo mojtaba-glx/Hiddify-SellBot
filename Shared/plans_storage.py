@@ -346,6 +346,7 @@ _DEFAULT_DYNAMIC_SETTINGS = {
     "discount_tiered_enabled": False,
     "discount_tiers": [],
     "discount_simple_expire_at": 0,
+    "discount_tiered_expire_at": 0,
 }
 
 
@@ -382,12 +383,26 @@ def is_simple_discount_enabled(settings: Dict[str, Any]) -> bool:
     )
 
 
+def is_tiered_discount_active(settings: Dict[str, Any]) -> bool:
+    """تخفیف پلاکانی را فعال تلقی می‌کند مگر اینکه تایمر آن منقضی شده باشد."""
+    if not settings or not bool(settings.get("discount_tiered_enabled", False)):
+        return False
+    expire_at = settings.get("discount_tiered_expire_at") or 0
+    try:
+        expire_at = float(expire_at)
+    except (TypeError, ValueError):
+        return True
+    if expire_at <= 0:
+        return True
+    return time.time() < expire_at
+
+
 def is_tiered_discount_enabled(settings: Dict[str, Any]) -> bool:
-    """تشخیص فعال بودن تخفیف پلاکانی با سازگاری با حالت قدیمی."""
+    """تشخیص فعال بودن تخفیف پلاکانی با احترام به تایمر و سازگاری با حالت قدیمی."""
     if not settings:
         return False
     if "discount_tiered_enabled" in settings:
-        return bool(settings.get("discount_tiered_enabled"))
+        return is_tiered_discount_active(settings)
     return bool(normalize_discount_tiers(settings.get("discount_tiers", [])))
 
 
