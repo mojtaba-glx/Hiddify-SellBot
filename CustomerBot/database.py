@@ -202,6 +202,7 @@ def init_db() -> None:
     _ensure_column(cur, "customer_orders", "plan_id", "INTEGER DEFAULT 0")
     _ensure_column(cur, "customer_orders", "wholesale_price", "INTEGER DEFAULT 0")
     _ensure_column(cur, "customer_orders", "renew_service_id", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "customer_orders", "updated_at", "TEXT DEFAULT ''")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS customer_payments (
@@ -909,10 +910,10 @@ def create_order(agent_id: int, telegram_id: int, volume_gb: float, days: int, p
     user_id = user["id"] if user else 0
     cur.execute(
         "UPDATE customer_orders SET user_id=?, telegram_id=?, username=?, full_name=?, "
-        "created_at=?, volume_gb=?, days=?, price=?, plan_title=?, server_location=?, "
+        "created_at=?, updated_at=?, volume_gb=?, days=?, price=?, plan_title=?, server_location=?, "
         "server_id=?, plan_id=?, wholesale_price=?, renew_service_id=?, status='pending' "
         "WHERE agent_id=? AND order_id=?",
-        (user_id, telegram_id, username, full_name, now,
+        (user_id, telegram_id, username, full_name, now, now,
          volume_gb, days, price, plan_title, server_location,
          int(server_id or 0), int(plan_id or 0), int(wholesale_price or 0),
          int(renew_service_id or 0),
@@ -942,9 +943,10 @@ def update_order_status(agent_id: int, order_id: int, status: str) -> bool:
     init_db()
     conn = _get_conn()
     cur = conn.cursor()
+    now = _now()
     cur.execute(
-        "UPDATE customer_orders SET status = ? WHERE agent_id = ? AND order_id = ?",
-        (status, agent_id, order_id),
+        "UPDATE customer_orders SET status = ?, updated_at = ? WHERE agent_id = ? AND order_id = ?",
+        (status, now, agent_id, order_id),
     )
     affected = cur.rowcount
     conn.commit()

@@ -379,7 +379,12 @@ def init_db() -> None:
     cur.execute("""CREATE TABLE IF NOT EXISTS userbot_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER UNIQUE NOT NULL, user_id INTEGER,
             telegram_id INTEGER, username TEXT, full_name TEXT, created_at TEXT, volume_gb REAL,
-            days INTEGER, price INTEGER, plan_title TEXT, server_location TEXT, status TEXT)""")
+            days INTEGER, price INTEGER, plan_title TEXT, server_location TEXT, status TEXT,
+            renew_service_id INTEGER DEFAULT 0)""")
+    try:
+        cur.execute("SELECT renew_service_id FROM userbot_orders LIMIT 1")
+    except sqlite3.OperationalError:
+        cur.execute("ALTER TABLE userbot_orders ADD COLUMN renew_service_id INTEGER DEFAULT 0")
 
     cur.execute("""CREATE TABLE IF NOT EXISTS userbot_payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT, tx_code TEXT, user_id INTEGER, amount INTEGER, method TEXT,

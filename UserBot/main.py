@@ -5724,8 +5724,8 @@ async def _process_wallet_purchase(
             cur.execute(
                 """
                 INSERT INTO userbot_orders
-                (order_id, user_id, telegram_id, username, full_name, created_at, volume_gb, days, price, plan_title, server_location, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (order_id, user_id, telegram_id, username, full_name, created_at, volume_gb, days, price, plan_title, server_location, status, renew_service_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_id,
@@ -5740,6 +5740,7 @@ async def _process_wallet_purchase(
                     service_name,
                     server_title,
                     "approved",
+                    int(renew_service_id or 0),
                 ),
             )
 
