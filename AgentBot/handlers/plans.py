@@ -43,6 +43,7 @@ DISCOUNT_DEFAULTS = {
     "discount_tiered_enabled": False,
     "discount_tiers": [],
     "discount_simple_expire_at": 0,
+    "discount_tiered_expire_at": 0,
 }
 
 
@@ -86,8 +87,12 @@ def _set_discount_settings(agent_id: int, **kwargs: Any) -> None:
     set_setting(agent_id, "dynamic_plan_settings", settings)
 
 
-def _discount_timer_line(settings: Dict[str, Any]) -> str:
-    expire_at = settings.get("discount_simple_expire_at") or 0
+def _discount_timer_line(
+    settings: Dict[str, Any],
+    expire_key: str = "discount_simple_expire_at",
+    label: str = "تخفیف حجمی ساده",
+) -> str:
+    expire_at = settings.get(expire_key) or 0
     try:
         expire_at = float(expire_at)
     except (TypeError, ValueError):
@@ -107,9 +112,30 @@ def _discount_timer_line(settings: Dict[str, Any]) -> str:
         parts.append(f"{minutes} دقیقه")
     remaining_txt = " و ".join(parts) if parts else "کمتر از یک دقیقه"
     return (
-        f"⏱ تایمر تخفیف حجمی ساده: {remaining_txt} مانده "
+        f"⏱ تایمر {label}: {remaining_txt} مانده "
         f"(پایان: {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')})"
     )
+
+
+def _expire_discount_timers(agent_id: int, settings: Dict[str, Any]) -> Dict[str, Any]:
+    now = time.time()
+    updates: Dict[str, Any] = {}
+    for expire_key, enabled_key in (
+        ("discount_simple_expire_at", "discount_simple_enabled"),
+        ("discount_tiered_expire_at", "discount_tiered_enabled"),
+    ):
+        expire_at = settings.get(expire_key) or 0
+        try:
+            expire_at = float(expire_at)
+        except (TypeError, ValueError):
+            expire_at = 0
+        if expire_at > 0 and now >= expire_at:
+            updates[enabled_key] = False
+            updates[expire_key] = 0
+    if updates:
+        _set_discount_settings(agent_id, **updates)
+        return _get_discount_settings(agent_id)
+    return settings
 
 
 async def _render_discount_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -117,23 +143,16 @@ async def _render_discount_menu(update: Update, context: ContextTypes.DEFAULT_TY
     agent_id = get_agent_id(context)
     settings = _get_discount_settings(agent_id)
 
-    # اگر تایمر منقضی شده، خودکار غیرفعال کن
-    expire_at = settings.get("discount_simple_expire_at") or 0
-    try:
-        expire_at = float(expire_at)
-    except (TypeError, ValueError):
-        expire_at = 0
-    if expire_at > 0 and time.time() >= expire_at:
-        _set_discount_settings(
-            agent_id,
-            discount_simple_enabled=False,
-            discount_simple_expire_at=0,
-        )
-        settings = _get_discount_settings(agent_id)
+    settings = _expire_discount_timers(agent_id, settings)
 
     simple_enabled = plans_storage.is_simple_discount_enabled(settings)
     tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
     timer_line = _discount_timer_line(settings)
+    tiered_timer_line = _discount_timer_line(
+        settings,
+        "discount_tiered_expire_at",
+        "تخفیف پلاکانی",
+    )
 
     lines = [
         "🎛 <b>مدیریت حرفه‌ای تخفیف‌ها</b>",
@@ -145,6 +164,8 @@ async def _render_discount_menu(update: Update, context: ContextTypes.DEFAULT_TY
     ]
     if timer_line:
         lines.append(timer_line)
+    if tiered_timer_line:
+        lines.append(tiered_timer_line)
 
     if simple_enabled:
         lines.append(
@@ -180,18 +201,16 @@ async def _render_discount_menu(update: Update, context: ContextTypes.DEFAULT_TY
 async def _roleme_discount_menu(context: ContextTypes.DEFAULT_TYPE, update: Update, agent_id: int) -> None:
     settings = _get_discount_settings(agent_id)
 
-    expire_at = settings.get("discount_simple_expire_at") or 0
-    try:
-        expire_at = float(expire_at)
-    except (TypeError, ValueError):
-        expire_at = 0
-    if expire_at > 0 and time.time() >= expire_at:
-        _set_discount_settings(agent_id, discount_simple_enabled=False, discount_simple_expire_at=0)
-        settings = _get_discount_settings(agent_id)
+    settings = _expire_discount_timers(agent_id, settings)
 
     simple_enabled = plans_storage.is_simple_discount_enabled(settings)
     tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
     timer_line = _discount_timer_line(settings)
+    tiered_timer_line = _discount_timer_line(
+        settings,
+        "discount_tiered_expire_at",
+        "تخفیف پلاکانی",
+    )
 
     lines = [
         "🎛 <b>مدیریت حرفه‌ای تخفیف‌ها</b>",
@@ -203,6 +222,8 @@ async def _roleme_discount_menu(context: ContextTypes.DEFAULT_TYPE, update: Upda
     ]
     if timer_line:
         lines.append(timer_line)
+    if tiered_timer_line:
+        lines.append(tiered_timer_line)
 
     if simple_enabled:
         lines.append(
@@ -263,12 +284,20 @@ async def _discount_tiers_toggle(update: Update, context: ContextTypes.DEFAULT_T
     tiered_enabled = plans_storage.is_tiered_discount_enabled(settings)
 
     if tiered_enabled:
-        _set_discount_settings(agent_id, discount_tiered_enabled=False)
+        _set_discount_settings(
+            agent_id,
+            discount_tiered_enabled=False,
+            discount_tiered_expire_at=0,
+        )
         await _render_discount_menu(update, context)
         return
 
     if settings.get("discount_tiers"):
-        _set_discount_settings(agent_id, discount_tiered_enabled=True)
+        _set_discount_settings(
+            agent_id,
+            discount_tiered_enabled=True,
+            discount_tiered_expire_at=0,
+        )
         await _render_discount_menu(update, context)
         return
 
@@ -705,6 +734,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     reply_markup=cancel_keyboard(), parse_mode="HTML",
                 )
                 return
+            if which == "tiers_timer":
+                context.user_data[UD_STATE] = STATE_DYN_EDIT_FIELD
+                context.user_data[UD_DYN_FIELD] = "discount_tiers_timer"
+                await query.answer()
+                await context.bot.send_message(
+                    query.message.chat_id,
+                    "⏱ <b>تایمر تخفیف پلاکانی</b>\n\n"
+                    "مدت زمان را به ساعت ارسال کن (مثلاً 12 یا 24).\n"
+                    "برای اتمام تایمر و خاموش شدن خودکار تخفیف پلاکانی، عدد 0 بفرست.",
+                    reply_markup=cancel_keyboard(), parse_mode="HTML",
+                )
+                return
 
     if action == "dyn_edit":
         field = parts[3] if len(parts) > 3 else ""
@@ -932,7 +973,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             _set_discount_settings(
                 agent_id,
                 discount_tiers=tiers,
-                discount_tiered_enabled=True,
+                discount_tiered_enabled=bool(tiers),
+                discount_tiered_expire_at=0,
             )
             if tiers:
                 await update.message.reply_text(
@@ -941,6 +983,53 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 )
             else:
                 await update.message.reply_text("✅ تخفیف پلکانی خاموش شد.", reply_markup=main_menu_keyboard())
+            context.user_data.pop(UD_STATE, None)
+            context.user_data.pop(UD_DYN_FIELD, None)
+            await _roleme_discount_menu(context, update, agent_id)
+            return True
+
+        if field == "discount_tiers_timer":
+            try:
+                hours = int(raw)
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ لطفاً مدت زمان را به ساعت به صورت عددی ارسال کنید (مثلاً 12).",
+                    reply_markup=cancel_keyboard(),
+                )
+                return True
+
+            current = _get_discount_settings(agent_id)
+            tiers = plans_storage.normalize_discount_tiers(current.get("discount_tiers", []))
+            if hours > 0 and not tiers:
+                await update.message.reply_text(
+                    "⚠️ ابتدا پله‌های تخفیف پلاکانی را تنظیم کنید، سپس تایمر را فعال کنید.",
+                    reply_markup=cancel_keyboard(),
+                )
+                return True
+
+            if hours <= 0:
+                _set_discount_settings(
+                    agent_id,
+                    discount_tiered_enabled=False,
+                    discount_tiered_expire_at=0,
+                )
+                await update.message.reply_text(
+                    "✅ تایمر تخفیف پلاکانی حذف شد و تخفیف پلاکانی خاموش شد.",
+                    reply_markup=main_menu_keyboard(),
+                )
+            else:
+                expire_at = int(time.time()) + hours * 3600
+                _set_discount_settings(
+                    agent_id,
+                    discount_tiered_enabled=True,
+                    discount_tiered_expire_at=expire_at,
+                )
+                await update.message.reply_text(
+                    "✅ تایمر تخفیف پلاکانی تنظیم شد.\n"
+                    f"تخفیف به مدت {hours} ساعت (تا {datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')}) فعال است "
+                    "و پس از اتمام، به‌صورت خودکار خاموش می‌شود.",
+                    reply_markup=main_menu_keyboard(),
+                )
             context.user_data.pop(UD_STATE, None)
             context.user_data.pop(UD_DYN_FIELD, None)
             await _roleme_discount_menu(context, update, agent_id)
