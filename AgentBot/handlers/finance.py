@@ -23,9 +23,16 @@ def _kb() -> InlineKeyboardMarkup:
     ])
 
 
-def _text(agent_id: int, days: Optional[int]) -> str:
-    s = get_agent_financial_report(agent_id, days)
-    label = _LABELS.get(days, "گزارش")
+def build_financial_report_text(
+    agent_id: int,
+    days: Optional[int] = 0,
+    *,
+    report_day: Optional[str] = None,
+    label: Optional[str] = None,
+) -> str:
+    s = get_agent_financial_report(agent_id, days, report_day=report_day)
+    if label is None:
+        label = _LABELS.get(days, "گزارش")
     profit = int(s["known_profit"])
     return (
         f"📊 <b>گزارش مالی نمایندگی — {label}</b>\n"
@@ -52,6 +59,10 @@ def _text(agent_id: int, days: Optional[int]) -> str:
         "برای تمدیدهای مستقیم قدیمی، مبلغ فروش تاریخی جداگانه ذخیره نشده؛ "
         "بنابراین سود نمایش‌داده‌شده فقط از فروش‌هایی است که قیمت فروش و عمده آنها قابل اثبات است."
     )
+
+
+def _text(agent_id: int, days: Optional[int]) -> str:
+    return build_financial_report_text(agent_id, days)
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, days: Optional[int] = 0) -> None:

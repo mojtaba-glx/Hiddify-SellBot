@@ -12,11 +12,29 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 CUSTOMER_DB = ROOT_DIR / "customer_bot.db"
 
 
-def _bounds(days: Optional[int], tz_name: str = "Asia/Tehran") -> tuple[str, str]:
+def _bounds(
+    days: Optional[int],
+    tz_name: str = "Asia/Tehran",
+    report_day: Optional[str] = None,
+) -> tuple[str, str]:
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
         tz = ZoneInfo("Asia/Tehran")
+
+    if report_day:
+        try:
+            day = datetime.strptime(str(report_day), "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("report_day must be YYYY-MM-DD") from exc
+        local_start = datetime(
+            day.year, day.month, day.day, 0, 0, 0, tzinfo=tz
+        )
+        local_end = local_start + timedelta(days=1)
+        start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+        end = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+        return start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")
+
     now = datetime.now(tz)
     end = now.astimezone(timezone.utc).replace(tzinfo=None)
     if days is None:
@@ -29,7 +47,12 @@ def _bounds(days: Optional[int], tz_name: str = "Asia/Tehran") -> tuple[str, str
     return start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def get_agent_financial_report(agent_id: int, days: Optional[int] = 0, tz_name: str = "Asia/Tehran") -> Dict[str, Any]:
+def get_agent_financial_report(
+    agent_id: int,
+    days: Optional[int] = 0,
+    tz_name: str = "Asia/Tehran",
+    report_day: Optional[str] = None,
+) -> Dict[str, Any]:
     """Read-only financial summary for one reseller.
 
     CustomerBot revenue uses approved customer_orders. Direct AgentBot creations
@@ -37,7 +60,7 @@ def get_agent_financial_report(agent_id: int, days: Optional[int] = 0, tz_name: 
     reported separately so wallet charges are never counted as sales income.
     """
     agent_db.init_db()
-    start, end = _bounds(days, tz_name)
+    start, end = _bounds(days, tz_name, report_day=report_day)
     out: Dict[str, Any] = {
         "customer_sales": 0, "customer_cost": 0, "customer_buy_count": 0,
         "customer_renew_count": 0, "direct_sales": 0, "direct_cost": 0,
@@ -50,15 +73,24 @@ def get_agent_financial_report(agent_id: int, days: Optional[int] = 0, tz_name: 
         conn = sqlite3.connect(str(CUSTOMER_DB), timeout=10)
         conn.row_factory = sqlite3.Row
         try:
+            cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(customer_orders)").fetchall()
+            }
+            stamp = (
+                "COALESCE(NULLIF(updated_at,''),created_at)"
+                if "updated_at" in cols
+                else "created_at"
+            )
             row = conn.execute(
-                """SELECT
+                f"""SELECT
                     COALESCE(SUM(price),0) revenue,
                     COALESCE(SUM(wholesale_price),0) cost,
                     SUM(CASE WHEN COALESCE(renew_service_id,0)=0 THEN 1 ELSE 0 END) buys,
                     SUM(CASE WHEN COALESCE(renew_service_id,0)>0 THEN 1 ELSE 0 END) renews
                    FROM customer_orders
                    WHERE agent_id=? AND lower(COALESCE(status,''))='approved'
-                     AND created_at>=? AND created_at<?""",
+                     AND {stamp}>=? AND {stamp}<?""",
                 (int(agent_id), start, end),
             ).fetchone()
             if row:

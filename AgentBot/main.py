@@ -4,7 +4,9 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timedelta, time as dt_time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from telegram import Update, BotCommand
@@ -40,6 +42,12 @@ AGENT_SMS_QUEUE_POLL_SECONDS = env_float(
 AGENT_SMS_QUEUE_BATCH_SIZE = env_int(
     "AGENT_SMS_QUEUE_BATCH_SIZE", 10, minimum=1, maximum=50
 )
+AGENT_DAILY_REPORT_ENABLED = (
+    os.getenv("AGENT_DAILY_REPORT_ENABLED", "1") or "1"
+).strip().lower() in {"1", "true", "yes", "on"}
+AGENT_DAILY_REPORT_TIMEZONE = (
+    os.getenv("AGENT_DAILY_REPORT_TIMEZONE", "Asia/Tehran") or "Asia/Tehran"
+).strip()
 
 
 async def _sms_webhook_queue_worker(application) -> None:
@@ -67,6 +75,96 @@ async def _sms_webhook_queue_worker(application) -> None:
             await asyncio.sleep(AGENT_SMS_QUEUE_POLL_SECONDS)
 
 
+
+
+def _agent_report_tz() -> ZoneInfo:
+    try:
+        return ZoneInfo(AGENT_DAILY_REPORT_TIMEZONE)
+    except Exception:
+        return ZoneInfo("Asia/Tehran")
+
+
+async def _send_daily_agent_financial_reports(bot, *, now: datetime | None = None) -> dict:
+    """Send the completed previous calendar day's report to every active reseller."""
+    from AgentBot.handlers.finance import build_financial_report_text
+    from Shared import agent_db
+
+    tz = _agent_report_tz()
+    local_now = now.astimezone(tz) if now and now.tzinfo else datetime.now(tz)
+    report_day = (local_now.date() - timedelta(days=1)).isoformat()
+    summary = {"day": report_day, "sent": 0, "skipped": 0, "failed": 0}
+
+    for agent in agent_db.get_all_active_agents():
+        agent_id = int(agent.get("id") or 0)
+        telegram_id = int(agent.get("telegram_id") or 0)
+        if agent_id <= 0 or telegram_id <= 0:
+            summary["failed"] += 1
+            continue
+        if agent_db.was_agent_daily_report_sent(agent_id, report_day):
+            summary["skipped"] += 1
+            continue
+
+        text = build_financial_report_text(
+            agent_id,
+            report_day=report_day,
+            label=f"گزارش روزانه {report_day}",
+        )
+        try:
+            await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
+            agent_db.mark_agent_daily_report_sent(agent_id, report_day)
+            summary["sent"] += 1
+        except Exception as exc:
+            summary["failed"] += 1
+            logger.warning(
+                "Daily reseller report failed agent=%s telegram=%s: %s",
+                agent_id,
+                telegram_id,
+                secure_io.redact_sensitive_text(str(exc)),
+            )
+        await asyncio.sleep(0.05)
+
+    logger.info(
+        "Daily reseller financial reports day=%s sent=%s skipped=%s failed=%s",
+        summary["day"],
+        summary["sent"],
+        summary["skipped"],
+        summary["failed"],
+    )
+    return summary
+
+
+async def _daily_agent_financial_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not AGENT_DAILY_REPORT_ENABLED:
+        return
+    await _send_daily_agent_financial_reports(context.bot)
+
+
+async def _daily_agent_report_fallback_loop(application) -> None:
+    """Fallback for installs without PTB JobQueue; persistent dedupe makes it safe."""
+    while True:
+        try:
+            now = datetime.now(_agent_report_tz())
+            if now.hour == 0:
+                await _send_daily_agent_financial_reports(application.bot, now=now)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Daily reseller report fallback cycle failed")
+        await asyncio.sleep(60)
+
+
+async def _daily_agent_report_startup_catchup(application) -> None:
+    """If AgentBot restarts during 00:xx, still deliver that night's report once."""
+    try:
+        await asyncio.sleep(5)
+        now = datetime.now(_agent_report_tz())
+        if now.hour == 0:
+            await _send_daily_agent_financial_reports(application.bot, now=now)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Daily reseller report startup catch-up failed")
+
 async def _post_init(application) -> None:
     try:
         from AgentBot.handlers.settings_customer_payments import recover_customer_payment_operations
@@ -89,6 +187,21 @@ async def _post_init(application) -> None:
         application.create_task(_sms_webhook_queue_worker(application))
     except Exception as e:
         logger.warning("Failed starting sms webhook queue worker: %s", e)
+
+    if AGENT_DAILY_REPORT_ENABLED:
+        try:
+            application.create_task(_daily_agent_report_startup_catchup(application))
+        except Exception as e:
+            logger.warning("Failed starting daily reseller report catch-up: %s", e)
+        if application.job_queue is None:
+            try:
+                application.create_task(_daily_agent_report_fallback_loop(application))
+                logger.info(
+                    "Daily reseller report fallback enabled (00:00 %s)",
+                    AGENT_DAILY_REPORT_TIMEZONE,
+                )
+            except Exception as e:
+                logger.warning("Failed starting daily reseller report fallback: %s", e)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -234,6 +347,25 @@ def main() -> None:
         application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.VIDEO) & ~filters.COMMAND, handle_agent_text))
         application.add_handler(CallbackQueryHandler(handle_main_menu_callback))
         application.add_error_handler(error_handler)
+
+        if AGENT_DAILY_REPORT_ENABLED and application.job_queue is not None:
+            report_tz = _agent_report_tz()
+            application.job_queue.run_daily(
+                _daily_agent_financial_report_job,
+                time=dt_time(hour=0, minute=0, tzinfo=report_tz),
+                name="daily-reseller-financial-report",
+                job_kwargs={
+                    "max_instances": 1,
+                    "coalesce": True,
+                    "misfire_grace_time": 3600,
+                },
+            )
+            logger.info(
+                "Daily reseller financial report enabled (00:00 %s)",
+                AGENT_DAILY_REPORT_TIMEZONE,
+            )
+        elif not AGENT_DAILY_REPORT_ENABLED:
+            logger.info("Daily reseller financial report disabled by env")
 
         try:
             logger.info("AgentBot started and polling...")

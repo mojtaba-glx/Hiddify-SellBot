@@ -275,6 +275,18 @@ def init_db() -> None:
         )
     """)
 
+    # 12. ثبت پایدار ارسال گزارش مالی روزانه نماینده.
+    # این جدول از ارسال تکراری هنگام restart یا fallback scheduler جلوگیری می‌کند.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_daily_report_delivery (
+            agent_id INTEGER NOT NULL,
+            report_day TEXT NOT NULL,
+            sent_at TEXT DEFAULT '',
+            PRIMARY KEY (agent_id, report_day),
+            FOREIGN KEY (agent_id) REFERENCES agent_users(id)
+        )
+    """)
+
     _backfill_service_codes(cur)
 
     conn.commit()
@@ -635,6 +647,37 @@ def get_all_active_agents() -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def was_agent_daily_report_sent(agent_id: int, report_day: str) -> bool:
+    """آیا گزارش مالی این روز قبلاً برای نماینده ارسال شده است؟"""
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM agent_daily_report_delivery WHERE agent_id=? AND report_day=? LIMIT 1",
+            (int(agent_id), str(report_day)),
+        ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+def mark_agent_daily_report_sent(agent_id: int, report_day: str) -> None:
+    """ثبت موفقیت ارسال گزارش روزانه؛ idempotent."""
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO agent_daily_report_delivery (agent_id, report_day, sent_at)
+            VALUES (?, ?, ?)
+            """,
+            (int(agent_id), str(report_day), _now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def set_agent_active(agent_id: int, is_active: bool) -> bool:
