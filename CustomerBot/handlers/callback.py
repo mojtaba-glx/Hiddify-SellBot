@@ -122,7 +122,7 @@ def _active_discount_tiered(settings) -> bool:
     global _plans_storage
     if _plans_storage is None:
         from Shared import plans_storage as _plans_storage
-    return _plans_storage.is_tiered_discount_active(settings) if settings else False
+    return _plans_storage.is_tiered_discount_enabled(settings) if settings else False
 
 
 def _normalized_discount_tiers(settings) -> list:
