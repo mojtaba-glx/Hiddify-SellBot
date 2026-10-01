@@ -730,6 +730,9 @@ async def enforce_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"سرویس قطع‌شده: {summary['services_disabled']}\n"
         f"نود قطع‌شده: {summary['nodes_disabled']}\n"
         f"نود قطع‌ناموفق: {summary['nodes_disable_failed']}\n"
+        f"سرویس بازیابی‌شده: {summary.get('services_reenabled', 0)}\n"
+        f"نود دوباره فعال‌شده: {summary.get('nodes_reenabled', 0)}\n"
+        f"فعال‌سازی ناموفق: {summary.get('nodes_reenable_failed', 0)}\n"
         f"خطا: {summary['errors']}\n\n"
         f"🔔 یادآور تمدید: روز={reminder_summary['days_sent']} | حجم={reminder_summary['usage_sent']} | منقضی‌شده={reminder_summary['expired_sent']} | دسترسی‌ندارد={reminder_summary['unreachable']} | خطا={reminder_summary['errors']}"
     )
