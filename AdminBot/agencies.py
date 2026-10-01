@@ -2022,14 +2022,17 @@ def _service_detail_kb(agent_id: int, service_id: int) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton("♻️ تمدید", callback_data=f"agency:svcrenew:{agent_id}:{service_id}"),
+                InlineKeyboardButton("🛠 اصلاح از پنل", callback_data=f"agency:svcrepair:{agent_id}:{service_id}"),
+            ],
+            [
                 InlineKeyboardButton("📥 دریافت کانفیگ", callback_data=f"agency:svcconfig:{agent_id}:{service_id}"),
-            ],
-            [
                 InlineKeyboardButton("🌐 وضعیت نودها", callback_data=f"agency:svcnodes:{agent_id}:{service_id}"),
-                InlineKeyboardButton("💳 سوابق مالی", callback_data=f"agency:svcfin:{agent_id}:{service_id}:1"),
             ],
             [
+                InlineKeyboardButton("💳 سوابق مالی", callback_data=f"agency:svcfin:{agent_id}:{service_id}:1"),
                 InlineKeyboardButton("✏️ نام و یادداشت", callback_data=f"agency:svcedit:{agent_id}:{service_id}"),
+            ],
+            [
                 InlineKeyboardButton("⚙️ عملیات بیشتر", callback_data=f"agency:svcmore:{agent_id}:{service_id}"),
             ],
             [
@@ -3149,6 +3152,23 @@ async def refresh_service_detail(update: Update, context: ContextTypes.DEFAULT_T
                 updates["is_active"] = 0 if active_raw.strip().lower() in {"0", "false", "off", "inactive", "disabled"} else 1
             else:
                 updates["is_active"] = 1 if bool(active_raw) else 0
+
+        # A live, active panel record with future expiry and remaining quota
+        # proves that a stale expired_at marker (for example after restoring an
+        # older bot backup) must be cleared. This is DB-only; panels/wallet are
+        # never mutated here.
+        try:
+            panel_active = int(updates.get("is_active", svc.get("is_active") or 0)) == 1
+            panel_end = end
+            panel_limit = float(updates.get("usage_limit", svc.get("usage_limit") or 0) or 0)
+            panel_used = float(updates.get("usage_current", svc.get("usage_current") or 0) or 0)
+            if panel_active and panel_end is not None and panel_end > now and (
+                panel_limit <= 0 or panel_used < panel_limit
+            ):
+                updates["expired_at"] = ""
+        except Exception:
+            pass
+
         if updates:
             try:
                 agent_db.update_service(service_id, updates)
@@ -3208,6 +3228,269 @@ async def refresh_service_detail(update: Update, context: ContextTypes.DEFAULT_T
 
     state = _svc_ui(context, agent_id)
     await send_agent_service_detail(update, context, agent_id, service_id, page=state["page"])
+
+
+async def repair_service_from_panel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    agent_id: int,
+    service_id: int,
+) -> None:
+    """Repair an agency DB record from live panels without charging or renewing.
+
+    Intended for recovery after restoring an older bot backup. It is strictly
+    read-only toward panels: no create/patch/enable/disable/reset calls are
+    issued and no wallet/transaction row is touched.
+    """
+    import asyncio as _asyncio
+    import math as _math
+    from datetime import timezone as _timezone
+    from Shared.sub_links import get_service_panel_targets
+    from Shared import hiddify_api
+
+    query = update.callback_query
+    svc = agent_db.get_service_by_id(service_id)
+    if not svc or int(svc.get("agent_id", 0) or 0) != int(agent_id):
+        await query.answer("سرویس پیدا نشد.", show_alert=True)
+        return
+
+    try:
+        targets = list(get_service_panel_targets(svc) or [])
+    except Exception:
+        targets = []
+    if not targets:
+        await query.answer("هیچ نود معتبری برای این سرویس ثبت نشده است.", show_alert=True)
+        return
+
+    await query.answer("در حال بازیابی رکورد از پنل‌ها…")
+
+    sem = _asyncio.Semaphore(4)
+
+    async def _fetch(target):
+        server, uuid, mapping = target
+        async with sem:
+            try:
+                user = await _asyncio.wait_for(
+                    hiddify_api.get_user_by_uuid(server, str(uuid or "")),
+                    timeout=8.0,
+                )
+                if isinstance(user, dict) and user:
+                    return target, user, ""
+                return target, None, "empty"
+            except Exception as exc:
+                logger.warning(
+                    "agency panel repair failed svc=%s server=%s: %s",
+                    service_id,
+                    (server or {}).get("id"),
+                    type(exc).__name__,
+                )
+                return target, None, type(exc).__name__
+
+    fetched = await _asyncio.gather(*[_fetch(t) for t in targets])
+    available = [(t, u) for t, u, _err in fetched if u]
+    total = len(targets)
+    up = len(available)
+
+    primary_id = int(svc.get("server_id") or 0)
+    primary_pair = next(
+        (
+            (t, u)
+            for t, u in available
+            if int(((t[0] or {}).get("id") or 0)) == primary_id
+        ),
+        None,
+    )
+    if primary_pair is None:
+        text = (
+            "❌ <b>اصلاح انجام نشد</b>\n"
+            f"{SEPARATOR}\n"
+            "سرور اصلی سرویس پاسخ معتبر نداد. برای جلوگیری از ثبت تاریخ/حجم اشتباه، "
+            "هیچ تغییری در دیتابیس انجام نشد.\n\n"
+            f"پنل‌های پاسخ‌گو: <b>{up}/{total}</b>"
+        )
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "🔄 تلاش مجدد",
+                callback_data=f"agency:svcrepair:{agent_id}:{service_id}",
+            ),
+            InlineKeyboardButton(
+                "🔙 جزئیات",
+                callback_data=f"agency:svcview:{agent_id}:{service_id}:{_svc_ui(context, agent_id)['page']}",
+            ),
+        ]])
+        try:
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except BadRequest:
+            pass
+        return
+
+    (_primary_target, authoritative) = primary_pair
+    now_aware = datetime.now(_timezone.utc)
+    now_naive = now_aware.replace(tzinfo=None)
+
+    def _active_value(user: Dict[str, Any]) -> Optional[int]:
+        raw = user.get("is_active")
+        if raw is None:
+            raw = user.get("enable")
+        if raw is None:
+            raw = user.get("active")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            return 0 if raw.strip().lower() in {
+                "0", "false", "off", "inactive", "disabled", "expired"
+            } else 1
+        return 1 if bool(raw) else 0
+
+    updates: Dict[str, Any] = {}
+
+    # Only overwrite aggregate usage when every mapped panel answered. Partial
+    # reads must never make usage go backwards.
+    usage_values: List[float] = []
+    for _target, user in available:
+        try:
+            usage_values.append(float(user.get("current_usage_GB") or user.get("usage_current") or 0))
+        except (TypeError, ValueError):
+            usage_values.append(0.0)
+    if up == total and len(usage_values) == total:
+        updates["usage_current"] = float(sum(usage_values))
+
+    try:
+        limit_raw = authoritative.get("usage_limit_GB")
+        if limit_raw is None:
+            limit_raw = authoritative.get("usage_limit")
+        if limit_raw is not None:
+            updates["usage_limit"] = float(limit_raw or 0)
+    except (TypeError, ValueError):
+        pass
+
+    end = _panel_expiry_datetime(authoritative, now_aware)
+    if end is not None:
+        end_naive = end.astimezone(_timezone.utc).replace(tzinfo=None) if end.tzinfo else end
+        remaining = (end_naive - now_naive).total_seconds()
+        updates["end_date"] = end_naive.strftime("%Y-%m-%d %H:%M:%S")
+        updates["days_left"] = (
+            _math.ceil(remaining / 86400)
+            if remaining >= 0
+            else _math.floor(remaining / 86400)
+        )
+    else:
+        end_naive = None
+
+    primary_active = _active_value(authoritative)
+    if primary_active is not None:
+        updates["is_active"] = int(primary_active)
+
+    # Update each local node snapshot from the panel that actually answered.
+    for (server, uuid, _mapping), user in available:
+        try:
+            server_id = int((server or {}).get("id") or 0)
+        except (TypeError, ValueError):
+            server_id = 0
+        if server_id <= 0 or not str(uuid or "").strip():
+            continue
+        try:
+            node_usage = float(user.get("current_usage_GB") or user.get("usage_current") or 0)
+        except (TypeError, ValueError):
+            node_usage = 0.0
+        node_active = _active_value(user)
+        node_end = _panel_expiry_datetime(user, now_aware)
+        node_days = None
+        if node_end is not None:
+            node_end_naive = node_end.astimezone(_timezone.utc).replace(tzinfo=None) if node_end.tzinfo else node_end
+            node_remaining = (node_end_naive - now_naive).total_seconds()
+            node_days = (
+                _math.ceil(node_remaining / 86400)
+                if node_remaining >= 0
+                else _math.floor(node_remaining / 86400)
+            )
+        try:
+            agent_db.update_service_node_runtime(
+                service_id,
+                server_id,
+                str(uuid or "").strip(),
+                usage_current=node_usage,
+                days_left=node_days,
+                frozen=0,
+                fail_count=0,
+                last_ok_at=now_naive.strftime("%Y-%m-%d %H:%M:%S"),
+                frozen_at="",
+                frozen_reason="",
+                deleted=0,
+                is_active=node_active,
+            )
+        except Exception:
+            logger.warning(
+                "agency panel repair node snapshot failed svc=%s server=%s",
+                service_id,
+                server_id,
+            )
+
+    # Clear stale expiry only when the live source proves the service is valid.
+    try:
+        live_used = float(updates.get("usage_current", svc.get("usage_current") or 0) or 0)
+        live_limit = float(updates.get("usage_limit", svc.get("usage_limit") or 0) or 0)
+        valid_live = (
+            int(updates.get("is_active", svc.get("is_active") or 0)) == 1
+            and end_naive is not None
+            and end_naive > now_naive
+            and (live_limit <= 0 or live_used < live_limit)
+        )
+    except Exception:
+        valid_live = False
+
+    if valid_live:
+        updates["expired_at"] = ""
+
+    if not updates:
+        await query.answer("اطلاعات قابل‌بازیابی از پنل پیدا نشد.", show_alert=True)
+        return
+
+    try:
+        agent_db.update_service(service_id, updates)
+        agent_db.refresh_service_server_titles(service_id)
+        agent_db.mark_service_seen(service_id)
+        if valid_live:
+            agent_db.set_service_reminder_state(
+                service_id,
+                days_sent=-1,
+                usage_sent=-1,
+                expired_sent=0,
+            )
+    except Exception as exc:
+        logger.exception("agency panel repair DB write failed svc=%s: %s", service_id, exc)
+        await query.answer("خطا در ثبت اطلاعات بازیابی‌شده.", show_alert=True)
+        return
+
+    _svc_store_probe(context, agent_id, service_id, {"total": total, "up": up})
+    repaired = agent_db.get_service_by_id(service_id) or svc
+    new_used = float(repaired.get("usage_current") or 0)
+    new_limit = float(repaired.get("usage_limit") or 0)
+    new_days = repaired.get("days_left")
+    status_word = _svc_status_word(repaired)
+
+    lines = [
+        "✅ <b>اصلاح از روی پنل انجام شد</b>",
+        SEPARATOR,
+        f"👤 {_escape(str(repaired.get('name') or 'اشتراک'))}",
+        f"🌐 پنل‌های پاسخ‌گو: <b>{up}/{total}</b>",
+        f"📊 مصرف ثبت‌شده: <b>{_fmt_gb(new_used)} / {_fmt_gb(new_limit)}GB</b>",
+        f"⏳ روز باقی‌مانده: <b>{new_days if new_days is not None else UNKNOWN}</b>",
+        f"📌 وضعیت دیتابیس: <b>{_escape(status_word)}</b>",
+        "",
+        "💳 از کیف پول نماینده <b>هیچ مبلغی کم نشد</b>.",
+        "🛡 روی پنل‌ها هیچ تمدید/ریست/فعال‌سازی انجام نشد؛ فقط دیتابیس ربات از وضعیت زنده اصلاح شد.",
+    ]
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "🔙 جزئیات سرویس",
+            callback_data=f"agency:svcview:{agent_id}:{service_id}:{_svc_ui(context, agent_id)['page']}",
+        )
+    ]])
+    try:
+        await query.edit_message_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
+    except BadRequest:
+        pass
 
 
 # ===============================
@@ -3578,7 +3861,7 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
     # --- مسیرهای جزئیات اشتراک (به‌ازای هر سرویس) ---
     if action in {
         "svcconfig", "svcnodes", "svcfin", "svcmore", "svcdelete", "svcdeleteok",
-        "svctoggle", "svcrelink", "svcrefresh", "svcedit",
+        "svctoggle", "svcrelink", "svcrefresh", "svcrepair", "svcedit",
         "svcrenew", "svcrenewplan", "svcrenewdo",
     }:
         context.user_data.pop("state", None)
@@ -3605,6 +3888,8 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
             await do_service_relink(update, context, agent_id, service_id)
         elif action == "svcrefresh":
             await refresh_service_detail(update, context, agent_id, service_id)
+        elif action == "svcrepair":
+            await repair_service_from_panel(update, context, agent_id, service_id)
         elif action == "svcedit":
             await start_service_note_edit(update, context, agent_id, service_id)
         elif action == "svcrenew":
