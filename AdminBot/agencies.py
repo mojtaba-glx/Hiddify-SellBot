@@ -3131,13 +3131,31 @@ async def refresh_service_detail(update: Update, context: ContextTypes.DEFAULT_T
         from datetime import timezone
         now = datetime.now(timezone.utc)
 
-        # مصرف/حجم از همه نودهای پاسخ‌گو (مثل منطق نمایندگی)
+        # مصرف/حجم از همه نودهای پاسخ‌گو با محافظ ضد ریست شمارنده.
         usage_values = []
-        for _t, u in available:
+        for (srv, uuid, _m), u in available:
             try:
-                usage_values.append(float(u.get("current_usage_GB") or 0))
+                panel_usage = float(u.get("current_usage_GB") or 0)
             except (TypeError, ValueError):
-                pass
+                panel_usage = 0.0
+            try:
+                guarded = agent_db.record_monotonic_panel_usage(
+                    service_id,
+                    int((srv or {}).get("id") or 0),
+                    str(uuid or "").strip(),
+                    panel_usage,
+                )
+                usage_values.append(float(guarded.get("effective_usage") or 0))
+                if bool(guarded.get("reset_detected")):
+                    logger.warning(
+                        "admin agency refresh protected usage reset svc=%s server=%s raw=%.3f effective=%.3f",
+                        service_id,
+                        (srv or {}).get("id"),
+                        panel_usage,
+                        float(guarded.get("effective_usage") or 0),
+                    )
+            except Exception:
+                usage_values.append(panel_usage)
         updates: Dict[str, Any] = {}
         if usage_values and up == total:
             updates["usage_current"] = sum(usage_values)
@@ -3350,14 +3368,25 @@ async def repair_service_from_panel(
 
     updates: Dict[str, Any] = {}
 
-    # Only overwrite aggregate usage when every mapped panel answered. Partial
-    # reads must never make usage go backwards.
+    # Only overwrite aggregate usage when every mapped panel answered. Each
+    # node first passes through the monotonic guard so a panel counter reset
+    # cannot erase already-consumed traffic.
     usage_values: List[float] = []
-    for _target, user in available:
+    for (server, uuid, _mapping), user in available:
         try:
-            usage_values.append(float(user.get("current_usage_GB") or user.get("usage_current") or 0))
+            panel_usage = float(user.get("current_usage_GB") or user.get("usage_current") or 0)
         except (TypeError, ValueError):
-            usage_values.append(0.0)
+            panel_usage = 0.0
+        try:
+            guarded = agent_db.record_monotonic_panel_usage(
+                service_id,
+                int((server or {}).get("id") or 0),
+                str(uuid or "").strip(),
+                panel_usage,
+            )
+            usage_values.append(float(guarded.get("effective_usage") or 0))
+        except Exception:
+            usage_values.append(panel_usage)
     if up == total and len(usage_values) == total:
         updates["usage_current"] = float(sum(usage_values))
 
@@ -3415,7 +3444,6 @@ async def repair_service_from_panel(
                 service_id,
                 server_id,
                 str(uuid or "").strip(),
-                usage_current=node_usage,
                 days_left=node_days,
                 frozen=0,
                 fail_count=0,
