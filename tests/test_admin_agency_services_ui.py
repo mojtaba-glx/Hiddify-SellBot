@@ -569,6 +569,34 @@ class CallbackRouterTests(_Base):
             self.assertIn("نمایش: فعال", _rendered_text(upd3))
         _run(flow())
 
+    def test_new_search_clears_previous_query(self):
+        async def flow():
+            ctx = _mk_context()
+            state = self.mod._svc_ui(ctx, self.agent1)
+            state["query"] = "فخری"
+            state["page"] = 3
+            upd = _mk_update(callback_data=f"agency:svcsearch:{self.agent1}")
+            await self.mod.handle_agencies_callback(upd, ctx)
+            current = self.mod._svc_ui(ctx, self.agent1)
+            self.assertEqual(current["query"], "")
+            self.assertEqual(current["page"], 1)
+            self.assertEqual(ctx.user_data["state"], self.mod.AGENCY_SVC_SEARCH)
+        _run(flow())
+
+    def test_back_from_detail_clears_search_query_but_keeps_filter(self):
+        async def flow():
+            ctx = _mk_context()
+            state = self.mod._svc_ui(ctx, self.agent1)
+            state["query"] = "علی"
+            state["filter"] = "active"
+            upd = _mk_update(callback_data=f"agency:svcback:{self.agent1}")
+            await self.mod.handle_agencies_callback(upd, ctx)
+            current = self.mod._svc_ui(ctx, self.agent1)
+            self.assertEqual(current["query"], "")
+            self.assertEqual(current["filter"], "active")
+            self.assertNotIn("🔎 جستجو:", _rendered_text(upd))
+        _run(flow())
+
     def test_search_flow_via_text_state(self):
         async def flow():
             ctx = _mk_context()
