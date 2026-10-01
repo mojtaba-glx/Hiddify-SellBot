@@ -71,14 +71,26 @@ async def _send_broadcast_preview(
     body = str(payload.get("text") or "").strip()
     photo_file_id = str(payload.get("photo_file_id") or "").strip()
     segment = str(payload.get("segment") or "all").strip().lower()
-    target_count = len(get_broadcast_target_telegram_ids(agent_id, segment))
+
+    # Preview must never fail just because the live recipient counter could not
+    # be calculated. Delivery will calculate the target list again on confirm.
+    try:
+        target_count = len(get_broadcast_target_telegram_ids(agent_id, segment))
+        target_count_text = str(target_count)
+    except Exception as exc:
+        logger.warning(
+            "agent broadcast preview target count failed agent=%s error=%s",
+            agent_id,
+            type(exc).__name__,
+        )
+        target_count_text = "نامشخص"
 
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
             "👁 <b>پیش‌نمایش انتشار</b>\n"
             f"گروه: {_broadcast_segment_label(segment)}\n"
-            f"تعداد گیرنده فعلی: {target_count}\n\n"
+            f"تعداد گیرنده فعلی: {target_count_text}\n\n"
             "پیام زیر هنوز ارسال نشده است. در صورت تایید روی «✅ انتشار و ارسال» بزنید."
         ),
         parse_mode="HTML",
@@ -87,15 +99,25 @@ async def _send_broadcast_preview(
 
     kb = broadcast_preview_keyboard()
     if photo_file_id:
+        # Do not reuse the incoming Telegram file_id directly as send_photo.
+        # An image may arrive as a document/file and Telegram file_ids are
+        # media-type sensitive. Downloading then uploading bytes makes preview
+        # work for both normal photos and image documents.
+        tg_file = await context.bot.get_file(photo_file_id)
+        preview_data = BytesIO()
+        await tg_file.download_to_memory(out=preview_data)
+        preview_data.seek(0)
+        preview_data.name = "broadcast-preview.jpg"
+
         if len(body) <= 1024:
             await context.bot.send_photo(
                 chat_id=chat_id,
-                photo=photo_file_id,
+                photo=preview_data,
                 caption=body,
                 reply_markup=kb,
             )
         else:
-            await context.bot.send_photo(chat_id=chat_id, photo=photo_file_id)
+            await context.bot.send_photo(chat_id=chat_id, photo=preview_data)
             await context.bot.send_message(chat_id=chat_id, text=body, reply_markup=kb)
     else:
         await context.bot.send_message(chat_id=chat_id, text=body, reply_markup=kb)
@@ -424,7 +446,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
     segment = str(payload.get("segment") or "all").strip().lower()
     text = (update.message.text or update.message.caption or "").strip()
-    photo_file_id = update.message.photo[-1].file_id if update.message.photo else ""
+    image_document = update.message.document if (
+        update.message.document
+        and str(update.message.document.mime_type or "").lower().startswith("image/")
+    ) else None
+    photo_file_id = (
+        update.message.photo[-1].file_id
+        if update.message.photo
+        else (image_document.file_id if image_document else "")
+    )
     step = str(payload.get("step") or "wait_text").strip().lower()
 
     if text in CANCEL_WORDS:
