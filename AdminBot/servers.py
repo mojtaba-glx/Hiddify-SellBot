@@ -757,7 +757,10 @@ async def _set_user_active_state_on_related_servers(
 ) -> tuple[str, int, int, List[str]]:
     """
     Enable/disable user on full related cluster (main + nodes).
-    Returns: (resolved_uuid, changed_count, total_targets, failed_titles)
+
+    Legacy AdminBot users can have a different UUID on an old X-UI/Sanaei
+    child. Prefer the persisted per-node mapping and, only after a confirmed
+    not-found, recover by one exact name/email match on that target.
     """
     server = database.get_server_by_id(server_id)
     if not server:
@@ -768,30 +771,150 @@ async def _set_user_active_state_on_related_servers(
     if not targets:
         targets = [server]
 
+    source_name = ""
+    try:
+        source_user = await hiddify_api.get_user_by_uuid(server, resolved_uuid)
+        source_name = str(
+            (source_user or {}).get("name")
+            or (source_user or {}).get("email")
+            or (source_user or {}).get("username")
+            or ""
+        ).strip()
+    except Exception:
+        source_user = {}
+
+    service_id = 0
+    mapped_by_server: Dict[int, str] = {}
+    try:
+        owner = userbot_db.get_service_owner_by_panel_uuid(resolved_uuid) or {}
+        service_id = int(owner.get("service_id") or 0)
+        if service_id > 0:
+            for row in userbot_db.get_service_nodes(service_id) or []:
+                if int(row.get("deleted") or 0) == 1:
+                    continue
+                sid = int(row.get("server_id") or 0)
+                mapped_uuid = str(row.get("panel_user_uuid") or "").strip()
+                if sid > 0 and mapped_uuid:
+                    mapped_by_server[sid] = mapped_uuid
+    except Exception:
+        service_id = 0
+        mapped_by_server = {}
+
     changed = 0
     failed: List[str] = []
+
+    def _identity(value: Any) -> str:
+        return " ".join(str(value or "").strip().casefold().split())
+
     for target in targets:
         try:
             tid = int(target.get("id") or 0)
         except (TypeError, ValueError):
             tid = 0
         title = (target.get("title") or f"سرور #{tid or '?'}").strip()
-        try:
+
+        target_uuid = mapped_by_server.get(tid) or resolved_uuid
+        if tid > 0 and tid not in mapped_by_server:
+            try:
+                target_uuid = await _resolve_panel_user_uuid(target, tid, resolved_uuid)
+            except Exception:
+                target_uuid = resolved_uuid
+
+        async def _apply(uuid_value: str) -> None:
             if active:
-                await hiddify_api.enable_user(target, resolved_uuid)
+                await hiddify_api.enable_user(target, uuid_value)
             else:
-                await hiddify_api.disable_user(target, resolved_uuid)
+                await hiddify_api.disable_user(target, uuid_value)
+
+        try:
+            await _apply(target_uuid)
             changed += 1
-        except Exception as e:
-            logger.warning(
-                "Failed setting active=%s for user_uuid=%s on server_id=%s (%s): %s",
-                active,
-                resolved_uuid,
-                tid,
-                title,
-                e,
-            )
-            failed.append(title)
+            continue
+        except Exception as first_error:
+            # Only a confirmed missing identity is eligible for legacy repair.
+            # Any auth/network/API error remains a normal failure.
+            if not _is_absent_record_error(first_error) or not source_name:
+                logger.warning(
+                    "Failed setting active=%s for user_uuid=%s on server_id=%s (%s): %s",
+                    active,
+                    target_uuid,
+                    tid,
+                    title,
+                    first_error,
+                )
+                failed.append(title)
+                continue
+
+            try:
+                users = await hiddify_api.list_users(target)
+                wanted = _identity(source_name)
+                candidates: List[Dict[str, Any]] = []
+                seen_uuids: set[str] = set()
+                for candidate in users or []:
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidate_uuid = str(
+                        candidate.get("uuid") or candidate.get("id") or ""
+                    ).strip()
+                    if not candidate_uuid or candidate_uuid in seen_uuids:
+                        continue
+                    names = {
+                        _identity(candidate.get("name")),
+                        _identity(candidate.get("email")),
+                        _identity(candidate.get("username")),
+                    }
+                    names.discard("")
+                    if wanted and wanted in names:
+                        seen_uuids.add(candidate_uuid)
+                        candidates.append(candidate)
+
+                if len(candidates) != 1:
+                    raise first_error
+
+                candidate = candidates[0]
+                repaired_uuid = str(
+                    candidate.get("uuid") or candidate.get("id") or ""
+                ).strip()
+                if not repaired_uuid:
+                    raise first_error
+
+                if service_id > 0 and tid > 0:
+                    old_mapping_uuid = mapped_by_server.get(tid) or target_uuid
+                    rebound = userbot_db.rebind_service_node_uuid(
+                        service_id,
+                        tid,
+                        old_mapping_uuid,
+                        repaired_uuid,
+                        server_title=title,
+                        panel_user_id=(
+                            str(candidate.get("id")).strip()
+                            if candidate.get("id") is not None
+                            else None
+                        ),
+                    )
+                    if rebound:
+                        mapped_by_server[tid] = repaired_uuid
+
+                await _apply(repaired_uuid)
+                changed += 1
+                logger.warning(
+                    "Legacy AdminBot node identity repaired during active-state change "
+                    "server_id=%s old_uuid=%s new_uuid=%s name=%s",
+                    tid,
+                    target_uuid[:12],
+                    repaired_uuid[:12],
+                    source_name,
+                )
+            except Exception as final_error:
+                logger.warning(
+                    "Failed setting active=%s for user_uuid=%s on server_id=%s (%s): %s",
+                    active,
+                    target_uuid,
+                    tid,
+                    title,
+                    final_error,
+                )
+                failed.append(title)
 
     return resolved_uuid, changed, len(targets), failed
 
