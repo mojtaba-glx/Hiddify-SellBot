@@ -3302,6 +3302,135 @@ def add_service_node(
         conn.close()
 
 
+def rebind_service_node_uuid(
+    service_id: int,
+    server_id: int,
+    old_panel_user_uuid: str,
+    new_panel_user_uuid: str,
+    *,
+    server_title: str = "",
+    panel_user_id: Optional[str] = None,
+) -> bool:
+    """Safely repair one legacy node mapping after the panel proves its real UUID.
+
+    The old row is never retained as a second accounting row; otherwise the
+    same node could be counted twice. Runtime failure/frozen flags are cleared
+    because the caller has just confirmed the live panel identity.
+    """
+    init_db()
+    sid = int(service_id or 0)
+    srv = int(server_id or 0)
+    old_uuid = str(old_panel_user_uuid or "").strip()
+    new_uuid = str(new_panel_user_uuid or "").strip()
+    if sid <= 0 or srv <= 0 or not old_uuid or not new_uuid:
+        return False
+    if old_uuid == new_uuid:
+        return True
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT *
+            FROM userbot_service_nodes
+            WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?
+            LIMIT 1
+            """,
+            (sid, srv, old_uuid),
+        )
+        old_row = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT id
+            FROM userbot_service_nodes
+            WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?
+            LIMIT 1
+            """,
+            (sid, srv, new_uuid),
+        )
+        existing = cur.fetchone()
+
+        if existing:
+            cur.execute(
+                """
+                UPDATE userbot_service_nodes
+                SET server_title = CASE WHEN ? != '' THEN ? ELSE server_title END,
+                    panel_user_id = CASE WHEN ? IS NOT NULL AND ? != '' THEN ? ELSE panel_user_id END,
+                    is_active = 1,
+                    frozen = 0,
+                    fail_count = 0,
+                    frozen_at = '',
+                    frozen_reason = '',
+                    deleted = 0,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(server_title or ""),
+                    str(server_title or ""),
+                    (str(panel_user_id).strip() if panel_user_id is not None else None),
+                    (str(panel_user_id).strip() if panel_user_id is not None else None),
+                    (str(panel_user_id).strip() if panel_user_id is not None else None),
+                    now,
+                    int(existing["id"]),
+                ),
+            )
+            if old_row:
+                cur.execute(
+                    "DELETE FROM userbot_service_nodes WHERE id = ?",
+                    (int(old_row["id"]),),
+                )
+        elif old_row:
+            cur.execute(
+                """
+                UPDATE userbot_service_nodes
+                SET panel_user_uuid = ?,
+                    server_title = CASE WHEN ? != '' THEN ? ELSE server_title END,
+                    panel_user_id = CASE WHEN ? IS NOT NULL AND ? != '' THEN ? ELSE panel_user_id END,
+                    is_active = 1,
+                    frozen = 0,
+                    fail_count = 0,
+                    frozen_at = '',
+                    frozen_reason = '',
+                    deleted = 0,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    new_uuid,
+                    str(server_title or ""),
+                    str(server_title or ""),
+                    (str(panel_user_id).strip() if panel_user_id is not None else None),
+                    (str(panel_user_id).strip() if panel_user_id is not None else None),
+                    (str(panel_user_id).strip() if panel_user_id is not None else None),
+                    now,
+                    int(old_row["id"]),
+                ),
+            )
+        else:
+            add_service_node(
+                service_id=sid,
+                server_id=srv,
+                panel_user_uuid=new_uuid,
+                server_title=str(server_title or ""),
+                panel_user_id=panel_user_id,
+                is_active=1,
+            )
+            conn.commit()
+            return True
+
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def get_service_nodes(service_id: int) -> List[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
