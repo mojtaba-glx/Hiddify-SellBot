@@ -5340,6 +5340,100 @@ def _dedupe_expired_targets(expired_rows: List[Dict[str, Any]]) -> List[Dict[str
     return deduped
 
 
+async def _delete_user_on_single_server(
+    server_id: int,
+    user_uuid: str,
+) -> tuple[bool, str]:
+    """Delete a panel user only from the selected server.
+
+    This deliberately does NOT delete the owning UserBot/Agency service row.
+    It is the safe choice for orphan/extra users on one node. The local
+    per-node mapping is marked deleted/frozen best-effort so smart-link and
+    enforcer accounting do not silently treat the removed node as healthy.
+    """
+    server = database.get_server_by_id(server_id)
+    if not server:
+        return False, f"سرور #{server_id}: یافت نشد"
+
+    uuid = str(user_uuid or "").strip()
+    if not uuid:
+        return False, "UUID کاربر خالی است"
+
+    panel_user: Dict[str, Any] = {}
+    try:
+        fetched = await _get_panel_user_with_list_fallback(server, uuid)
+        if isinstance(fetched, dict):
+            panel_user = fetched
+    except Exception:
+        panel_user = {}
+    try:
+        held_usage = max(0.0, float(panel_user.get("current_usage_GB") or 0))
+    except (TypeError, ValueError):
+        held_usage = 0.0
+
+    try:
+        await hiddify_api.delete_user(server, uuid)
+    except Exception as exc:
+        if not _panel_delete_absent_error(exc):
+            return False, str(exc)[:160]
+
+    try:
+        local_id = int(uuid)
+        try:
+            database.delete_user(int(server_id), local_id)
+        except Exception:
+            pass
+    except ValueError:
+        pass
+
+    now_str = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        owner = userbot_db.get_service_owner_by_panel_uuid(uuid) or {}
+        service_id = int(owner.get("service_id") or 0)
+        if service_id > 0:
+            userbot_db.update_service_node_runtime(
+                service_id,
+                int(server_id),
+                uuid,
+                usage_current=held_usage,
+                deleted=1,
+                is_active=0,
+                frozen=1 if held_usage > 0 else 0,
+                frozen_at=now_str if held_usage > 0 else "",
+                frozen_reason="manual_node_delete",
+            )
+    except Exception as exc:
+        logger.warning(
+            "single-server delete: failed to mark userbot node deleted sid=%s uuid=%s: %s",
+            server_id, uuid[:12], exc,
+        )
+
+    try:
+        from Shared import agent_db as _agn
+        agent_service = _agn.get_service_by_uuid(uuid) or {}
+        agent_service_id = int(agent_service.get("id") or 0)
+        if agent_service_id > 0:
+            _agn.update_service_node_runtime(
+                agent_service_id,
+                int(server_id),
+                uuid,
+                usage_current=held_usage,
+                deleted=1,
+                is_active=0,
+                frozen=1 if held_usage > 0 else 0,
+                frozen_at=now_str if held_usage > 0 else "",
+                frozen_reason="manual_node_delete",
+            )
+    except Exception as exc:
+        logger.warning(
+            "single-server delete: failed to mark agency node deleted sid=%s uuid=%s: %s",
+            server_id, uuid[:12], exc,
+        )
+
+    return True, ""
+
+
 async def _delete_user_across_related_servers(
     server_id: int,
     user_uuid: str,
@@ -7605,6 +7699,28 @@ async def handle_server_inline_callback(
             await msg.edit_text("❌ حذف کاربر لغو شد.")
             return
 
+        if choice == "single":
+            ok, error = await _delete_user_on_single_server(server_id, user_uuid)
+            if not ok:
+                await msg.edit_text(
+                    "❌ حذف فقط از همین سرور انجام نشد."
+                    + (f"\n{error}" if error else "")
+                )
+                return
+            await msg.edit_text(
+                "✅ کاربر فقط از همین سرور حذف شد.\n"
+                "🛡 سرویس اصلی و رکورد نمایندگی/ربات کاربران حذف نشد."
+            )
+            if source != "expired":
+                await send_user_list(server_id, chat_id, context)
+            return
+
+        # Backward compatibility: old pending yes callbacks are treated as
+        # explicit full-cluster deletion, same as the new all choice.
+        if choice not in {"all", "yes"}:
+            await msg.edit_text("❌ گزینه حذف نامعتبر است.")
+            return
+
         deleted_server_ids, failed_servers = await _delete_user_across_related_servers(
             server_id, user_uuid
         )
@@ -7619,11 +7735,13 @@ async def handle_server_inline_callback(
 
         if failed_servers:
             await msg.edit_text(
-                "✅ کاربر از سرور اصلی/نودهای قابل‌دسترسی حذف شد.\n"
+                "✅ حذف کامل روی سرورهای قابل‌دسترسی انجام شد.\n"
                 f"⚠️ برخی سرورها حذف نشدند: {len(failed_servers)}"
             )
         else:
-            await msg.edit_text("✅ کاربر با موفقیت از سرور اصلی و نودهای مرتبط حذف شد.")
+            await msg.edit_text(
+                "✅ حذف کامل انجام شد؛ کاربر از سرور اصلی و همه نودهای مرتبط حذف شد."
+            )
         if source != "expired":
             await send_user_list(server_id, chat_id, context)
         return
@@ -9336,20 +9454,31 @@ async def handle_server_inline_callback(
                 [
                     [
                         InlineKeyboardButton(
-                            "✅ بله، حذف شود",
-                            callback_data=f"deluser:{server_id}:{user_uuid}:yes:{userdel_source}",
-                        ),
+                            "🧹 فقط همین سرور",
+                            callback_data=f"deluser:{server_id}:{user_uuid}:single:{userdel_source}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🗑 حذف کامل از همه سرورها",
+                            callback_data=f"deluser:{server_id}:{user_uuid}:all:{userdel_source}",
+                        )
+                    ],
+                    [
                         InlineKeyboardButton(
                             "لغو❌",
                             callback_data=f"deluser:{server_id}:{user_uuid}:no:{userdel_source}",
-                        ),
-                    ]
+                        )
+                    ],
                 ]
             )
             await msg.edit_text(
-                "❓ آیا از حذف کامل این کاربر مطمئن هستید؟\n"
-                "این عملیات قابل بازگشت نیست.",
+                "⚠️ <b>نوع حذف را انتخاب کنید</b>\n\n"
+                "🧹 <b>فقط همین سرور:</b> فقط همین پنل حذف می‌شود و رکورد اصلی سرویس/نمایندگی حفظ می‌شود.\n\n"
+                "🗑 <b>حذف کامل:</b> کاربر از سرور اصلی و همه نودهای مرتبط حذف می‌شود و رکورد سرویس هم پاک می‌شود.\n\n"
+                "برای کاربران «اضافی روی نودها» معمولاً گزینه اول امن‌تر است.",
                 reply_markup=kb,
+                parse_mode="HTML",
             )
             return
 
@@ -9549,6 +9678,7 @@ async def handle_server_inline_callback(
                         "👁 <b>کاربران اضافی روی نودها</b>\n"
                         "❖⬩──────────────⬩❖\n"
                         "این کاربران روی نود وجود دارند ولی روی سرور اصلی نیستند:\n"
+                        "⚠️ برای حذف چنین موردی، «فقط همین سرور» را انتخاب کنید؛ حذف کامل همه نودها را پاک می‌کند.\n"
                     )
                     # نمایش حرفه‌ای: هر نود جدا با شماره و جزئیات
                     body_lines = []
