@@ -344,10 +344,119 @@ def _get_or_create_mappings_for_service(service: Dict[str, Any]) -> list[Dict[st
     return userbot_db.get_service_nodes(service_id) or []
 
 
+def _normalized_identity_name(value: Any) -> str:
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def _exact_named_panel_candidates(
+    users: List[Dict[str, Any]],
+    service_name: str,
+) -> List[Dict[str, Any]]:
+    """Return only unambiguous exact identity-name matches for legacy repair."""
+    wanted = _normalized_identity_name(service_name)
+    if not wanted:
+        return []
+    matches: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for user in users or []:
+        if not isinstance(user, dict):
+            continue
+        candidate_uuid = str(user.get("uuid") or user.get("id") or "").strip()
+        if not candidate_uuid:
+            continue
+        names = {
+            _normalized_identity_name(user.get("name")),
+            _normalized_identity_name(user.get("email")),
+            _normalized_identity_name(user.get("username")),
+        }
+        names.discard("")
+        if wanted not in names:
+            continue
+        if candidate_uuid in seen:
+            continue
+        seen.add(candidate_uuid)
+        matches.append(user)
+    return matches
+
+
+async def _recover_legacy_node_mapping(
+    *,
+    service_id: int,
+    service_name: str,
+    node: Dict[str, Any],
+    server: Dict[str, Any],
+    listed_users: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Repair a legacy node UUID only when the panel identity match is unique.
+
+    Old AdminBot-created clusters can predate the shared-UUID mapping model.
+    Never guess from a partial/fuzzy name: exact one-to-one match is required.
+    """
+    old_uuid = str(node.get("panel_user_uuid") or "").strip()
+    if not old_uuid or not str(service_name or "").strip():
+        return None
+
+    try:
+        users = listed_users if listed_users is not None else await hiddify_api.list_users(server)
+    except Exception:
+        return None
+
+    matches = _exact_named_panel_candidates(users or [], service_name)
+    if len(matches) != 1:
+        if len(matches) > 1:
+            logger.warning(
+                "legacy mapping repair skipped: ambiguous name service_id=%s server_id=%s name=%s matches=%s",
+                service_id,
+                server.get("id"),
+                service_name,
+                len(matches),
+            )
+        return None
+
+    panel_user = matches[0]
+    new_uuid = str(panel_user.get("uuid") or panel_user.get("id") or "").strip()
+    if not new_uuid or new_uuid == old_uuid:
+        return None
+
+    server_id = int(server.get("id") or 0)
+    rebound = userbot_db.rebind_service_node_uuid(
+        service_id,
+        server_id,
+        old_uuid,
+        new_uuid,
+        server_title=str(server.get("title") or node.get("server_title") or ""),
+        panel_user_id=(
+            str(panel_user.get("id")).strip()
+            if panel_user.get("id") is not None
+            else None
+        ),
+    )
+    if not rebound:
+        return None
+
+    # Keep the in-memory mapping in sync so this same enforcer cycle uses the
+    # repaired UUID for accounting and for the eventual disable operation.
+    node["panel_user_uuid"] = new_uuid
+    node["is_active"] = 1
+    node["deleted"] = 0
+    node["frozen"] = 0
+    node["fail_count"] = 0
+    logger.warning(
+        "legacy node mapping repaired service_id=%s server_id=%s old_uuid=%s new_uuid=%s name=%s",
+        service_id,
+        server_id,
+        old_uuid[:12],
+        new_uuid[:12],
+        service_name,
+    )
+    return panel_user
+
+
 async def _fetch_service_node_usage(
     *,
     service_id: int,
     node: Dict[str, Any],
+    service_name: str = "",
     servers_map: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     server_id = int(node.get("server_id") or 0)
@@ -418,6 +527,31 @@ async def _fetch_service_node_usage(
                                 "panel_user": candidate,
                                 "error": None,
                             }
+
+                    # Legacy AdminBot users may have been created on Sanaei/X-UI
+                    # before shared UUID propagation existed. Recover only from
+                    # one exact name/email match; never guess on ambiguity.
+                    recovered = await _recover_legacy_node_mapping(
+                        service_id=service_id,
+                        service_name=service_name,
+                        node=node,
+                        server=server,
+                        listed_users=users or [],
+                    )
+                    if recovered:
+                        recovered_uuid = str(
+                            recovered.get("uuid") or recovered.get("id") or ""
+                        ).strip()
+                        return {
+                            "server_id": server_id,
+                            "user_uuid": recovered_uuid,
+                            "valid": True,
+                            "ok": True,
+                            "not_found": False,
+                            "panel_user": recovered,
+                            "error": None,
+                            "mapping_recovered": True,
+                        }
                 except Exception:
                     # اگر list_users هم شکست خورد، این دیگر «عدم وجود قطعی کاربر»
                     # نیست؛ به‌صورت خطای شبکه/پنل نگه می‌داریم.
@@ -553,7 +687,27 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
             )
             local_expired_by_usage = local_limit > 0 and local_usage >= local_limit
             local_expired_by_time = local_days_left is not None and local_days_left < 0
-            if had_local_active and (local_expired_by_usage or local_expired_by_time):
+
+            # AdminBot-created/legacy services and mappings with frozen/deleted
+            # runtime state must be freshly scanned before a remote cutoff.
+            # Their local aggregate may include held snapshots or pre-shared-UUID
+            # mappings that are not visible in the current panel cards.
+            is_admin_legacy = (
+                int(service.get("user_id") or 0) == 0
+                or "admin:1" in str(service.get("comment") or "").lower()
+            )
+            mapping_is_uncertain = any(
+                int(m.get("deleted") or 0) == 1
+                or int(m.get("frozen") or 0) == 1
+                or int(m.get("fail_count") or 0) > 0
+                for m in mappings
+            )
+            allow_fast_cutoff = not is_admin_legacy and not mapping_is_uncertain
+            if (
+                allow_fast_cutoff
+                and had_local_active
+                and (local_expired_by_usage or local_expired_by_time)
+            ):
                 reason = []
                 if local_expired_by_usage:
                     reason.append("usage_limit_local")
@@ -595,7 +749,12 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                     skipped_held.append(node)
                     continue
                 fetch_tasks.append(
-                    _fetch_service_node_usage(service_id=service_id, node=node, servers_map=servers_map)
+                    _fetch_service_node_usage(
+                        service_id=service_id,
+                        node=node,
+                        service_name=str(service.get("name") or "").strip(),
+                        servers_map=servers_map,
+                    )
                 )
 
             fetch_results = await asyncio.gather(*fetch_tasks) if fetch_tasks else []
