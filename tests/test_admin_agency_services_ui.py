@@ -1340,6 +1340,108 @@ class TransactionLinkTests(_Base):
         self.assertFalse(any(t["description"] == "شارژ کلی" for t in rows))
 
 
+class PanelRepairTests(_Base):
+    """Admin-only DB repair from live panel state after restoring an older bot backup."""
+
+    def test_detail_page_has_panel_repair_button(self):
+        ctx = _mk_context()
+        upd = _mk_update(callback_data=f"agency:svcview:{self.agent1}:{self.svc_active12}:1")
+        _run(self.mod.handle_agencies_callback(upd, ctx))
+        kb = upd.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        self.assertIn("🛠 اصلاح از پنل", labels)
+
+    def test_panel_repair_updates_db_only_without_wallet_or_panel_mutation(self):
+        from Shared import hiddify_api
+
+        service_id = self.svc_expired
+        old_expired = (now - timedelta(days=2)).strftime(FMT)
+        agent_db.update_service(
+            service_id,
+            {
+                "usage_current": 10.0018,
+                "usage_limit": 10.0,
+                "is_active": 0,
+                "end_date": (now - timedelta(days=1)).strftime(FMT),
+                "days_left": -1,
+                "expired_at": old_expired,
+            },
+        )
+        agent_db.add_service_node(
+            service_id=service_id,
+            server_id=1,
+            server_title="Germany",
+            panel_user_uuid=f"uuid-{self.agent1}-مریم مشتری",
+            is_active=0,
+        )
+
+        wallet_before = agent_db.get_wallet_balance(self.agent1)
+        server = {"id": 1, "title": "Germany", "panel_type": "hiddify"}
+        live_user = {
+            "uuid": f"uuid-{self.agent1}-مریم مشتری",
+            "current_usage_GB": 0.13,
+            "usage_limit_GB": 10.0,
+            "is_active": True,
+        }
+
+        sub_links = types.ModuleType("Shared.sub_links")
+        sub_links.get_service_panel_targets = lambda svc: [
+            (server, live_user["uuid"], {})
+        ]
+        saved_sub_links = sys.modules.get("Shared.sub_links")
+        sys.modules["Shared.sub_links"] = sub_links
+
+        try:
+            with patch.object(
+                hiddify_api,
+                "get_user_by_uuid",
+                new=AsyncMock(return_value=live_user),
+            ), patch.object(
+                hiddify_api,
+                "patch_user",
+                new=AsyncMock(),
+            ) as patch_user, patch.object(
+                hiddify_api,
+                "enable_user",
+                new=AsyncMock(),
+            ) as enable_user, patch.object(
+                hiddify_api,
+                "disable_user",
+                new=AsyncMock(),
+            ) as disable_user, patch.object(
+                self.mod,
+                "_panel_expiry_datetime",
+                return_value=(now + timedelta(days=20)).replace(tzinfo=timezone.utc),
+            ):
+                ctx = _mk_context()
+                upd = _mk_update(
+                    callback_data=f"agency:svcrepair:{self.agent1}:{service_id}"
+                )
+                _run(self.mod.handle_agencies_callback(upd, ctx))
+
+                patch_user.assert_not_awaited()
+                enable_user.assert_not_awaited()
+                disable_user.assert_not_awaited()
+        finally:
+            if saved_sub_links is not None:
+                sys.modules["Shared.sub_links"] = saved_sub_links
+            else:
+                sys.modules.pop("Shared.sub_links", None)
+
+        repaired = agent_db.get_service_by_id(service_id)
+        self.assertEqual(int(repaired["is_active"]), 1)
+        self.assertAlmostEqual(float(repaired["usage_current"]), 0.13, places=3)
+        self.assertAlmostEqual(float(repaired["usage_limit"]), 10.0, places=3)
+        self.assertEqual(str(repaired["expired_at"] or ""), "")
+        self.assertGreater(int(repaired["days_left"]), 0)
+        self.assertEqual(agent_db.get_wallet_balance(self.agent1), wallet_before)
+        self.assertFalse(
+            any(int(s["id"]) == service_id for s in agent_db.get_all_expired_services(0))
+        )
+        self.assertIn("هیچ مبلغی کم نشد", _rendered_text(upd))
+
+
+
 class CallbackDataLimitTests(_Base):
     """تأیید طول callback_data (≤۶۴ بایت) در همه دکمه‌های مسیر سرویس‌ها."""
 
