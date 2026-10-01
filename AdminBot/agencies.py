@@ -2474,6 +2474,12 @@ async def send_agent_svc_add_help(update: Update, context: ContextTypes.DEFAULT_
 
 async def start_agent_service_search(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int) -> None:
     """شروع ویزارد جستجو در اشتراک‌های همان نماینده (نام، شناسه، UUID)."""
+    # هر جستجوی جدید باید از صفر شروع شود؛ عبارت قبلی نباید رابط را روی
+    # نتیجه قبلی قفل نگه دارد.
+    state = _svc_ui(context, agent_id)
+    state["query"] = ""
+    state["page"] = 1
+    _svc_save_ui(context, agent_id, state)
     context.user_data["state"] = AGENCY_SVC_SEARCH
     context.user_data[AGENCY_VIEWING_ID_KEY] = agent_id
     text = (
@@ -3779,8 +3785,13 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     if action == "svcback":
-        # بازگشت از جزئیات به لیست با حفظ صفحه/فیلتر/ترتیب/جستجو
+        # بازگشت از جزئیات باید جستجوی قبلی را آزاد کند؛ فیلتر و مرتب‌سازی
+        # حفظ می‌شوند ولی عبارت جستجو پاک می‌شود تا کاربر روی یک نام قفل نماند.
         context.user_data.pop("state", None)
+        state = _svc_ui(context, agent_id)
+        state["query"] = ""
+        state["page"] = 1
+        _svc_save_ui(context, agent_id, state)
         await send_agent_services(update, context, agent_id)
         return
 
