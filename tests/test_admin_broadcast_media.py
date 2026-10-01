@@ -95,40 +95,197 @@ class AdminBroadcastMediaTests(unittest.IsolatedAsyncioTestCase):
         target_bot.send_photo.assert_not_awaited()
         self.assertEqual(target_bot.send_message.await_count, 2)
 
-    async def test_broadcast_preview_shows_photo_and_confirmation_buttons(self):
-        bot = SimpleNamespace(
-            send_message=AsyncMock(),
-            send_photo=AsyncMock(),
+    def test_skip_button_text_accepts_telegram_variants(self):
+        accepted = (
+            "⏩رد کردن",
+            "⏩ رد کردن",
+            "⏩️رد کردن",
+            "رد کردن",
+            "رد\u200cکردن",
+            "⏭️رد کردن",
+            "▶️رد کردن",
         )
-        context = SimpleNamespace(bot=bot)
-        state = {
-            "segment": "all",
-            "text": "preview body",
-            "photo_file_id": "admin-photo-id",
+        for value in accepted:
+            with self.subTest(value=value):
+                self.assertTrue(userbot._is_ticket_reply_skip_text(value))
+
+    def test_admin_broadcast_preview_stage_is_removed(self):
+        self.assertFalse(hasattr(userbot, "_send_broadcast_preview"))
+        self.assertFalse(hasattr(userbot, "build_broadcast_preview_keyboard"))
+
+    async def test_admin_skip_sends_text_directly(self):
+        message = SimpleNamespace(
+            text="⏩رد کردن",
+            photo=[],
+            document=None,
+            chat_id=999,
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(message=message)
+        context = SimpleNamespace(
+            user_data={
+                userbot.BROADCAST_SEND_STATE: {
+                    "segment": "all",
+                    "step": "wait_photo",
+                    "text": "متن تست",
+                }
+            },
+            bot=SimpleNamespace(),
+        )
+        details = {
+            "unreachable": 0,
+            "temporary": 0,
+            "telegram": 0,
+            "other": 0,
+            "recovered": 0,
         }
+        send_mock = AsyncMock(return_value=(2, 0, details))
 
         with patch.object(
             userbot.userbot_db,
             "get_broadcast_target_telegram_ids",
-            return_value=[101, 102, 103],
+            return_value=[101, 102],
+        ), patch.object(
+            userbot,
+            "_send_broadcast_to_targets",
+            new=send_mock,
         ):
-            await userbot._send_broadcast_preview(context, 999, state)
+            await userbot.handle_admin_text_input(update, context)
 
-        self.assertEqual(bot.send_message.await_count, 1)
-        self.assertEqual(bot.send_photo.await_count, 1)
-        self.assertEqual(
-            bot.send_photo.await_args.kwargs["caption"],
-            "preview body",
+        send_mock.assert_awaited_once_with(
+            context,
+            [101, 102],
+            "متن تست",
+            "",
         )
-        markup = bot.send_photo.await_args.kwargs["reply_markup"]
-        callback_data = [
-            button.callback_data
-            for row in markup.inline_keyboard
-            for button in row
-        ]
-        self.assertIn("userbot:broadcast:preview:send", callback_data)
-        self.assertIn("userbot:broadcast:preview:edit", callback_data)
-        self.assertIn("userbot:broadcast:preview:cancel", callback_data)
+        self.assertNotIn(userbot.BROADCAST_SEND_STATE, context.user_data)
+        self.assertIn("2", message.reply_text.await_args.args[0])
+
+    async def test_admin_photo_sends_directly_without_preview(self):
+        message = SimpleNamespace(
+            text=None,
+            photo=[
+                SimpleNamespace(file_id="photo-small"),
+                SimpleNamespace(file_id="photo-large"),
+            ],
+            document=None,
+            chat_id=999,
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(message=message)
+        context = SimpleNamespace(
+            user_data={
+                userbot.BROADCAST_SEND_STATE: {
+                    "segment": "all",
+                    "step": "wait_photo",
+                    "text": "متن همراه عکس",
+                }
+            },
+            bot=SimpleNamespace(),
+        )
+        details = {
+            "unreachable": 0,
+            "temporary": 0,
+            "telegram": 0,
+            "other": 0,
+            "recovered": 0,
+        }
+        send_mock = AsyncMock(return_value=(1, 0, details))
+
+        with patch.object(
+            userbot.userbot_db,
+            "get_broadcast_target_telegram_ids",
+            return_value=[101],
+        ), patch.object(
+            userbot,
+            "_send_broadcast_to_targets",
+            new=send_mock,
+        ):
+            await userbot.handle_admin_text_input(update, context)
+
+        send_mock.assert_awaited_once_with(
+            context,
+            [101],
+            "متن همراه عکس",
+            "photo-large",
+        )
+        self.assertNotIn(userbot.BROADCAST_SEND_STATE, context.user_data)
+
+    async def test_admin_image_document_is_accepted_as_photo(self):
+        message = SimpleNamespace(
+            text=None,
+            photo=[],
+            document=SimpleNamespace(
+                file_id="image-document-id",
+                mime_type="image/jpeg",
+            ),
+            chat_id=999,
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(message=message)
+        context = SimpleNamespace(
+            user_data={
+                userbot.BROADCAST_SEND_STATE: {
+                    "segment": "all",
+                    "step": "wait_photo",
+                    "text": "متن همراه فایل عکس",
+                }
+            },
+            bot=SimpleNamespace(),
+        )
+        details = {
+            "unreachable": 0,
+            "temporary": 0,
+            "telegram": 0,
+            "other": 0,
+            "recovered": 0,
+        }
+        send_mock = AsyncMock(return_value=(1, 0, details))
+
+        with patch.object(
+            userbot.userbot_db,
+            "get_broadcast_target_telegram_ids",
+            return_value=[101],
+        ), patch.object(
+            userbot,
+            "_send_broadcast_to_targets",
+            new=send_mock,
+        ):
+            await userbot.handle_admin_text_input(update, context)
+
+        send_mock.assert_awaited_once_with(
+            context,
+            [101],
+            "متن همراه فایل عکس",
+            "image-document-id",
+        )
+
+    async def test_stale_preview_state_recovers_after_update(self):
+        message = SimpleNamespace(
+            text="⏩رد کردن",
+            photo=[],
+            document=None,
+            chat_id=999,
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(message=message)
+        context = SimpleNamespace(
+            user_data={
+                userbot.BROADCAST_SEND_STATE: {
+                    "segment": "all",
+                    "step": "preview",
+                    "text": "متن قدیمی",
+                    "photo_file_id": "",
+                }
+            },
+            bot=SimpleNamespace(),
+        )
+
+        await userbot.handle_admin_text_input(update, context)
+
+        state = context.user_data[userbot.BROADCAST_SEND_STATE]
+        self.assertEqual(state["step"], "wait_photo")
+        self.assertIn("مسیر قدیمی پیش‌نمایش حذف شده", message.reply_text.await_args.args[0])
 
     async def test_transient_network_error_is_retried_and_recovered(self):
         context = SimpleNamespace(
