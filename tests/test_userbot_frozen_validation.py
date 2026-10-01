@@ -175,6 +175,56 @@ class UserBotFrozenReportDbTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertAlmostEqual(float(rows[0]["usage_current"]), 0.005)
 
+    def test_rebind_legacy_node_uuid_replaces_wrong_mapping(self):
+        conn = userbot_db._get_conn()
+        try:
+            conn.execute(
+                """
+                UPDATE userbot_service_nodes
+                SET server_id = 2,
+                    server_title = 'Sanaei',
+                    panel_user_uuid = 'wrong-uuid',
+                    usage_current = 7.5,
+                    frozen = 1,
+                    fail_count = 3,
+                    deleted = 0,
+                    is_active = 0
+                WHERE service_id = 1
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ok = userbot_db.rebind_service_node_uuid(
+            1,
+            2,
+            "wrong-uuid",
+            "real-sanaei-uuid",
+            server_title="Sanaei",
+        )
+        self.assertTrue(ok)
+        rows = userbot_db.get_service_nodes(1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["panel_user_uuid"], "real-sanaei-uuid")
+        self.assertEqual(int(rows[0]["is_active"]), 1)
+        self.assertEqual(int(rows[0]["frozen"]), 0)
+        self.assertEqual(int(rows[0]["fail_count"]), 0)
+
+    def test_legacy_name_recovery_requires_one_exact_match(self):
+        users = [
+            {"uuid": "a", "name": "Kyc", "email": "Kyc"},
+            {"uuid": "b", "name": "Other", "email": "other"},
+        ]
+        matches = service_enforcer._exact_named_panel_candidates(users, "Kyc")
+        self.assertEqual([row["uuid"] for row in matches], ["a"])
+
+        ambiguous = users + [{"uuid": "c", "name": "kyc", "email": "kyc"}]
+        self.assertEqual(
+            service_enforcer._exact_named_panel_candidates(ambiguous, "Kyc"),
+            [users[0], ambiguous[-1]],
+        )
+
     def test_partial_mapping_heals_configured_xui_child(self):
         primary = {
             "id": 1,
