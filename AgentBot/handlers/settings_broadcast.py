@@ -18,6 +18,7 @@ from AgentBot.keyboards import (
 )
 from CustomerBot.database import get_broadcast_stats, get_broadcast_target_telegram_ids
 from Shared.agent_db import get_active_customer_bot
+from Shared import secure_io
 
 logger = logging.getLogger(__name__)
 CANCEL_WORDS = {"❌ لغو", "/cancel"}
@@ -518,15 +519,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
     try:
         await _send_broadcast_preview(context, update.message.chat_id, agent_id, payload)
     except Exception as e:
+        safe_detail = secure_io.redact_sensitive_text(str(e)).strip()
+        if len(safe_detail) > 500:
+            safe_detail = safe_detail[:500] + "…"
         logger.warning(
-            "agent broadcast preview failed agent=%s error=%s",
+            "agent broadcast preview failed agent=%s error=%s detail=%s",
             agent_id,
             type(e).__name__,
+            safe_detail or "-",
         )
         payload["step"] = "wait_photo"
         context.user_data["broadcast_state"] = payload
         await update.message.reply_text(
-            "❌ ساخت پیش‌نمایش ناموفق بود. لطفاً عکس را دوباره ارسال کنید یا رد کنید.",
+            "❌ ساخت پیش‌نمایش ناموفق بود.\n"
+            f"نوع خطا: {type(e).__name__}\n"
+            f"جزئیات: {safe_detail or '-'}\n\n"
+            "ℹ️ این خطا الزاماً مربوط به عکس نیست؛ خطای واقعی مرحله پیش‌نمایش بالا نمایش داده شده است.\n"
+            "می‌توانید دوباره عکس بفرستید یا «⏩رد کردن» را بزنید.",
             reply_markup=broadcast_skip_cancel_keyboard(),
         )
     return True
