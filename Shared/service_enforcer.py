@@ -815,7 +815,28 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                 if bool(result.get("ok")):
                     got_any_panel_data = True
                     panel_user = result.get("panel_user") or {}
-                    usage = _to_float(panel_user.get("current_usage_GB"), 0.0)
+                    panel_usage = _to_float(panel_user.get("current_usage_GB"), 0.0)
+                    try:
+                        guarded = userbot_db.record_monotonic_panel_usage(
+                            service_id, server_id, user_uuid, panel_usage
+                        )
+                        usage = _to_float(guarded.get("effective_usage"), panel_usage)
+                        if bool(guarded.get("reset_detected")):
+                            logger.warning(
+                                "user usage counter reset protected service_id=%s server_id=%s uuid=%s raw=%.3f effective=%.3f offset=%.3f",
+                                service_id,
+                                server_id,
+                                user_uuid[:8],
+                                panel_usage,
+                                usage,
+                                _to_float(guarded.get("usage_offset"), 0.0),
+                            )
+                    except Exception as guard_err:
+                        logger.warning(
+                            "user usage guard failed service_id=%s server_id=%s; using live raw value: %s",
+                            service_id, server_id, guard_err,
+                        )
+                        usage = panel_usage
                     total_usage += usage
 
                     panel_limit = _usage_limit_from_panel_user(panel_user)
@@ -836,7 +857,6 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                     # بروزرسانی رکورد نود: مقدار زنده، یخ‌زدایی، ریست شمارنده خطا.
                     userbot_db.update_service_node_runtime(
                         service_id, server_id, user_uuid,
-                        usage_current=usage,
                         days_left=days_left,
                         frozen=0,
                         fail_count=0,

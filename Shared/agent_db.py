@@ -141,6 +141,8 @@ def init_db() -> None:
             marzban_username TEXT DEFAULT '',
             is_active INTEGER DEFAULT 1,
             usage_current REAL DEFAULT 0,
+            usage_raw REAL,
+            usage_offset REAL DEFAULT 0,
             days_left INTEGER,
             frozen INTEGER DEFAULT 0,
             fail_count INTEGER DEFAULT 0,
@@ -318,6 +320,8 @@ def _migrate_db():
     # runtime/frozen-accounting columns for agent_service_nodes
     for _col, _ddl in (
         ("usage_current", "REAL DEFAULT 0"),
+        ("usage_raw", "REAL"),
+        ("usage_offset", "REAL DEFAULT 0"),
         ("days_left", "INTEGER"),
         ("frozen", "INTEGER DEFAULT 0"),
         ("fail_count", "INTEGER DEFAULT 0"),
@@ -2810,6 +2814,95 @@ def update_service_node_runtime(
         conn.close()
 
 
+def record_monotonic_panel_usage(
+    service_id: int,
+    server_id: int,
+    panel_user_uuid: str,
+    panel_usage: float,
+) -> Dict[str, Any]:
+    """Persist a live panel counter without letting accounted usage go backwards.
+
+    usage_raw stores the latest raw counter reported by the panel.
+    usage_offset stores traffic consumed before unexpected panel counter resets.
+    usage_current is the effective monotonic value used by accounting/enforcers.
+
+    A reset is detected only for a material collapse (at least 0.10 GB and the
+    new raw value is <= 60% of the previous raw value) so tiny corrections do
+    not create a false reset. Tiny decreases still never reduce effective usage.
+    """
+    init_db()
+    sid = int(service_id or 0)
+    srv = int(server_id or 0)
+    uuid = str(panel_user_uuid or "").strip()
+    try:
+        raw = max(0.0, float(panel_usage or 0.0))
+    except (TypeError, ValueError):
+        raw = 0.0
+    if sid <= 0 or srv <= 0 or not uuid:
+        return {
+            "effective_usage": raw,
+            "panel_usage": raw,
+            "usage_offset": 0.0,
+            "reset_detected": False,
+        }
+
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT usage_current, usage_raw, usage_offset
+            FROM agent_service_nodes
+            WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?
+            LIMIT 1
+            """,
+            (sid, srv, uuid),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return {
+                "effective_usage": raw,
+                "panel_usage": raw,
+                "usage_offset": 0.0,
+                "reset_detected": False,
+            }
+
+        previous_effective = max(0.0, float(row["usage_current"] or 0.0))
+        offset = max(0.0, float(row["usage_offset"] or 0.0))
+        if row["usage_raw"] is None:
+            previous_raw = max(0.0, previous_effective - offset)
+        else:
+            previous_raw = max(0.0, float(row["usage_raw"] or 0.0))
+
+        drop = max(0.0, previous_raw - raw)
+        reset_detected = bool(
+            previous_raw >= 0.10
+            and drop >= 0.10
+            and raw <= (previous_raw * 0.60)
+        )
+        if reset_detected:
+            offset += previous_raw
+
+        effective = max(previous_effective, offset + raw)
+        conn.execute(
+            """
+            UPDATE agent_service_nodes
+            SET usage_current = ?, usage_raw = ?, usage_offset = ?, updated_at = ?
+            WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?
+            """,
+            (effective, raw, offset, _now(), sid, srv, uuid),
+        )
+        conn.commit()
+        return {
+            "effective_usage": effective,
+            "panel_usage": raw,
+            "usage_offset": offset,
+            "reset_detected": reset_detected,
+        }
+    finally:
+        conn.close()
+
+
 def hold_deleted_server_nodes(server_id: int) -> List[int]:
     """Freeze agency-node usage when a server is removed from servers.json."""
     srv = int(server_id or 0)
@@ -2910,6 +3003,8 @@ def reset_service_nodes_on_renew(
                     """
                     UPDATE agent_service_nodes
                     SET usage_current = CASE WHEN ? THEN 0 ELSE usage_current END,
+                        usage_raw = CASE WHEN ? THEN 0 ELSE usage_raw END,
+                        usage_offset = CASE WHEN ? THEN 0 ELSE usage_offset END,
                         days_left = NULL,
                         frozen = 1,
                         fail_count = 0,
@@ -2919,7 +3014,12 @@ def reset_service_nodes_on_renew(
                         updated_at = ?
                     WHERE service_id = ? AND server_id = ?
                     """,
-                    (1 if reset_usage else 0, now, reason, now, sid, server_id),
+                    (
+                        1 if reset_usage else 0,
+                        1 if reset_usage else 0,
+                        1 if reset_usage else 0,
+                        now, reason, now, sid, server_id,
+                    ),
                 )
                 continue
 
@@ -2927,6 +3027,8 @@ def reset_service_nodes_on_renew(
                 """
                 UPDATE agent_service_nodes
                 SET usage_current = CASE WHEN ? THEN 0 ELSE usage_current END,
+                    usage_raw = CASE WHEN ? THEN 0 ELSE usage_raw END,
+                    usage_offset = CASE WHEN ? THEN 0 ELSE usage_offset END,
                     days_left = NULL,
                     frozen = 0,
                     fail_count = 0,
@@ -2938,6 +3040,8 @@ def reset_service_nodes_on_renew(
                 WHERE service_id = ? AND server_id = ?
                 """,
                 (
+                    1 if reset_usage else 0,
+                    1 if reset_usage else 0,
                     1 if reset_usage else 0,
                     1 if reset_usage else 0,
                     now,

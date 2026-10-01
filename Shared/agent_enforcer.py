@@ -335,7 +335,28 @@ async def _process_service(svc: dict) -> Dict[str, str]:
                     )
                     continue
 
-            usage = _to_float(user_data.get("current_usage_GB"), 0.0)
+            panel_usage = _to_float(user_data.get("current_usage_GB"), 0.0)
+            try:
+                guarded = agent_db.record_monotonic_panel_usage(
+                    service_id, server_id, uuid, panel_usage
+                )
+                usage = _to_float(guarded.get("effective_usage"), panel_usage)
+                if bool(guarded.get("reset_detected")):
+                    logger.warning(
+                        "agent usage counter reset protected svc=%s server=%s uuid=%s raw=%.3f effective=%.3f offset=%.3f",
+                        service_id,
+                        server_id,
+                        uuid[:8],
+                        panel_usage,
+                        usage,
+                        _to_float(guarded.get("usage_offset"), 0.0),
+                    )
+            except Exception as guard_err:
+                logger.warning(
+                    "agent usage guard failed svc=%s server=%s; using live raw value: %s",
+                    service_id, server_id, guard_err,
+                )
+                usage = panel_usage
             total_usage += usage
             live_success += 1
             try:
@@ -348,7 +369,6 @@ async def _process_service(svc: dict) -> Dict[str, str]:
                     service_id,
                     server_id,
                     uuid,
-                    usage_current=usage,
                     days_left=(
                         _to_int(user_data.get("remaining_days"), 0)
                         if user_data.get("remaining_days") is not None

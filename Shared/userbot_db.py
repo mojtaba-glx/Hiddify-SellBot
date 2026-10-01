@@ -768,6 +768,8 @@ def _migrate_db():
         existing_cols = set()
     for _col, _ddl in (
         ("usage_current", "REAL DEFAULT 0"),
+        ("usage_raw", "REAL"),
+        ("usage_offset", "REAL DEFAULT 0"),
         ("days_left", "INTEGER"),
         ("frozen", "INTEGER DEFAULT 0"),
         ("fail_count", "INTEGER DEFAULT 0"),
@@ -3931,6 +3933,96 @@ def update_service_node_runtime(
         conn.close()
 
 
+def record_monotonic_panel_usage(
+    service_id: int,
+    server_id: int,
+    panel_user_uuid: str,
+    panel_usage: float,
+) -> Dict[str, Any]:
+    """Persist a live panel counter without letting accounted usage go backwards."""
+    init_db()
+    sid = int(service_id or 0)
+    srv = int(server_id or 0)
+    uuid = str(panel_user_uuid or "").strip()
+    try:
+        raw = max(0.0, float(panel_usage or 0.0))
+    except (TypeError, ValueError):
+        raw = 0.0
+    if sid <= 0 or srv <= 0 or not uuid:
+        return {
+            "effective_usage": raw,
+            "panel_usage": raw,
+            "usage_offset": 0.0,
+            "reset_detected": False,
+        }
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute(
+            """
+            SELECT usage_current, usage_raw, usage_offset
+            FROM userbot_service_nodes
+            WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?
+            LIMIT 1
+            """,
+            (sid, srv, uuid),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return {
+                "effective_usage": raw,
+                "panel_usage": raw,
+                "usage_offset": 0.0,
+                "reset_detected": False,
+            }
+
+        previous_effective = max(0.0, float(row["usage_current"] or 0.0))
+        offset = max(0.0, float(row["usage_offset"] or 0.0))
+        if row["usage_raw"] is None:
+            previous_raw = max(0.0, previous_effective - offset)
+        else:
+            previous_raw = max(0.0, float(row["usage_raw"] or 0.0))
+
+        drop = max(0.0, previous_raw - raw)
+        reset_detected = bool(
+            previous_raw >= 0.10
+            and drop >= 0.10
+            and raw <= (previous_raw * 0.60)
+        )
+        if reset_detected:
+            offset += previous_raw
+
+        effective = max(previous_effective, offset + raw)
+        cur.execute(
+            """
+            UPDATE userbot_service_nodes
+            SET usage_current = ?, usage_raw = ?, usage_offset = ?, updated_at = ?
+            WHERE service_id = ? AND server_id = ? AND panel_user_uuid = ?
+            """,
+            (
+                effective,
+                raw,
+                offset,
+                datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+                sid,
+                srv,
+                uuid,
+            ),
+        )
+        conn.commit()
+        return {
+            "effective_usage": effective,
+            "panel_usage": raw,
+            "usage_offset": offset,
+            "reset_detected": reset_detected,
+        }
+    finally:
+        conn.close()
+
+
 def set_service_nodes_active_except_deleted(service_id: int, is_active: int) -> None:
     """مثل set_service_nodes_active ولی نودهای حذف‌شده (deleted=1) را دست‌نخورده می‌گذارد."""
     sid = int(service_id or 0)
@@ -4012,7 +4104,8 @@ def reset_service_nodes_on_renew(service_id: int) -> None:
         cur.execute(
             """
             UPDATE userbot_service_nodes
-            SET usage_current = 0, days_left = NULL, frozen = 0, fail_count = 0,
+            SET usage_current = 0, usage_raw = 0, usage_offset = 0,
+                days_left = NULL, frozen = 0, fail_count = 0,
                 last_ok_at = NULL, frozen_at = '', frozen_reason = '',
                 is_active = 1, updated_at = ?
             WHERE service_id = ?
