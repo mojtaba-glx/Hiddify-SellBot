@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -252,6 +253,173 @@ class UserBotFrozenReportDbTests(unittest.TestCase):
         )
         child_row = next(row for row in mappings if int(row["server_id"]) == 2)
         self.assertEqual(child_row["panel_user_uuid"], "uuid-a")
+
+
+class ForceEnforcerClusterTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_path = userbot_db.DB_PATH
+        userbot_db.DB_PATH = Path(self.tmp.name) / "force-enforcer.db"
+        userbot_db.init_db()
+        service_enforcer._ENFORCER_FETCH_SEMAPHORE = None
+
+        conn = userbot_db._get_conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO userbot_services
+                (id, user_id, name, server_id, server_title,
+                 usage_current, usage_limit, days_left, last_online, comment)
+                VALUES (77, 0, 'Kyc', 1, 'Germany',
+                        0, 100, 21, '', 'uuid:shared-uuid|admin:1')
+                """
+            )
+            for sid, title in ((1, "Germany"), (2, "Turkey"), (3, "France")):
+                conn.execute(
+                    """
+                    INSERT INTO userbot_service_nodes
+                    (service_id, server_id, server_title, panel_user_uuid,
+                     is_active, usage_current, frozen, fail_count, deleted,
+                     created_at, updated_at)
+                    VALUES (77, ?, ?, 'shared-uuid',
+                            1, 0, 0, 0, 0, '', '')
+                    """,
+                    (sid, title),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        self.servers = {
+            1: {"id": 1, "title": "Germany", "nodes": [{"target_server_id": 2}, {"target_server_id": 3}]},
+            2: {"id": 2, "title": "Turkey", "nodes": []},
+            3: {"id": 3, "title": "France", "nodes": []},
+        }
+
+    def tearDown(self):
+        userbot_db.DB_PATH = self.old_path
+        service_enforcer._ENFORCER_FETCH_SEMAPHORE = None
+        service_enforcer._enforcer_running = False
+        self.tmp.cleanup()
+
+    def _panel_user(self, sid: int, usage: float) -> dict:
+        return {
+            "uuid": "shared-uuid",
+            "name": "Kyc",
+            "current_usage_GB": usage,
+            "usage_limit_GB": 100,
+            "days_left": 21,
+            "is_active": True,
+        }
+
+    def test_force_scan_reenables_only_bot_locked_nodes_when_live_total_is_below_limit(self):
+        conn = userbot_db._get_conn()
+        try:
+            conn.execute(
+                "UPDATE userbot_service_nodes SET is_active = 0 WHERE service_id = 77"
+            )
+            conn.execute(
+                "UPDATE userbot_services SET usage_current = 100 WHERE id = 77"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        usage_by_sid = {1: 76.38, 2: 22.83, 3: 0.42}
+
+        async def get_user(server, uuid):
+            return self._panel_user(int(server["id"]), usage_by_sid[int(server["id"])])
+
+        enable = AsyncMock(return_value={"is_active": True})
+        disable = AsyncMock()
+
+        with patch.object(
+            service_enforcer.database,
+            "get_servers",
+            return_value=list(self.servers.values()),
+        ), patch.object(
+            service_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: self.servers.get(int(sid)),
+        ), patch.object(
+            service_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            service_enforcer.hiddify_api,
+            "enable_user",
+            new=enable,
+        ), patch.object(
+            service_enforcer.hiddify_api,
+            "disable_user",
+            new=disable,
+        ):
+            summary = asyncio.run(
+                service_enforcer._run_global_usage_enforcer_impl(scan_all=True)
+            )
+
+        self.assertAlmostEqual(
+            float(userbot_db.get_service_by_id(77)["usage_current"]),
+            99.63,
+            places=2,
+        )
+        self.assertEqual(summary["services_disabled"], 0)
+        self.assertEqual(summary["services_reenabled"], 1)
+        self.assertEqual(summary["nodes_reenabled"], 3)
+        self.assertEqual(summary["nodes_reenable_failed"], 0)
+        self.assertEqual(enable.await_count, 3)
+        self.assertEqual(disable.await_count, 0)
+        self.assertTrue(
+            all(int(row["is_active"]) == 1 for row in userbot_db.get_service_nodes(77))
+        )
+
+    def test_force_scan_disables_all_cluster_nodes_when_live_total_reaches_limit(self):
+        usage_by_sid = {1: 76.38, 2: 22.83, 3: 0.79}
+
+        async def get_user(server, uuid):
+            return self._panel_user(int(server["id"]), usage_by_sid[int(server["id"])])
+
+        enable = AsyncMock()
+        disable = AsyncMock(return_value={"is_active": False})
+
+        with patch.object(
+            service_enforcer.database,
+            "get_servers",
+            return_value=list(self.servers.values()),
+        ), patch.object(
+            service_enforcer.database,
+            "get_server_by_id",
+            side_effect=lambda sid: self.servers.get(int(sid)),
+        ), patch.object(
+            service_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=get_user),
+        ), patch.object(
+            service_enforcer.hiddify_api,
+            "enable_user",
+            new=enable,
+        ), patch.object(
+            service_enforcer.hiddify_api,
+            "disable_user",
+            new=disable,
+        ):
+            summary = asyncio.run(
+                service_enforcer._run_global_usage_enforcer_impl(scan_all=True)
+            )
+
+        self.assertAlmostEqual(
+            float(userbot_db.get_service_by_id(77)["usage_current"]),
+            100.0,
+            places=2,
+        )
+        self.assertEqual(summary["services_disabled"], 1)
+        self.assertEqual(summary["nodes_disabled"], 3)
+        self.assertEqual(summary["nodes_disable_failed"], 0)
+        self.assertEqual(disable.await_count, 3)
+        self.assertEqual(enable.await_count, 0)
+        self.assertTrue(
+            all(int(row["is_active"]) == 0 for row in userbot_db.get_service_nodes(77))
+        )
 
 
 if __name__ == "__main__":

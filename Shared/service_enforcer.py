@@ -651,6 +651,8 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
         "services_reenabled": 0,
         "nodes_disabled": 0,
         "nodes_disable_failed": 0,
+        "nodes_reenabled": 0,
+        "nodes_reenable_failed": 0,
         "errors": 0,
     }
 
@@ -664,7 +666,25 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
             int(s.get("id") or 0): s for s in _all_servers if isinstance(s, dict) and int(s.get("id") or 0) > 0
         }
     except Exception:
+        _all_servers = []
         servers_map = {}
+
+    # اجرای دستی/scan_all باید snapshot واقعاً تازه بگیرد. X-UI adapters
+    # لیست کاربران را کوتاه‌مدت cache می‌کنند؛ قبل از Force Enforce cache
+    # همان پنل‌ها را پاک می‌کنیم تا مصرف چند ثانیه قبل مبنای قطع نشود.
+    if bool(scan_all):
+        for _srv in _all_servers or []:
+            try:
+                from Shared import xui_sanaei as _xui_sanaei
+                _xui_sanaei._invalidate_caches(_srv)
+            except Exception:
+                pass
+            try:
+                from Shared import xui_alireza as _xui_alireza
+                _xui_alireza._invalidate_xui_inbounds_cache(_srv)
+            except Exception:
+                pass
+
     for service in selected_services:
         summary["services_scanned"] += 1
         service_id = int(service.get("id") or 0)
@@ -969,7 +989,10 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                 if had_local_active or changed > 0:
                     summary["services_disabled"] += 1
             elif got_any_panel_data:
-                # فقط نودهای غیرِحذف‌شده و غیرِ not_found را فعال کن تا فلیپ رخ ندهد.
+                # فقط نودهایی که Enforcer قبلاً در DB قفل کرده و در این اسکن
+                # واقعاً سالم/زیر سقف هستند دوباره روی خود پنل فعال می‌شوند.
+                # غیرفعال‌سازی دستی ادمین local is_active را صفر نمی‌کند، پس
+                # Force Enforce آن را ناخواسته روشن نخواهد کرد.
                 needs_reenable = any(
                     int(m.get("is_active") or 0) == 0
                     and int(m.get("deleted") or 0) == 0
@@ -978,27 +1001,49 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                     for m in mappings
                 )
                 if needs_reenable:
-                    # فعال‌سازی انتخابی (نه bulk) تا نودهای not_found دوباره فعال نشوند
                     reenabled = 0
+                    reenable_failed = 0
                     for m in mappings:
                         if int(m.get("deleted") or 0) == 1:
                             continue
                         sid = int(m.get("server_id") or 0)
                         uuid = str(m.get("panel_user_uuid") or "").strip()
+                        if sid <= 0 or not uuid:
+                            continue
                         if (sid, uuid) in not_found_keys:
                             continue
-                        if int(m.get("is_active") or 0) == 0:
-                            try:
-                                userbot_db.set_service_node_active(service_id, sid, uuid, 1)
-                                reenabled += 1
-                            except Exception:
-                                pass
-                    # اگر هیچ نودی نیاز به فعال‌سازی نداشت (همه not_found بودند) چیزی نشمار
+                        if int(m.get("is_active") or 0) != 0:
+                            continue
+
+                        server = servers_map.get(sid) or database.get_server_by_id(sid)
+                        if not server:
+                            reenable_failed += 1
+                            logger.warning(
+                                "Failed re-enabling service_id=%s server_id=%s uuid=%s: server missing",
+                                service_id,
+                                sid,
+                                uuid,
+                            )
+                            continue
+
+                        try:
+                            await hiddify_api.enable_user(server, uuid)
+                            userbot_db.set_service_node_active(service_id, sid, uuid, 1)
+                            reenabled += 1
+                        except Exception as exc:
+                            reenable_failed += 1
+                            logger.warning(
+                                "Failed re-enabling service_id=%s server_id=%s uuid=%s: %s",
+                                service_id,
+                                sid,
+                                uuid,
+                                exc,
+                            )
+
+                    summary["nodes_reenabled"] += reenabled
+                    summary["nodes_reenable_failed"] += reenable_failed
                     if reenabled > 0:
                         summary["services_reenabled"] += 1
-                    else:
-                        # fallback: اگر bulk قدیمی همه را فعال می‌کرد ولی الان چیزی نماند، لاگ نکن
-                        pass
 
         except Exception as e:
             summary["errors"] += 1
