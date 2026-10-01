@@ -57,8 +57,13 @@ def _broadcast_segment_label(segment: str) -> str:
 
 
 def _is_skip_text(text: str) -> bool:
-    raw = str(text or "").strip().replace(" ", "")
-    return raw in {"⏩ردکردن", "ردکردن", "⏭️ردکردن", "▶️ردکردن"}
+    # Telegram/Android may insert variation selectors, RTL marks or different
+    # whitespace around the "رد کردن" label. Normalize them so the text-only
+    # broadcast path can never get stuck on the skip step.
+    raw = "".join(str(text or "").strip().split())
+    for mark in ("\ufe0f", "\u200c", "\u200e", "\u200f"):
+        raw = raw.replace(mark, "")
+    return raw in {"⏩ردکردن", "ردکردن", "⏭ردکردن", "▶ردکردن"}
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -270,15 +275,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
 
     segment = str(payload.get("segment") or "all").strip().lower()
     text = (update.message.text or update.message.caption or "").strip()
-    image_document = update.message.document if (
-        update.message.document
-        and str(update.message.document.mime_type or "").lower().startswith("image/")
-    ) else None
-    photo_file_id = (
-        update.message.photo[-1].file_id
-        if update.message.photo
-        else (image_document.file_id if image_document else "")
-    )
+    photo_file_id = update.message.photo[-1].file_id if update.message.photo else ""
     step = str(payload.get("step") or "wait_text").strip().lower()
 
     if text in CANCEL_WORDS:
