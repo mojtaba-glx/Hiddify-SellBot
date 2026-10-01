@@ -1372,8 +1372,8 @@ class PanelRepairTests(_Base):
             server_id=1,
             server_title="Germany",
             panel_user_uuid=f"uuid-{self.agent1}-مریم مشتری",
-            is_active=0,
         )
+        agent_db.set_service_node_active(service_id, 1, False)
 
         wallet_before = agent_db.get_wallet_balance(self.agent1)
         server = {"id": 1, "title": "Germany", "panel_type": "hiddify"}
