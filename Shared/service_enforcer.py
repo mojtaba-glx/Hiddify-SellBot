@@ -457,6 +457,7 @@ async def _fetch_service_node_usage(
     service_id: int,
     node: Dict[str, Any],
     service_name: str = "",
+    allow_name_recovery: bool = False,
     servers_map: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     server_id = int(node.get("server_id") or 0)
@@ -531,13 +532,15 @@ async def _fetch_service_node_usage(
                     # Legacy AdminBot users may have been created on Sanaei/X-UI
                     # before shared UUID propagation existed. Recover only from
                     # one exact name/email match; never guess on ambiguity.
-                    recovered = await _recover_legacy_node_mapping(
-                        service_id=service_id,
-                        service_name=service_name,
-                        node=node,
-                        server=server,
-                        listed_users=users or [],
-                    )
+                    recovered = None
+                    if allow_name_recovery:
+                        recovered = await _recover_legacy_node_mapping(
+                            service_id=service_id,
+                            service_name=service_name,
+                            node=node,
+                            server=server,
+                            listed_users=users or [],
+                        )
                     if recovered:
                         recovered_uuid = str(
                             recovered.get("uuid") or recovered.get("id") or ""
@@ -753,6 +756,7 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                         service_id=service_id,
                         node=node,
                         service_name=str(service.get("name") or "").strip(),
+                        allow_name_recovery=is_admin_legacy,
                         servers_map=servers_map,
                     )
                 )
