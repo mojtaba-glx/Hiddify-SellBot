@@ -4915,6 +4915,47 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
         await context.bot.send_message(chat_id, f"❌ خطا در اعمال تمدید پویا.{detail}")
         return
 
+    # اگر این UUID متعلق به سرویس UserBot باشد، منبع حقیقت محلی باید همان لحظه
+    # با دورهٔ جدید همگام شود. در غیر این صورت Global Enforcer هنوز days_left /
+    # usage دورهٔ قبلی را منقضی می‌بیند و چند ثانیه بعد دوباره همه نودها را
+    # غیرفعال می‌کند؛ همین باعث ماندن سرویس در لیست «منقضی‌شده‌ها» نیز می‌شود.
+    local_sync_note = ""
+    try:
+        owner = (
+            userbot_db.get_service_owner_by_panel_uuid(target_uuid)
+            or userbot_db.get_service_owner_by_panel_uuid(user_uuid)
+            or {}
+        )
+        local_service_id = int(owner.get("service_id") or 0)
+        if local_service_id > 0:
+            userbot_db.reset_service_nodes_on_renew(local_service_id)
+            userbot_db.update_service_runtime(
+                local_service_id,
+                usage_current=0.0,
+                usage_limit=float(gb),
+                days_left=int(new_days),
+            )
+            refreshed = userbot_db.get_service_by_id(local_service_id) or {}
+            if (
+                int(refreshed.get("days_left") or 0) != int(new_days)
+                or abs(float(refreshed.get("usage_current") or 0.0)) > 1e-9
+                or abs(float(refreshed.get("usage_limit") or 0.0) - float(gb)) > 1e-9
+                or str(refreshed.get("expired_at") or "").strip()
+            ):
+                raise RuntimeError(
+                    f"local renewal verification failed for service_id={local_service_id}"
+                )
+    except Exception as e:
+        logger.exception(
+            "Panel renewal succeeded but UserBot runtime sync failed uuid=%s: %s",
+            target_uuid,
+            e,
+        )
+        local_sync_note = (
+            "\n⚠️ تمدید روی پنل انجام شد اما وضعیت داخلی ربات همگام نشد؛ "
+            "کنترل سراسری ممکن است دوباره سرویس را غیرفعال کند."
+        )
+
     # فعال‌سازی اشتراک (تیک فعال شدن) روی کل خوشه
     try:
         await _set_user_active_state_on_related_servers(server_id, user_uuid, active=True)
@@ -4927,7 +4968,8 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
         f"✅ اشتراک با پلن پویا تمدید و فعال شد ({changed}/{total} سرور)!\n"
         f"حجم: {format_gb(gb)}GB (ریست کامل - حجم قبلی صفر شد)\n"
         f"زمان: {int(new_days)} روز (ریست کامل - زمان قبلی صفر شد)"
-        f"{node_note}",
+        f"{node_note}"
+        f"{local_sync_note}",
     )
     await send_user_detail(server_id, target_uuid, chat_id, context)
 
