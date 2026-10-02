@@ -1587,6 +1587,47 @@ def get_service_by_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def get_service_by_any_panel_uuid(panel_user_uuid: str) -> Optional[Dict[str, Any]]:
+    """Resolve an agency/customer service by its primary or any node UUID."""
+    init_db()
+    uuid = str(panel_user_uuid or "").strip()
+    if not uuid:
+        return None
+
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT s.*
+            FROM agent_services s
+            WHERE s.panel_user_uuid = ?
+              AND (s.deleted_at IS NULL OR s.deleted_at = '')
+            ORDER BY s.id DESC
+            LIMIT 1
+            """,
+            (uuid,),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        row = conn.execute(
+            """
+            SELECT s.*
+            FROM agent_service_nodes n
+            JOIN agent_services s ON s.id = n.service_id
+            WHERE (n.panel_user_uuid = ? OR n.panel_user_id = ?)
+              AND COALESCE(n.deleted, 0) = 0
+              AND (s.deleted_at IS NULL OR s.deleted_at = '')
+            ORDER BY s.id DESC
+            LIMIT 1
+            """,
+            (uuid, uuid),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def update_service_name_by_panel_uuid(panel_user_uuid: str, name: str) -> int:
     """Sync a panel-side rename into every matching reseller/customer service."""
     init_db()

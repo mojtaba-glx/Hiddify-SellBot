@@ -4915,6 +4915,101 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
         await context.bot.send_message(chat_id, f"❌ خطا در اعمال تمدید پویا.{detail}")
         return
 
+    # تمدید دستی AdminBot باید runtime هر مالک محلی همان UUID را نیز همگام کند.
+    # در غیر این صورت UserBot/AgentBot هنوز دورهٔ قبلی را منقضی می‌بینند و
+    # Enforcer می‌تواند کمی بعد همه نودها را دوباره غیرفعال کند؛ همین رکورد
+    # stale باعث باقی‌ماندن سرویس در «منقضی‌شده‌ها» هم می‌شود.
+    local_sync_errors: List[str] = []
+
+    try:
+        owner = (
+            userbot_db.get_service_owner_by_panel_uuid(target_uuid)
+            or userbot_db.get_service_owner_by_panel_uuid(user_uuid)
+            or {}
+        )
+        local_service_id = int(owner.get("service_id") or 0)
+        if local_service_id > 0:
+            userbot_db.reset_service_nodes_on_renew(local_service_id)
+            userbot_db.update_service_runtime(
+                local_service_id,
+                usage_current=0.0,
+                usage_limit=float(gb),
+                days_left=int(new_days),
+            )
+            refreshed = userbot_db.get_service_by_id(local_service_id) or {}
+            if (
+                int(refreshed.get("days_left") or 0) != int(new_days)
+                or abs(float(refreshed.get("usage_current") or 0.0)) > 1e-9
+                or abs(float(refreshed.get("usage_limit") or 0.0) - float(gb)) > 1e-9
+                or str(refreshed.get("expired_at") or "").strip()
+            ):
+                raise RuntimeError(
+                    f"UserBot local renewal verification failed service_id={local_service_id}"
+                )
+    except Exception as e:
+        logger.exception(
+            "Panel renewal succeeded but UserBot runtime sync failed uuid=%s: %s",
+            target_uuid,
+            e,
+        )
+        local_sync_errors.append("UserBot")
+
+    try:
+        from Shared import agent_db as _agent_db
+
+        agent_service = (
+            _agent_db.get_service_by_any_panel_uuid(target_uuid)
+            or _agent_db.get_service_by_any_panel_uuid(user_uuid)
+            or {}
+        )
+        agent_service_id = int(agent_service.get("id") or 0)
+        if agent_service_id > 0:
+            period_start = datetime.now(timezone.utc).replace(tzinfo=None)
+            period_end = period_start + timedelta(days=int(new_days))
+            _agent_db.reset_service_nodes_on_renew(
+                agent_service_id,
+                reset_usage=True,
+                reset_time=True,
+            )
+            _agent_db.update_service(
+                agent_service_id,
+                {
+                    "usage_current": 0.0,
+                    "usage_limit": float(gb),
+                    "days_left": int(new_days),
+                    "start_date": period_start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "end_date": period_end.strftime("%Y-%m-%d %H:%M:%S"),
+                    "expired_at": "",
+                    "is_active": 1,
+                },
+            )
+            refreshed_agent = _agent_db.get_service_by_id(agent_service_id) or {}
+            if (
+                int(refreshed_agent.get("days_left") or 0) != int(new_days)
+                or abs(float(refreshed_agent.get("usage_current") or 0.0)) > 1e-9
+                or abs(float(refreshed_agent.get("usage_limit") or 0.0) - float(gb)) > 1e-9
+                or str(refreshed_agent.get("expired_at") or "").strip()
+                or int(refreshed_agent.get("is_active") or 0) != 1
+            ):
+                raise RuntimeError(
+                    f"AgentBot local renewal verification failed service_id={agent_service_id}"
+                )
+    except Exception as e:
+        logger.exception(
+            "Panel renewal succeeded but AgentBot runtime sync failed uuid=%s: %s",
+            target_uuid,
+            e,
+        )
+        local_sync_errors.append("AgentBot")
+
+    local_sync_note = ""
+    if local_sync_errors:
+        local_sync_note = (
+            "\n⚠️ تمدید روی پنل انجام شد اما همگام‌سازی داخلی "
+            + " / ".join(local_sync_errors)
+            + " کامل نشد؛ کنترل سراسری ممکن است دوباره سرویس را غیرفعال کند."
+        )
+
     # فعال‌سازی اشتراک (تیک فعال شدن) روی کل خوشه
     try:
         await _set_user_active_state_on_related_servers(server_id, user_uuid, active=True)
@@ -4927,7 +5022,8 @@ async def _apply_dynamic_extend(server_id: int, user_uuid: str, gb: int, months:
         f"✅ اشتراک با پلن پویا تمدید و فعال شد ({changed}/{total} سرور)!\n"
         f"حجم: {format_gb(gb)}GB (ریست کامل - حجم قبلی صفر شد)\n"
         f"زمان: {int(new_days)} روز (ریست کامل - زمان قبلی صفر شد)"
-        f"{node_note}",
+        f"{node_note}"
+        f"{local_sync_note}",
     )
     await send_user_detail(server_id, target_uuid, chat_id, context)
 
