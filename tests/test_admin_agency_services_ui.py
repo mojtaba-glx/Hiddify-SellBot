@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from Shared import agent_db
 from Shared import database as shared_database
+from Shared import plans_storage
 
 ADMIN_ID = 111
 OTHER_ID = 222
@@ -895,10 +896,34 @@ class RenewFlowTests(_Base):
 
     def setUp(self):
         super().setUp()
-        self.plan_id = int(agent_db.set_agent_plan(
-            self.agent1, server_id=1, days=30, gb=20.0,
-            wholesale_price=50000, sale_price=80000, plan_title="ماهانه",
+
+        # تمدید AdminBot باید از پلن‌های سراسری همان پنل (Shared/plans.json)
+        # بخواند، نه از agent_plans نماینده.
+        self._plans_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._plans_tmp.cleanup)
+        self._plans_file = Path(self._plans_tmp.name) / "plans.json"
+        plans_patch = patch.object(plans_storage, "_PLANS_FILE", self._plans_file)
+        plans_patch.start()
+        self.addCleanup(plans_patch.stop)
+
+        plans_storage.set_plan_display_mode(1, "fixed")
+        category = plans_storage.add_plan_category(1, "ماهانه", priority=0)
+        self.plan_id = int(plans_storage.add_plan(
+            1,
+            category_id=int(category["id"]),
+            title="پلن ادمین ۲۰ گیگ",
+            price=80000,
+            days=30,
+            gb=20.0,
+            priority=0,
         )["id"])
+
+        # یک تعرفه متفاوت نماینده عمداً ثبت می‌کنیم تا مشخص شود مسیر AdminBot
+        # آن را برای انتخاب پلن تمدید استفاده نمی‌کند.
+        agent_db.set_agent_plan(
+            self.agent1, server_id=1, days=60, gb=5.0,
+            wholesale_price=12345, sale_price=54321, plan_title="پلن قدیمی نماینده",
+        )
 
     def test_detail_page_has_renew_button(self):
         async def flow():
@@ -939,7 +964,7 @@ class RenewFlowTests(_Base):
             # برچسب دکمه با مقادیر واقعی پلن
             self.assertIn("30 روز", plan_btns[0].text)
             self.assertIn("20GB", plan_btns[0].text)
-            self.assertIn("50,000", plan_btns[0].text)
+            self.assertIn("80,000", plan_btns[0].text)
             plan_cb = plan_btns[0].callback_data
             # تأیید: نام، شناسه، حجم، مدت، قیمت عمده، موجودی
             upd2 = _mk_update(callback_data=plan_cb)
@@ -947,7 +972,7 @@ class RenewFlowTests(_Base):
             text2 = _rendered_text(upd2)
             self.assertIn("حجم جدید: <b>20GB</b>", text2)
             self.assertIn("مدت جدید: <b>30 روز</b>", text2)
-            self.assertIn("قیمت عمده: <b>50,000</b>", text2)
+            self.assertIn("قیمت پلن ادمین: <b>80,000</b>", text2)
             self.assertIn("60,000", text2)  # موجودی کیف پول
             kb2 = upd2.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
             do_cb = [b.callback_data for row in kb2.inline_keyboard for b in row
