@@ -3551,6 +3551,10 @@ async def show_service_renew_plans(update: Update, context: ContextTypes.DEFAULT
         await query.answer("پلن معتبری برای تمدید تعریف نشده است.", show_alert=True)
         return
 
+    # این مسیر callback را خودش پاسخ می‌دهد؛ پاسخ صریح قبل از edit
+    # باعث می‌شود spinner تلگرام قطع شود حتی اگر edit کمی زمان ببرد.
+    await query.answer("♻️ در حال آماده‌سازی پلن‌های تمدید…")
+
     code = _svc_code(svc)
     name = _shorten(svc.get("name"), 24) or "بی‌نام"
     lines = [
@@ -3581,7 +3585,14 @@ async def show_service_renew_plans(update: Update, context: ContextTypes.DEFAULT
     try:
         await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
     except BadRequest:
-        await query.answer()
+        await query.answer("نمایش پلن‌های تمدید ناموفق بود. دوباره تلاش کنید.", show_alert=True)
+    except Exception:
+        logger.exception(
+            "Failed to render agency renewal plans agent=%s service=%s",
+            agent_id,
+            service_id,
+        )
+        await query.answer("❌ نمایش پلن‌های تمدید ناموفق بود.", show_alert=True)
 
 
 async def confirm_service_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int, plan_id: int) -> None:
@@ -3632,8 +3643,17 @@ async def confirm_service_renew(update: Update, context: ContextTypes.DEFAULT_TY
     ])
     try:
         await query.edit_message_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
+        await query.answer("پلن تمدید آماده شد.")
     except BadRequest:
-        await query.answer()
+        await query.answer("نمایش تأیید تمدید ناموفق بود. دوباره تلاش کنید.", show_alert=True)
+    except Exception:
+        logger.exception(
+            "Failed to render agency renewal confirmation agent=%s service=%s plan=%s",
+            agent_id,
+            service_id,
+            plan_id,
+        )
+        await query.answer("❌ نمایش تأیید تمدید ناموفق بود.", show_alert=True)
 
 
 async def do_service_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int, plan_id: int) -> None:
@@ -3698,10 +3718,16 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
     if not data.startswith("agency:"):
         return
 
-    await query.answer()
     parts = data.split(":")
 
     action = parts[1] if len(parts) > 1 else ""
+
+    # پاسخ callback را هر مسیر مالک خودش مدیریت می‌کند. مسیرهای تمدید
+    # مخصوصاً نباید قبل از نمایش پلن/تأیید دوباره answer شوند؛ Telegram
+    # روی callback یک پاسخ تکراری می‌تواند QUERY_ID_INVALID بدهد و دکمه
+    # از دید کاربر بی‌اثر به نظر برسد.
+    if action not in {"svcrenew", "svcrenewplan", "svcrenewdo"}:
+        await query.answer()
 
     # کنترل ADMIN_ID برای همه مسیرهای این ماژول
     if not _svc_is_admin(update):
