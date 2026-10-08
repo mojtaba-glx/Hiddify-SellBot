@@ -930,6 +930,9 @@ class RenewFlowTests(_Base):
             upd = _mk_update(callback_data=f"agency:svcrenew:{self.agent1}:{self.svc_active12}")
             await self.mod.handle_agencies_callback(upd, ctx)
             kb = upd.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+            # callback تمدید باید دقیقاً یک‌بار answer شود؛ پاسخ تکراری
+            # در Telegram می‌تواند مسیر را برای کاربر بی‌اثر کند.
+            self.assertEqual(upd.callback_query.answer.await_count, 1)
             plan_btns = [b for row in kb.inline_keyboard for b in row
                          if b.callback_data and "svcrenewplan" in b.callback_data]
             self.assertEqual(len(plan_btns), 1)
