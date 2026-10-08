@@ -581,6 +581,15 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         except Exception as e:
             logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
+        # اگر همین UUID در دیتابیس مرکزی UserBot هم وجود دارد، runtime آن را
+        # هم‌زمان با تمدید نماینده ریست کن تا Enforcer وضعیت منقضی قبلی را
+        # دوباره روی پنل اعمال نکند.
+        _sync_userbot_runtime_after_agency_renew(
+            updated.get("panel_user_uuid"),
+            new_usage,
+            new_days,
+        )
+
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         primary_enable_ok = False
         for tgt in targets:
@@ -656,6 +665,57 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     updated["_renew_volume_mode"] = volume_mode
     updated["_renew_time_mode"] = time_mode
     return updated
+
+
+def _sync_userbot_runtime_after_agency_renew(
+    panel_user_uuid: str,
+    usage_limit: float,
+    days_left: int,
+) -> bool:
+    """همگام‌سازی runtime دیتابیس UserBot بعد از تمدید موفق نماینده.
+
+    سرویس‌های قدیمی/ادمینی ممکن است همان UUID را در userbot.db داشته باشند.
+    اگر تمدید فقط در agent.db ثبت شود، Enforcer با days_left/usage قدیمی
+    می‌تواند چند ثانیه بعد همان UUID را دوباره منقضی و غیرفعال کند.
+    """
+    panel_user_uuid = str(panel_user_uuid or "").strip()
+    if not panel_user_uuid:
+        return False
+
+    try:
+        from Shared import userbot_db
+
+        userbot_service = userbot_db.get_service_by_panel_uuid(panel_user_uuid)
+        if not userbot_service:
+            return False
+
+        userbot_service_id = int(userbot_service.get("id") or 0)
+        if userbot_service_id <= 0:
+            return False
+
+        # همان reset امن تمدید UserBot: snapshot/offset/frozen/expired قبلی
+        # نباید وارد دوره جدید شوند.
+        userbot_db.reset_service_nodes_on_renew(userbot_service_id)
+        userbot_db.update_service_runtime(
+            userbot_service_id,
+            usage_current=0.0,
+            usage_limit=float(usage_limit or 0),
+            days_left=int(days_left or 0),
+        )
+        logger.info(
+            "agency renewal synced UserBot runtime service=%s uuid=%s limit=%s days=%s",
+            userbot_service_id,
+            panel_user_uuid[:8],
+            usage_limit,
+            days_left,
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "agency renewal UserBot runtime sync failed uuid=%s",
+            panel_user_uuid[:8],
+        )
+        return False
 
 
 def get_admin_renew_policy() -> Tuple[str, str, bool]:
