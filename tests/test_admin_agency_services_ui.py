@@ -892,38 +892,11 @@ class InternalIdSearchTests(_Base):
 
 
 class RenewFlowTests(_Base):
-    """مورد ۳: دکمه تمدید، انتخاب پلن، تأیید و اجرا با سرویس معتبر موجود."""
+    """تمدید نمایندگی از طریق ویزارد پویا، نه پلن‌های ثابت."""
 
     def setUp(self):
         super().setUp()
-
-        # تمدید AdminBot باید از پلن‌های سراسری همان پنل (Shared/plans.json)
-        # بخواند، نه از agent_plans نماینده.
-        self._plans_tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._plans_tmp.cleanup)
-        self._plans_file = Path(self._plans_tmp.name) / "plans.json"
-        plans_patch = patch.object(plans_storage, "_PLANS_FILE", self._plans_file)
-        plans_patch.start()
-        self.addCleanup(plans_patch.stop)
-
-        plans_storage.set_plan_display_mode(1, "fixed")
-        category = plans_storage.add_plan_category(1, "ماهانه", priority=0)
-        self.plan_id = int(plans_storage.add_plan(
-            1,
-            category_id=int(category["id"]),
-            title="پلن ادمین ۲۰ گیگ",
-            price=80000,
-            days=30,
-            gb=20.0,
-            priority=0,
-        )["id"])
-
-        # یک تعرفه متفاوت نماینده عمداً ثبت می‌کنیم تا مشخص شود مسیر AdminBot
-        # آن را برای انتخاب پلن تمدید استفاده نمی‌کند.
-        agent_db.set_agent_plan(
-            self.agent1, server_id=1, days=60, gb=5.0,
-            wholesale_price=12345, sale_price=54321, plan_title="پلن قدیمی نماینده",
-        )
+        agent_db.set_wholesale_pricing(self.agent1, 500, 0)
 
     def test_detail_page_has_renew_button(self):
         async def flow():
@@ -931,111 +904,74 @@ class RenewFlowTests(_Base):
             upd = _mk_update(callback_data=f"agency:svcview:{self.agent1}:{self.svc_active12}:1")
             await self.mod.handle_agencies_callback(upd, ctx)
             kb = upd.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
-            flat = [b.text for row in kb.inline_keyboard for b in row]
-            self.assertIn("♻️ تمدید", flat)
+            self.assertIn("♻️ تمدید", [b.text for row in kb.inline_keyboard for b in row])
         _run(flow())
 
-    def test_renew_without_plans_shows_message_not_dead_button(self):
-        async def flow():
-            # نماینده بدون هیچ پلنی
-            a2 = agent_db.upsert_agent(4321, username="noplan")
-            svc = agent_db.create_service(
-                agent_id=a2, customer_id=1, server_id=1, server_title="s",
-                name="بی‌پلن", panel_user_uuid="np", usage_limit=5, days=10)
-            ctx = _mk_context()
-            upd = _mk_update(callback_data=f"agency:svcrenew:{a2}:{int(svc['id'])}")
-            await self.mod.handle_agencies_callback(upd, ctx)
-            upd.callback_query.answer.assert_awaited_with("پلن معتبری برای تمدید تعریف نشده است.", show_alert=True)
-        _run(flow())
-
-    def test_renew_plan_list_and_confirm_show_real_values(self):
+    def test_renew_opens_dynamic_wizard_without_fixed_plan_catalog(self):
         async def flow():
             ctx = _mk_context()
-            agent_db.charge_wallet(self.agent1, 60000)
             upd = _mk_update(callback_data=f"agency:svcrenew:{self.agent1}:{self.svc_active12}")
             await self.mod.handle_agencies_callback(upd, ctx)
-            kb = upd.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
-            # callback تمدید باید دقیقاً یک‌بار answer شود؛ پاسخ تکراری
-            # در Telegram می‌تواند مسیر را برای کاربر بی‌اثر کند.
-            self.assertEqual(upd.callback_query.answer.await_count, 1)
-            plan_btns = [b for row in kb.inline_keyboard for b in row
-                         if b.callback_data and "svcrenewplan" in b.callback_data]
-            self.assertEqual(len(plan_btns), 1)
-            # برچسب دکمه با مقادیر واقعی پلن
-            self.assertIn("30 روز", plan_btns[0].text)
-            self.assertIn("20GB", plan_btns[0].text)
-            self.assertIn("80,000", plan_btns[0].text)
-            plan_cb = plan_btns[0].callback_data
-            # تأیید: نام، شناسه، حجم، مدت، قیمت عمده، موجودی
-            upd2 = _mk_update(callback_data=plan_cb)
-            await self.mod.handle_agencies_callback(upd2, ctx)
-            text2 = _rendered_text(upd2)
-            self.assertIn("حجم جدید: <b>20GB</b>", text2)
-            self.assertIn("مدت جدید: <b>30 روز</b>", text2)
-            self.assertIn("قیمت پلن ادمین: <b>80,000</b>", text2)
-            self.assertIn("60,000", text2)  # موجودی کیف پول
-            kb2 = upd2.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
-            do_cb = [b.callback_data for row in kb2.inline_keyboard for b in row
-                     if b.callback_data and "svcrenewdo" in b.callback_data]
-            self.assertEqual(len(do_cb), 1)
-            self.assertLessEqual(len(do_cb[0]), 64)
-        _run(flow())
-
-    def test_renew_confirm_insufficient_balance_warns(self):
-        async def flow():
-            ctx = _mk_context()
-            agent_db.charge_wallet(self.agent1, 1000)  # کمتر از 50000
-            upd = _mk_update(callback_data=f"agency:svcrenewplan:{self.agent1}:{self.svc_active12}:{self.plan_id}")
-            await self.mod.handle_agencies_callback(upd, ctx)
             text = _rendered_text(upd)
-            self.assertIn("موجودی کیف پول نماینده کمتر از قیمت عمده", text)
+            self.assertIn("🎛 <b>تمدید اشتراک با پلن پویا</b>", text)
+            self.assertIn("حجم و مدت دلخواه تمدید را انتخاب کنید", text)
+            kb = upd.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+            callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+            self.assertTrue(any("svcrenewgb" in str(cb) for cb in callbacks))
+            self.assertTrue(any("svcrenewmo" in str(cb) for cb in callbacks))
+            self.assertTrue(any("svcrenewdo" in str(cb) for cb in callbacks))
+            self.assertFalse(any("svcrenewplan" in str(cb) for cb in callbacks))
         _run(flow())
 
-    def test_renew_do_success_calls_existing_service_and_renders_detail(self):
+    def test_dynamic_wizard_adjusts_volume_and_months(self):
         async def flow():
+            ctx = _mk_context({
+                "agency_renew_wizard": {
+                    "agent_id": self.agent1, "service_id": self.svc_active12,
+                    "gb": 20, "months": 1,
+                }
+            })
+            upd = _mk_update(callback_data=f"agency:svcrenewgb:{self.agent1}:{self.svc_active12}:5")
+            await self.mod.handle_agencies_callback(upd, ctx)
+            self.assertEqual(ctx.user_data["agency_renew_wizard"]["gb"], 25)
+            upd2 = _mk_update(callback_data=f"agency:svcrenewmo:{self.agent1}:{self.svc_active12}:1")
+            await self.mod.handle_agencies_callback(upd2, ctx)
+            self.assertEqual(ctx.user_data["agency_renew_wizard"]["months"], 2)
+            self.assertIn("25 گیگابایت", _rendered_text(upd2))
+            self.assertIn("2 ماه", _rendered_text(upd2))
+        _run(flow())
+
+    def test_dynamic_renew_applies_selected_gb_and_months(self):
+        async def flow():
+            agent_db.charge_wallet(self.agent1, 100000)
+            ctx = _mk_context({
+                "agency_renew_wizard": {
+                    "agent_id": self.agent1, "service_id": self.svc_active12,
+                    "gb": 20, "months": 1,
+                }
+            })
             sub = types.ModuleType("AgentBot.services.subscription_service")
 
             async def fake_renew(agent_id_, service_id_, extra_days=0, extra_gb=0.0, **kw):
+                self.assertEqual(agent_id_, self.agent1)
+                self.assertEqual(service_id_, self.svc_active12)
                 self.assertEqual(extra_days, 30)
                 self.assertEqual(extra_gb, 20.0)
-                agent_db.renew_service(service_id_, extra_days=extra_days, extra_gb=extra_gb)
                 return agent_db.get_service_by_id(service_id_)
 
             sub.renew_subscription = AsyncMock(side_effect=fake_renew)
             saved = sys.modules.get("AgentBot.services.subscription_service")
             sys.modules["AgentBot.services.subscription_service"] = sub
             try:
-                ctx = _mk_context()
-                upd = _mk_update(callback_data=f"agency:svcrenewdo:{self.agent1}:{self.svc_active12}:{self.plan_id}")
+                upd = _mk_update(callback_data=f"agency:svcrenewdo:{self.agent1}:{self.svc_active12}")
                 await self.mod.handle_agencies_callback(upd, ctx)
             finally:
                 if saved is not None:
                     sys.modules["AgentBot.services.subscription_service"] = saved
                 else:
                     sys.modules.pop("AgentBot.services.subscription_service", None)
-            upd.callback_query.answer.assert_awaited_with("✅ تمدید انجام شد.")
-            text = _rendered_text(upd)
-            # جزئیات با اطلاعات تازه (انقضای جدید ~۳۰ روز)
-            self.assertIn("<b>وضعیت:</b> فعال", text)
-        _run(flow())
-
-    def test_renew_failure_shows_no_success(self):
-        async def flow():
-            sub = types.ModuleType("AgentBot.services.subscription_service")
-            sub.renew_subscription = AsyncMock(return_value=None)  # شکست کامل
-            saved = sys.modules.get("AgentBot.services.subscription_service")
-            sys.modules["AgentBot.services.subscription_service"] = sub
-            try:
-                ctx = _mk_context()
-                upd = _mk_update(callback_data=f"agency:svcrenewdo:{self.agent1}:{self.svc_active12}:{self.plan_id}")
-                await self.mod.handle_agencies_callback(upd, ctx)
-            finally:
-                if saved is not None:
-                    sys.modules["AgentBot.services.subscription_service"] = saved
-                else:
-                    sys.modules.pop("AgentBot.services.subscription_service", None)
-            args = upd.callback_query.answer.await_args
-            self.assertIn("انجام نشد", str(args))
+            sub.renew_subscription.assert_awaited_once()
+            self.assertNotIn("agency_renew_wizard", ctx.user_data)
         _run(flow())
 
     def test_renew_rejects_other_agent_service(self):
