@@ -939,6 +939,17 @@ class RenewFlowTests(_Base):
             self.assertEqual(ctx.user_data["agency_renew_wizard"]["months"], 2)
             self.assertIn("25 گیگابایت", _rendered_text(upd2))
             self.assertIn("2 ماه", _rendered_text(upd2))
+
+            # Decrement callbacks must route through the same real callback dispatcher.
+            upd3 = _mk_update(callback_data=f"agency:svcrenewgb:{self.agent1}:{self.svc_active12}:-5")
+            await self.mod.handle_agencies_callback(upd3, ctx)
+            self.assertEqual(ctx.user_data["agency_renew_wizard"]["gb"], 20)
+
+            upd4 = _mk_update(callback_data=f"agency:svcrenewmo:{self.agent1}:{self.svc_active12}:-1")
+            await self.mod.handle_agencies_callback(upd4, ctx)
+            self.assertEqual(ctx.user_data["agency_renew_wizard"]["months"], 1)
+            self.assertIn("20 گیگابایت", _rendered_text(upd4))
+            self.assertIn("1 ماه", _rendered_text(upd4))
         _run(flow())
 
     def test_dynamic_renew_applies_selected_gb_and_months(self):
