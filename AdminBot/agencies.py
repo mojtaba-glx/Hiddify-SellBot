@@ -3530,206 +3530,139 @@ async def repair_service_from_panel(
 # ===============================
 #   تمدید اشتراک نماینده (اتصال به سرویس معتبر موجود)
 # ===============================
-def _get_admin_panel_renew_plans(server_id: int) -> List[Dict[str, Any]]:
-    """پلن‌های واقعی تعریف‌شده در پنل ادمین را برای تمدید برمی‌گرداند.
-
-    منبع واحد پلن‌های سراسری AdminBot همان Shared/plans.json است که
-    AdminBot/plans.py نیز از طریق plans_storage مدیریت می‌کند.
-    پلن‌های agent_db (تعرفه داخلی نماینده) عمداً برای انتخاب پلن تمدید
-    استفاده نمی‌شوند.
-    """
-    try:
-        from Shared import plans_storage
-
-        plans = plans_storage.get_plans(int(server_id))
-        normalized: List[Dict[str, Any]] = []
-        for plan in plans or []:
-            days = int(plan.get("days") or 0)
-            gb = float(plan.get("gb") or 0)
-            if days <= 0 or gb < 0:
-                continue
-            normalized.append({
-                "id": int(plan.get("id") or 0),
-                "title": str(plan.get("title") or f"پلن #{int(plan.get('id') or 0)}").strip(),
-                "price": int(plan.get("price") or 0),
-                "days": days,
-                "gb": gb,
-                "category_id": plan.get("category_id"),
-                "priority": int(plan.get("priority") or 0),
-            })
-        return normalized
-    except Exception:
-        logger.exception("Failed to load AdminBot renewal plans server=%s", server_id)
-        return []
-
-
-def _get_admin_panel_renew_plan(server_id: int, plan_id: int) -> Optional[Dict[str, Any]]:
-    for plan in _get_admin_panel_renew_plans(server_id):
-        if int(plan.get("id") or 0) == int(plan_id):
-            return plan
-    return None
+def _agency_dynamic_renew_cost(agent_id: int, service_id: int, gb: int, months: int) -> int:
+    svc = agent_db.get_service_by_id(service_id) or {}
+    server_id = int(svc.get("server_id") or 0)
+    return int(agent_db.calculate_wholesale_price(agent_id, float(gb), int(months) * 30, server_id) or 0)
 
 
 async def show_service_renew_plans(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int) -> None:
-    """انتخاب پلن تمدید از همان پلن‌های سراسری تعریف‌شده در AdminBot."""
+    """نمایش ویزارد پویا برای تمدید سرویس نمایندگی؛ بدون وابستگی به پلن‌های ثابت."""
     query = update.callback_query
     svc = agent_db.get_service_by_id(service_id)
     if not svc or int(svc.get("agent_id", 0) or 0) != agent_id:
         await query.answer("سرویس پیدا نشد.", show_alert=True)
         return
 
-    server_id = int(svc.get("server_id") or 0)
-    plans = _get_admin_panel_renew_plans(server_id)
-    if not plans:
-        await query.answer(
-            "برای این سرور هیچ پلن قابل‌تمدیدی در «مدیریت پلن‌ها»ی ربات ادمین تعریف نشده است.",
-            show_alert=True,
-        )
+    context.user_data["agency_renew_wizard"] = {
+        "agent_id": int(agent_id),
+        "service_id": int(service_id),
+        "gb": 20,
+        "months": 1,
+    }
+    await _render_agency_dynamic_renew(update, context, agent_id, service_id)
+
+
+async def _render_agency_dynamic_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int) -> None:
+    query = update.callback_query
+    svc = agent_db.get_service_by_id(service_id)
+    wizard = context.user_data.get("agency_renew_wizard") or {}
+    if not svc or int(svc.get("agent_id", 0) or 0) != agent_id:
+        await query.answer("سرویس پیدا نشد.", show_alert=True)
         return
 
-    await query.answer("♻️ پلن‌های تمدید از پنل ادمین بارگذاری شد.")
-
-    code = _svc_code(svc)
+    gb = max(1, min(10000, int(wizard.get("gb") or 20)))
+    months = max(1, min(120, int(wizard.get("months") or 1)))
+    cost = _agency_dynamic_renew_cost(agent_id, service_id, gb, months)
+    balance = int(agent_db.get_wallet_balance(agent_id) or 0)
     name = _shorten(svc.get("name"), 24) or "بی‌نام"
+    code = _svc_code(svc)
+    server_title = _live_service_server_title(svc)
+    warn = "\n⚠️ موجودی کیف پول نماینده کافی نیست." if cost <= 0 or balance < cost else ""
     lines = [
-        "♻️ <b>تمدید اشتراک</b>",
+        "🎛 <b>تمدید اشتراک با پلن پویا</b>",
         SEPARATOR,
-        f"👤 {_escape(name)} · شناسه: <code>{_escape(code) or '—'}</code>",
-        f"🌐 سرور: <b>{_escape(_live_service_server_title(svc))}</b>",
+        f"👤 اشتراک: <b>{_escape(name)}</b> · <code>{_escape(code) or '—'}</code>",
+        f"🌐 سرور: <b>{_escape(server_title)}</b>",
         "",
-        "پلن‌های تعریف‌شده در پنل ادمین:",
+        "حجم و مدت دلخواه تمدید را انتخاب کنید، سپس «✅ اعمال و تمدید» را بزنید.",
+        "",
+        f"📦 حجم انتخابی: <b>{gb} گیگابایت</b>",
+        f"⏳ مدت انتخابی: <b>{months} ماه ({months * 30} روز)</b>",
+        f"💰 هزینه عمده تمدید: <b>{_fmt_toman(cost)}</b> تومان",
+        f"💳 موجودی کیف پول نماینده: <b>{_fmt_toman(balance)}</b> تومان",
+        "📌 حجم و مدت اشتراک با مقادیر انتخابی جایگزین می‌شود.",
+        warn,
     ]
-    rows: List[List[Any]] = []
-    for plan in plans[:8]:
-        title = _shorten(plan.get("title"), 22) or f"پلن #{int(plan.get('id') or 0)}"
-        sale = int(plan.get("price") or 0)
-        rows.append([InlineKeyboardButton(
-            f"{title} · {plan['days']} روز · {_fmt_gb(plan['gb'])}GB · {_fmt_toman(sale)} تومان",
-            callback_data=f"agency:svcrenewplan:{agent_id}:{service_id}:{int(plan['id'])}",
-        )])
-    if len(plans) > 8:
-        lines.append("")
-        lines.append(f"… {len(plans) - 8} پلن دیگر (فقط ۸ پلن اول نمایش داده می‌شود)")
+    rows: List[List[Any]] = [
+        [
+            InlineKeyboardButton("➖ ۵ گیگ", callback_data=f"agency:svcrenewgb:{agent_id}:{service_id}:-5"),
+            InlineKeyboardButton(f"📦 {gb} گیگ", callback_data="agency:noop"),
+            InlineKeyboardButton("➕ ۵ گیگ", callback_data=f"agency:svcrenewgb:{agent_id}:{service_id}:5"),
+        ],
+        [
+            InlineKeyboardButton("➖ یک ماه", callback_data=f"agency:svcrenewmo:{agent_id}:{service_id}:-1"),
+            InlineKeyboardButton(f"⏳ {months} ماه", callback_data="agency:noop"),
+            InlineKeyboardButton("➕ یک ماه", callback_data=f"agency:svcrenewmo:{agent_id}:{service_id}:1"),
+        ],
+        [InlineKeyboardButton("✅ اعمال و تمدید", callback_data=f"agency:svcrenewdo:{agent_id}:{service_id}")],
+    ]
     state = _svc_ui(context, agent_id)
-    rows.append([InlineKeyboardButton(
-        "🔙 جزئیات",
-        callback_data=f"agency:svcview:{agent_id}:{service_id}:{state['page']}",
-    )])
+    rows.append([InlineKeyboardButton("🔙 جزئیات اشتراک", callback_data=f"agency:svcview:{agent_id}:{service_id}:{state['page']}")])
     try:
         await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+        await query.answer()
     except BadRequest:
-        await query.answer("نمایش پلن‌های پنل ادمین ناموفق بود. دوباره تلاش کنید.", show_alert=True)
+        await query.answer("نمایش ویزارد تمدید پویا ناموفق بود.", show_alert=True)
     except Exception:
-        logger.exception(
-            "Failed to render AdminBot renewal plans agent=%s service=%s server=%s",
-            agent_id,
-            service_id,
-            server_id,
-        )
-        await query.answer("❌ نمایش پلن‌های تمدید ناموفق بود.", show_alert=True)
+        logger.exception("Failed to render dynamic agency renewal agent=%s service=%s", agent_id, service_id)
+        await query.answer("❌ نمایش ویزارد تمدید ناموفق بود.", show_alert=True)
 
 
-async def confirm_service_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int, plan_id: int) -> None:
-    """تأیید تمدید: نمایش دقیق اثر پلن انتخابی بر سرویس و کیف پول نماینده."""
+async def adjust_service_renew_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int, delta: int, field: str) -> None:
+    query = update.callback_query
+    wizard = context.user_data.get("agency_renew_wizard") or {}
+    if int(wizard.get("agent_id") or 0) != agent_id or int(wizard.get("service_id") or 0) != service_id:
+        wizard = {"agent_id": agent_id, "service_id": service_id, "gb": 20, "months": 1}
+    if field == "gb":
+        wizard["gb"] = max(1, min(10000, int(wizard.get("gb") or 20) + delta))
+    else:
+        wizard["months"] = max(1, min(120, int(wizard.get("months") or 1) + delta))
+    context.user_data["agency_renew_wizard"] = wizard
+    await _render_agency_dynamic_renew(update, context, agent_id, service_id)
+
+
+async def do_service_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int) -> None:
+    """اجرای تمدید پویا با منطق واحد پرداخت/پنل/rollback سرویس نمایندگی."""
     query = update.callback_query
     svc = agent_db.get_service_by_id(service_id)
+    wizard = context.user_data.get("agency_renew_wizard") or {}
     if not svc or int(svc.get("agent_id", 0) or 0) != agent_id:
         await query.answer("سرویس پیدا نشد.", show_alert=True)
         return
-
-    server_id = int(svc.get("server_id") or 0)
-    plan = _get_admin_panel_renew_plan(server_id, plan_id)
-    if not plan:
-        await query.answer("پلن پنل ادمین پیدا نشد یا برای این سرور معتبر نیست.", show_alert=True)
+    if int(wizard.get("agent_id") or 0) != agent_id or int(wizard.get("service_id") or 0) != service_id:
+        await query.answer("اطلاعات تمدید منقضی شده است؛ دوباره وارد تمدید شوید.", show_alert=True)
         return
 
-    days = int(plan.get("days") or 0)
-    gb = float(plan.get("gb") or 0)
-    sale_price = int(plan.get("price") or 0)
-    wholesale = int(agent_db.calculate_wholesale_price(agent_id, gb, days, server_id) or 0)
-    balance = agent_db.get_wallet_balance(agent_id)
-    code = _svc_code(svc)
-    name = _shorten(svc.get("name"), 24) or "بی‌نام"
-
-    warn = ""
-    if wholesale > balance:
-        warn = "\n⚠️ موجودی کیف پول نماینده کمتر از قیمت عمده است؛ تمدید انجام نخواهد شد."
-
-    lines = [
-        "♻️ <b>تأیید تمدید اشتراک</b>",
-        SEPARATOR,
-        f"👤 {_escape(name)} · شناسه: <code>{_escape(code) or '—'}</code>",
-        f"📦 حجم جدید: <b>{_fmt_gb(gb)}GB</b>",
-        f"⏳ مدت جدید: <b>{days} روز</b>",
-        f"💵 قیمت پلن ادمین: <b>{_fmt_toman(sale_price)}</b> تومان",
-        f"💰 هزینه عمده نماینده: <b>{_fmt_toman(wholesale)}</b> تومان",
-        f"💳 موجودی کیف پول نماینده: <b>{_fmt_toman(balance)}</b> تومان",
-        "📉 اثر: این مبلغ از کیف پول نماینده کسر می‌شود؛ حجم و زمان اشتراک با مقادیر جدید جایگزین می‌شود.",
-        warn,
-        "",
-        "تمدید را تأیید می‌کنید؟",
-    ]
-    state = _svc_ui(context, agent_id)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تأیید تمدید", callback_data=f"agency:svcrenewdo:{agent_id}:{service_id}:{int(plan_id)}")],
-        [InlineKeyboardButton("❌ انصراف", callback_data=f"agency:svcview:{agent_id}:{service_id}:{state['page']}")],
-    ])
-    try:
-        await query.edit_message_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
-        await query.answer("پلن تمدید آماده شد.")
-    except BadRequest:
-        await query.answer("نمایش تأیید تمدید ناموفق بود. دوباره تلاش کنید.", show_alert=True)
-    except Exception:
-        logger.exception(
-            "Failed to render agency renewal confirmation agent=%s service=%s plan=%s",
-            agent_id,
-            service_id,
-            plan_id,
-        )
-        await query.answer("❌ نمایش تأیید تمدید ناموفق بود.", show_alert=True)
-
-
-async def do_service_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, agent_id: int, service_id: int, plan_id: int) -> None:
-    """اجرای تمدید با همان سرویس معتبر موجود (بدون بازنویسی منطق کسر/پنل/rollback)."""
-    query = update.callback_query
-    svc = agent_db.get_service_by_id(service_id)
-    if not svc or int(svc.get("agent_id", 0) or 0) != agent_id:
-        await query.answer("سرویس پیدا نشد.", show_alert=True)
+    gb = max(1, min(10000, int(wizard.get("gb") or 20)))
+    months = max(1, min(120, int(wizard.get("months") or 1)))
+    cost = _agency_dynamic_renew_cost(agent_id, service_id, gb, months)
+    balance = int(agent_db.get_wallet_balance(agent_id) or 0)
+    if cost <= 0:
+        await query.answer("تعرفه عمده برای این حجم و مدت تنظیم نشده است.", show_alert=True)
+        return
+    if balance < cost:
+        await query.answer("موجودی کیف پول نماینده کافی نیست.", show_alert=True)
         return
 
-    server_id = int(svc.get("server_id") or 0)
-    plan = _get_admin_panel_renew_plan(server_id, plan_id)
-    if not plan:
-        await query.answer("پلن پنل ادمین پیدا نشد یا برای این سرور معتبر نیست.", show_alert=True)
-        return
-
-    await query.answer("در حال انجام تمدید…")
+    await query.answer("در حال اعمال تمدید پویا…")
     try:
         import asyncio as _asyncio
         from AgentBot.services.subscription_service import renew_subscription
         updated = await _asyncio.wait_for(
-            renew_subscription(
-                agent_id, service_id,
-                extra_days=int(plan.get("days") or 0),
-                extra_gb=float(plan.get("gb") or 0),
-            ),
+            renew_subscription(agent_id, service_id, extra_days=months * 30, extra_gb=float(gb)),
             timeout=60.0,
         )
-    except Exception as e:
-        logger.warning("svcrenewdo failed svc=%s: %s", service_id, type(e).__name__)
+    except Exception:
+        logger.exception("Dynamic agency renewal failed agent=%s service=%s", agent_id, service_id)
         updated = None
 
-    state = _svc_ui(context, agent_id)
     if updated:
-        # موفقیت: بازگشت به جزئیات با اطلاعات تازه (مصرف/انقضای جدید)
-        await query.answer("✅ تمدید انجام شد.")
+        context.user_data.pop("agency_renew_wizard", None)
+        state = _svc_ui(context, agent_id)
         await send_agent_service_detail(update, context, agent_id, service_id, page=state["page"])
     else:
-        await query.answer(
-            "❌ تمدید انجام نشد. دلایل احتمالی: موجودی ناکافی کیف پول نماینده، "
-            "در دسترس نبودن سرور اصلی یا نامعتبر بودن سرویس.",
-            show_alert=True,
-        )
+        await query.answer("❌ تمدید انجام نشد؛ موجودی، تعرفه عمده و اتصال پنل را بررسی کنید.", show_alert=True)
 
 
 # ===============================
@@ -3756,7 +3689,7 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
     # مخصوصاً نباید قبل از نمایش پلن/تأیید دوباره answer شوند؛ Telegram
     # روی callback یک پاسخ تکراری می‌تواند QUERY_ID_INVALID بدهد و دکمه
     # از دید کاربر بی‌اثر به نظر برسد.
-    if action not in {"svcrenew", "svcrenewplan", "svcrenewdo"}:
+    if action not in {"svcrenew", "svcrenewgb", "svcrenewmo", "svcrenewdo"}:
         await query.answer()
 
     # کنترل ADMIN_ID برای همه مسیرهای این ماژول
@@ -3989,18 +3922,20 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
             await start_service_note_edit(update, context, agent_id, service_id)
         elif action == "svcrenew":
             await show_service_renew_plans(update, context, agent_id, service_id)
-        elif action == "svcrenewplan":
-            plan_id = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
-            if plan_id <= 0:
-                await query.answer("پلن نامعتبر.", show_alert=True)
-                return
-            await confirm_service_renew(update, context, agent_id, service_id, plan_id)
+        elif action == "svcrenewgb":
+            delta = int(parts[4]) if len(parts) > 4 and parts[4].lstrip("-").isdigit() else 0
+            if delta:
+                await adjust_service_renew_wizard(update, context, agent_id, service_id, delta, "gb")
+            else:
+                await query.answer("مقدار حجم نامعتبر است.", show_alert=True)
+        elif action == "svcrenewmo":
+            delta = int(parts[4]) if len(parts) > 4 and parts[4].lstrip("-").isdigit() else 0
+            if delta:
+                await adjust_service_renew_wizard(update, context, agent_id, service_id, delta, "months")
+            else:
+                await query.answer("مدت نامعتبر است.", show_alert=True)
         elif action == "svcrenewdo":
-            plan_id = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
-            if plan_id <= 0:
-                await query.answer("پلن نامعتبر.", show_alert=True)
-                return
-            await do_service_renew(update, context, agent_id, service_id, plan_id)
+            await do_service_renew(update, context, agent_id, service_id)
         return
 
     if action == "prices":
