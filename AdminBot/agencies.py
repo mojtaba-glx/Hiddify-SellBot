@@ -3890,7 +3890,7 @@ async def handle_agencies_callback(update: Update, context: ContextTypes.DEFAULT
     if action in {
         "svcconfig", "svcnodes", "svcfin", "svcmore", "svcdelete", "svcdeleteok",
         "svctoggle", "svcrelink", "svcrefresh", "svcrepair", "svcedit",
-        "svcrenew", "svcrenewplan", "svcrenewdo",
+        "svcrenew", "svcrenewplan", "svcrenewgb", "svcrenewmo", "svcrenewdo",
     }:
         context.user_data.pop("state", None)
         service_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
