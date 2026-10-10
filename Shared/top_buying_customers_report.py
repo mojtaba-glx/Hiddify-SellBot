@@ -35,7 +35,8 @@ def format_top_buying_customers_report(
         order_count = max(0, int(row.get("orders_count") or 0))
         total_spent += amount
         # Limit names so one unusual profile cannot overflow Telegram's message limit.
-        customer_name = customer_name[:28]
+        customer_name = escape(customer_name[:28])
+        telegram_id = escape(telegram_id)
         lines.append(f"{rank:>2}   | {customer_name}")
         lines.append(f"     | ID: {telegram_id} | {amount:,} | {order_count}")
     lines.append("</pre>")
