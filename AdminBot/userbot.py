@@ -6587,38 +6587,129 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if context.user_data.get(REFERRAL_MANUAL_REWARD_STATE):
+        state = context.user_data.get(REFERRAL_MANUAL_REWARD_STATE) or {}
         raw_text = (text or "").strip()
         if raw_text in CANCEL_WORDS:
             context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
-            await msg.reply_text("❌ لغو شد.", reply_markup=admin_main_keyboard())
+            await msg.reply_text("❌ عملیات پاداش دستی لغو شد.", reply_markup=admin_main_keyboard())
             await send_referral_admin_menu(msg.chat_id, context)
             return
-        parts = raw_text.replace("٬", "").replace(",", "").split()
-        if len(parts) != 2:
+
+        step = str(state.get("step") or "user")
+        if step == "user":
+            identifier = raw_text.strip()
+            target_user = None
+            if identifier.isdigit():
+                try:
+                    target_user = userbot_db.get_user_by_telegram_id(int(identifier))
+                except Exception:
+                    target_user = None
+            elif re.fullmatch(r"@[A-Za-z0-9_]{5,32}", identifier):
+                username = identifier[1:].casefold()
+                try:
+                    candidates = userbot_db.search_users_by_name(identifier, limit=100)
+                    target_user = next(
+                        (item for item in candidates
+                         if str(item.get("username") or "").lstrip("@").casefold() == username),
+                        None,
+                    )
+                except Exception:
+                    target_user = None
+
+            if not target_user:
+                await msg.reply_text(
+                    "❌ کاربر پیدا نشد. یوزرنیم دقیق مثل @username یا آیدی عددی تلگرام را بفرستید.\nبرای لغو، دکمه «❌ لغو» را بزنید.",
+                    reply_markup=userbot_cancel_keyboard(),
+                )
+                return
+
+            telegram_id = int(target_user.get("telegram_id") or 0)
+            internal_id = int(target_user.get("id") or 0)
+            if telegram_id <= 0 or internal_id <= 0:
+                await msg.reply_text(
+                    "❌ اطلاعات تلگرام این کاربر کامل نیست؛ کاربر دیگری را وارد کنید.",
+                    reply_markup=userbot_cancel_keyboard(),
+                )
+                return
+
+            context.user_data[REFERRAL_MANUAL_REWARD_STATE] = {
+                "step": "amount",
+                "target_user_id": internal_id,
+                "telegram_id": telegram_id,
+                "username": str(target_user.get("username") or ""),
+                "full_name": str(target_user.get("full_name") or ""),
+            }
+            display_name = str(target_user.get("full_name") or "").strip() or "—"
+            display_username = ("@" + str(target_user.get("username") or "").lstrip("@")) if target_user.get("username") else "ندارد"
             await msg.reply_text(
-                "❌ فرمت نامعتبر است.\nبه‌صورت «شناسه داخلی مبلغ» ارسال کنید. مثال: 42 50000",
+                f"👤 کاربر شناسایی شد\nنام: {html_escape(display_name)}\nیوزرنیم: {html_escape(display_username)}\nآیدی تلگرام: <code>{telegram_id}</code>\n\n💰 حالا مبلغ هدیه را به تومان وارد کنید (فقط عدد؛ مثلاً 50000).",
+                parse_mode="HTML",
                 reply_markup=userbot_cancel_keyboard(),
             )
             return
-        try:
-            target_user_id = int(parts[0])
-            amount = int(parts[1])
-        except Exception:
-            await msg.reply_text("❌ عدد نامعتبر.", reply_markup=userbot_cancel_keyboard())
+
+        if step == "amount":
+            amount_text = raw_text.replace("٬", "").replace(",", "").replace("،", "").strip()
+            try:
+                amount = int(amount_text)
+            except (TypeError, ValueError):
+                amount = 0
+            if amount <= 0:
+                await msg.reply_text(
+                    "❌ مبلغ نامعتبر است. مبلغ باید عددی بزرگ‌تر از صفر باشد؛ مثلاً 50000 تومان.",
+                    reply_markup=userbot_cancel_keyboard(),
+                )
+                return
+
+            target_user_id = int(state.get("target_user_id") or 0)
+            telegram_id = int(state.get("telegram_id") or 0)
+            try:
+                reward = userbot_db.grant_manual_referral_reward(target_user_id, amount)
+            except Exception as e:
+                logger.exception("Manual referral reward failed for user %s", target_user_id)
+                await msg.reply_text(
+                    f"❌ خطا در ثبت پاداش دستی: {e}\nعملیات انجام نشد؛ می‌توانید دوباره تلاش کنید یا لغو کنید.",
+                    reply_markup=userbot_cancel_keyboard(),
+                )
+                return
+
+            if not reward:
+                await msg.reply_text(
+                    "❌ پاداش ثبت نشد؛ کاربر یا مبلغ نامعتبر است. دوباره تلاش کنید یا لغو کنید.",
+                    reply_markup=userbot_cancel_keyboard(),
+                )
+                return
+
+            context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
+            notification_sent = False
+            try:
+                if not USER_BOT_TOKEN:
+                    raise RuntimeError("USER_BOT_TOKEN تنظیم نشده است")
+                user_bot = Bot(token=USER_BOT_TOKEN)
+                await user_bot.send_message(
+                    chat_id=telegram_id,
+                    text=(
+                        "🎁 <b>هدیه‌ای از طرف مدیریت دریافت کردید!</b>\n\n"
+                        f"💰 مبلغ هدیه: <b>{amount:,} تومان</b>\n"
+                        "✅ مبلغ به کیف پول شما اضافه شد.\n"
+                        "از همراهی شما سپاسگزاریم ❤️"
+                    ),
+                    parse_mode="HTML",
+                )
+                notification_sent = True
+            except Exception:
+                logger.exception("Manual reward saved but user notification failed for telegram_id=%s", telegram_id)
+
+            notification_status = "✅ پیام هدیه به ربات کاربر ارسال شد." if notification_sent else "⚠️ مبلغ ثبت شد، اما پیام به کاربر ارسال نشد (ممکن است کاربر ربات را شروع نکرده باشد)."
+            username = ("@" + str(state.get("username") or "").lstrip("@")) if state.get("username") else "بدون یوزرنیم"
+            await msg.reply_text(
+                f"✅ پاداش دستی ثبت شد.\n👤 کاربر: {username}\n🆔 آیدی تلگرام: {telegram_id}\n💰 مبلغ: {amount:,} تومان\n🎁 پاداش #{reward.get('id')}\n{notification_status}",
+                reply_markup=admin_main_keyboard(),
+            )
             return
-        try:
-            reward = userbot_db.grant_manual_referral_reward(target_user_id, amount)
-        except Exception as e:
-            await msg.reply_text(f"خطا در ایجاد پاداش دستی: {e}", reply_markup=admin_main_keyboard())
-            return
+
         context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
-        if not reward:
-            await msg.reply_text("❌ پاداش دستی ایجاد نشد (کاربر یا مبلغ نامعتبر).", reply_markup=admin_main_keyboard())
-            return
-        await msg.reply_text(
-            f"✅ پاداش دستی ایجاد شد.\n👤 کاربر: {target_user_id}\n💰 مبلغ: {amount:,} تومان\n🎁 پاداش #{reward.get('id')}",
-            reply_markup=admin_main_keyboard(),
-        )
+        await msg.reply_text("❌ مرحله پاداش دستی نامعتبر بود؛ از ابتدا شروع کنید.", reply_markup=admin_main_keyboard())
         return
 
     if context.user_data.get(INVITE_BANNER_PHOTO_EDIT_STATE):
@@ -10438,10 +10529,10 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if data == "userbot:referral:manual":
-        context.user_data[REFERRAL_MANUAL_REWARD_STATE] = {"step": "input"}
+        context.user_data[REFERRAL_MANUAL_REWARD_STATE] = {"step": "user"}
         await query.answer()
         await msg.reply_text(
-            "🧾 پاداش دستی\nبرای یک کاربر به‌صورت «شناسه داخلی مبلغ» ارسال کنید.\nمثال: 42 50000\n(مبلغ به تومان)",
+            "🧾 پاداش دستی\nابتدا یوزرنیم دقیق کاربر (مثل @username) یا آیدی عددی تلگرام او را بفرستید.\nدر هر مرحله با دکمه «❌ لغو» می‌توانید عملیات را متوقف کنید.",
             reply_markup=userbot_cancel_keyboard(),
         )
         return
