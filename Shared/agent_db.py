@@ -472,6 +472,12 @@ def _migrate_service_customer_nullable() -> None:
         conn.execute("PRAGMA legacy_alter_table=ON")
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("ALTER TABLE agent_services RENAME TO agent_services__old_customer_fk")
+        legacy_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(agent_services__old_customer_fk)").fetchall()
+        }
+        # Older production databases may not yet contain columns added by later releases.
+        expired_at_expr = "s.expired_at" if "expired_at" in legacy_columns else "''"
         conn.execute(
             """
             CREATE TABLE agent_services (
@@ -504,7 +510,7 @@ def _migrate_service_customer_nullable() -> None:
             """
         )
         conn.execute(
-            """
+            f"""
             INSERT INTO agent_services (
                 id, agent_id, customer_id, server_id, server_title, name,
                 panel_user_uuid, usage_current, usage_limit, days_left,
@@ -522,7 +528,7 @@ def _migrate_service_customer_nullable() -> None:
                 END,
                 s.server_id, s.server_title, s.name, s.panel_user_uuid,
                 s.usage_current, s.usage_limit, s.days_left, s.start_date,
-                s.end_date, s.expired_at, s.is_active, s.comment, s.wholesale_price,
+                s.end_date, {expired_at_expr}, s.is_active, s.comment, s.wholesale_price,
                 s.sale_price, s.is_trial, s.created_at, s.updated_at,
                 s.deleted_at, s.payment_operation_key,
                 s.last_payment_operation_key

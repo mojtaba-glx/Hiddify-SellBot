@@ -2165,6 +2165,55 @@ def get_users_page(page: int, page_size: int) -> Tuple[List[Dict[str, Any]], int
     return [dict(r) for r in rows], total
 
 
+
+def get_top_buying_customers(limit: int = 10, days: int = 0) -> List[Dict[str, Any]]:
+    """Return customers ranked by successful UserBot order spend (approved orders only)."""
+    init_db()
+    safe_limit = max(1, min(50, int(limit or 10)))
+    lookback_days = max(0, int(days or 0))
+    conn = _get_conn()
+    try:
+        params: list[Any] = []
+        date_filter = ""
+        if lookback_days:
+            # SQLite datetime() correctly handles both "YYYY-MM-DD HH:MM:SS"
+            # and ISO timestamps with a T separator.
+            date_filter = " AND datetime(o.created_at) >= datetime('now', ?)"
+            params.append(f"-{lookback_days} days")
+        params.append(safe_limit)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0), 0) AS telegram_id,
+                MAX(COALESCE(NULLIF(u.username, ''), NULLIF(o.username, ''), '')) AS username,
+                MAX(COALESCE(NULLIF(u.full_name, ''), NULLIF(o.full_name, ''), '')) AS full_name,
+                COUNT(DISTINCT o.order_id) AS orders_count,
+                COALESCE(SUM(CAST(o.price AS INTEGER)), 0) AS total_spent
+            FROM userbot_orders o
+            LEFT JOIN userbot_users u ON u.id = o.user_id
+            WHERE LOWER(TRIM(COALESCE(o.status, ''))) = 'approved'
+              AND (
+                    COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0), 0) != 0
+                    OR COALESCE(o.user_id, 0) != 0
+              )
+            """ + date_filter + """
+            GROUP BY CASE
+                WHEN COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0), 0) != 0
+                    THEN 'telegram:' || COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0))
+                ELSE 'user:' || COALESCE(o.user_id, 0)
+            END
+            HAVING COALESCE(SUM(CAST(o.price AS INTEGER)), 0) > 0
+            ORDER BY total_spent DESC, orders_count DESC, username COLLATE NOCASE ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
