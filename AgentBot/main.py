@@ -348,9 +348,10 @@ def main() -> None:
         application.add_handler(CallbackQueryHandler(handle_main_menu_callback))
         application.add_error_handler(error_handler)
 
-        if AGENT_DAILY_REPORT_ENABLED and application.job_queue is not None:
+        job_queue = getattr(application, "job_queue", None)
+        if AGENT_DAILY_REPORT_ENABLED and job_queue is not None:
             report_tz = _agent_report_tz()
-            application.job_queue.run_daily(
+            job_queue.run_daily(
                 _daily_agent_financial_report_job,
                 time=dt_time(hour=0, minute=0, tzinfo=report_tz),
                 name="daily-reseller-financial-report",
