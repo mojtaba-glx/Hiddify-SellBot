@@ -39,6 +39,7 @@ from AdminBot.keyboards import (
     BTN_BACKUP,
     BTN_AGENCIES,
     BTN_DAILY_REPORT,
+    BTN_TOP_BUYERS,
     cancel_keyboard,
 )
 
@@ -194,6 +195,8 @@ def _is_any_main_menu_button(text: str, text_key: str) -> bool:
         or _is_status_button(text, text_key)
         or _is_backup_button(text, text_key)
         or _is_agencies_button(text, text_key)
+        or text == BTN_TOP_BUYERS
+        or "مشتریانبرترخرید" in text_key
     )
 
 
@@ -9990,6 +9993,24 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if _is_backup_button(text, text_key):
         await send_admin_full_backup(chat_id, context, message=message)
+        return
+
+    if text == BTN_TOP_BUYERS or "مشتریانبرترخرید" in text_key:
+        try:
+            from Shared.top_buying_customers_report import format_top_buying_customers_report
+            customers = userbot_db.get_top_buying_customers(limit=10, days=30) or []
+            report_text = format_top_buying_customers_report(customers, days=30)
+            await message.reply_text(
+                report_text,
+                parse_mode="HTML",
+                reply_markup=admin_main_keyboard(),
+            )
+        except Exception:
+            logger.exception("Top buying customers report failed")
+            await message.reply_text(
+                "❌ ساخت گزارش مشتریان برتر ناموفق بود.",
+                reply_markup=admin_main_keyboard(),
+            )
         return
 
     if text == BTN_DAILY_REPORT or "گزارشروزانه" in text_key:
