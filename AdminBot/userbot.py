@@ -6618,7 +6618,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
 
             if not target_user:
                 await msg.reply_text(
-                    "❌ کاربر پیدا نشد. یوزرنیم دقیق مثل @username یا آیدی عددی تلگرام را بفرستید.\\nبرای لغو، دکمه «❌ لغو» را بزنید.",
+                    "❌ کاربر پیدا نشد. یوزرنیم دقیق مثل @username یا آیدی عددی تلگرام را بفرستید.\nبرای لغو، دکمه «❌ لغو» را بزنید.",
                     reply_markup=userbot_cancel_keyboard(),
                 )
                 return
@@ -6642,7 +6642,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             display_name = str(target_user.get("full_name") or "").strip() or "—"
             display_username = ("@" + str(target_user.get("username") or "").lstrip("@")) if target_user.get("username") else "ندارد"
             await msg.reply_text(
-                f"👤 کاربر شناسایی شد\\nنام: {display_name}\\nیوزرنیم: {display_username}\\nآیدی تلگرام: <code>{telegram_id}</code>\\n\\n💰 حالا مبلغ هدیه را به تومان وارد کنید (فقط عدد؛ مثلاً 50000).",
+                f"👤 کاربر شناسایی شد\nنام: {html_escape(display_name)}\nیوزرنیم: {html_escape(display_username)}\nآیدی تلگرام: <code>{telegram_id}</code>\n\n💰 حالا مبلغ هدیه را به تومان وارد کنید (فقط عدد؛ مثلاً 50000).",
                 parse_mode="HTML",
                 reply_markup=userbot_cancel_keyboard(),
             )
@@ -6668,7 +6668,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             except Exception as e:
                 logger.exception("Manual referral reward failed for user %s", target_user_id)
                 await msg.reply_text(
-                    f"❌ خطا در ثبت پاداش دستی: {e}\\nعملیات انجام نشد؛ می‌توانید دوباره تلاش کنید یا لغو کنید.",
+                    f"❌ خطا در ثبت پاداش دستی: {e}\nعملیات انجام نشد؛ می‌توانید دوباره تلاش کنید یا لغو کنید.",
                     reply_markup=userbot_cancel_keyboard(),
                 )
                 return
@@ -6686,9 +6686,9 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 await context.bot.send_message(
                     chat_id=telegram_id,
                     text=(
-                        "🎁 <b>هدیه‌ای از طرف مدیریت دریافت کردید!</b>\\n\\n"
-                        f"💰 مبلغ هدیه: <b>{amount:,} تومان</b>\\n"
-                        "✅ مبلغ به کیف پول شما اضافه شد.\\n"
+                        "🎁 <b>هدیه‌ای از طرف مدیریت دریافت کردید!</b>\n\n"
+                        f"💰 مبلغ هدیه: <b>{amount:,} تومان</b>\n"
+                        "✅ مبلغ به کیف پول شما اضافه شد.\n"
                         "از همراهی شما سپاسگزاریم ❤️"
                     ),
                     parse_mode="HTML",
@@ -6700,7 +6700,7 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             notification_status = "✅ پیام هدیه به ربات کاربر ارسال شد." if notification_sent else "⚠️ مبلغ ثبت شد، اما پیام به کاربر ارسال نشد (ممکن است کاربر ربات را شروع نکرده باشد)."
             username = ("@" + str(state.get("username") or "").lstrip("@")) if state.get("username") else "بدون یوزرنیم"
             await msg.reply_text(
-                f"✅ پاداش دستی ثبت شد.\\n👤 کاربر: {username}\\n🆔 آیدی تلگرام: {telegram_id}\\n💰 مبلغ: {amount:,} تومان\\n🎁 پاداش #{reward.get('id')}\\n{notification_status}",
+                f"✅ پاداش دستی ثبت شد.\n👤 کاربر: {username}\n🆔 آیدی تلگرام: {telegram_id}\n💰 مبلغ: {amount:,} تومان\n🎁 پاداش #{reward.get('id')}\n{notification_status}",
                 reply_markup=admin_main_keyboard(),
             )
             return
@@ -10529,7 +10529,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
         context.user_data[REFERRAL_MANUAL_REWARD_STATE] = {"step": "user"}
         await query.answer()
         await msg.reply_text(
-            "🧾 پاداش دستی\\nابتدا یوزرنیم دقیق کاربر (مثل @username) یا آیدی عددی تلگرام او را بفرستید.\\nدر هر مرحله با دکمه «❌ لغو» می‌توانید عملیات را متوقف کنید.",
+            "🧾 پاداش دستی\nابتدا یوزرنیم دقیق کاربر (مثل @username) یا آیدی عددی تلگرام او را بفرستید.\nدر هر مرحله با دکمه «❌ لغو» می‌توانید عملیات را متوقف کنید.",
             reply_markup=userbot_cancel_keyboard(),
         )
         return
