@@ -2172,29 +2172,37 @@ def get_top_buying_customers(limit: int = 10, days: int = 0) -> List[Dict[str, A
     safe_limit = max(1, min(50, int(limit or 10)))
     lookback_days = max(0, int(days or 0))
     conn = _get_conn()
-    cur = conn.cursor()
     try:
         params: list[Any] = []
         date_filter = ""
         if lookback_days:
-            cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d %H:%M:%S")
-            date_filter = " AND COALESCE(o.created_at, '') >= ?"
-            params.append(cutoff)
+            # SQLite datetime() correctly handles both "YYYY-MM-DD HH:MM:SS"
+            # and ISO timestamps with a T separator.
+            date_filter = " AND datetime(o.created_at) >= datetime('now', ?)"
+            params.append(f"-{lookback_days} days")
         params.append(safe_limit)
+        cur = conn.cursor()
         cur.execute(
             """
             SELECT
-                COALESCE(NULLIF(o.telegram_id, 0), u.telegram_id, 0) AS telegram_id,
-                MAX(COALESCE(NULLIF(o.username, ''), u.username, '')) AS username,
-                MAX(COALESCE(NULLIF(o.full_name, ''), u.full_name, '')) AS full_name,
+                COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0), 0) AS telegram_id,
+                MAX(COALESCE(NULLIF(u.username, ''), NULLIF(o.username, ''), '')) AS username,
+                MAX(COALESCE(NULLIF(u.full_name, ''), NULLIF(o.full_name, ''), '')) AS full_name,
                 COUNT(DISTINCT o.order_id) AS orders_count,
                 COALESCE(SUM(CAST(o.price AS INTEGER)), 0) AS total_spent
             FROM userbot_orders o
             LEFT JOIN userbot_users u ON u.id = o.user_id
-            WHERE LOWER(COALESCE(o.status, '')) = 'approved'
-              AND (COALESCE(o.telegram_id, 0) != 0 OR COALESCE(u.telegram_id, 0) != 0 OR COALESCE(o.user_id, 0) != 0)
+            WHERE LOWER(TRIM(COALESCE(o.status, ''))) = 'approved'
+              AND (
+                    COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0), 0) != 0
+                    OR COALESCE(o.user_id, 0) != 0
+              )
             """ + date_filter + """
-            GROUP BY COALESCE(NULLIF(o.telegram_id, 0), u.telegram_id, o.user_id)
+            GROUP BY CASE
+                WHEN COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0), 0) != 0
+                    THEN 'telegram:' || COALESCE(NULLIF(u.telegram_id, 0), NULLIF(o.telegram_id, 0))
+                ELSE 'user:' || COALESCE(o.user_id, 0)
+            END
             HAVING COALESCE(SUM(CAST(o.price AS INTEGER)), 0) > 0
             ORDER BY total_spent DESC, orders_count DESC, username COLLATE NOCASE ASC
             LIMIT ?
