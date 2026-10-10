@@ -11,6 +11,7 @@ BTN_STATUS = "📊 وضعیت سرور"
 BTN_BACKUP = "📫 دریافت بکاپ"
 BTN_AGENCIES = "🏢 نمایندگی"
 BTN_DAILY_REPORT = "📊 گزارش روزانه"
+BTN_TOP_BUYERS = "🏆 مشتریان برتر خرید"
 BTN_CHANNEL_POSTS = "📢 مدیریت کانال"
 
 
@@ -18,6 +19,7 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(BTN_SERVERS)],
         [KeyboardButton(BTN_SEARCH_USER), KeyboardButton(BTN_DAILY_REPORT)],
+        [KeyboardButton(BTN_TOP_BUYERS)],
         [KeyboardButton(BTN_USERBOT)],
         [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_AGENCIES), KeyboardButton(BTN_BACKUP)],
     ]
