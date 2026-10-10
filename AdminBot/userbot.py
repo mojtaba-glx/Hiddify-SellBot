@@ -7852,6 +7852,7 @@ def build_referral_admin_menu_keyboard() -> InlineKeyboardMarkup:
     enabled_icon = "✅" if bool(settings.get("referral_enabled", False)) else "❌"
     rows = [
         [InlineKeyboardButton("📊 داشبورد رفرال", callback_data="userbot:referral:dashboard")],
+        [InlineKeyboardButton("🏆 مشتریان برتر خرید", callback_data="userbot:referral:topbuyers:all")],
         [
             InlineKeyboardButton("⚙️ تنظیمات", callback_data="userbot:referral:settings"),
             InlineKeyboardButton(f"🎁 فعال/غیرفعال | {enabled_icon}", callback_data="userbot:referral:toggle"),
@@ -10363,6 +10364,52 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
     if data == "userbot:referral_menu":
         await query.answer()
         await send_referral_admin_menu(cid, context, message=msg)
+        return
+
+    if data.startswith("userbot:referral:topbuyers:"):
+        period = str(data.rsplit(":", 1)[-1] or "all").strip().lower()
+        days = 30 if period == "30d" else 0
+        await query.answer()
+        try:
+            customers = userbot_db.get_top_buying_customers(limit=10, days=days)
+        except Exception:
+            logger.exception("Failed to load top buying customers")
+            await query.answer("خطا در خواندن آمار خریدها.", show_alert=True)
+            return
+        title = "۳۰ روز اخیر" if days else "کل سابقه"
+        lines = [
+            "🏆 مشتریان برتر خرید",
+            "❖ ◈━━━━━━━━━━━━━━━━━━━━◈ ❖",
+            f"📅 بازه: {title}",
+            "📌 فقط سفارش‌های موفق (approved) محاسبه شده‌اند.",
+            "",
+        ]
+        if customers:
+            for rank, customer in enumerate(customers, start=1):
+                username = str(customer.get("username") or "").strip()
+                name = ("@" + username.lstrip("@")) if username else str(customer.get("full_name") or "بدون نام").strip()
+                telegram_id = int(customer.get("telegram_id") or 0)
+                orders = int(customer.get("orders_count") or 0)
+                total = int(customer.get("total_spent") or 0)
+                lines.append(f"{rank}. {html_escape(name)}")
+                lines.append(f"   💰 مجموع خرید: {total:,} تومان | 🛒 تعداد: {orders}")
+                if telegram_id:
+                    lines.append(f"   🆔 <code>{telegram_id}</code>")
+        else:
+            lines.append("هنوز خرید موفقی برای این بازه پیدا نشد.")
+        lines.extend(["", "برای هدیه دادن، از «🧾 پاداش دستی» استفاده کنید و آیدی تلگرام یا یوزرنیم دقیق مشتری را وارد کنید."])
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📆 ۳۰ روز اخیر", callback_data="userbot:referral:topbuyers:30d"),
+                InlineKeyboardButton("📚 کل سابقه", callback_data="userbot:referral:topbuyers:all"),
+            ],
+            [InlineKeyboardButton("🎁 ثبت هدیه", callback_data="userbot:referral:manual")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="userbot:referral_menu")],
+        ])
+        try:
+            await msg.edit_text("\\n".join(lines), reply_markup=kb, parse_mode="HTML")
+        except BadRequest:
+            await context.bot.send_message(cid, "\\n".join(lines), reply_markup=kb, parse_mode="HTML")
         return
 
     if data == "userbot:referral:dashboard":
