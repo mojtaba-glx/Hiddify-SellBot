@@ -6683,7 +6683,10 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
             context.user_data.pop(REFERRAL_MANUAL_REWARD_STATE, None)
             notification_sent = False
             try:
-                await context.bot.send_message(
+                if not USER_BOT_TOKEN:
+                    raise RuntimeError("USER_BOT_TOKEN تنظیم نشده است")
+                user_bot = Bot(token=USER_BOT_TOKEN)
+                await user_bot.send_message(
                     chat_id=telegram_id,
                     text=(
                         "🎁 <b>هدیه‌ای از طرف مدیریت دریافت کردید!</b>\n\n"
