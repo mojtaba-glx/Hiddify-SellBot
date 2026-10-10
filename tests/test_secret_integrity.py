@@ -607,7 +607,7 @@ class WriterCompatibilityTests(unittest.TestCase):
                   "ReplyKeyboardMarkup", "ReplyKeyboardRemove", "InputMediaPhoto"):
             setattr(tg, n, _Any)
         terr = types.ModuleType("telegram.error")
-        for n in ("TelegramError", "BadRequest", "Forbidden", "NetworkError", "TimedOut"):
+        for n in ("TelegramError", "BadRequest", "Forbidden", "NetworkError", "RetryAfter", "TimedOut"):
             setattr(terr, n, type(n, (Exception,), {}))
         ext = types.ModuleType("telegram.ext")
         ext.ContextTypes = types.SimpleNamespace(DEFAULT_TYPE=object)
