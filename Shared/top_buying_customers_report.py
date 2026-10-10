@@ -5,12 +5,16 @@ from html import escape
 from typing import Any, Iterable
 
 
+def _persian_digits(value: int) -> str:
+    return str(value).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
 def format_top_buying_customers_report(
     customers: Iterable[dict[str, Any]], days: int = 30
 ) -> str:
     """Render a compact, Telegram-safe ranked report for approved orders."""
     rows = list(customers or [])
-    period = f"{int(days)} روز اخیر" if int(days or 0) > 0 else "کل سابقه"
+    period = f"{_persian_digits(int(days))} روز اخیر" if int(days or 0) > 0 else "کل سابقه"
     lines = [
         "🏆 <b>۱۰ مشتری برتر خرید</b>",
         f"📅 <b>بازه:</b> {escape(period)}",
