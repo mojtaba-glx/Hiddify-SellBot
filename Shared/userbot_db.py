@@ -2165,6 +2165,47 @@ def get_users_page(page: int, page_size: int) -> Tuple[List[Dict[str, Any]], int
     return [dict(r) for r in rows], total
 
 
+
+def get_top_buying_customers(limit: int = 10, days: int = 0) -> List[Dict[str, Any]]:
+    """Return customers ranked by successful UserBot order spend (approved orders only)."""
+    init_db()
+    safe_limit = max(1, min(50, int(limit or 10)))
+    lookback_days = max(0, int(days or 0))
+    conn = _get_conn()
+    cur = conn.cursor()
+    try:
+        params: list[Any] = []
+        date_filter = ""
+        if lookback_days:
+            cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d %H:%M:%S")
+            date_filter = " AND COALESCE(o.created_at, '') >= ?"
+            params.append(cutoff)
+        params.append(safe_limit)
+        cur.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(o.telegram_id, 0), u.telegram_id, 0) AS telegram_id,
+                MAX(COALESCE(NULLIF(o.username, ''), u.username, '')) AS username,
+                MAX(COALESCE(NULLIF(o.full_name, ''), u.full_name, '')) AS full_name,
+                COUNT(DISTINCT o.order_id) AS orders_count,
+                COALESCE(SUM(CAST(o.price AS INTEGER)), 0) AS total_spent
+            FROM userbot_orders o
+            LEFT JOIN userbot_users u ON u.id = o.user_id
+            WHERE LOWER(COALESCE(o.status, '')) = 'approved'
+              AND (COALESCE(o.telegram_id, 0) != 0 OR COALESCE(u.telegram_id, 0) != 0 OR COALESCE(o.user_id, 0) != 0)
+            """ + date_filter + """
+            GROUP BY COALESCE(NULLIF(o.telegram_id, 0), u.telegram_id, o.user_id)
+            HAVING COALESCE(SUM(CAST(o.price AS INTEGER)), 0) > 0
+            ORDER BY total_spent DESC, orders_count DESC, username COLLATE NOCASE ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     init_db()
     conn = _get_conn()
