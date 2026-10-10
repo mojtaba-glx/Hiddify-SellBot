@@ -10374,7 +10374,15 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             customers = userbot_db.get_top_buying_customers(limit=10, days=days)
         except Exception:
             logger.exception("Failed to load top buying customers")
-            return
+            try:
+                await msg.edit_text(
+                    "❌ بارگذاری فهرست مشتریان برتر ناموفق بود. دوباره تلاش کنید.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 بازگشت", callback_data="userbot:referral_menu")
+                    ]]),
+                )
+            except Exception:
+                logger.debug("Could not render top-buyers database error message", exc_info=True)
             return
         title = "۳۰ روز اخیر" if days else "کل سابقه"
         lines = [
@@ -10407,9 +10415,9 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🔙 بازگشت", callback_data="userbot:referral_menu")],
         ])
         try:
-            await msg.edit_text("\\n".join(lines), reply_markup=kb, parse_mode="HTML")
+            await msg.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
         except BadRequest:
-            await context.bot.send_message(cid, "\\n".join(lines), reply_markup=kb, parse_mode="HTML")
+            await context.bot.send_message(cid, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
         return
 
     if data == "userbot:referral:dashboard":
