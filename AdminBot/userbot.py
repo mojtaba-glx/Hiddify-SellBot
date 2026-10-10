@@ -10374,7 +10374,7 @@ async def handle_userbot_callback(update: Update, context: ContextTypes.DEFAULT_
             customers = userbot_db.get_top_buying_customers(limit=10, days=days)
         except Exception:
             logger.exception("Failed to load top buying customers")
-            await query.answer("خطا در خواندن آمار خریدها.", show_alert=True)
+            return
             return
         title = "۳۰ روز اخیر" if days else "کل سابقه"
         lines = [
