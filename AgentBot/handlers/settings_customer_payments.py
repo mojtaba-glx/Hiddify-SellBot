@@ -1534,6 +1534,24 @@ async def _renew_subscription_from_order(
     except Exception as e:
         logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
+    # CustomerBot renewals also need to refresh the central AdminBot/UserBot
+    # runtime mirror. Otherwise the global enforcer can read the previous
+    # negative days_left / expired_at snapshot and disable this renewed UUID.
+    try:
+        from AgentBot.services.subscription_service import _sync_userbot_runtime_after_agency_renew
+
+        _sync_userbot_runtime_after_agency_renew(
+            str(svc.get("panel_user_uuid") or ""),
+            usage_limit=new_usage_limit,
+            days_left=new_days_left,
+        )
+    except Exception:
+        logger.exception(
+            "CustomerBot renewal central UserBot runtime sync failed service=%s uuid=%s",
+            service_id,
+            str(svc.get("panel_user_uuid") or "")[:12],
+        )
+
     # ── فعال‌سازی مجدد (اگر به‌خاطر اتمام حجم/زمان غیرفعال شده بود) ──
     for srv, uuid, marzban_un in targets:
         try:
