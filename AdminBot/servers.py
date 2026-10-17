@@ -516,7 +516,16 @@ def _compute_package_info(user: Dict[str, Any]):
             pass
     start_dt = _parse_dt(user.get("start_date"))
     package_days = user.get("package_days")
-    if not start_dt or not package_days:
+    if not start_dt:
+        if package_days is not None:
+            try:
+                pkg_int = int(float(package_days))
+                if pkg_int > 0:
+                    return None, None, pkg_int
+            except (TypeError, ValueError):
+                pass
+        return None, None, None
+    if not package_days:
         return None, None, None
     try:
         end_dt = start_dt + timedelta(days=int(package_days))
@@ -788,6 +797,8 @@ async def _set_user_active_state_on_related_servers(
 
     service_id = 0
     mapped_by_server: Dict[int, str] = {}
+    service_id = 0
+    agent_service_id = 0
     try:
         owner = userbot_db.get_service_owner_by_panel_uuid(resolved_uuid) or {}
         service_id = int(owner.get("service_id") or 0)
@@ -801,7 +812,24 @@ async def _set_user_active_state_on_related_servers(
                     mapped_by_server[sid] = mapped_uuid
     except Exception:
         service_id = 0
-        mapped_by_server = {}
+
+    try:
+        from Shared import agent_db
+        ag_svc = (
+            agent_db.get_service_by_any_panel_uuid(resolved_uuid)
+            or {}
+        )
+        agent_service_id = int(ag_svc.get("id") or 0)
+        if agent_service_id > 0:
+            for row in agent_db.get_service_nodes(agent_service_id) or []:
+                if int(row.get("deleted") or 0) == 1:
+                    continue
+                sid = int(row.get("server_id") or 0)
+                mapped_uuid = str(row.get("panel_user_uuid") or "").strip()
+                if sid > 0 and mapped_uuid and sid not in mapped_by_server:
+                    mapped_by_server[sid] = mapped_uuid
+    except Exception:
+        agent_service_id = 0
 
     changed = 0
     failed: List[str] = []
@@ -922,10 +950,11 @@ async def _set_user_active_state_on_related_servers(
                 )
                 failed.append(title)
 
-    # A manual AdminBot activation must update the central service snapshot too.
-    # Otherwise an old negative days_left/expired_at value can make the global
+    # A manual AdminBot activation must update the central service snapshot too
+    # (for both UserBot services and AgentBot agency services).
+    # Otherwise an old negative days_left/expired_at value can make the periodic
     # enforcer disable a user again immediately after the panel API succeeded.
-    if active and service_id > 0 and not failed and len(successful_targets) == len(targets):
+    if active and (service_id > 0 or agent_service_id > 0) and not failed and len(successful_targets) == len(targets):
         runtime_snapshots: List[Tuple[int, str, float, int]] = []
         now_text = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
         runtime_sync_failed: List[str] = []
@@ -948,45 +977,96 @@ async def _set_user_active_state_on_related_servers(
                 title = str(target.get("title") or f"سرور #{target.get('id') or '?'}")
                 runtime_sync_failed.append(title)
                 logger.warning(
-                    "Manual AdminBot activation runtime probe failed service=%s server=%s: %s",
+                    "Manual AdminBot activation runtime probe failed service=%s agent_service=%s server=%s: %s",
                     service_id,
+                    agent_service_id,
                     target.get("id"),
                     sync_error,
                 )
 
         if len(runtime_snapshots) == len(targets):
-            try:
-                # Refresh the aggregate expiry first, so the enforcer cannot
-                # act on the old expired snapshot while node records are updated.
-                userbot_db.update_service_runtime(
-                    service_id=service_id,
-                    usage_current=sum(row[2] for row in runtime_snapshots),
-                    days_left=min(row[3] for row in runtime_snapshots),
-                )
-                for target_sid, target_uuid, usage_current, days_left in runtime_snapshots:
-                    userbot_db.update_service_node_runtime(
-                        service_id,
-                        target_sid,
-                        target_uuid,
-                        usage_current=usage_current,
-                        days_left=days_left,
-                        frozen=0,
-                        fail_count=0,
-                        last_ok_at=now_text,
-                        frozen_at="",
-                        frozen_reason="",
-                        deleted=0,
-                        is_active=1,
+            if service_id > 0:
+                try:
+                    userbot_db.update_service_runtime(
+                        service_id=service_id,
+                        usage_current=sum(row[2] for row in runtime_snapshots),
+                        days_left=min(row[3] for row in runtime_snapshots),
                     )
-            except Exception:
-                logger.exception(
-                    "Manual AdminBot activation runtime DB sync failed service=%s uuid=%s",
-                    service_id,
-                    resolved_uuid[:12],
-                )
-                failed.append("همگام‌سازی دیتابیس مرکزی")
+                    for target_sid, target_uuid, usage_current, days_left in runtime_snapshots:
+                        userbot_db.update_service_node_runtime(
+                            service_id,
+                            target_sid,
+                            target_uuid,
+                            usage_current=usage_current,
+                            days_left=days_left,
+                            frozen=0,
+                            fail_count=0,
+                            last_ok_at=now_text,
+                            frozen_at="",
+                            frozen_reason="",
+                            deleted=0,
+                            is_active=1,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Manual AdminBot activation runtime DB sync failed service=%s uuid=%s",
+                        service_id,
+                        resolved_uuid[:12],
+                    )
+                    failed.append("همگام‌سازی دیتابیس مرکزی")
+
+            if agent_service_id > 0:
+                try:
+                    from Shared import agent_db
+                    agent_db.set_service_active(agent_service_id, True)
+                    total_usage = sum(row[2] for row in runtime_snapshots)
+                    min_days = min(row[3] for row in runtime_snapshots)
+                    updates = {
+                        "usage_current": total_usage,
+                        "days_left": min_days,
+                        "expired_at": "",
+                        "is_active": 1,
+                    }
+                    if min_days > 0:
+                        new_end_dt = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=min_days)
+                        updates["end_date"] = new_end_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    agent_db.update_service(agent_service_id, updates)
+                    for target_sid, target_uuid, usage_current, days_left in runtime_snapshots:
+                        agent_db.update_service_node_runtime(
+                            agent_service_id,
+                            target_sid,
+                            target_uuid,
+                            usage_current=usage_current,
+                            days_left=days_left,
+                            frozen=0,
+                            fail_count=0,
+                            last_ok_at=now_text,
+                            frozen_at="",
+                            frozen_reason="",
+                            deleted=0,
+                            is_active=1,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Manual AdminBot activation runtime agent_db sync failed service=%s uuid=%s",
+                        agent_service_id,
+                        resolved_uuid[:12],
+                    )
+                    failed.append("همگام‌سازی دیتابیس نمایندگی")
         elif runtime_sync_failed:
             failed.extend(title for title in runtime_sync_failed if title not in failed)
+    elif not active and not failed and len(successful_targets) == len(targets):
+        if service_id > 0:
+            try:
+                userbot_db.set_service_active(service_id, False)
+            except Exception:
+                pass
+        if agent_service_id > 0:
+            try:
+                from Shared import agent_db
+                agent_db.set_service_active(agent_service_id, False)
+            except Exception:
+                pass
     return resolved_uuid, changed, len(targets), failed
 
 

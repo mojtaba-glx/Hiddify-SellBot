@@ -1487,6 +1487,8 @@ async def _renew_subscription_from_order(
             "start_date": now.strftime("%Y-%m-%d"),
             "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S"),
             "is_active": True,
+            "expire_date": new_end_str[:10],
+            "expire": new_end_str[:10],
         }
         try:
             await multi_panel.patch_user(
@@ -1540,11 +1542,17 @@ async def _renew_subscription_from_order(
     try:
         from AgentBot.services.subscription_service import _sync_userbot_runtime_after_agency_renew
 
-        _sync_userbot_runtime_after_agency_renew(
-            str(svc.get("panel_user_uuid") or ""),
-            usage_limit=new_usage_limit,
-            days_left=new_days_left,
-        )
+        synced_uuids = {str(svc.get("panel_user_uuid") or "").strip()}
+        for srv, tgt_uuid, _ in (targets or []):
+            if tgt_uuid:
+                synced_uuids.add(str(tgt_uuid).strip())
+        for u in synced_uuids:
+            if u:
+                _sync_userbot_runtime_after_agency_renew(
+                    u,
+                    usage_limit=new_usage_limit,
+                    days_left=new_days_left,
+                )
     except Exception:
         logger.exception(
             "CustomerBot renewal central UserBot runtime sync failed service=%s uuid=%s",

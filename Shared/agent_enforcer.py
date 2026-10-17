@@ -488,8 +488,12 @@ async def _process_service(svc: dict) -> Dict[str, str]:
             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
                 try:
                     end_dt = datetime.strptime(end_raw[:19], fmt)
-                    if end_dt < datetime.now(timezone.utc).replace(tzinfo=None):
+                    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+                    if end_dt < now_utc:
                         time_expired = True
+                    else:
+                        seconds_left = (end_dt - now_utc).total_seconds()
+                        updates["days_left"] = max(0, int((seconds_left + 86399) // 86400))
                     break
                 except ValueError:
                     continue

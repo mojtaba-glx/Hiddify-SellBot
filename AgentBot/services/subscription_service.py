@@ -530,25 +530,31 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
     if updated:
         sid = int(updated.get("server_id") or 0)
         server = get_server_by_id(sid)
-        targets = _get_cluster_servers(sid) if sid > 0 else []
+        from CustomerBot.services import get_service_panel_targets
+        targets = get_service_panel_targets(updated) or []
         if not targets and server:
-            targets = [server]
+            targets = [(server, str(updated.get("panel_user_uuid") or ""), "")]
         new_usage = float(updated.get("usage_limit", 0) or 0)
         new_days = int(updated.get("days_left", 0) or 0)
+        new_end_raw = str(updated.get("end_date") or "").strip()
+        new_end_date = new_end_raw[:10] if new_end_raw else ""
         patch_data = {"usage_limit_GB": new_usage, "package_days": new_days}
+        if new_end_date:
+            patch_data["expire_date"] = new_end_date
+            patch_data["expire"] = new_end_date
         if str(volume_mode).strip().lower() == "reset":
             patch_data["current_usage_GB"] = 0
         if str(time_mode).strip().lower() == "reset":
             patch_data["start_date"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d")
 
         primary_ok = False
-        for tgt in targets:
+        for tgt, tgt_uuid, marzban_un in targets:
             tgt_id = int(tgt.get("id") or 0)
-            marzban_un = _lookup_marzban_username(service_id, tgt_id)
+            target_uuid = str(tgt_uuid or updated.get("panel_user_uuid") or "")
             try:
                 await multi_panel.patch_user(
                     tgt,
-                    updated["panel_user_uuid"],
+                    target_uuid,
                     patch_data,
                     marzban_username=marzban_un,
                 )
@@ -556,7 +562,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                     primary_ok = True
             except Exception as e:
                 logger.warning("renew panel sync failed svc=%s server=%s: %s", service_id, tgt_id, e)
-                renew_failed.append(str(tgt.get("title") or f"\u0633\u0631\u0648\u0631 #{tgt_id}"))
+                renew_failed.append(str(tgt.get("title") or f"سرور #{tgt_id}"))
                 if tgt_id > 0 and tgt_id not in renew_failed_ids:
                     renew_failed_ids.append(tgt_id)
                 if tgt_id == sid:
@@ -581,28 +587,29 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         except Exception as e:
             logger.warning("renew frozen reset failed svc=%s: %s", service_id, e)
 
-        # اگر همین UUID در دیتابیس مرکزی UserBot هم وجود دارد، runtime آن را
+        # اگر همین UUIDها در دیتابیس مرکزی UserBot هم وجود دارند، runtime آن‌ها را
         # هم‌زمان با تمدید نماینده ریست کن تا Enforcer وضعیت منقضی قبلی را
         # دوباره روی پنل اعمال نکند.
-        _sync_userbot_runtime_after_agency_renew(
-            updated.get("panel_user_uuid"),
-            new_usage,
-            new_days,
-        )
+        synced_uuids = {str(updated.get("panel_user_uuid") or "").strip()}
+        for _, tuuid, _ in targets:
+            if tuuid:
+                synced_uuids.add(str(tuuid).strip())
+        for u in synced_uuids:
+            if u:
+                _sync_userbot_runtime_after_agency_renew(u, new_usage, new_days)
 
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         primary_enable_ok = False
-        for tgt in targets:
+        for tgt, tgt_uuid, marzban_un in targets:
             tgt_id = int(tgt.get("id") or 0)
-            marzban_un = _lookup_marzban_username(service_id, tgt_id)
+            target_uuid = str(tgt_uuid or updated.get("panel_user_uuid") or "")
             try:
-                await enable_user_on_panel(updated["panel_user_uuid"], tgt_id, marzban_username=marzban_un)
+                await multi_panel.enable_user(tgt, target_uuid, marzban_username=marzban_un)
                 if tgt_id == sid:
                     primary_enable_ok = True
             except Exception as e:
                 logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, tgt_id, e)
                 renew_failed.append(str(tgt.get("title") or f"سرور #{tgt_id}"))
-
         if targets and not primary_enable_ok:
             agent_db.set_service_active(service_id, False)
             logger.error("Primary panel renewal applied but re-activation failed (service=%s)", service_id)

@@ -2521,21 +2521,25 @@ def renew_service(service_id: int, extra_days: int, extra_gb: float = 0) -> bool
     if not row:
         conn.close()
         return False
-    new_days_left = int(row["days_left"] or 0) + int(extra_days)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    remaining_days = max(int(row["days_left"] or 0), 0)
+    new_days_left = remaining_days + int(extra_days)
     new_usage_limit = float(row["usage_limit"] or 0) + float(extra_gb)
-    # محاسبه end_date جدید
+    # محاسبه end_date جدید (هرگز نباید در گذشته بماند)
     end_date = str(row["end_date"] or "").strip()
     if end_date:
         try:
             current_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+            if current_end < now:
+                current_end = now
         except ValueError:
-            current_end = datetime.now(timezone.utc).replace(tzinfo=None)
+            current_end = now
     else:
-        current_end = datetime.now(timezone.utc).replace(tzinfo=None)
+        current_end = now
     new_end = (current_end + timedelta(days=int(extra_days))).strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute(
-        "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, expired_at = '', updated_at = ? WHERE id = ?",
+        "UPDATE agent_services SET days_left = ?, usage_limit = ?, end_date = ?, is_active = 1, expired_at = '', updated_at = ? WHERE id = ?",
         (new_days_left, new_usage_limit, new_end, _now(), service_id),
     )
     conn.commit()

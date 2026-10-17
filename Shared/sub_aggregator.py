@@ -203,6 +203,23 @@ def _panel_user_exactly_expired(
         return False
     current = now or datetime.now(timezone.utc).replace(tzinfo=None)
 
+    # Check package_days + start_date. If a package has positive days and
+    # either hasn't started yet or its calculated expiry is today/future,
+    # the user is not expired even if a stale expire_date was kept from an earlier cycle.
+    start_dt = _parse_dt(user.get("start_date"))
+    pkg_days = user.get("package_days")
+    if pkg_days is not None:
+        try:
+            pkg_int = int(float(pkg_days))
+            if pkg_int > 0:
+                if start_dt is None:
+                    return False
+                calc_end = start_dt + timedelta(days=pkg_int)
+                if calc_end.date() >= current.date():
+                    return False
+        except (TypeError, ValueError):
+            pass
+
     for key in ("expiryTime", "expires_at", "expiration_date", "end_date", "expire", "expire_date"):
         raw = user.get(key)
         if raw is None or str(raw).strip() in {"", "0", "0.0"}:

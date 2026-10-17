@@ -434,6 +434,28 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
     except Exception as exc:
         logger.warning("legacy renew frozen reset failed svc=%s: %s", service_id, exc)
 
+    # Re-enable the subscription across all targets and mark active in agent_db
+    for srv, uuid, marzban_un in targets:
+        try:
+            await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+        except Exception as exc:
+            logger.warning("legacy renew re-activate failed svc=%s server=%s: %s", service_id, (srv or {}).get("id"), exc)
+    agent_db.set_service_active(service_id, True)
+
+    try:
+        from AgentBot.services.subscription_service import _sync_userbot_runtime_after_agency_renew
+        new_days = int((updated or {}).get("days_left") or extra_days)
+        new_lim = float((updated or {}).get("usage_limit") or (svc or {}).get("usage_limit") or 0)
+        synced_uuids = {str(svc.get("panel_user_uuid") or "").strip()}
+        for srv, tgt_uuid, _ in (targets or []):
+            if tgt_uuid:
+                synced_uuids.add(str(tgt_uuid).strip())
+        for u in synced_uuids:
+            if u:
+                _sync_userbot_runtime_after_agency_renew(u, usage_limit=new_lim, days_left=new_days)
+    except Exception:
+        logger.exception("legacy renew central UserBot sync failed svc=%s", service_id)
+
     return {
         "ok": True,
         "wallet_balance": int((wallet or {}).get("balance") or 0),

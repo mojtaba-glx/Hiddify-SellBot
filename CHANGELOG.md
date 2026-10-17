@@ -1,5 +1,13 @@
 # Changelog
 
+## Hiddify-SellBot v6.1.2 — Agency Renewal & Manual Activation Enforcer Fix
+- اصلاح همگام‌سازی کامل فعال‌سازی دستی AdminBot با دیتابیس نمایندگی (agent_db)؛ رفع غیرفعال‌شدن خودکار اکانت پس از ۳ دقیقه توسط agent_enforcer
+- اصلاح ارسال expire_date و پارامترهای انقضای صریح به پنل در تمدیدهای ربات مشتری و نمایندگی؛ جلوگیری از انقضای کاذب در sub_aggregator._panel_user_exactly_expired
+- اصلاح ارسال UUID مستقل هر نود در خوشه‌های چند سروری هنگام تمدید و فعال‌سازی در subscription_service
+- اصلاح محاسبه days_left برای اشتراک‌های با package_days در صورت نبود start_date در پنل هیدیفای
+- بازنشانی امن روزها، تاریخ انقضا و فعال‌سازی مجدد اکانت در جریان تمدید CustomerBot.services.renew_service
+- افزودن تست‌های رگرسیون جامع برای چرخه تمدید، فعال‌سازی دستی، چندنودی و انقضای واقعی
+
 ## Hiddify-SellBot v6.1.1 — Renewal Status Consistency Fix
 - اصلاح همگام‌سازی تمدید CustomerBot با دیتابیس مرکزی UserBot/AdminBot؛ جلوگیری از خاموش‌شدن مجدد سرویس به‌دلیل باقی‌ماندن اطلاعات قدیمی انقضا
 - اصلاح فعال‌سازی دستی در AdminBot برای به‌روزرسانی runtime مصرف/زمان و وضعیت نودها، فقط پس از تأیید موفق وضعیت زنده همه targetها
