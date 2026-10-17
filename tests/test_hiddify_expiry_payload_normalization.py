@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta
 
 from Shared.hiddify_api import _normalize_hiddify_payload
 
@@ -33,6 +34,15 @@ class HiddifyExpiryPayloadNormalizationTests(unittest.TestCase):
         self.assertIs(normalized["enable"], True)
         self.assertEqual(normalized["package_days"], 30)
         self.assertEqual(normalized["start_date"], "2026-10-17")
+
+    def test_legacy_expiry_only_payload_is_translated_to_supported_fields(self):
+        expiry_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+        normalized = _normalize_hiddify_payload({"expire_date": expiry_date}, 12)
+
+        self.assertNotIn("expire_date", normalized)
+        self.assertIn("start_date", normalized)
+        self.assertEqual(normalized["start_date"], datetime.now().strftime("%Y-%m-%d"))
+        self.assertEqual(normalized["package_days"], 30)
 
     def test_normalization_does_not_mutate_the_callers_payload(self):
         original = dict(self.payload)
