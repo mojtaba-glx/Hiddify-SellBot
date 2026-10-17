@@ -78,6 +78,17 @@ class CustomerBotRenewalMatchesUserBotTests(unittest.TestCase):
         self.assertIn("days=int(extra_days or 0)", src)
         self.assertNotIn("volume_gb=float(new_usage_limit or 0)", src)
 
+    def test_customerbot_renewal_syncs_central_userbot_runtime(self):
+        src = _function_source(
+            CUSTOMER_RENEW_SOURCE, "_renew_subscription_from_order"
+        )
+        self.assertIn(
+            "from AgentBot.services.subscription_service import _sync_userbot_runtime_after_agency_renew",
+            src,
+        )
+        self.assertIn("usage_limit=new_usage_limit", src)
+        self.assertIn("days_left=new_days_left", src)
+
 
 if __name__ == "__main__":
     unittest.main()
