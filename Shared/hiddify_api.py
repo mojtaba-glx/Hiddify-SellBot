@@ -278,12 +278,33 @@ def _coerce_compat_bool(value: Any) -> Optional[bool]:
 
 
 def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dict[str, Any]:
-    """Translate legacy account-state fields only for Hiddify v13+.
+    """Normalize writable fields for the version-specific Hiddify API schema.
 
-    v11/v12 payloads are copied unchanged. In v13, enable is the writable
-    account switch while is_active is a computed/output state.
+    Explicit expire and expire_date are response aliases, not writable fields
+    on Hiddify's user PATCH endpoint (which rejects them with HTTP 422).
+    Hiddify expiry is set with start_date + package_days. Keep explicit expiry
+    aliases for X-UI/X-NET adapters, which use their own API mappers.
+    In v13, enable is the writable account switch while is_active is a
+    computed/output state.
     """
     out = dict(payload or {})
+    requested_expiry = out.get("expire_date") or out.get("expire")
+    out.pop("expire", None)
+    out.pop("expire_date", None)
+
+    # Keep the legacy helper functional when it sends only expire_date. When
+    # the richer renewal payload already carries package_days, that duration
+    # and its start_date remain authoritative; otherwise translate the expiry
+    # alias to Hiddify's supported start_date + package_days fields.
+    if requested_expiry and out.get("package_days") in (None, ""):
+        expiry_dt = _parse_dt(str(requested_expiry))
+        if expiry_dt is not None:
+            start_dt = _parse_dt(str(out.get("start_date") or ""))
+            if start_dt is None:
+                start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                out["start_date"] = start_dt.strftime("%Y-%m-%d")
+            out["package_days"] = max((expiry_dt.date() - start_dt.date()).days, 0)
+
     if panel_major < 13:
         return out
 
