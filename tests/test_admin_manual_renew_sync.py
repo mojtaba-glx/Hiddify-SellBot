@@ -153,6 +153,65 @@ class AdminManualRenewRuntimeSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(agent_nodes), 1)
         self.assertEqual(int(agent_nodes[0]["is_active"]), 1)
 
+    async def test_manual_admin_activation_refreshes_stale_userbot_runtime(self):
+        server = {"id": 1, "title": "Germany"}
+        live_user = {
+            "uuid": "uuid-a",
+            "name": "mohammadhosein",
+            "is_active": True,
+            "current_usage_GB": 0.21,
+            "usage_limit_GB": 10.0,
+            "days_left": 25,
+        }
+
+        with patch.object(
+            servers.database,
+            "get_server_by_id",
+            return_value=server,
+        ), patch.object(
+            servers,
+            "_get_related_server_targets",
+            return_value=[server],
+        ), patch.object(
+            servers,
+            "_resolve_panel_user_uuid",
+            new=AsyncMock(return_value="uuid-a"),
+        ), patch.object(
+            servers.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value=live_user),
+        ), patch.object(
+            servers.hiddify_api,
+            "enable_user",
+            new=AsyncMock(),
+        ), patch.object(
+            servers,
+            "_get_panel_user_with_list_fallback",
+            new=AsyncMock(return_value=live_user),
+        ):
+            resolved_uuid, changed, total, failed = (
+                await servers._set_user_active_state_on_related_servers(
+                    1, "uuid-a", active=True
+                )
+            )
+
+        self.assertEqual(resolved_uuid, "uuid-a")
+        self.assertEqual(changed, 1)
+        self.assertEqual(total, 1)
+        self.assertEqual(failed, [])
+
+        service = userbot_db.get_service_by_id(1)
+        self.assertEqual(int(service["days_left"]), 25)
+        self.assertAlmostEqual(float(service["usage_current"]), 0.21)
+        self.assertEqual(str(service["expired_at"] or ""), "")
+
+        nodes = userbot_db.get_service_nodes(1)
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(int(nodes[0]["is_active"]), 1)
+        self.assertEqual(int(nodes[0]["days_left"]), 25)
+        self.assertEqual(int(nodes[0]["frozen"] or 0), 0)
+        self.assertEqual(int(nodes[0]["fail_count"] or 0), 0)
+
     async def test_agency_service_can_be_resolved_from_node_uuid(self):
         agent_db.add_service_node(
             self.agent_service_id,
