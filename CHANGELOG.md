@@ -1,5 +1,11 @@
 # Changelog
 
+## Hiddify-SellBot v6.1.3 — Hiddify Renewal HTTP 422 Fix
+- رفع خطای HTTP 422 در تمدید اشتراک Hiddify با حذف فیلدهای خروجی و غیرقابل‌نوشتن expire و expire_date از درخواست PATCH فقط برای Hiddify؛ حفظ رفتار اختصاصی X-UI و X-NET
+- حفظ package_days و start_date به‌عنوان روش تنظیم زمان انقضا در پنل Hiddify
+- افزودن تست رگرسیون برای نسخه‌های Hiddify 11/12/13 و حفظ payload اصلی
+
+
 ## Hiddify-SellBot v6.1.2 — Agency Renewal & Manual Activation Enforcer Fix
 - اصلاح همگام‌سازی کامل فعال‌سازی دستی AdminBot با دیتابیس نمایندگی (agent_db)؛ رفع غیرفعال‌شدن خودکار اکانت پس از ۳ دقیقه توسط agent_enforcer
 - اصلاح ارسال expire_date و پارامترهای انقضای صریح به پنل در تمدیدهای ربات مشتری و نمایندگی؛ جلوگیری از انقضای کاذب در sub_aggregator._panel_user_exactly_expired
