@@ -805,6 +805,7 @@ async def _set_user_active_state_on_related_servers(
 
     changed = 0
     failed: List[str] = []
+    successful_targets: List[Tuple[Dict[str, Any], str]] = []
 
     def _identity(value: Any) -> str:
         return " ".join(str(value or "").strip().casefold().split())
@@ -832,6 +833,7 @@ async def _set_user_active_state_on_related_servers(
         try:
             await _apply(target_uuid)
             changed += 1
+            successful_targets.append((target, target_uuid))
             continue
         except Exception as first_error:
             # Only a confirmed missing identity is eligible for legacy repair.
@@ -900,6 +902,7 @@ async def _set_user_active_state_on_related_servers(
 
                 await _apply(repaired_uuid)
                 changed += 1
+                successful_targets.append((target, repaired_uuid))
                 logger.warning(
                     "Legacy AdminBot node identity repaired during active-state change "
                     "server_id=%s old_uuid=%s new_uuid=%s name=%s",
@@ -919,6 +922,71 @@ async def _set_user_active_state_on_related_servers(
                 )
                 failed.append(title)
 
+    # A manual AdminBot activation must update the central service snapshot too.
+    # Otherwise an old negative days_left/expired_at value can make the global
+    # enforcer disable a user again immediately after the panel API succeeded.
+    if active and service_id > 0 and not failed and len(successful_targets) == len(targets):
+        runtime_snapshots: List[Tuple[int, str, float, int]] = []
+        now_text = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        runtime_sync_failed: List[str] = []
+        for target, target_uuid in successful_targets:
+            try:
+                live_user = await _get_panel_user_with_list_fallback(target, target_uuid)
+                if not isinstance(live_user, dict) or not live_user:
+                    raise RuntimeError("empty live user response")
+                usage_current = _to_float(live_user.get("current_usage_GB"))
+                _, _, days_left = _compute_package_info(live_user)
+                if usage_current is None or days_left is None:
+                    raise RuntimeError("live usage or remaining time is missing")
+                runtime_snapshots.append((
+                    int(target.get("id") or 0),
+                    str(target_uuid),
+                    float(usage_current),
+                    int(days_left),
+                ))
+            except Exception as sync_error:
+                title = str(target.get("title") or f"سرور #{target.get('id') or '?'}")
+                runtime_sync_failed.append(title)
+                logger.warning(
+                    "Manual AdminBot activation runtime probe failed service=%s server=%s: %s",
+                    service_id,
+                    target.get("id"),
+                    sync_error,
+                )
+
+        if len(runtime_snapshots) == len(targets):
+            try:
+                # Refresh the aggregate expiry first, so the enforcer cannot
+                # act on the old expired snapshot while node records are updated.
+                userbot_db.update_service_runtime(
+                    service_id=service_id,
+                    usage_current=sum(row[2] for row in runtime_snapshots),
+                    days_left=min(row[3] for row in runtime_snapshots),
+                )
+                for target_sid, target_uuid, usage_current, days_left in runtime_snapshots:
+                    userbot_db.update_service_node_runtime(
+                        service_id,
+                        target_sid,
+                        target_uuid,
+                        usage_current=usage_current,
+                        days_left=days_left,
+                        frozen=0,
+                        fail_count=0,
+                        last_ok_at=now_text,
+                        frozen_at="",
+                        frozen_reason="",
+                        deleted=0,
+                        is_active=1,
+                    )
+            except Exception:
+                logger.exception(
+                    "Manual AdminBot activation runtime DB sync failed service=%s uuid=%s",
+                    service_id,
+                    resolved_uuid[:12],
+                )
+                failed.append("همگام‌سازی دیتابیس مرکزی")
+        elif runtime_sync_failed:
+            failed.extend(title for title in runtime_sync_failed if title not in failed)
     return resolved_uuid, changed, len(targets), failed
 
 
