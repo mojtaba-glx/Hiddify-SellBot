@@ -278,12 +278,18 @@ def _coerce_compat_bool(value: Any) -> Optional[bool]:
 
 
 def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dict[str, Any]:
-    """Translate legacy account-state fields only for Hiddify v13+.
+    """Normalize writable fields for the version-specific Hiddify API schema.
 
-    v11/v12 payloads are copied unchanged. In v13, enable is the writable
-    account switch while is_active is a computed/output state.
+    Explicit expire and expire_date are response aliases, not writable fields
+    on Hiddify's user PATCH endpoint (which rejects them with HTTP 422).
+    Hiddify expiry is set with start_date + package_days. Keep explicit expiry
+    aliases for X-UI/X-NET adapters, which use their own API mappers.
+    In v13, enable is the writable account switch while is_active is a
+    computed/output state.
     """
     out = dict(payload or {})
+    out.pop("expire", None)
+    out.pop("expire_date", None)
     if panel_major < 13:
         return out
 
