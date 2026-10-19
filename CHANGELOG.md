@@ -1,5 +1,12 @@
 # Changelog
 
+## Hiddify-SellBot v6.1.4 — Python 3.14 / Ubuntu 26.04 Dependency Update
+- ارتقای `python-telegram-bot[job-queue]` از 20.7 به 22.8 برای سازگاری با Python 3.14 و Ubuntu 26.04
+- ارتقای `Pillow` از 10.4.0 به 11.3.0 و `httpx` از 0.25.2 به 0.28.1
+- بدون تغییر: `python-dotenv==1.0.1` و `qrcode==7.4.2`
+- افزودن Python 3.14 به ماتریس تست CI
+- تست Ubuntu 22.04 و 24.04 هنوز انجام نشده است
+
 ## Hiddify-SellBot v6.1.3 — Hiddify Renewal HTTP 422 Fix
 - رفع خطای HTTP 422 در تمدید اشتراک Hiddify با حذف فیلدهای خروجی و غیرقابل‌نوشتن expire و expire_date از درخواست PATCH فقط برای Hiddify؛ حفظ رفتار اختصاصی X-UI و X-NET
 - حفظ package_days و start_date به‌عنوان روش تنظیم زمان انقضا در پنل Hiddify
