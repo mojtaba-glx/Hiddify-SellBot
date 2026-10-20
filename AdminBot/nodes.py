@@ -1,6 +1,5 @@
 # AdminBot/nodes.py
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -182,12 +181,13 @@ def _find_node(server_id: int, node_id: int) -> tuple[List[Dict[str, Any]], Opti
     return nodes, None, -1
 
 
-def _get_node_plans_count(server_id: int) -> int:
+def _node_plan_mode_label(server_id: int) -> str:
+    labels = {"dynamic": "پویا", "fixed": "ثابت", "mixed": "ترکیبی"}
     try:
         mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
-        return 0 if mode == "dynamic" else len(plans_storage.get_plans(server_id) or [])
     except Exception:
-        return 0
+        mode = "dynamic"
+    return labels.get(mode, labels["dynamic"])
 
 
 def _build_node_edit_text(
@@ -195,6 +195,7 @@ def _build_node_edit_text(
     node: Dict[str, Any],
     *,
     users_count_override: Optional[int] = None,
+    version_text_override: str = "",
 ) -> str:
     target_sid = int(node.get("target_server_id") or 0)
     child = database.get_server_by_id(target_sid) if target_sid > 0 else None
@@ -209,17 +210,22 @@ def _build_node_edit_text(
             users_count = len(database.get_users(target_sid) or [])
         except Exception:
             users_count = len((child or {}).get("users") or [])
-    plans_count = _get_node_plans_count(server_id)
+    plan_mode_label = _node_plan_mode_label(server_id)
     priority = int((child or {}).get("priority") or 0)
     child_panel_type = str((child or {}).get("panel_type") or "").strip().lower()
     is_xui_child = child_panel_type in {"xui", "x-ui"}
     is_xnet_child = child_panel_type in {"xnet", "x-net"}
     if is_xui_child:
         version_text = "X-UI"
+        panel_type_label = "X-UI"
     elif is_xnet_child:
         version_text = "X-NET"
+        panel_type_label = "X-NET"
     else:
-        version_text = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,12").strip()
+        panel_type_label = "Hiddify"
+        version_text = version_text_override or hiddify_api.format_panel_version(
+            fallback=(child or {}).get("panel_version") or (child or {}).get("version"),
+        )
 
     def _to_clickable_url(raw: Any) -> str:
         value = str(raw or "").strip()
@@ -260,7 +266,8 @@ def _build_node_edit_text(
         f"{server_line}\n"
         "❖ • -------------------------- • ❖\n"
         f"👤 تعداد کاربران: {users_count} از {_safe_text(users_limit_text)}\n"
-        f"📋 تعداد پلن ها: {plans_count}\n"
+        f"📋 نوع پلن: {plan_mode_label}\n"
+        f"🧩 نوع پنل: {panel_type_label}\n"
         f"🟩 اولویت: {priority}\n"
         f"📦 نسخه: {_safe_text(version_text)}\n\n"
         "فیلد موردنظر را انتخاب کنید:"
@@ -354,10 +361,26 @@ async def _build_node_edit_text_live(server_id: int, node: Dict[str, Any]) -> st
                 users_count = len(database.get_users(target_sid) or [])
             except Exception:
                 users_count = len(child.get("users") or [])
+    version_text = ""
+    child_panel_type = str((child or {}).get("panel_type") or "").strip().lower()
+    if child and not xnet_api.is_xnet_server(child) and child_panel_type not in {"xui", "x-ui"}:
+        try:
+            version_info = await hiddify_api.get_panel_version(child)
+            version_text = hiddify_api.format_panel_version(
+                version_info,
+                fallback=child.get("panel_version") or child.get("version"),
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed reading node panel version (server_id=%s): %s",
+                target_sid,
+                e,
+            )
     return _build_node_edit_text(
         server_id,
         node,
         users_count_override=users_count,
+        version_text_override=version_text,
     )
 
 

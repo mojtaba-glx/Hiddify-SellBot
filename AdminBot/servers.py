@@ -114,7 +114,11 @@ PANEL_PREREQ_SCRIPT_URL = (
     os.getenv("PANEL_PREREQ_SCRIPT_URL", "")
     or "https://raw.githubusercontent.com/mojtaba-glx/Hiddify-Panel-Prereq/main/install.sh"
 ).strip()
-SERVER_DISPLAY_VERSION = (os.getenv("SERVER_DISPLAY_VERSION", "V11,12") or "V11,12").strip()
+PLAN_MODE_LABELS = {
+    "dynamic": "پویا",
+    "fixed": "ثابت",
+    "mixed": "ترکیبی",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -2753,6 +2757,40 @@ def _format_node_sync_report(summary: Dict[str, Any]) -> str:
     return text
 
 
+def _plan_mode_label(server_id: int) -> str:
+    try:
+        mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
+    except Exception:
+        mode = "dynamic"
+    return PLAN_MODE_LABELS.get(mode, PLAN_MODE_LABELS["dynamic"])
+
+
+def _server_list_panel_label(server: Dict[str, Any]) -> str:
+    panel_type = str(server.get("panel_type") or "").strip().lower()
+    if panel_type in {"xui", "x-ui"}:
+        return "X-UI"
+    if panel_type in {"xnet", "x-net"}:
+        return "X-NET"
+    version = hiddify_api.format_panel_version(
+        fallback=server.get("panel_version") or server.get("version"),
+    )
+    return "Hiddify" if version == "نامشخص" else f"Hiddify {version}"
+
+
+def _server_list_button_text(
+    server: Dict[str, Any],
+    server_id: int,
+    title: Any = None,
+) -> str:
+    title = str(title or server.get("title") or f"سرور #{server_id}").strip()
+    meta = f"{_server_list_panel_label(server)} | {_plan_mode_label(server_id)}"
+    text = f"{title} | {meta}"
+    if len(text) <= 64:
+        return text
+    prefix_len = max(1, 64 - len(meta) - 4)
+    return f"{title[:prefix_len].rstrip()}… | {meta}"
+
+
 def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
     servers = database.get_servers() or []
     child_ids = _get_child_server_ids()
@@ -2769,7 +2807,7 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
             continue
 
         # عنوان دقیق ثبت‌شده توسط ادمین؛ بدون «لوکیشن» یا پرچم خودکار.
-        btn_text = str(s.get("title") or f"سرور #{sid_int}").strip()
+        btn_text = _server_list_button_text(s, sid_int, s.get("title"))
         keyboard.append([
             InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")
         ])
@@ -3683,7 +3721,7 @@ def build_server_detail_text(
     server: Dict[str, Any],
     *,
     users_count_override: Optional[int] = None,
-    plans_count_override: Optional[int] = None,
+    version_text_override: str = "",
 ) -> str:
     title = server.get("title", f"سرور #{server.get('id')}")
     panel_url = (server.get("panel_url") or "").strip()
@@ -3692,30 +3730,23 @@ def build_server_detail_text(
     server_id = int(server.get("id") or 0)
     users_limit = int(server.get("users_limit") or 0)
     users_count = int(users_count_override) if users_count_override is not None else 0
-    plans_count = int(plans_count_override) if plans_count_override is not None else 0
     if users_count_override is None:
         try:
             users_count = len(database.get_users(server_id) or [])
         except Exception:
             users_count = len(server.get("users") or [])
-    if plans_count_override is None:
-        try:
-            mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
-            if mode == "dynamic":
-                plans_count = 0
-            else:
-                plans_count = len(plans_storage.get_plans(server_id) or [])
-        except Exception:
-            plans_count = 0
+    plan_mode_label = _plan_mode_label(server_id)
     priority = int(server.get("priority") or 0)
     panel_type = str(server.get("panel_type") or "").strip().lower()
     is_xui = panel_type in {"xui", "x-ui"}
     is_xnet = panel_type in {"xnet", "x-net"}
     if is_xui:
         version_text = "X-UI"
+        panel_type_label = "X-UI"
         admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
     elif is_xnet:
         version_text = "X-NET"
+        panel_type_label = "X-NET"
         admin_panel_url = ""
         if panel_url.startswith(("http://", "https://")):
             panel_base = panel_url.rstrip("/")
@@ -3726,7 +3757,10 @@ def build_server_detail_text(
                 else f"{panel_base}/"
             )
     else:
-        version_text = SERVER_DISPLAY_VERSION or f"V{int(server.get('version') or 11)}"
+        version_text = version_text_override or hiddify_api.format_panel_version(
+            fallback=server.get("panel_version") or server.get("version"),
+        )
+        panel_type_label = "Hiddify"
         admin_panel_url = ""
         if panel_url.startswith(("http://", "https://")):
             panel_base = panel_url.rstrip("/")
@@ -3762,7 +3796,8 @@ def build_server_detail_text(
             f"{title_line}\n"
             "❖ • -------------------------- • ❖\n"
             f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-            f"📋 تعداد پلن ها: {plans_count}\n"
+            f"📋 نوع پلن: {plan_mode_label}\n"
+            f"🧩 نوع پنل: {panel_type_label}\n"
             f"🟩 اولویت: {priority}\n"
             f"📦 پنل: {escape(version_text)}{xui_info}"
         )
@@ -3798,7 +3833,8 @@ def build_server_detail_text(
             f"{title_line}\n"
             "❖ • -------------------------- • ❖\n"
             f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-            f"📋 تعداد پلن ها: {plans_count}\n"
+            f"📋 نوع پلن: {plan_mode_label}\n"
+            f"🧩 نوع پنل: {panel_type_label}\n"
             f"🟩 اولویت: {priority}\n"
             f"📦 پنل: {escape(version_text)}{xnet_info}"
         )
@@ -3807,7 +3843,8 @@ def build_server_detail_text(
         f"{title_line}\n"
         "❖ • -------------------------- • ❖\n"
         f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-        f"📋 تعداد پلن ها: {plans_count}\n"
+        f"📋 نوع پلن: {plan_mode_label}\n"
+        f"🧩 نوع پنل: {panel_type_label}\n"
         f"🟩 اولویت: {priority}\n"
         f"📦 نسخه: {escape(version_text)}"
     )
@@ -3850,16 +3887,21 @@ async def build_server_detail_text_live(server: Dict[str, Any]) -> str:
         except Exception:
             users_count = len(server.get("users") or [])
 
-    try:
-        mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
-        plans_count = 0 if mode == "dynamic" else len(plans_storage.get_plans(server_id) or [])
-    except Exception:
-        plans_count = 0
+    version_text = ""
+    if not xnet_api.is_xnet_server(server_for_view) and not xui_api.is_xui_server(server_for_view):
+        try:
+            version_info = await hiddify_api.get_panel_version(server_for_view)
+            version_text = hiddify_api.format_panel_version(
+                version_info,
+                fallback=server_for_view.get("panel_version") or server_for_view.get("version"),
+            )
+        except Exception as e:
+            logger.warning("Failed reading panel version (server_id=%s): %s", server_id, e)
 
     return build_server_detail_text(
         server_for_view,
         users_count_override=users_count,
-        plans_count_override=plans_count,
+        version_text_override=version_text,
     )
 
 
@@ -10325,7 +10367,7 @@ async def send_status_servers_list(chat_id: int, context: ContextTypes.DEFAULT_T
             continue
 
         # نام سرور دقیقاً همان عنوان ذخیره‌شده باشد.
-        btn_text = str(s.get("title") or f"سرور #{sid_int}").strip()
+        btn_text = _server_list_button_text(s, sid_int, s.get("title"))
         rows.append([InlineKeyboardButton(btn_text, callback_data=f"status_srv:{sid_int}")])
 
 
