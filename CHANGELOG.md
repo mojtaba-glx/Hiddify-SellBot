@@ -1,5 +1,13 @@
 # Changelog
 
+## Hiddify-SellBot v6.3.0 — Telegram Proxy Link & QR
+- افزودن دکمه «✈️ پروکسی تلگرام» به منوی کانفیگ‌های AdminBot برای کاربران Hiddify
+- دریافت لینک‌های MTProxy/WebProxy از endpoint اختصاصی `api/v2/user/mtproxies/` هیدیفای
+- نمایش لینک پروکسی همراه با بارکد QR و دکمه اتصال مستقیم تلگرام
+- پشتیبانی از چند پروکسی تلگرام با انتخاب پروکسی قبل از نمایش QR
+- بازگشت خودکار به کانفیگ‌های کاربر در پنل‌های قدیمی‌تر یا وقتی Telegram/WebProxy غیرفعال است
+- عدم نمایش دکمه برای سرورهای X-UI و X-NET
+
 ## Hiddify-SellBot v6.2.0 — Hiddify v14 Compatibility
 - پشتیبانی از اسکیم‌های کانفیگ Hiddify v14 شامل `hy2`، `wg`، `socks`، `ssh`، `naive`، `mierus`، `snell`، `anytls` و `tg`/`mtproxies` همراه با نرمال‌سازی aliasها
 - افزودن سیاست مرکزی کانفیگ‌های قابل نمایش و حذف تروجان واقعی از خروجی همه ربات‌ها با حفظ تروجان مصنوعی وضعیت اشتراک

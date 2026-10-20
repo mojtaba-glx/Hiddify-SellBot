@@ -1731,6 +1731,72 @@ async def get_user_configs(
         raise HiddifyApiError("پاسخ get_user_configs شکل لیست ندارد.")
     return data
 
+
+async def get_user_telegram_proxies(
+    server: Dict[str, Any],
+    user_uuid: str,
+) -> List[Dict[str, str]]:
+    """
+    GET /{user_proxy}/{secret_uuid}/api/v2/user/mtproxies/
+
+    Hiddify Telegram MTProxy/WebProxy links are excluded from all-configs and
+    served only by this endpoint. Older panels or panels with Telegram proxies
+    disabled return 404; callers should treat that as "no proxies".
+    """
+    if _is_xnet_server(server) or _is_xui_server(server):
+        return []
+
+    base = _get_panel_url(server)
+    proxy = _get_user_proxy(server)
+    url = f"{base}/{proxy}/{user_uuid}/api/v2/user/mtproxies/"
+
+    try:
+        data = await _request("GET", url, server)
+    except HiddifyApiError as exc:
+        message = str(exc).lower()
+        if any(
+            marker in message
+            for marker in ("http 404", "not found", "not enable", "not enabled")
+        ):
+            return []
+        raise
+
+    if isinstance(data, dict):
+        for key in ("mtproxies", "proxies", "items", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                data = value
+                break
+        else:
+            data = []
+
+    if not isinstance(data, list):
+        raise HiddifyApiError("پاسخ get_user_telegram_proxies شکل لیست ندارد.")
+
+    from Shared.config_links import config_protocol, extract_visible_config_link
+
+    proxies: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in data:
+        if isinstance(item, dict):
+            raw_link = item.get("link") or item.get("url")
+            title = str(item.get("title") or "").strip()
+        else:
+            raw_link = item
+            title = ""
+
+        link = extract_visible_config_link(raw_link)
+        if (
+            not link
+            or link in seen
+            or config_protocol(link) != "telegram"
+        ):
+            continue
+        seen.add(link)
+        proxies.append({"title": title, "link": link})
+
+    return proxies
+
 # در Shared/hiddify_api.py جایگزین تابع قبلی شود
 
 async def refresh_user_usage_snapshot(server: Dict[str, Any]) -> Dict[str, Any]:
