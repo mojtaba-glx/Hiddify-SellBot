@@ -252,6 +252,23 @@ def _parse_panel_major(version: Any) -> int:
         return 0
 
 
+def format_panel_version(
+    version_info: Optional[Dict[str, Any]] = None,
+    fallback: Any = "",
+) -> str:
+    info = version_info or {}
+    version = str(info.get("version") or "").strip()
+    if version:
+        return version if version.lower().startswith("v") else f"v{version}"
+    try:
+        major = int(info.get("major") or 0)
+    except Exception:
+        major = 0
+    if major <= 0:
+        major = _parse_panel_major(fallback)
+    return f"V{major}" if major > 0 else "نامشخص"
+
+
 async def get_panel_version(
     server: Dict[str, Any],
     *,
