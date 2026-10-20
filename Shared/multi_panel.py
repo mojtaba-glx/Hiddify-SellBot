@@ -153,6 +153,11 @@ async def create_primary_user(
 
     try:
         created = await create_user(server, dict(payload or {}))
+    except hiddify_api.HiddifyUserStabilizationError:
+        # The create POST succeeded but the panel never confirmed the
+        # requested final state. Recovering by identity would turn that
+        # verified failure back into a false success.
+        raise
     except Exception:
         if is_xui:
             requested_uuid = str((payload or {}).get("uuid") or "").strip()
@@ -226,6 +231,9 @@ async def create_user_with_uuid(
 
     try:
         created = await create_user(server, dict(payload or {}))
+    except hiddify_api.HiddifyUserStabilizationError:
+        # Do not let UUID recovery mask a confirmed post-create failure.
+        raise
     except Exception:
         if is_xui:
             # X-UI may create a subset of configured inbounds before an error.

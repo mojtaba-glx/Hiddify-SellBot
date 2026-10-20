@@ -973,9 +973,8 @@ async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List
             "start_date": now.strftime("%Y-%m-%d"),
             "current_usage_GB": usage_current,
             "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "is_active": True,
         }
-        changed, failed = await delivery_ops.patch_service_on_panels(service, payload)
+        changed, failed, activation_failed = await delivery_ops.patch_service_on_panels(service, payload)
         if changed == 0:
             return False, "بازگشت تمدید روی هیچ سروری انجام نشد.", failed
         userbot_db.update_service_runtime(
@@ -985,7 +984,14 @@ async def _revert_approved_payment(pay: Dict[str, Any]) -> Tuple[bool, str, List
             days_left=days_left,
         )
         userbot_db._patch_payment_receipt_meta(pid, {"direct_done": "reverted"})
-        return True, "🔁 تمدید به حالت قبل بازگشت.", failed
+        rev_msg = "🔁 تمدید به حالت قبل بازگشت."
+        if activation_failed:
+            rev_msg += (
+                "\n⚠️ فعال‌سازی پس از بازگشت روی این سرورها تأیید نشد: "
+                + "، ".join(dict.fromkeys(activation_failed))
+                + "\nلطفاً وضعیت کاربر را در پنل بررسی کنید."
+            )
+        return True, rev_msg, failed
 
     service = userbot_db.get_service_by_id(delivered_service_id) if delivered_service_id > 0 else None
     if not service:

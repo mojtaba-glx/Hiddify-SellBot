@@ -49,6 +49,32 @@ class HiddifyApiError(Exception):
     pass
 
 
+class HiddifyActiveUserLimitError(HiddifyApiError):
+    """پنل به‌دلیل رسیدن به سقف کاربران فعال، فعال‌سازی را رد کرده است."""
+    pass
+
+
+class HiddifyUserStabilizationError(HiddifyApiError):
+    """کاربر ساخته شد اما وضعیت نهایی درخواستی پنل قابل تأیید نبود.
+
+    برای خطاهای عمومی، این خطا کاربر را حذف نمی‌کند؛ caller باید تراکنش را
+    ناموفق اعلام کند و کاربر پنلی برای بررسی/پاک‌سازی دستی باقی می‌ماند.
+    تنها رد قطعی سقف کاربران فعال (که یعنی کاربر غیرفعال است) پاک‌سازی
+    best-effort دارد.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        user_uuid: str = "",
+        last_error: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.user_uuid = str(user_uuid or "")
+        self.last_error = str(last_error or "")
+
+
 def _safe_filename(name: str) -> str:
     raw = str(name or "").strip().replace("\\", "/")
     raw = raw.split("/")[-1]
@@ -84,6 +110,24 @@ def _extract_filename_from_headers(headers: Dict[str, str]) -> str:
     if m:
         return _safe_filename(m.group(1).strip().strip('"').strip("'"))
 
+    return ""
+
+
+def _backup_payload_error(body: bytes) -> str:
+    """Return a reason when a response is not a real Hiddify backup JSON.
+
+    v14's /api/v2/admin/backup/ endpoint returns state metadata
+    ({"current": {"users": count}, ...}), not a backup. A real backup always
+    contains the top-level admin_users list in v11-v14.
+    """
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return "response is not valid JSON"
+    if not isinstance(data, dict):
+        return "backup JSON root is not an object"
+    if "admin_users" not in data:
+        return "JSON is panel state/metadata, not a Hiddify backup (admin_users missing)"
     return ""
 
 
@@ -216,6 +260,9 @@ async def get_panel_version(
     """Detect Hiddify panel version using the API shared by v11/v12/v13.
 
     Detection is best-effort: failure never blocks normal panel operations.
+    The failure reason is returned in ``error`` so callers can report it, and
+    user writes fall back to a payload valid across v11-v14 instead of
+    assuming v12 or v13.
     """
     if _is_xnet_server(server) or _is_xui_server(server):
         return {"version": "", "major": 0, "source": "not-hiddify"}
@@ -231,7 +278,7 @@ async def get_panel_version(
     base = _get_panel_url(server)
     proxy = _get_admin_proxy(server)
     url = f"{base}/{proxy}/api/v2/panel/info/"
-    result: Dict[str, Any] = {"version": "", "major": 0, "source": "unknown"}
+    result: Dict[str, Any] = {"version": "", "major": 0, "source": "unknown", "error": ""}
 
     try:
         data = await _request("GET", url, server)
@@ -242,6 +289,7 @@ async def get_panel_version(
                     "version": version,
                     "major": _parse_panel_major(version),
                     "source": "panel-info",
+                    "error": "",
                 }
                 logger.info(
                     "Detected Hiddify panel version server_id=%s version=%s major=%s",
@@ -249,11 +297,17 @@ async def get_panel_version(
                     result["version"],
                     result["major"],
                 )
+            else:
+                result["error"] = "panel info response has no version field"
+        else:
+            result["error"] = f"panel info response is not an object: {type(data).__name__}"
     except Exception as exc:
-        logger.debug(
-            "Hiddify panel version detection failed for server_id=%s: %s",
+        result["error"] = str(exc).strip() or exc.__class__.__name__
+        logger.warning(
+            "Hiddify panel version detection failed for server_id=%s; "
+            "using a cross-version payload and keeping operations available: %s",
             server.get("id"),
-            exc,
+            result["error"],
         )
 
     ttl = _get_panel_version_cache_seconds() if result["major"] else 60.0
@@ -277,6 +331,21 @@ def _coerce_compat_bool(value: Any) -> Optional[bool]:
     return None
 
 
+def _requested_user_state(payload: Dict[str, Any]) -> Optional[bool]:
+    """Return the explicit active-state requested by a create/patch payload."""
+    requested: Optional[bool] = None
+    for key in ("enable", "is_active", "enabled", "active", "status"):
+        if key in payload:
+            parsed = _coerce_compat_bool(payload.get(key))
+            if parsed is not None:
+                requested = parsed
+                break
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode in {"disable", "disabled", "inactive"}:
+        return False
+    return requested
+
+
 def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dict[str, Any]:
     """Normalize writable fields for the version-specific Hiddify API schema.
 
@@ -284,8 +353,10 @@ def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dic
     on Hiddify's user PATCH endpoint (which rejects them with HTTP 422).
     Hiddify expiry is set with start_date + package_days. Keep explicit expiry
     aliases for X-UI/X-NET adapters, which use their own API mappers.
-    In v13, enable is the writable account switch while is_active is a
-    computed/output state.
+    In v13+, enable is the writable account switch while is_active is a
+    computed/output state. When the panel version cannot be detected, keep a
+    cross-version payload instead of guessing v12 or v13: v11-v14 schemas
+    accept both switches, but their models historically honor different ones.
     """
     out = dict(payload or {})
     requested_expiry = out.get("expire_date") or out.get("expire")
@@ -305,11 +376,18 @@ def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dic
                 out["start_date"] = start_dt.strftime("%Y-%m-%d")
             out["package_days"] = max((expiry_dt.date() - start_dt.date()).days, 0)
 
-    if panel_major < 13:
+    if 0 < panel_major < 13:
         return out
 
+    unknown_version = panel_major <= 0
+    state_keys = ("enable", "is_active", "enabled", "active")
+    if unknown_version:
+        # status is a v11/v12 writable field, so it can carry the intent when
+        # the panel version is unknown. It is removed again below.
+        state_keys = ("enable", "is_active", "enabled", "active", "status")
+
     requested_enable: Optional[bool] = None
-    for key in ("enable", "is_active", "enabled", "active"):
+    for key in state_keys:
         if key in out:
             parsed = _coerce_compat_bool(out.get(key))
             if parsed is not None:
@@ -320,6 +398,20 @@ def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dic
     if mode in {"disable", "disabled", "inactive"}:
         requested_enable = False
         out["mode"] = "no_reset"
+
+    if unknown_version:
+        for key in ("is_active", "enabled", "active", "status"):
+            out.pop(key, None)
+        if requested_enable is not None:
+            # Cross-version payload: schemas in v11-v14 accept both fields.
+            out["enable"] = requested_enable
+            out["is_active"] = requested_enable
+        elif "enable" in out:
+            parsed = _coerce_compat_bool(out.get("enable"))
+            if parsed is not None:
+                out["enable"] = parsed
+                out["is_active"] = parsed
+        return out
 
     for key in ("is_active", "enabled", "active", "status"):
         out.pop(key, None)
@@ -333,6 +425,16 @@ def _normalize_hiddify_payload(payload: Dict[str, Any], panel_major: int) -> Dic
 
     return out
 
+
+def _unknown_version_error_hint(version_info: Dict[str, Any]) -> str:
+    if int(version_info.get("major") or 0) > 0:
+        return ""
+    detail = str(version_info.get("error") or "panel info unavailable").strip()
+    return (
+        " (نسخه پنل Hiddify تشخیص داده نشد؛ payload سازگار با v11-v14 ارسال شد. "
+        "دسترسی /api/v2/panel/info/ و کلید ادمین را بررسی کنید. "
+        f"جزئیات تشخیص: {detail})"
+    )
 
 
 def _get_ssl_mode() -> str:
@@ -628,7 +730,13 @@ async def _request(
             raise HiddifyApiError(f"خطا در اتصال به Hiddify API: {msg}") from e
 
     if resp.status_code >= 400:
-        raise HiddifyApiError(f"HTTP {resp.status_code}: {resp.text}")
+        body_text = resp.text or ""
+        if resp.status_code == 400 and "active user limit reached" in body_text.lower():
+            raise HiddifyActiveUserLimitError(
+                "محدودیت کاربران فعال پنل (max_active_users) مانع فعال‌سازی شد: "
+                + body_text[:500]
+            )
+        raise HiddifyApiError(f"HTTP {resp.status_code}: {body_text}")
 
     ct = resp.headers.get("content-type", "")
     if "application/json" in ct.lower():
@@ -733,13 +841,14 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
     proxy = _get_admin_proxy(server)
 
     candidate_urls = [
-        # Flask-Classful backup download used by Hiddify v11/v12/v13.
+        # Flask-Classful backup download used by Hiddify v11/v12/v13/v14.
         f"{base}/{proxy}/admin/backup/backupfile",
         f"{base}/{proxy}/admin/backup/backupfile/",
+        # Hiddify v14 REST API backup download (trailing slash is the route).
+        f"{base}/{proxy}/api/v2/admin/backup/download/",
+        f"{base}/{proxy}/api/v2/admin/backup/download",
         f"{base}/{proxy}/backup",
         f"{base}/{proxy}/admin/backup",
-        f"{base}/{proxy}/api/v2/admin/backup/",
-        f"{base}/{proxy}/api/v2/admin/backup",
         f"{base}/{proxy}/api/v2/admin/user/backup/",
         f"{base}/{proxy}/api/v2/admin/user/backup",
     ]
@@ -763,6 +872,11 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
             errors.append(f"{url} -> html response")
             continue
 
+        backup_error = _backup_payload_error(body)
+        if backup_error:
+            errors.append(f"{url} -> {backup_error}")
+            continue
+
         filename = _extract_filename_from_headers(headers)
         if not filename:
             filename = _default_server_backup_filename(server)
@@ -779,7 +893,10 @@ async def download_server_backup(server: Dict[str, Any]) -> Dict[str, Any]:
     try:
         html_result = await _download_server_backup_from_admin_html(server)
         if html_result:
-            return html_result
+            html_error = _backup_payload_error(html_result.get("content") or b"")
+            if not html_error:
+                return html_result
+            errors.append(f"admin-html-fallback -> {html_error}")
     except Exception as e:
         errors.append(f"admin-html-fallback -> {e}")
 
@@ -886,6 +1003,8 @@ async def _download_server_backup_from_admin_html(server: Dict[str, Any]) -> Opt
                 body = bytes(resp.content or b"")
                 ctype = str(resp.headers.get("content-type") or "")
                 if not _looks_like_html(body, ctype):
+                    if _backup_payload_error(body):
+                        return None
                     filename = _extract_filename_from_headers(dict(resp.headers)) or _default_server_backup_filename(server)
                     if not filename.lower().endswith(".json"):
                         filename = f"{filename}.json"
@@ -923,6 +1042,8 @@ async def _download_server_backup_from_admin_html(server: Dict[str, Any]) -> Opt
                         continue
                     if _looks_like_html(rb, str(rr.headers.get("content-type") or "")):
                         continue
+                    if _backup_payload_error(rb):
+                        continue
                     filename = _extract_filename_from_headers(dict(rr.headers)) or _safe_filename(u.split("/")[-1] or _default_server_backup_filename(server))
                     if not filename.lower().endswith(".json"):
                         filename = f"{filename}.json"
@@ -948,6 +1069,8 @@ async def _download_server_backup_from_admin_html(server: Dict[str, Any]) -> Opt
                         continue
                     if _looks_like_html(rb, str(rr.headers.get("content-type") or "")):
                         continue
+                    if _backup_payload_error(rb):
+                        continue
                     filename = _extract_filename_from_headers(dict(rr.headers)) or _default_server_backup_filename(server)
                     if not filename.lower().endswith(".json"):
                         filename = f"{filename}.json"
@@ -972,6 +1095,8 @@ async def _download_server_backup_from_admin_html(server: Dict[str, Any]) -> Opt
                         if not rb:
                             continue
                         if _looks_like_html(rb, str(rr.headers.get("content-type") or "")):
+                            continue
+                        if _backup_payload_error(rb):
                             continue
                         filename = _extract_filename_from_headers(dict(rr.headers)) or fname
                         if not filename.lower().endswith(".json"):
@@ -1066,7 +1191,14 @@ async def patch_user(
     version_info = await get_panel_version(server)
     panel_major = int(version_info.get("major") or 0)
     request_payload = _normalize_hiddify_payload(payload, panel_major)
-    data = await _request("PATCH", url, server, json=request_payload)
+    try:
+        data = await _request("PATCH", url, server, json=request_payload)
+    except HiddifyActiveUserLimitError:
+        raise
+    except HiddifyApiError as exc:
+        if panel_major <= 0:
+            raise HiddifyApiError(f"{exc}{_unknown_version_error_hint(version_info)}") from exc
+        raise
     if not isinstance(data, dict):
         raise HiddifyApiError("پاسخ patch_user شکل دیکشنری ندارد.")
     return data
@@ -1179,6 +1311,10 @@ async def enable_user(server: Dict[str, Any], user_uuid: str) -> Dict[str, Any]:
             last_data = patched
         except Exception as e:
             last_err = e
+            if isinstance(e, HiddifyActiveUserLimitError):
+                # A permanent panel limit cannot be fixed by trying another
+                # payload variant; surface it immediately.
+                raise
             continue
 
         try:
@@ -1305,7 +1441,12 @@ async def create_user(
     server: Dict[str, Any],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Create a Hiddify user with v11/v12/v13-compatible state fields."""
+    """Create a Hiddify user (v11-v14) and confirm the requested active state.
+
+    If the POST succeeds but the final state cannot be confirmed, raises
+    HiddifyUserStabilizationError and leaves the panel user for manual review
+    instead of reporting a false success.
+    """
     if _is_xnet_server(server):
         from Shared import xnet_api
         return await xnet_api.create_user(server, payload)
@@ -1322,9 +1463,20 @@ async def create_user(
     panel_major = int(version_info.get("major") or 0)
     request_payload = _normalize_hiddify_payload(payload, panel_major)
 
-    data = await _request("POST", url, server, json=request_payload)
+    try:
+        data = await _request("POST", url, server, json=request_payload)
+    except HiddifyActiveUserLimitError:
+        raise
+    except HiddifyApiError as exc:
+        if panel_major <= 0:
+            raise HiddifyApiError(f"{exc}{_unknown_version_error_hint(version_info)}") from exc
+        raise
     if not isinstance(data, dict):
         raise HiddifyApiError("پاسخ create_user شکل دیکشنری ندارد.")
+    # Hiddify v14 returns {"user": {...}} from the users-page create endpoint
+    # while v11-v13 return the user schema directly.
+    if isinstance(data.get("user"), dict):
+        data = data["user"]
 
     user_uuid = str(data.get("uuid") or request_payload.get("uuid") or payload.get("uuid") or "").strip()
     if not user_uuid:
@@ -1338,12 +1490,75 @@ async def create_user(
     if mode == CREATE_USER_STABILIZE_OFF:
         return data
 
+    requested_enable = _requested_user_state(payload)
+    target_enable = True if requested_enable is None else requested_enable
+
+    def _stabilization_error(
+        stage: str,
+        exc: Exception,
+        detail: str = "",
+    ) -> HiddifyUserStabilizationError:
+        suffix = f" ({detail})" if detail else ""
+        return HiddifyUserStabilizationError(
+            "کاربر در پنل ساخته شد اما وضعیت نهایی آن تأیید نشد "
+            f"(uuid={user_uuid}, stage={stage}, requested_enable={target_enable})"
+            f": {exc}{suffix}",
+            user_uuid=user_uuid,
+            last_error=str(exc),
+        )
+
+    async def _verify_final_state() -> Optional[str]:
+        """Return "" when confirmed, a mismatch detail, or None if unreadable."""
+        try:
+            current = await get_user_by_uuid(server, user_uuid)
+        except Exception as exc:
+            logger.warning(
+                "Could not verify post-create Hiddify user state for uuid=%s: %s",
+                user_uuid,
+                exc,
+            )
+            return None
+        if not isinstance(current, dict):
+            logger.warning(
+                "Could not verify post-create Hiddify user state for uuid=%s: "
+                "panel returned %s",
+                user_uuid,
+                type(current).__name__,
+            )
+            return None
+        state_keys = ("enable", "is_active", "enabled", "active", "mode", "status")
+        if not any(key in current for key in state_keys):
+            logger.warning(
+                "Could not verify post-create Hiddify user state for uuid=%s: "
+                "response has no active-state fields",
+                user_uuid,
+            )
+            return None
+        is_enabled = _user_is_enabled(current) and not _user_is_disabled(current)
+        if is_enabled == bool(target_enable):
+            return ""
+        return f"panel state enabled={is_enabled}, requested={bool(target_enable)}"
+
+    async def _cleanup_created_user_on_active_limit() -> None:
+        # The panel's active-user limit means this fresh user is still
+        # disabled, so removing it is safe and avoids a refund leaving an
+        # orphan. Generic stabilization failures do not delete the user.
+        try:
+            await delete_user(server, user_uuid)
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Could not clean up Hiddify user %s after active-user limit "
+                "during create: %s",
+                user_uuid,
+                cleanup_exc,
+            )
+
     update_payload = dict(payload)
     if panel_major >= 13:
-        update_payload["enable"] = True
+        update_payload["enable"] = target_enable
         update_payload.pop("is_active", None)
     else:
-        update_payload["is_active"] = True
+        update_payload["is_active"] = target_enable
 
     last_error: Optional[Exception] = None
     for attempt in range(2):
@@ -1351,6 +1566,9 @@ async def create_user(
             await patch_user(server, user_uuid, update_payload)
             last_error = None
             break
+        except HiddifyActiveUserLimitError as exc:
+            await _cleanup_created_user_on_active_limit()
+            raise _stabilization_error("stabilize_update", exc) from exc
         except Exception as exc:
             last_error = exc
             if attempt == 0:
@@ -1362,9 +1580,39 @@ async def create_user(
             user_uuid,
             last_error,
         )
+        if mode != CREATE_USER_STABILIZE_TOGGLE:
+            mismatch = await _verify_final_state()
+            if mismatch:
+                raise _stabilization_error(
+                    "stabilize_update", last_error, mismatch,
+                ) from last_error
+            return data
+    elif mode != CREATE_USER_STABILIZE_TOGGLE:
+        mismatch = await _verify_final_state()
+        if mismatch:
+            raise _stabilization_error(
+                "stabilize_update",
+                RuntimeError(mismatch),
+                mismatch,
+            )
         return data
 
-    if mode != CREATE_USER_STABILIZE_TOGGLE:
+    if target_enable is False:
+        try:
+            await disable_user(server, user_uuid)
+        except Exception as exc:
+            logger.warning(
+                "Post-create Hiddify user final disable step failed for uuid=%s: %s",
+                user_uuid,
+                exc,
+            )
+        mismatch = await _verify_final_state()
+        if mismatch:
+            raise _stabilization_error(
+                "disable_final",
+                RuntimeError(mismatch),
+                mismatch,
+            )
         return data
 
     await asyncio.sleep(0.2)
@@ -1376,17 +1624,24 @@ async def create_user(
             user_uuid,
             exc,
         )
-        return data
 
     await asyncio.sleep(0.25)
     try:
         await enable_user(server, user_uuid)
+    except HiddifyActiveUserLimitError as exc:
+        await _cleanup_created_user_on_active_limit()
+        raise _stabilization_error("enable_final", exc) from exc
     except Exception as exc:
-        logger.warning(
+        logger.error(
             "Post-create Hiddify user activation refresh enable step failed for uuid=%s: %s",
             user_uuid,
             exc,
         )
+        mismatch = await _verify_final_state()
+        if mismatch:
+            raise _stabilization_error(
+                "enable_final", exc, mismatch,
+            ) from exc
     return data
 
 async def delete_user(server: Dict[str, Any], user_uuid: str) -> None:

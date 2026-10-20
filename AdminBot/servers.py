@@ -28,6 +28,12 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from Shared import database, hiddify_api, userbot_db, plans_storage, xui_api, xnet_api
+from Shared.config_links import (
+    config_protocol,
+    extract_visible_config_link,
+    filter_visible_config_links,
+    normalize_protocol,
+)
 from Shared.tg_button_styles import inline_button as InlineKeyboardButton
 from AdminBot.keyboards import (
     admin_main_keyboard,
@@ -4885,41 +4891,88 @@ async def send_direct_config_menu(
         "username"
     ) or f"User_{user_uuid}"
 
+    back_row = [
+        InlineKeyboardButton(
+            "🔙 بازگشت",
+            callback_data=f"server:{server_id}:usercfg:{user_uuid}",
+        )
+    ]
+
+    try:
+        configs = await hiddify_api.get_user_configs(server, user_uuid)
+    except hiddify_api.HiddifyApiError as exc:
+        text = (
+            "📄 کانفیگ مستقیم\n"
+            f"👤 کاربر: {name}\n"
+            "━━━━━━━━━━━━━━\n"
+            f"❌ خطا در دریافت کانفیگ‌ها:\n{exc}"
+        )
+        keyboard = InlineKeyboardMarkup([back_row])
+        if message is not None:
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+        return
+
+    links = filter_visible_config_links(
+        (cfg or {}).get("link") if isinstance(cfg, dict) else cfg
+        for cfg in (configs or [])
+    )
+    protocols: list[str] = []
+    for link in links:
+        protocol = config_protocol(link)
+        if protocol and protocol not in protocols:
+            protocols.append(protocol)
+
+    if not protocols:
+        text = (
+            "📄 کانفیگ مستقیم\n"
+            f"👤 کاربر: {name}\n"
+            "━━━━━━━━━━━━━━\n"
+            "❌ برای این کاربر کانفیگ قابل نمایشی وجود ندارد."
+        )
+        keyboard = InlineKeyboardMarkup([back_row])
+        if message is not None:
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+        return
+
+    labels = {
+        "vless": "🟢 VLESS",
+        "vmess": "🔵 VMESS",
+        "ss": "🟣 Shadowsocks",
+        "ssr": "🟣 ShadowsocksR",
+        "tuic": "🟡 TUIC",
+        "hysteria": "🟠 Hysteria",
+        "hysteria2": "🟠 Hysteria2",
+        "anytls": "🟤 AnyTLS",
+        "wireguard": "⚪ WireGuard",
+        "socks": "⚪ SOCKS",
+        "ssh": "⚫ SSH",
+        "naive": "🔷 Naive",
+        "mieru": "🔶 Mieru",
+        "snell": "🔸 Snell",
+        "telegram": "✈️ Telegram",
+    }
+    rows = [
+        [
+            InlineKeyboardButton(
+                labels.get(protocol, protocol.upper()),
+                callback_data=f"server:{server_id}:directcfg:{user_uuid}:{protocol}",
+            )
+        ]
+        for protocol in protocols
+    ]
+    rows.append(back_row)
+
     text = (
         "📄 کانفیگ مستقیم\n"
         f"👤 کاربر: {name}\n"
         "━━━━━━━━━━━━━━\n"
         "پروتکل موردنظر را انتخاب کنید:"
     )
-
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "🟢 VLESS",
-                    callback_data=f"server:{server_id}:directcfg:{user_uuid}:vless",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔵 VMESS",
-                    callback_data=f"server:{server_id}:directcfg:{user_uuid}:vmess",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🟠 TROJAN",
-                    callback_data=f"server:{server_id}:directcfg:{user_uuid}:trojan",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔙 بازگشت",
-                    callback_data=f"server:{server_id}:usercfg:{user_uuid}",
-                )
-            ],
-        ]
-    )
+    keyboard = InlineKeyboardMarkup(rows)
 
     if message is not None:
         await message.edit_text(text, reply_markup=keyboard)
@@ -9539,7 +9592,7 @@ async def handle_server_inline_callback(
 
         if action == "directcfg" and len(parts) >= 5:
             user_uuid = parts[3]
-            proto = parts[4].lower()
+            proto = normalize_protocol(parts[4])
 
             server = database.get_server_by_id(server_id)
             if not server:
@@ -9568,24 +9621,11 @@ async def handle_server_inline_callback(
             links: List[str] = []
             seen_links: set[str] = set()
             for cfg in configs or []:
-                c_proto = str(cfg.get("protocol") or "").strip().lower()
-                link = str(cfg.get("link") or "").strip()
-                if not link:
+                raw = cfg.get("link") if isinstance(cfg, dict) else cfg
+                link = extract_visible_config_link(raw)
+                if not link or link in seen_links:
                     continue
-
-                link_l = link.lower()
-                if not c_proto:
-                    if link_l.startswith("vless://"):
-                        c_proto = "vless"
-                    elif link_l.startswith("vmess://"):
-                        c_proto = "vmess"
-                    elif link_l.startswith("trojan://"):
-                        c_proto = "trojan"
-
-                normalized = c_proto.replace("-", "").replace("_", "")
-                if proto not in normalized and not link_l.startswith(f"{proto}://"):
-                    continue
-                if link in seen_links:
+                if proto and config_protocol(link) != proto:
                     continue
                 seen_links.add(link)
                 links.append(link)

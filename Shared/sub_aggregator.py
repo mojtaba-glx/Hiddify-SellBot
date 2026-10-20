@@ -7,21 +7,10 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from Shared import database, userbot_db, hiddify_api, multi_panel, xui_api
+from Shared.config_links import VISIBLE_CONFIG_SCHEMES, is_visible_config_link
 
 
-ALLOWED_CONFIG_SCHEMES = (
-    "vless://",
-    "vmess://",
-    "trojan://",
-    "ss://",
-    "ssr://",
-    "tuic://",
-    "hysteria://",
-    "hysteria2://",
-    "hy2://",
-    "anytls://",
-    "wireguard://",
-)
+ALLOWED_CONFIG_SCHEMES = tuple(f"{scheme}://" for scheme in VISIBLE_CONFIG_SCHEMES)
 STATUS_CONFIG_ENABLED_ENV = "SUB_STATUS_CONFIG_ENABLED"
 STATUS_CONFIG_HOST_ENV = "SUB_STATUS_CONFIG_HOST"
 STATUS_CONFIG_SNI_ENV = "SUB_STATUS_CONFIG_SNI"
@@ -492,8 +481,7 @@ def sync_service_runtime_from_panels(service_id: int) -> dict:
 
 
 def _is_config_line(line: str) -> bool:
-    low = str(line or "").strip().lower()
-    return any(low.startswith(s) for s in ALLOWED_CONFIG_SCHEMES)
+    return is_visible_config_link(line)
 
 
 def _is_panel_status_config_line(line: str) -> bool:
@@ -835,7 +823,7 @@ def build_subscription_text_for_service(service_id: int) -> str:
             seen.add(dedup_key)
             lines.append(ln)
     status_line = _build_status_config_line(service)
-    if status_line and lines:
+    if status_line:
         lines.insert(0, status_line)
     return "\n".join(lines)
 

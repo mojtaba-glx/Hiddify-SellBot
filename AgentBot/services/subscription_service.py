@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from Shared import agent_db, multi_panel, hiddify_api, database
+from Shared.config_links import extract_visible_config_link
 from Shared.sub_links import get_or_create_bot_sub_links, get_service_panel_targets
 from AgentBot.services.hiddify_service import (
     get_available_servers, get_server_by_id, get_agent_plans,
@@ -600,6 +601,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
 
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         primary_enable_ok = False
+        primary_enable_error = ""
         for tgt, tgt_uuid, marzban_un in targets:
             tgt_id = int(tgt.get("id") or 0)
             target_uuid = str(tgt_uuid or updated.get("panel_user_uuid") or "")
@@ -609,6 +611,8 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                     primary_enable_ok = True
             except Exception as e:
                 logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, tgt_id, e)
+                if tgt_id == sid:
+                    primary_enable_error = str(e)[:300]
                 renew_failed.append(str(tgt.get("title") or f"سرور #{tgt_id}"))
         if targets and not primary_enable_ok:
             agent_db.set_service_active(service_id, False)
@@ -619,7 +623,11 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         # گزارش به ادمین
         try:
             from Shared.admin_reports import notify_admin_delivery_report
-            if not primary_ok and renew_failed:
+            if (not primary_ok and renew_failed) or (targets and not primary_enable_ok):
+                if not primary_ok and renew_failed:
+                    report_error = "\n".join(renew_failed[:3])
+                else:
+                    report_error = primary_enable_error or "فعال‌سازی مجدد روی سرور اصلی تأیید نشد"
                 await notify_admin_delivery_report(
                     action_title="تمدید سرویس نماینده",
                     agent=agent_db.get_agent_by_id(agent_id),
@@ -630,7 +638,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                     days=new_days,
                     amount=cost if extra_days > 0 else 0,
                     status="error",
-                    error="\n".join(renew_failed[:3]),
+                    error=report_error,
                 )
             elif renew_failed:
                 await notify_admin_delivery_report(
@@ -1052,7 +1060,17 @@ async def get_configs(agent_id: int, service_id: int) -> list:
     if not targets:
         sid = int(svc.get("server_id") or 0)
         marzban_un = _lookup_marzban_username(service_id, sid)
-        return await get_user_configs(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+        cfgs = await get_user_configs(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+        filtered: list = []
+        seen: set = set()
+        for item in cfgs or []:
+            raw = item.get("link") if isinstance(item, dict) else item
+            link = extract_visible_config_link(raw)
+            if not link or link in seen:
+                continue
+            seen.add(link)
+            filtered.append({**item, "link": link} if isinstance(item, dict) else {"link": link})
+        return filtered
 
     aggregated: list = []
     seen: set = set()
@@ -1060,11 +1078,12 @@ async def get_configs(agent_id: int, service_id: int) -> list:
         try:
             cfgs = await get_user_configs(uuid, int(srv.get("id") or 0), marzban_username=marzban_un)
             for item in cfgs or []:
-                link = item if isinstance(item, str) else str((item or {}).get("link") or "").strip()
+                raw = item.get("link") if isinstance(item, dict) else item
+                link = extract_visible_config_link(raw)
                 if not link or link in seen:
                     continue
                 seen.add(link)
-                aggregated.append(item if isinstance(item, dict) else {"link": link})
+                aggregated.append({**item, "link": link} if isinstance(item, dict) else {"link": link})
         except Exception as e:
             logger.warning("Agent get_configs node failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
             continue

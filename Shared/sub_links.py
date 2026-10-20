@@ -14,6 +14,11 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 from Shared import agent_db, database, multi_panel, userbot_db
+from Shared.config_links import (
+    extract_visible_config_link,
+    filter_visible_config_links,
+    is_visible_config_link,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -530,24 +535,7 @@ def _sanitize_config_text(value: Any) -> str:
 
 
 def _extract_config_link_from_line(value: Any) -> str:
-    raw = _sanitize_config_text(value)
-    if not raw:
-        return ""
-    raw = raw.rstrip("'\",;)]}")
-    if "://" not in raw:
-        return ""
-    if re.search(r"\s", raw):
-        return ""
-    m = re.match(r"(?i)^([a-z][a-z0-9.+\-]{1,24})://", raw)
-    if not m:
-        return ""
-    scheme = str(m.group(1) or "").lower()
-    blocked = {"http", "https", "hiddify", "ftp", "file", "mailto", "tg"}
-    if scheme in blocked:
-        return ""
-    if len(raw) < 16:
-        return ""
-    return raw
+    return extract_visible_config_link(value)
 
 
 def _fetch_remote_lines(url: str) -> List[str]:
@@ -626,7 +614,7 @@ def _agency_service_is_locked(svc: dict) -> bool:
     except Exception:
         return True
 
-def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
+def collect_all_direct_configs_for_service(svc: dict, protocol: str = "") -> List[str]:
     """جمع‌آوری کانفیگ‌های مستقیم از لینک‌های all.txt همه نودها (X-UI aware)"""
     if _agency_service_is_locked(svc):
         return []
@@ -662,10 +650,10 @@ def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
                 continue
             seen_links.add(link)
             out.append(link)
-    return out
+    return filter_visible_config_links(out, protocol)
 
 
-async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
+async def collect_all_direct_configs_from_api(svc: dict, protocol: str = "") -> List[str]:
     """پشتیبان: دریافت کانفیگ‌ها از API پنل برای همه نودها"""
     if _agency_service_is_locked(svc):
         return []
@@ -675,10 +663,12 @@ async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
         try:
             configs = await multi_panel.get_user_configs(srv, uuid, marzban_username=marzban_un)
             for item in configs or []:
-                link = str(item.get("link") or "").strip()
-                if link and link not in seen:
-                    seen.add(link)
-                    out.append(link)
+                raw = item.get("link") if isinstance(item, dict) else item
+                link = _extract_config_link_from_line(raw)
+                if not link or link in seen or not is_visible_config_link(link):
+                    continue
+                seen.add(link)
+                out.append(link)
         except Exception as e:
             logger.warning("API config fallback failed svc=%s node=%s: %s", svc.get("id"), uuid[:8], e)
-    return out
+    return filter_visible_config_links(out, protocol)

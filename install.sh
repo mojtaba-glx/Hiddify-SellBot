@@ -385,6 +385,10 @@ install_system_dependencies() {
   command -v python3 >/dev/null 2>&1 || need_install=1
   command -v pip3 >/dev/null 2>&1 || need_install=1
   command -v rg >/dev/null 2>&1 || need_install=1
+  python3 - <<'PY' >/dev/null 2>&1 || need_install=1
+import ensurepip
+import venv
+PY
 
   if [ "$need_install" -eq 0 ]; then
     return 0

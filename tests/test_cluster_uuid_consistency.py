@@ -82,6 +82,74 @@ class StrictPanelUuidTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["uuid"], "panel-primary-uuid")
 
+    async def test_primary_stabilization_failure_is_not_masked_by_recovery(self):
+        server = {"id": 1, "title": "main"}
+        payload = {"name": "user", "uuid": "requested-uuid", "comment": "agent|1234567"}
+
+        with patch.object(
+            multi_panel,
+            "create_user",
+            new=AsyncMock(
+                side_effect=multi_panel.hiddify_api.HiddifyUserStabilizationError(
+                    "created but disabled",
+                    user_uuid="requested-uuid",
+                )
+            ),
+        ), patch.object(
+            multi_panel.hiddify_api,
+            "_is_xui_server",
+            return_value=False,
+        ), patch.object(
+            multi_panel,
+            "_recover_primary_by_identity",
+            new=AsyncMock(return_value={"uuid": "requested-uuid"}),
+        ) as recover_mock, patch.object(
+            multi_panel,
+            "delete_user",
+            new=AsyncMock(),
+        ) as delete_mock:
+            with self.assertRaises(
+                multi_panel.hiddify_api.HiddifyUserStabilizationError
+            ):
+                await multi_panel.create_primary_user(server, payload)
+
+        recover_mock.assert_not_awaited()
+        delete_mock.assert_not_awaited()
+
+    async def test_child_stabilization_failure_is_not_masked_by_uuid_probe(self):
+        server = {"id": 7, "title": "node"}
+        payload = {"name": "user", "uuid": "shared-user-uuid"}
+
+        with patch.object(
+            multi_panel,
+            "create_user",
+            new=AsyncMock(
+                side_effect=multi_panel.hiddify_api.HiddifyUserStabilizationError(
+                    "created but disabled",
+                    user_uuid="shared-user-uuid",
+                )
+            ),
+        ), patch.object(
+            multi_panel.hiddify_api,
+            "_is_xui_server",
+            return_value=False,
+        ), patch.object(
+            multi_panel,
+            "_probe_requested_user",
+            new=AsyncMock(return_value={"uuid": "shared-user-uuid"}),
+        ) as probe_mock, patch.object(
+            multi_panel,
+            "delete_user",
+            new=AsyncMock(),
+        ) as delete_mock:
+            with self.assertRaises(
+                multi_panel.hiddify_api.HiddifyUserStabilizationError
+            ):
+                await multi_panel.create_user_with_uuid(server, payload)
+
+        probe_mock.assert_not_awaited()
+        delete_mock.assert_not_awaited()
+
     async def test_hiddify_numeric_id_response_is_not_mistaken_for_uuid(self):
         server = {"id": 7, "title": "node"}
         payload = {"name": "user", "uuid": "shared-user-uuid"}

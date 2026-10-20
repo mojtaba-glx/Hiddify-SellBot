@@ -15,6 +15,11 @@ from urllib.error import HTTPError
 from uuid import uuid4
 
 from Shared import agent_db, database, hiddify_api, multi_panel
+from Shared.config_links import (
+    extract_visible_config_link,
+    filter_visible_config_links,
+    is_visible_config_link,
+)
 from AgentBot.database import get_fixed_plan
 from CustomerBot.utils.helpers import escape_markdown
 
@@ -434,13 +439,25 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
     except Exception as exc:
         logger.warning("legacy renew frozen reset failed svc=%s: %s", service_id, exc)
 
-    # Re-enable the subscription across all targets and mark active in agent_db
+    # Re-enable the subscription across all targets. Only record the service
+    # as active when the authoritative primary target confirmed activation.
+    primary_enable_ok = False
+    primary_enable_error = ""
+    activation_failed: List[str] = []
     for srv, uuid, marzban_un in targets:
+        srv_id = int((srv or {}).get("id") or 0)
         try:
             await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+            if srv_id == server_id:
+                primary_enable_ok = True
         except Exception as exc:
-            logger.warning("legacy renew re-activate failed svc=%s server=%s: %s", service_id, (srv or {}).get("id"), exc)
-    agent_db.set_service_active(service_id, True)
+            failed_title = str((srv or {}).get("title") or f"سرور #{srv_id}")
+            if failed_title not in activation_failed:
+                activation_failed.append(failed_title)
+            if srv_id == server_id:
+                primary_enable_error = str(exc)[:300]
+            logger.warning("legacy renew re-activate failed svc=%s server=%s: %s", service_id, srv_id, exc)
+    agent_db.set_service_active(service_id, primary_enable_ok)
 
     try:
         from AgentBot.services.subscription_service import _sync_userbot_runtime_after_agency_renew
@@ -460,6 +477,8 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
         "ok": True,
         "wallet_balance": int((wallet or {}).get("balance") or 0),
         "pending_nodes": failed_nodes,
+        "activation_failed": activation_failed,
+        "activation_error": primary_enable_error,
     }
 
 
@@ -504,18 +523,19 @@ async def get_configs(service_id: int) -> Dict[str, Any]:
             )
             for item in configs or []:
                 if isinstance(item, dict):
-                    link = str(item.get("link") or "").strip()
+                    link = _extract_config_link_from_line(item.get("link"))
                     if not link:
                         continue
                     if link in seen_links:
                         continue
                     seen_links.add(link)
-                    aggregated.append(item)
-                elif isinstance(item, str) and "://" in item:
-                    if item.strip() in seen_links:
+                    aggregated.append({**item, "link": link})
+                elif isinstance(item, str):
+                    link = _extract_config_link_from_line(item)
+                    if not link or link in seen_links:
                         continue
-                    seen_links.add(item.strip())
-                    aggregated.append({"link": item.strip()})
+                    seen_links.add(link)
+                    aggregated.append({"link": link})
         except Exception as e:
             last_error = str(e)[:120]
             logger.warning("get_configs node fetch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
@@ -993,24 +1013,7 @@ def _sanitize_config_text(value: Any) -> str:
 
 
 def _extract_config_link_from_line(value: Any) -> str:
-    raw = _sanitize_config_text(value)
-    if not raw:
-        return ""
-    raw = raw.rstrip("'\",;)]}")
-    if "://" not in raw:
-        return ""
-    if re.search(r"\s", raw):
-        return ""
-    m = re.match(r"(?i)^([a-z][a-z0-9.+\-]{1,24})://", raw)
-    if not m:
-        return ""
-    scheme = str(m.group(1) or "").lower()
-    blocked = {"http", "https", "hiddify", "ftp", "file", "mailto", "tg"}
-    if scheme in blocked:
-        return ""
-    if len(raw) < 16:
-        return ""
-    return raw
+    return extract_visible_config_link(value)
 
 
 def _fetch_remote_lines(url: str) -> List[str]:
@@ -1074,11 +1077,11 @@ def _fetch_remote_lines(url: str) -> List[str]:
     return []
 
 
-def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
+def collect_all_direct_configs_for_service(svc: dict, protocol: str = "") -> List[str]:
     """جمع‌آوری کانفیگ‌های مستقیم — اکنون directly به Shared واگذار می‌شود تا per-node fallback (HTTP→API) برای X-UI اعمال شود."""
     try:
         from Shared.sub_links import collect_all_direct_configs_for_service as _shared_collect
-        return _shared_collect(svc)
+        return _shared_collect(svc, protocol=protocol)
     except Exception as e:
         logger.warning("CustomerBot collect fallback to local impl: %s", e)
         def _is_internal_status(raw: str) -> bool:
@@ -1108,10 +1111,10 @@ def collect_all_direct_configs_for_service(svc: dict) -> List[str]:
                         continue
                     seen_links.add(link)
                     out.append(link)
-        return out
+        return filter_visible_config_links(out, protocol)
 
 
-async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
+async def collect_all_direct_configs_from_api(svc: dict, protocol: str = "") -> List[str]:
     """پشتیبان: دریافت کانفیگ‌ها از API پنل برای همه نودها"""
     out: List[str] = []
     seen: set = set()
@@ -1119,13 +1122,14 @@ async def collect_all_direct_configs_from_api(svc: dict) -> List[str]:
         try:
             configs = await multi_panel.get_user_configs(srv, uuid, marzban_username=marzban_un)
             for item in configs or []:
-                link = str(item.get("link") or "").strip()
-                if link and link not in seen:
+                raw = item.get("link") if isinstance(item, dict) else item
+                link = _extract_config_link_from_line(raw)
+                if link and link not in seen and is_visible_config_link(link):
                     seen.add(link)
                     out.append(link)
         except Exception as e:
             logger.warning("API config fallback failed svc=%s node=%s: %s", svc.get("id"), uuid[:8], e)
-    return out
+    return filter_visible_config_links(out, protocol)
 
 
 # ---------- لینک اشتراک هوشمند (managed sub link) ----------

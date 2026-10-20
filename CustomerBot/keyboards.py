@@ -278,7 +278,7 @@ def replace_subscription_link_confirm_keyboard(service_id=None):
 
 
 def direct_configs_keyboard(service_id=None, *, show_vless: bool = True,
-                             show_vmess: bool = True, show_trojan: bool = True):
+                             show_vmess: bool = True, show_trojan: bool = False):
     rows = []
     if show_vless:
         rows.append([InlineKeyboardButton("Vless", callback_data=f"status:directcfg:{service_id}:vless")])

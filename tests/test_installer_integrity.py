@@ -529,6 +529,12 @@ class ProductionFailurePropagationTests(unittest.TestCase):
         self.assertIn("pip upgrade failed", body)
         self.assertIn("Python dependency installation failed", body)
 
+    def test_system_dependencies_probe_python_venv(self):
+        body = self._func("install_system_dependencies")
+        self.assertIn("import ensurepip", body)
+        self.assertIn("import venv", body)
+        self.assertIn('command -v python3 >/dev/null 2>&1 || need_install=1', body)
+
     def test_database_migration_failure_is_not_reported_as_success(self):
         body = self._func("init_database")
         self.assertIn('if ! "$VENV_DIR/bin/python" - <<\'PY\'', body)
