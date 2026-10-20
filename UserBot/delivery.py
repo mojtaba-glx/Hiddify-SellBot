@@ -111,10 +111,11 @@ async def delete_service_from_panels(service: Dict[str, Any]) -> Tuple[int, List
 async def patch_service_on_panels(
     service: Dict[str, Any],
     payload: Dict[str, Any],
-) -> Tuple[int, List[str]]:
+) -> Tuple[int, List[str], List[str]]:
     """
     اعمال payload روی کاربر پنلی این سرویس در سرور اصلی + همه نودها.
-    خروجی: (تعداد تغییر موفق, لیست عنوان سرورهای ناموفق)
+    خروجی: (تعداد تغییر موفق, لیست عنوان سرورهای ناموفق در patch,
+    لیست عنوان سرورهایی که فعال‌سازی بعد از patch روی آن‌ها تأیید نشد)
     """
     targets = get_service_targets(service)
     try:
@@ -124,23 +125,43 @@ async def patch_service_on_panels(
 
     changed = 0
     failed: List[str] = []
+    activation_failed: List[str] = []
     for srv, uuid in targets:
         title = str(srv.get("title") or f"سرور #{srv.get('id')}")
-        marzban_un = _marzban_username_for(service_id, int(srv.get("id") or 0))
+        server_id = int(srv.get("id") or 0)
+        marzban_un = _marzban_username_for(service_id, server_id)
         try:
             await multi_panel.patch_user(srv, uuid, payload, marzban_username=marzban_un)
-            try:
-                await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
-            except Exception:
-                pass
-            changed += 1
         except Exception as e:
             logger.warning(
                 "Failed patching service user on server_id=%s (uuid=%s): %s",
                 srv.get("id"), uuid, e,
             )
             failed.append(title)
-    return changed, failed
+            continue
+
+        changed += 1
+        try:
+            await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+        except Exception as e:
+            logger.error(
+                "Patch succeeded but service user activation failed on "
+                "server_id=%s (uuid=%s): %s",
+                srv.get("id"), uuid, e,
+            )
+            activation_failed.append(title)
+            if service_id > 0 and server_id > 0:
+                try:
+                    userbot_db.set_service_node_active(
+                        service_id, server_id, uuid, 0,
+                    )
+                except Exception as mark_exc:
+                    logger.warning(
+                        "Failed to mark node inactive after activation failure "
+                        "(service_id=%s, server_id=%s, uuid=%s): %s",
+                        service_id, server_id, uuid, mark_exc,
+                    )
+    return changed, failed, activation_failed
 
 
 def create_service_in_db(

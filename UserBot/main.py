@@ -2724,7 +2724,6 @@ def _build_renew_patch_payload(service: dict, *, package_gb: float, package_days
         "start_date": now_date,
         "current_usage_GB": 0,
         "last_reset_time": now_dt,
-        "is_active": True,
     }
     return payload, final_limit, final_days
 
@@ -2772,6 +2771,14 @@ async def _retry_enable_renewed_user(
                 attempts,
                 last_error,
             )
+            if isinstance(e, hiddify_api.HiddifyActiveUserLimitError):
+                logger.error(
+                    "Renewal activation stopped early for service_id=%s server_id=%s: "
+                    "panel active-user limit reached",
+                    service_id,
+                    srv.get("id"),
+                )
+                break
             if attempt < attempts:
                 await asyncio.sleep(max(int(delay_seconds), 1))
     return False, last_error
@@ -5102,7 +5109,9 @@ async def _warn_admin_renew_activation_failed(
                 f"📦 نام سرویس: {service_name or '-'}\n"
                 f"👤 Telegram ID: {telegram_id or '-'}\n"
                 f"🖥 سرور/نود:\n{fail_lines}\n\n"
-                "ربات ۳ بار با فاصله ۵ ثانیه برای فعال‌سازی تلاش کرد ولی موفق نشد.\n"
+                "فعال‌سازی خودکار ناموفق بود و پنل تأیید نکرد.\n"
+                "اگر خطا مربوط به max_active_users است، یک کاربر دیگر را غیرفعال کنید "
+                "یا سقف کاربران فعال پنل را افزایش دهید.\n"
                 "⚠️ تمدید حجم/زمان قبلاً روی پنل اعمال شده است؛ تمدید یا پرداخت را دوباره اجرا نکنید.\n"
                 "لطفاً کاربر را در پنل بررسی و در صورت نیاز دستی فعال کنید."
             ),

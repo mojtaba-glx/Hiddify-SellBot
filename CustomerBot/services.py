@@ -434,13 +434,25 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
     except Exception as exc:
         logger.warning("legacy renew frozen reset failed svc=%s: %s", service_id, exc)
 
-    # Re-enable the subscription across all targets and mark active in agent_db
+    # Re-enable the subscription across all targets. Only record the service
+    # as active when the authoritative primary target confirmed activation.
+    primary_enable_ok = False
+    primary_enable_error = ""
+    activation_failed: List[str] = []
     for srv, uuid, marzban_un in targets:
+        srv_id = int((srv or {}).get("id") or 0)
         try:
             await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+            if srv_id == server_id:
+                primary_enable_ok = True
         except Exception as exc:
-            logger.warning("legacy renew re-activate failed svc=%s server=%s: %s", service_id, (srv or {}).get("id"), exc)
-    agent_db.set_service_active(service_id, True)
+            failed_title = str((srv or {}).get("title") or f"سرور #{srv_id}")
+            if failed_title not in activation_failed:
+                activation_failed.append(failed_title)
+            if srv_id == server_id:
+                primary_enable_error = str(exc)[:300]
+            logger.warning("legacy renew re-activate failed svc=%s server=%s: %s", service_id, srv_id, exc)
+    agent_db.set_service_active(service_id, primary_enable_ok)
 
     try:
         from AgentBot.services.subscription_service import _sync_userbot_runtime_after_agency_renew
@@ -460,6 +472,8 @@ async def renew_service(service_id: int, extra_days: int = 30) -> Dict[str, Any]
         "ok": True,
         "wallet_balance": int((wallet or {}).get("balance") or 0),
         "pending_nodes": failed_nodes,
+        "activation_failed": activation_failed,
+        "activation_error": primary_enable_error,
     }
 
 

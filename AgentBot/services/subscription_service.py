@@ -600,6 +600,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
 
         # فعال‌سازی مجدد اشتراک روی سرور اصلی و همه نودها (اگر غیرفعال بود)
         primary_enable_ok = False
+        primary_enable_error = ""
         for tgt, tgt_uuid, marzban_un in targets:
             tgt_id = int(tgt.get("id") or 0)
             target_uuid = str(tgt_uuid or updated.get("panel_user_uuid") or "")
@@ -609,6 +610,8 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                     primary_enable_ok = True
             except Exception as e:
                 logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, tgt_id, e)
+                if tgt_id == sid:
+                    primary_enable_error = str(e)[:300]
                 renew_failed.append(str(tgt.get("title") or f"سرور #{tgt_id}"))
         if targets and not primary_enable_ok:
             agent_db.set_service_active(service_id, False)
@@ -619,7 +622,11 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
         # گزارش به ادمین
         try:
             from Shared.admin_reports import notify_admin_delivery_report
-            if not primary_ok and renew_failed:
+            if (not primary_ok and renew_failed) or (targets and not primary_enable_ok):
+                if not primary_ok and renew_failed:
+                    report_error = "\n".join(renew_failed[:3])
+                else:
+                    report_error = primary_enable_error or "فعال‌سازی مجدد روی سرور اصلی تأیید نشد"
                 await notify_admin_delivery_report(
                     action_title="تمدید سرویس نماینده",
                     agent=agent_db.get_agent_by_id(agent_id),
@@ -630,7 +637,7 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
                     days=new_days,
                     amount=cost if extra_days > 0 else 0,
                     status="error",
-                    error="\n".join(renew_failed[:3]),
+                    error=report_error,
                 )
             elif renew_failed:
                 await notify_admin_delivery_report(

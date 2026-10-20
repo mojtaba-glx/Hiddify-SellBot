@@ -1486,7 +1486,6 @@ async def _renew_subscription_from_order(
             "current_usage_GB": 0,
             "start_date": now.strftime("%Y-%m-%d"),
             "last_reset_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "is_active": True,
             "expire_date": new_end_str[:10],
             "expire": new_end_str[:10],
         }
@@ -1499,6 +1498,7 @@ async def _renew_subscription_from_order(
         except Exception as e:
             raise RuntimeError(f"panel_patch_failed: {str(e)[:100]}")
         renew_failed_ids: list[int] = []
+        renew_failed_nodes: list[str] = []
         for srv, uuid, marzban_un in targets:
             if int(srv.get("id") or 0) == int(primary_target[0].get("id") or 0):
                 continue
@@ -1508,6 +1508,9 @@ async def _renew_subscription_from_order(
                 failed_sid = int(srv.get("id") or 0)
                 if failed_sid > 0 and failed_sid not in renew_failed_ids:
                     renew_failed_ids.append(failed_sid)
+                failed_title = str(srv.get("title") or f"سرور #{failed_sid}")
+                if failed_title not in renew_failed_nodes:
+                    renew_failed_nodes.append(failed_title)
                 logger.warning("renew node patch failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
 
     # ── دیتابیس محلی ──
@@ -1561,12 +1564,23 @@ async def _renew_subscription_from_order(
         )
 
     # ── فعال‌سازی مجدد (اگر به‌خاطر اتمام حجم/زمان غیرفعال شده بود) ──
+    primary_enable_ok = False
+    primary_enable_error = ""
+    activation_failed_nodes: list[str] = []
     for srv, uuid, marzban_un in targets:
+        srv_id = int(srv.get("id") or 0)
         try:
             await multi_panel.enable_user(srv, uuid, marzban_username=marzban_un)
+            if srv_id == primary_sid:
+                primary_enable_ok = True
         except Exception as e:
-            logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
-    agent_db.set_service_active(service_id, True)
+            failed_title = str(srv.get("title") or f"سرور #{srv_id}")
+            if failed_title not in activation_failed_nodes:
+                activation_failed_nodes.append(failed_title)
+            if srv_id == primary_sid:
+                primary_enable_error = str(e)[:300]
+            logger.warning("renew re-activate failed svc=%s server=%s: %s", service_id, srv_id, e)
+    agent_db.set_service_active(service_id, primary_enable_ok)
 
     notify = (
         "♻️ اشتراک شما با موفقیت تمدید شد.\n\n"
@@ -1576,6 +1590,12 @@ async def _renew_subscription_from_order(
         f"⏳ تاریخ انقضا: {new_end_str[:10]}\n\n"
         "از دکمه «📊وضعیت اشتراک» می‌توانید اطلاعات به‌روزشده را ببینید."
     )
+    if not primary_enable_ok:
+        notify = (
+            "⚠️ تمدید ثبت شد اما فعال‌سازی سرویس در پنل تأیید نشد. "
+            "ادمین بررسی می‌کند؛ لطفاً تمدید را دوباره انجام ندهید.\n\n"
+            + notify
+        )
     if tx_code:
         notify += f"\n\n🎁 شناسه تراکنش: {tx_code}"
     try:
@@ -1605,6 +1625,16 @@ async def _renew_subscription_from_order(
             )
             or 0
         )
+        report_status = "success"
+        report_error = ""
+        report_pending: list[str] = []
+        if not primary_enable_ok:
+            report_status = "error"
+            report_error = primary_enable_error or "فعال‌سازی مجدد روی سرور اصلی تأیید نشد"
+        else:
+            report_pending = list(dict.fromkeys(renew_failed_nodes + activation_failed_nodes))
+            if report_pending:
+                report_status = "partial"
         await notify_admin_delivery_report(
             action_title="تمدید سرویس مشتری",
             agent=agent,
@@ -1617,7 +1647,10 @@ async def _renew_subscription_from_order(
             days=int(extra_days or 0),
             sale_amount=sale_amount,
             wholesale_amount=wholesale_amount,
-            status="success",
+            status=report_status,
+            error=report_error,
+            pending_servers=report_pending,
+            sync_primary_server_id=int(primary_sid or 0),
         )
     except Exception as report_error:
         logger.warning("Renewal completed but admin report failed: %s", report_error)

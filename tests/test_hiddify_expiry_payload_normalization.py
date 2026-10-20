@@ -35,6 +35,20 @@ class HiddifyExpiryPayloadNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["package_days"], 30)
         self.assertEqual(normalized["start_date"], "2026-10-17")
 
+    def test_unknown_version_uses_cross_version_switch_fields(self):
+        normalized = _normalize_hiddify_payload(self.payload, 0)
+        self.assertNotIn("expire", normalized)
+        self.assertNotIn("expire_date", normalized)
+        self.assertIs(normalized["is_active"], True)
+        self.assertIs(normalized["enable"], True)
+        self.assertEqual(normalized["package_days"], 30)
+
+    def test_unknown_version_keeps_disable_intent(self):
+        normalized = _normalize_hiddify_payload({"mode": "disable"}, 0)
+        self.assertEqual(normalized["mode"], "no_reset")
+        self.assertIs(normalized["is_active"], False)
+        self.assertIs(normalized["enable"], False)
+
     def test_legacy_expiry_only_payload_is_translated_to_supported_fields(self):
         expiry_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         normalized = _normalize_hiddify_payload({"expire_date": expiry_date}, 12)
