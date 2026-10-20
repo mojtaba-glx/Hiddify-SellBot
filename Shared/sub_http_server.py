@@ -836,9 +836,6 @@ def _build_panel_uuid_subscription_body(token: str, uuid_hint: str, is_b64: bool
             status_line = base64.b64encode(status_line.encode("utf-8")).decode("ascii")
         return status_line or "", service
 
-    if not lines:
-        return "", service
-
     status_line = sub_aggregator._build_status_config_line(service)
     if status_line:
         lines.insert(0, status_line)
@@ -2258,7 +2255,7 @@ def _build_agent_subscription_body(svc: dict, is_b64: bool) -> tuple[str, dict]:
         return "", {}
 
     status_line = locked_status or _build_status_config_line(svc)
-    if status_line and lines:
+    if status_line:
         lines.insert(0, status_line)
 
     body = "\n".join(lines)

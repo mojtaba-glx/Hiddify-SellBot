@@ -166,6 +166,12 @@ def _validate_internal_modules():
 
 try:
     from Shared import database, plans_storage, userbot_db, hiddify_api, multi_panel, sub_http_server
+    from Shared.config_links import (
+        config_protocol,
+        extract_visible_config_link,
+        filter_visible_config_links,
+        is_visible_config_link,
+    )
     from Shared.qr_utils import make_qr_image
     from UserBot.keyboards import (
         main_menu_keyboard, cancel_keyboard, receipt_cancel_keyboard, location_keyboard,
@@ -3230,15 +3236,16 @@ def _extract_proto_and_link(value: Any) -> tuple[str, str]:
                 _push(unquote(unquote(val)))
 
     for cand in candidates:
-        low = cand.lower()
-        for proto in ("vless", "vmess", "trojan"):
-            if low.startswith(f"{proto}://"):
-                return proto, cand.rstrip("'\",;)]}")
-        m = re.search(r"(?i)\b(vless|vmess|trojan)://\S+", cand)
+        link = extract_visible_config_link(cand)
+        if link:
+            return config_protocol(link), link
+        m = re.search(r"(?i)\b([a-z][a-z0-9+.\-]{1,24})://\S+", cand)
         if not m:
             continue
-        link = _sanitize_config_text(m.group(0)).rstrip("'\",;)]}")
-        return str(m.group(1)).lower(), link
+        link = extract_visible_config_link(m.group(0))
+        if not link:
+            continue
+        return config_protocol(link), link
     return "", ""
 
 
@@ -3290,6 +3297,8 @@ def _extract_all_config_links(value: Any) -> list[str]:
             scheme = str(m.group(1) or "").lower()
             if not scheme or scheme in blocked_schemes:
                 continue
+            if not is_visible_config_link(link):
+                continue
             if link in seen_links:
                 continue
             seen_links.add(link)
@@ -3298,33 +3307,7 @@ def _extract_all_config_links(value: Any) -> list[str]:
 
 
 def _extract_config_link_from_line(value: Any) -> str:
-    """
-    Strict parser:
-    - only accepts full-line URI
-    - no substring extraction
-    - blocks non-config schemes
-    """
-    raw = _sanitize_config_text(value)
-    if not raw:
-        return ""
-
-    raw = raw.rstrip("'\",;)]}")
-    if "://" not in raw:
-        return ""
-    if re.search(r"\s", raw):
-        return ""
-
-    m = re.match(r"(?i)^([a-z][a-z0-9+.\-]{1,24})://", raw)
-    if not m:
-        return ""
-
-    scheme = str(m.group(1) or "").lower()
-    blocked = {"http", "https", "hiddify", "ftp", "file", "mailto", "tg"}
-    if scheme in blocked:
-        return ""
-    if len(raw) < 16:
-        return ""
-    return raw
+    return extract_visible_config_link(value)
 
 
 def _collect_all_direct_configs_for_service(service: dict) -> list[str]:
@@ -3460,6 +3443,7 @@ async def _send_service_direct_configs_shell(
     user_id: int,
     service_id: int,
     service: dict,
+    protocol: str = "",
 ) -> None:
     service, lock_reason = await _resolve_service_access_lock(service)
     if lock_reason:
@@ -3509,11 +3493,15 @@ async def _send_service_direct_configs_shell(
                 "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ "
                 "کانفیگ‌ها از API پنل خوانده شد.\n\n"
             )
+    links = filter_visible_config_links(links, protocol)
     base_urls = _get_service_node_base_urls(service)
     fallback_base = base_urls[0] if base_urls else ""
 
     if not links:
-        msg = "❌ کانفیگی از لینک اشتراک استخراج نشد."
+        if protocol:
+            msg = f"❌ کانفیگ مستقیم {protocol.upper()} برای این سرویس یافت نشد."
+        else:
+            msg = "❌ کانفیگی از لینک اشتراک استخراج نشد."
         if fallback_base:
             fallback_link = (
                 fallback_base
@@ -3537,9 +3525,11 @@ async def _send_service_direct_configs_shell(
 
     server_title = _resolve_live_server_title(service, default="")
     header = "🔗 کانفیگ‌های مستقیم"
+    if protocol:
+        header = f"{header} | {protocol.upper()}"
     if server_title:
         header = f"{header} | {server_title}"
-    clean_links = [str(x).strip() for x in links if str(x).strip()]
+    clean_links = filter_visible_config_links(links, protocol)
 
     # Try single message first (best UX for one-shot copy).
     all_links_text = "\n".join(clean_links)
@@ -7707,6 +7697,7 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id=user_id,
                 service_id=int(service_id or 0),
                 service=service,
+                protocol=parts[3] if len(parts) > 3 else "",
             )
             return
 

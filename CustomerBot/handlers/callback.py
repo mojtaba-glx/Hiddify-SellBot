@@ -92,6 +92,7 @@ from CustomerBot.services import (
     service_is_renewable, renew_not_allowed_text, service_is_renewable_live,
     _resolve_live_server_title,
 )
+from Shared.config_links import filter_visible_config_links
 from Shared.qr_utils import make_qr_image
 
 _plans_storage = None
@@ -714,7 +715,7 @@ def _customer_owns_service(agent_id: int, telegram_id: int, svc) -> bool:
     return bool(customer and int(svc.get("customer_id") or 0) == int(customer.get("id") or 0))
 
 
-async def _send_service_direct_configs(msg, svc):
+async def _send_service_direct_configs(msg, svc, protocol: str = ""):
     """کانفیگ‌های مستقیم: استخراج از لینک اشتراک همه نودها (بدون API پنل).
 
     فقط از sub-link واقعی هر نود استخراج می‌شود تا همان تنظیمات
@@ -722,7 +723,11 @@ async def _send_service_direct_configs(msg, svc):
     نمی‌شود چون همه کانفیگ‌ها (حتی غیرفعال/مخفی) را برمی‌گرداند.
     """
     # دریافت لینک‌ها در thread جدا تا event loop ربات بلاک نشود
-    links = await asyncio.to_thread(collect_all_direct_configs_for_service, svc)
+    links = await asyncio.to_thread(
+        collect_all_direct_configs_for_service,
+        svc,
+        protocol,
+    )
     source_hint = ""
     base_urls = get_service_node_base_urls(svc)
     fallback_base = base_urls[0] if base_urls else ""
@@ -798,21 +803,28 @@ async def _send_service_direct_configs(msg, svc):
                 source_hint = "⚠️ دریافت مستقیم از لینک اشتراک محدود بود؛ کانفیگ‌ها از API پنل خوانده شد.\n\n"
         except Exception:
             pass
-        if not links:
+
+    links = filter_visible_config_links(links, protocol)
+    if not links:
+        if protocol:
+            msg_text = f"❌ کانفیگ مستقیم {protocol.upper()} برای این سرویس یافت نشد."
+        else:
             msg_text = "❌ کانفیگی از لینک اشتراک استخراج نشد."
-            if fallback_base:
-                if is_xui_fallback:
-                    msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}"
-                else:
-                    msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}/all.txt"
-            await msg.reply_text(msg_text, disable_web_page_preview=True)
-            return
+        if fallback_base:
+            if is_xui_fallback:
+                msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}"
+            else:
+                msg_text += f"\nمی‌توانید از لینک اشتراک استفاده کنید:\n{fallback_base}/all.txt"
+        await msg.reply_text(msg_text, disable_web_page_preview=True)
+        return
 
     server_title = _resolve_live_server_title(svc, default="")
     header = "🔗 کانفیگ‌های مستقیم"
+    if protocol:
+        header = f"{header} | {protocol.upper()}"
     if server_title:
         header = f"{header} | {server_title}"
-    clean_links = [str(x).strip() for x in links if str(x).strip()]
+    clean_links = filter_visible_config_links(links, protocol)
 
     all_links_text = "\n".join(clean_links)
     one_block_text = (
@@ -1011,7 +1023,8 @@ async def _handle_status(query, context, agent_id, user, data):
         if not svc:
             await msg.edit_text("❌ سرویس یافت نشد.")
             return
-        await _send_service_direct_configs(msg, svc)
+        protocol = parts[3] if data.startswith(CB_STATUS_DIRECTCFG) and len(parts) > 3 else ""
+        await _send_service_direct_configs(msg, svc, protocol)
 
     elif data.startswith(CB_STATUS_SUB_LINK) or data.startswith(CB_STATUS_AUTO_SUB) \
             or data.startswith(CB_STATUS_SUB_B64) or data.startswith(CB_STATUS_MULTI) \

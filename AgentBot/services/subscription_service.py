@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from Shared import agent_db, multi_panel, hiddify_api, database
+from Shared.config_links import extract_visible_config_link
 from Shared.sub_links import get_or_create_bot_sub_links, get_service_panel_targets
 from AgentBot.services.hiddify_service import (
     get_available_servers, get_server_by_id, get_agent_plans,
@@ -1059,7 +1060,17 @@ async def get_configs(agent_id: int, service_id: int) -> list:
     if not targets:
         sid = int(svc.get("server_id") or 0)
         marzban_un = _lookup_marzban_username(service_id, sid)
-        return await get_user_configs(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+        cfgs = await get_user_configs(svc.get("panel_user_uuid", ""), sid, marzban_username=marzban_un)
+        filtered: list = []
+        seen: set = set()
+        for item in cfgs or []:
+            raw = item.get("link") if isinstance(item, dict) else item
+            link = extract_visible_config_link(raw)
+            if not link or link in seen:
+                continue
+            seen.add(link)
+            filtered.append({**item, "link": link} if isinstance(item, dict) else {"link": link})
+        return filtered
 
     aggregated: list = []
     seen: set = set()
@@ -1067,11 +1078,12 @@ async def get_configs(agent_id: int, service_id: int) -> list:
         try:
             cfgs = await get_user_configs(uuid, int(srv.get("id") or 0), marzban_username=marzban_un)
             for item in cfgs or []:
-                link = item if isinstance(item, str) else str((item or {}).get("link") or "").strip()
+                raw = item.get("link") if isinstance(item, dict) else item
+                link = extract_visible_config_link(raw)
                 if not link or link in seen:
                     continue
                 seen.add(link)
-                aggregated.append(item if isinstance(item, dict) else {"link": link})
+                aggregated.append({**item, "link": link} if isinstance(item, dict) else {"link": link})
         except Exception as e:
             logger.warning("Agent get_configs node failed svc=%s server=%s: %s", service_id, srv.get("id"), e)
             continue

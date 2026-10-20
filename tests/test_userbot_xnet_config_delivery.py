@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from Shared.config_links import extract_visible_config_link
+
 
 SOURCE_PATH = Path(__file__).resolve().parents[1] / "UserBot" / "main.py"
 SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
@@ -29,6 +31,7 @@ def _load_functions(*names):
         "Optional": Optional,
         "re": re,
         "urlparse": urlparse,
+        "extract_visible_config_link": extract_visible_config_link,
     }
     exec(compile(module, str(SOURCE_PATH), "exec"), ns)
     return ns
