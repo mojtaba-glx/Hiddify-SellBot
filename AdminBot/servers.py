@@ -3716,9 +3716,11 @@ def build_server_detail_text(
     is_xnet = panel_type in {"xnet", "x-net"}
     if is_xui:
         version_text = "X-UI"
+        panel_type_label = "X-UI"
         admin_panel_url = panel_url if panel_url.startswith(("http://", "https://")) else ""
     elif is_xnet:
         version_text = "X-NET"
+        panel_type_label = "X-NET"
         admin_panel_url = ""
         if panel_url.startswith(("http://", "https://")):
             panel_base = panel_url.rstrip("/")
@@ -3732,6 +3734,7 @@ def build_server_detail_text(
         version_text = version_text_override or hiddify_api.format_panel_version(
             fallback=server.get("panel_version") or server.get("version"),
         )
+        panel_type_label = "Hiddify"
         admin_panel_url = ""
         if panel_url.startswith(("http://", "https://")):
             panel_base = panel_url.rstrip("/")
@@ -3767,7 +3770,8 @@ def build_server_detail_text(
             f"{title_line}\n"
             "❖ • -------------------------- • ❖\n"
             f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-            f"📋 نوع پنل: {plan_mode_label}\n"
+            f"📋 نوع پلن: {plan_mode_label}\n"
+            f"🧩 نوع پنل: {panel_type_label}\n"
             f"🟩 اولویت: {priority}\n"
             f"📦 پنل: {escape(version_text)}{xui_info}"
         )
@@ -3803,7 +3807,8 @@ def build_server_detail_text(
             f"{title_line}\n"
             "❖ • -------------------------- • ❖\n"
             f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-            f"📋 نوع پنل: {plan_mode_label}\n"
+            f"📋 نوع پلن: {plan_mode_label}\n"
+            f"🧩 نوع پنل: {panel_type_label}\n"
             f"🟩 اولویت: {priority}\n"
             f"📦 پنل: {escape(version_text)}{xnet_info}"
         )
@@ -3812,7 +3817,8 @@ def build_server_detail_text(
         f"{title_line}\n"
         "❖ • -------------------------- • ❖\n"
         f"👤 تعداد کاربران: {users_count} از {users_limit}\n"
-        f"📋 نوع پنل: {plan_mode_label}\n"
+        f"📋 نوع پلن: {plan_mode_label}\n"
+        f"🧩 نوع پنل: {panel_type_label}\n"
         f"🟩 اولویت: {priority}\n"
         f"📦 نسخه: {escape(version_text)}"
     )

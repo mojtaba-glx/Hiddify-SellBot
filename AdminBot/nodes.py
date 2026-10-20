@@ -217,9 +217,12 @@ def _build_node_edit_text(
     is_xnet_child = child_panel_type in {"xnet", "x-net"}
     if is_xui_child:
         version_text = "X-UI"
+        panel_type_label = "X-UI"
     elif is_xnet_child:
         version_text = "X-NET"
+        panel_type_label = "X-NET"
     else:
+        panel_type_label = "Hiddify"
         version_text = version_text_override or hiddify_api.format_panel_version(
             fallback=(child or {}).get("panel_version") or (child or {}).get("version"),
         )
@@ -263,7 +266,8 @@ def _build_node_edit_text(
         f"{server_line}\n"
         "❖ • -------------------------- • ❖\n"
         f"👤 تعداد کاربران: {users_count} از {_safe_text(users_limit_text)}\n"
-        f"📋 نوع پنل: {plan_mode_label}\n"
+        f"📋 نوع پلن: {plan_mode_label}\n"
+        f"🧩 نوع پنل: {panel_type_label}\n"
         f"🟩 اولویت: {priority}\n"
         f"📦 نسخه: {_safe_text(version_text)}\n\n"
         "فیلد موردنظر را انتخاب کنید:"

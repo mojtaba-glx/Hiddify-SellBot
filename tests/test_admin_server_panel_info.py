@@ -36,7 +36,8 @@ class ServerDetailPanelInfoTests(unittest.TestCase):
         for mode, label in cases.items():
             with self.subTest(mode=mode):
                 text = self._render(mode)
-                self.assertIn(f"📋 نوع پنل: {label}", text)
+                self.assertIn(f"📋 نوع پلن: {label}", text)
+                self.assertIn("🧩 نوع پنل: Hiddify", text)
                 self.assertNotIn("تعداد پلن", text)
 
     def test_hiddify_version_is_not_hardcoded(self):
@@ -49,8 +50,13 @@ class ServerDetailPanelInfoTests(unittest.TestCase):
         self.assertNotIn("V11,12", text)
 
     def test_xui_and_xnet_keep_their_panel_names(self):
-        self.assertIn("X-UI", self._render("fixed", panel_type="xui"))
-        self.assertIn("X-NET", self._render("fixed", panel_type="xnet"))
+        xui_text = self._render("fixed", panel_type="xui")
+        self.assertIn("🧩 نوع پنل: X-UI", xui_text)
+        self.assertIn("📦 پنل: X-UI", xui_text)
+
+        xnet_text = self._render("fixed", panel_type="xnet")
+        self.assertIn("🧩 نوع پنل: X-NET", xnet_text)
+        self.assertIn("📦 پنل: X-NET", xnet_text)
 
     def test_formatter_handles_hiddify_major_versions_11_to_14(self):
         for major in (11, 12, 13, 14):
@@ -102,7 +108,8 @@ class LiveServerDetailPanelInfoTests(unittest.IsolatedAsyncioTestCase):
             text = await admin_servers.build_server_detail_text_live(server)
 
         self.assertIn("📦 نسخه: v14.0.2", text)
-        self.assertIn("📋 نوع پنل: ترکیبی", text)
+        self.assertIn("📋 نوع پلن: ترکیبی", text)
+        self.assertIn("🧩 نوع پنل: Hiddify", text)
         self.assertNotIn("V11,12", text)
 
 
@@ -135,7 +142,8 @@ class NodeEditPanelInfoTests(unittest.TestCase):
             )
 
         self.assertIn("📦 نسخه: V13", text)
-        self.assertIn("📋 نوع پنل: ثابت", text)
+        self.assertIn("📋 نوع پلن: ثابت", text)
+        self.assertIn("🧩 نوع پنل: Hiddify", text)
         self.assertNotIn("V11,12", text)
 
 
