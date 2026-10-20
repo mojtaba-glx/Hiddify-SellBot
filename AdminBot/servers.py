@@ -2757,6 +2757,40 @@ def _format_node_sync_report(summary: Dict[str, Any]) -> str:
     return text
 
 
+def _plan_mode_label(server_id: int) -> str:
+    try:
+        mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
+    except Exception:
+        mode = "dynamic"
+    return PLAN_MODE_LABELS.get(mode, PLAN_MODE_LABELS["dynamic"])
+
+
+def _server_list_panel_label(server: Dict[str, Any]) -> str:
+    panel_type = str(server.get("panel_type") or "").strip().lower()
+    if panel_type in {"xui", "x-ui"}:
+        return "X-UI"
+    if panel_type in {"xnet", "x-net"}:
+        return "X-NET"
+    version = hiddify_api.format_panel_version(
+        fallback=server.get("panel_version") or server.get("version"),
+    )
+    return "Hiddify" if version == "نامشخص" else f"Hiddify {version}"
+
+
+def _server_list_button_text(
+    server: Dict[str, Any],
+    server_id: int,
+    title: Any = None,
+) -> str:
+    title = str(title or server.get("title") or f"سرور #{server_id}").strip()
+    meta = f"{_server_list_panel_label(server)} | {_plan_mode_label(server_id)}"
+    text = f"{title} | {meta}"
+    if len(text) <= 64:
+        return text
+    prefix_len = max(1, 64 - len(meta) - 4)
+    return f"{title[:prefix_len].rstrip()}… | {meta}"
+
+
 def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
     servers = database.get_servers() or []
     child_ids = _get_child_server_ids()
@@ -2773,7 +2807,7 @@ def build_servers_inline_keyboard() -> InlineKeyboardMarkup:
             continue
 
         # عنوان دقیق ثبت‌شده توسط ادمین؛ بدون «لوکیشن» یا پرچم خودکار.
-        btn_text = str(s.get("title") or f"سرور #{sid_int}").strip()
+        btn_text = _server_list_button_text(s, sid_int, s.get("title"))
         keyboard.append([
             InlineKeyboardButton(text=btn_text, callback_data=f"server:{sid_int}")
         ])
@@ -3681,14 +3715,6 @@ async def send_frozen_service_detail(
         await message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await context.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
-
-
-def _plan_mode_label(server_id: int) -> str:
-    try:
-        mode = str(plans_storage.get_plan_display_mode(server_id) or "dynamic").strip().lower()
-    except Exception:
-        mode = "dynamic"
-    return PLAN_MODE_LABELS.get(mode, PLAN_MODE_LABELS["dynamic"])
 
 
 def build_server_detail_text(
@@ -10341,7 +10367,7 @@ async def send_status_servers_list(chat_id: int, context: ContextTypes.DEFAULT_T
             continue
 
         # نام سرور دقیقاً همان عنوان ذخیره‌شده باشد.
-        btn_text = str(s.get("title") or f"سرور #{sid_int}").strip()
+        btn_text = _server_list_button_text(s, sid_int, s.get("title"))
         rows.append([InlineKeyboardButton(btn_text, callback_data=f"status_srv:{sid_int}")])
 
 

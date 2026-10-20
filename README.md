@@ -90,7 +90,7 @@
 
 پشتیبانی از:
 
-- `Hiddify Manager v11 / v12 / v13`
+- `Hiddify Manager v11 / v12 / v13 / v14`
 - `3x-ui / Sanaei`
 - `Alireza X-UI`
 - `X-Net`

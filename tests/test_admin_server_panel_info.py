@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from AdminBot import nodes as admin_nodes
@@ -111,6 +112,78 @@ class LiveServerDetailPanelInfoTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("📋 نوع پلن: ترکیبی", text)
         self.assertIn("🧩 نوع پنل: Hiddify", text)
         self.assertNotIn("V11,12", text)
+
+
+class ServerListPanelInfoTests(unittest.TestCase):
+    def test_list_button_shows_panel_version_and_plan_mode(self):
+        server = {
+            "id": 1,
+            "title": "لوکیشن هلند",
+            "panel_type": "hiddify",
+            "version": 14,
+        }
+        with (
+            patch.object(
+                admin_servers.database,
+                "get_servers",
+                return_value=[server],
+            ),
+            patch.object(
+                admin_servers,
+                "_get_child_server_ids",
+                return_value=set(),
+            ),
+            patch.object(
+                plans_storage,
+                "get_plan_display_mode",
+                return_value="dynamic",
+            ),
+        ):
+            keyboard = admin_servers.build_servers_inline_keyboard()
+
+        self.assertEqual(
+            keyboard.inline_keyboard[0][0].text,
+            "لوکیشن هلند | Hiddify V14 | پویا",
+        )
+
+    def test_list_button_labels_xui_and_xnet(self):
+        for panel_type, label in (("xui", "X-UI"), ("xnet", "X-NET")):
+            with self.subTest(panel_type=panel_type):
+                server = {
+                    "id": 2,
+                    "title": "server",
+                    "panel_type": panel_type,
+                }
+                with patch.object(
+                    plans_storage,
+                    "get_plan_display_mode",
+                    return_value="fixed",
+                ):
+                    text = admin_servers._server_list_button_text(server, 2)
+                self.assertIn(f"{label} | ثابت", text)
+
+    def test_list_button_respects_telegram_text_limit(self):
+        server = {
+            "id": 3,
+            "title": "x" * 80,
+            "panel_type": "hiddify",
+            "version": 14,
+        }
+        with patch.object(
+            plans_storage,
+            "get_plan_display_mode",
+            return_value="mixed",
+        ):
+            text = admin_servers._server_list_button_text(server, 3)
+
+        self.assertLessEqual(len(text), 64)
+        self.assertIn("Hiddify V14 | ترکیبی", text)
+
+    def test_readme_lists_v14_support(self):
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Hiddify Manager v11 / v12 / v13 / v14", readme)
 
 
 class NodeEditPanelInfoTests(unittest.TestCase):
