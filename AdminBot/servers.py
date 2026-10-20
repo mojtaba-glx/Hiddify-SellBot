@@ -20,7 +20,7 @@ from telegram.error import BadRequest, NetworkError
 from pathlib import Path
 from AdminBot.nodes import _short_error
 import sys
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 # اضافه کردن ریشه پروژه به sys.path تا Shared و بقیه ماژول‌ها پیدا شوند
 ROOT_DIR = Path(__file__).resolve().parents[1]  # پوشه‌ی Hiddify-SellBot
@@ -1359,6 +1359,66 @@ def make_qr_image(data: str) -> BytesIO:
     img.save(bio, "PNG")
     bio.seek(0)
     return bio
+
+
+def _telegram_proxy_title(link: str) -> str:
+    parsed = urlparse(link)
+    server = str((parse_qs(parsed.query or "").get("server") or [""])[0])
+    if parsed.netloc.lower() == "webproxy":
+        return f"{server.split('/', 1)[0]} Web".strip()
+    return server or parsed.netloc or "Telegram"
+
+
+def _normalize_telegram_proxy_entries(items: Any) -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        if isinstance(item, dict):
+            link = str(item.get("link") or "").strip()
+            title = str(item.get("title") or "").strip()
+        else:
+            link = str(item or "").strip()
+            title = ""
+        if not link or link in seen or config_protocol(link) != "telegram":
+            continue
+        seen.add(link)
+        entries.append({"title": title or _telegram_proxy_title(link), "link": link})
+    return entries
+
+
+async def _get_user_telegram_proxies(
+    server: Dict[str, Any],
+    user_uuid: str,
+) -> List[Dict[str, str]]:
+    try:
+        entries = _normalize_telegram_proxy_entries(
+            await hiddify_api.get_user_telegram_proxies(server, user_uuid)
+        )
+    except hiddify_api.HiddifyApiError as exc:
+        logger.warning(
+            "telegram proxy API failed server=%s uuid=%s: %s",
+            server.get("id"),
+            user_uuid[:12],
+            exc,
+        )
+        entries = []
+
+    if entries:
+        return entries
+
+    try:
+        configs = await hiddify_api.get_user_configs(server, user_uuid)
+    except hiddify_api.HiddifyApiError:
+        return []
+
+    links = filter_visible_config_links(
+        (
+            (cfg or {}).get("link") if isinstance(cfg, dict) else cfg
+            for cfg in (configs or [])
+        ),
+        "telegram",
+    )
+    return _normalize_telegram_proxy_entries(links)
 
 
 def _build_user_base_url(server: Dict[str, Any], user_uuid: str) -> Optional[str]:
@@ -4890,6 +4950,20 @@ async def send_user_configs_menu(
             ]
         )
 
+    if not is_xnet_server and not xui_api.is_xui_server(server):
+        rows = list(keyboard.inline_keyboard)
+        rows.insert(
+            1,
+            [
+                InlineKeyboardButton(
+                    "✈️ پروکسی تلگرام",
+                    callback_data=f"server:{server_id}:tgproxy:{user_uuid}",
+                    style="success",
+                )
+            ],
+        )
+        keyboard = InlineKeyboardMarkup(rows)
+
     if message is not None and message.text:
         await message.edit_text(
             text,
@@ -5020,6 +5094,172 @@ async def send_direct_config_menu(
         await message.edit_text(text, reply_markup=keyboard)
     else:
         await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+
+
+async def send_telegram_proxy_qr(
+    server_id: int,
+    user_uuid: str,
+    proxy: Dict[str, str],
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    link = str(proxy.get("link") or "").strip()
+    title = str(proxy.get("title") or "").strip() or _telegram_proxy_title(link)
+    caption = (
+        "✈️ پروکسی تلگرام\n"
+        f"🌐 {escape(title)}\n"
+        f"<code>{escape(link)}</code>"
+    )
+    back_kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🚀 اتصال به پروکسی",
+                    url=link,
+                    style="success",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔙 بازگشت به منوی کانفیگ‌ها",
+                    callback_data=f"server:{server_id}:usercfg:{user_uuid}",
+                )
+            ],
+        ]
+    )
+    try:
+        qr_image = make_qr_image(link)
+    except Exception as exc:
+        logger.warning("telegram proxy QR failed: %s", exc)
+        await context.bot.send_message(
+            chat_id,
+            f"{caption}\n\n❌ ساخت بارکد ناموفق بود.",
+            parse_mode="HTML",
+            reply_markup=back_kb,
+            disable_web_page_preview=True,
+        )
+        return
+
+    try:
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=qr_image,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=back_kb,
+        )
+    except BadRequest as exc:
+        if "button" not in str(exc).lower() and "url" not in str(exc).lower():
+            raise
+        qr_image.seek(0)
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=qr_image,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🔙 بازگشت به منوی کانفیگ‌ها",
+                            callback_data=f"server:{server_id}:usercfg:{user_uuid}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+async def send_telegram_proxy_menu(
+    server_id: int,
+    user_uuid: str,
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    message=None,
+) -> None:
+    server = database.get_server_by_id(server_id)
+    if not server:
+        text = "❌ سرور پیدا نشد."
+        if message is not None and message.text:
+            await message.edit_text(text)
+        else:
+            await context.bot.send_message(chat_id, text)
+        return
+
+    proxies = await _get_user_telegram_proxies(server, user_uuid)
+    back_row = [
+        InlineKeyboardButton(
+            "🔙 بازگشت به منوی کانفیگ‌ها",
+            callback_data=f"server:{server_id}:usercfg:{user_uuid}",
+        )
+    ]
+
+    if not proxies:
+        text = (
+            "✈️ پروکسی تلگرام\n"
+            "━━━━━━━━━━━━━━\n"
+            "❌ پروکسی تلگرامی برای این کاربر پیدا نشد.\n"
+            "فعال بودن Telegram/WebProxy در پنل Hiddify را بررسی کنید."
+        )
+        keyboard = InlineKeyboardMarkup([back_row])
+        if message is not None and message.text:
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+        return
+
+    if len(proxies) == 1:
+        await send_telegram_proxy_qr(
+            server_id,
+            user_uuid,
+            proxies[0],
+            chat_id,
+            context,
+        )
+        return
+
+    shown = proxies[:10]
+    lines = [
+        "✈️ پروکسی تلگرام",
+        "━━━━━━━━━━━━━━",
+    ]
+    rows = []
+    for index, proxy in enumerate(shown, start=1):
+        title = proxy.get("title") or _telegram_proxy_title(proxy.get("link", ""))
+        lines.append(f"{index}. <b>{escape(title)}</b>\n<code>{escape(proxy['link'])}</code>")
+        label = f"📷 {title}"
+        if len(label) > 60:
+            label = f"{label[:59]}…"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f"server:{server_id}:tgqr:{user_uuid}:{index - 1}",
+                )
+            ]
+        )
+    if len(proxies) > len(shown):
+        lines.append(f"… و {len(proxies) - len(shown)} پروکسی دیگر")
+    lines.append("برای دریافت بارکد، یکی از پروکسی‌ها را انتخاب کنید:")
+    text = "\n".join(lines)
+    rows.append(back_row)
+    keyboard = InlineKeyboardMarkup(rows)
+
+    if message is not None and message.text:
+        await message.edit_text(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    else:
+        await context.bot.send_message(
+            chat_id,
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 # ===============================
@@ -9211,6 +9451,50 @@ async def handle_server_inline_callback(
 
         action = parts[2]
 
+        if action in {"tgproxy", "tgqr"}:
+            if len(parts) < 4:
+                await query.answer()
+                await msg.edit_text("❌ شناسه کاربر نامعتبر است.")
+                return
+            user_uuid = parts[3]
+            await query.answer()
+
+            if action == "tgproxy":
+                await send_telegram_proxy_menu(
+                    server_id,
+                    user_uuid,
+                    chat_id,
+                    context,
+                    message=msg,
+                )
+                return
+
+            try:
+                proxy_index = int(parts[4])
+            except (IndexError, TypeError, ValueError):
+                proxy_index = -1
+
+            server = database.get_server_by_id(server_id)
+            if not server:
+                await msg.edit_text("❌ سرور پیدا نشد.")
+                return
+
+            proxies = await _get_user_telegram_proxies(server, user_uuid)
+            if proxy_index < 0 or proxy_index >= len(proxies):
+                await msg.edit_text(
+                    "❌ این پروکسی تلگرام دیگر در دسترس نیست. منو را دوباره باز کنید."
+                )
+                return
+
+            await send_telegram_proxy_qr(
+                server_id,
+                user_uuid,
+                proxies[proxy_index],
+                chat_id,
+                context,
+            )
+            return
+
         if action == "frozen":
             page = 1
             if len(parts) >= 4:
@@ -9639,6 +9923,16 @@ async def handle_server_inline_callback(
             server = database.get_server_by_id(server_id)
             if not server:
                 await msg.edit_text("❌ سرور پیدا نشد.")
+                return
+
+            if proto == "telegram":
+                await send_telegram_proxy_menu(
+                    server_id,
+                    user_uuid,
+                    chat_id,
+                    context,
+                    message=msg,
+                )
                 return
 
             try:
