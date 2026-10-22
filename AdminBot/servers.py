@@ -2935,6 +2935,8 @@ def _frozen_reason_text(raw: Any, deleted: bool = False) -> str:
         return "UUID پس از بررسی لیست کاربران پنل پیدا نشد"
     if reason == "network_error":
         return "خطای ارتباط با پنل پس از چند تلاش"
+    if reason == "admin_permission_denied":
+        return "کلید API اجازه دسترسی به این کاربر را ندارد"
     if reason == "server_missing":
         return "سرور در تنظیمات ربات پیدا نشد"
     if reason.startswith("renew_pending:"):
@@ -3487,6 +3489,8 @@ async def _recover_frozen_service_now(
                 live_probe[key] = False
                 if bool(probe.get("server_missing")):
                     probe_reason[key] = "سرور در تنظیمات ربات موجود نیست"
+                elif bool(probe.get("permission_denied")):
+                    probe_reason[key] = "کلید API اجازه دسترسی به این کاربر را ندارد"
                 elif bool(probe.get("not_found")):
                     probe_reason[key] = "UUID روی پنل پیدا نشد"
                 else:

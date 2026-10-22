@@ -177,6 +177,16 @@ def _is_user_not_found_error(exc: Exception) -> bool:
     return "http 404" in msg and "not found" in msg and "user" in msg
 
 
+def _is_user_permission_denied_error(exc: Exception) -> bool:
+    """Hiddify v12 ممکن است برای کاربر خارج از محدوده ادمین، 403 بدهد."""
+    msg = str(exc or "").lower()
+    if "http 403" not in msg:
+        return False
+    return "permission to access this user" in msg or (
+        "permission" in msg and "access this user" in msg
+    )
+
+
 def _select_services_for_cycle(services: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     """
     انتخاب سرویس‌ها برای چرخه فعلی:
@@ -507,9 +517,11 @@ async def _fetch_service_node_usage(
             }
         except Exception as e:
             # بعضی نسخه‌های Hiddify روی GET مستقیم UUID، برای کاربر موجود
-            # هم 404/user not found می‌دهند. قبل از ثبت missing/frozen،
-            # لیست کامل کاربران را به‌عنوان منبع دوم بررسی می‌کنیم.
-            if _is_user_not_found_error(e):
+            # هم 404/user not found یا 403/permission denied می‌دهند. قبل از
+            # ثبت missing/frozen، لیست کامل کاربران را بررسی می‌کنیم.
+            not_found_error = _is_user_not_found_error(e)
+            permission_denied = _is_user_permission_denied_error(e)
+            if not_found_error or permission_denied:
                 try:
                     users = await hiddify_api.list_users(server)
                     for candidate in users or []:
@@ -533,7 +545,7 @@ async def _fetch_service_node_usage(
                     # before shared UUID propagation existed. Recover only from
                     # one exact name/email match; never guess on ambiguity.
                     recovered = None
-                    if allow_name_recovery:
+                    if allow_name_recovery and not_found_error:
                         recovered = await _recover_legacy_node_mapping(
                             service_id=service_id,
                             service_name=service_name,
@@ -564,6 +576,7 @@ async def _fetch_service_node_usage(
                         "valid": True,
                         "ok": False,
                         "not_found": False,
+                        "permission_denied": permission_denied,
                         "panel_user": None,
                         "error": e,
                     }
@@ -573,7 +586,8 @@ async def _fetch_service_node_usage(
                 "user_uuid": user_uuid,
                 "valid": True,
                 "ok": False,
-                "not_found": _is_user_not_found_error(e),
+                "not_found": not_found_error,
+                "permission_denied": permission_denied,
                 "server_missing": False,
                 "panel_user": None,
                 "error": e,
@@ -948,7 +962,11 @@ async def _run_global_usage_enforcer_impl(*, scan_all: bool = False) -> Dict[str
                                 else str(node_rec.get("frozen_at") or "")
                             ),
                             frozen_reason=(
-                                "network_error"
+                                (
+                                    "admin_permission_denied"
+                                    if bool(result.get("permission_denied"))
+                                    else "network_error"
+                                )
                                 if frozen
                                 else str(node_rec.get("frozen_reason") or "")
                             ),

@@ -38,6 +38,63 @@ class UserBotFrozenValidationTests(unittest.IsolatedAsyncioTestCase):
         direct_mock.assert_awaited_once_with(server, "uuid-a")
         list_mock.assert_awaited_once_with(server)
 
+    async def test_permission_denied_uses_list_users_before_freezing(self):
+        server = {"id": 1, "title": "Turkey"}
+        node = {"server_id": 1, "panel_user_uuid": "uuid-a"}
+        permission_error = RuntimeError(
+            'HTTP 403: {"detail":{},"message":"You don\'t have permission to access this user"}'
+        )
+
+        with patch.object(
+            service_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=permission_error),
+        ) as direct_mock, patch.object(
+            service_enforcer.hiddify_api,
+            "list_users",
+            new=AsyncMock(
+                return_value=[{"uuid": "uuid-a", "current_usage_GB": 3.5}]
+            ),
+        ) as list_mock:
+            result = await service_enforcer._fetch_service_node_usage(
+                service_id=1,
+                node=node,
+                servers_map={1: server},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["not_found"])
+        self.assertFalse(result.get("permission_denied"))
+        self.assertEqual(result["panel_user"]["uuid"], "uuid-a")
+        direct_mock.assert_awaited_once_with(server, "uuid-a")
+        list_mock.assert_awaited_once_with(server)
+
+    async def test_permission_denied_without_list_match_is_flagged(self):
+        server = {"id": 1, "title": "Turkey"}
+        node = {"server_id": 1, "panel_user_uuid": "uuid-a"}
+        permission_error = RuntimeError(
+            'HTTP 403: {"detail":{},"message":"You don\'t have permission to access this user"}'
+        )
+
+        with patch.object(
+            service_enforcer.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(side_effect=permission_error),
+        ), patch.object(
+            service_enforcer.hiddify_api,
+            "list_users",
+            new=AsyncMock(return_value=[{"uuid": "uuid-b"}]),
+        ):
+            result = await service_enforcer._fetch_service_node_usage(
+                service_id=1,
+                node=node,
+                servers_map={1: server},
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["not_found"])
+        self.assertTrue(result["permission_denied"])
+
     async def test_list_failure_does_not_confirm_user_missing(self):
         server = {"id": 1, "title": "Germany"}
         node = {"server_id": 1, "panel_user_uuid": "uuid-a"}
