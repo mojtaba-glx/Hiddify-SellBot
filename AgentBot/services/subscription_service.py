@@ -25,6 +25,14 @@ class WholesalePricingNotConfiguredError(RuntimeError):
         super().__init__("agent wholesale pricing is not configured")
 
 
+class InvalidRenewalError(ValueError):
+    """Raised when a renewal request carries an invalid period or volume."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class InsufficientWalletError(RuntimeError):
     """Raised when an agent cannot pay for a new subscription."""
 
@@ -478,6 +486,20 @@ async def renew_subscription(agent_id: int, service_id: int, extra_days: int, ex
             agent_id,
         )
         return None
+
+    try:
+        extra_days = int(extra_days)
+    except (TypeError, ValueError):
+        raise InvalidRenewalError("invalid_days") from None
+    try:
+        extra_gb = float(extra_gb or 0)
+    except (TypeError, ValueError):
+        raise InvalidRenewalError("invalid_volume") from None
+    if extra_days <= 0:
+        raise InvalidRenewalError("invalid_days")
+    if extra_gb <= 0:
+        raise InvalidRenewalError("invalid_volume")
+
     server_id = int(svc.get("server_id") or 0)
     if not get_server_by_id(server_id):
         logger.error("Cannot renew service %s: primary server is missing", service_id)

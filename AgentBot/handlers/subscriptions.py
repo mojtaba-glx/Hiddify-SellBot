@@ -31,7 +31,7 @@ from AgentBot.services.subscription_service import (
     disable_subscription, enable_subscription, delete_subscription,
     change_subscription_link, get_subs_link_settings, get_sub_link_for_type,
     rename_service_on_panels, InsufficientWalletError, SubscriptionCreationError,
-    WholesalePricingNotConfiguredError,
+    WholesalePricingNotConfiguredError, InvalidRenewalError,
     format_service_expiry, get_service_activation_block_reason,
     service_is_customerbot_owned,
 )
@@ -69,7 +69,7 @@ def _calc_dynamic_price(agent_id: int, server_id: int, gb: int, months: int):
 
 def _get_wizard_defaults(agent_id: int):
     settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
-    min_gb = _wiz_num(settings.get("min_gb", 1), 1)
+    min_gb = max(1, _wiz_num(settings.get("min_gb", 1), 1))
     return min_gb, 1
 
 
@@ -1216,9 +1216,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
         step_gb = _wiz_num(settings.get("step_gb", 1), 1)
         step_month = _wiz_num(settings.get("step_month", 1), 1)
-        min_gb = _wiz_num(settings.get("min_gb", 1), 1)
+        min_gb = max(1, _wiz_num(settings.get("min_gb", 1), 1))
         max_gb = _wiz_num(settings.get("max_gb", 999), 999)
-        min_month = _wiz_num(settings.get("min_month", 1), 1)
+        min_month = max(1, _wiz_num(settings.get("min_month", 1), 1))
         max_month = _wiz_num(settings.get("max_month", 12), 12)
         if sub == "gb_inc":
             gb = min(gb + step_gb, max_gb)
@@ -1419,6 +1419,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         gb = _wiz_num(context.user_data.get("rewiz_gb", 1), 1)
         months = _wiz_num(context.user_data.get("rewiz_months", 1), 1)
 
+        if sub == "confirm" and (gb < 1 or months < 1):
+            await _safe_answer(
+                query,
+                "❌ حداقل حجم ۱ گیگابایت و حداقل مدت ۱ ماه است.",
+                alert=True,
+            )
+            return
+
         if sub == "confirm":
             wholesale = int(context.user_data.get("rewiz_wholesale", 0) or 0)
             vol_mode = context.user_data.get("rewiz_vol_mode") or "reset"
@@ -1429,6 +1437,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     agent_id, svc_id, days, extra_gb=float(gb),
                     override_cost=wholesale, volume_mode=vol_mode, time_mode=time_mode,
                 )
+            except InvalidRenewalError:
+                try:
+                    await query.edit_message_text(
+                        "❌ تمدید انجام نشد: مدت یا حجم تمدید نامعتبر است.\n"
+                        "حداقل ۱ روز و ۱ گیگابایت انتخاب کنید.",
+                        reply_markup=_service_detail_keyboard_for(svc),
+                    )
+                except Exception:
+                    pass
+                await _safe_answer(query, "مدت یا حجم تمدید نامعتبر است!", alert=True)
+                return
             except WholesalePricingNotConfiguredError:
                 try:
                     await query.edit_message_text(
@@ -1500,9 +1519,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         settings = db_get_setting(agent_id, "dynamic_plan_settings", {})
         step_gb = _wiz_num(settings.get("step_gb", 1), 1)
         step_month = _wiz_num(settings.get("step_month", 1), 1)
-        min_gb = _wiz_num(settings.get("min_gb", 1), 1)
+        min_gb = max(1, _wiz_num(settings.get("min_gb", 1), 1))
         max_gb = _wiz_num(settings.get("max_gb", 999), 999)
-        min_month = _wiz_num(settings.get("min_month", 1), 1)
+        min_month = max(1, _wiz_num(settings.get("min_month", 1), 1))
         max_month = _wiz_num(settings.get("max_month", 12), 12)
         if sub == "gb_inc":
             gb = min(gb + step_gb, max_gb)

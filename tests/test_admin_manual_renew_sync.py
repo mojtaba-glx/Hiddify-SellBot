@@ -212,6 +212,58 @@ class AdminManualRenewRuntimeSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(int(nodes[0]["frozen"] or 0), 0)
         self.assertEqual(int(nodes[0]["fail_count"] or 0), 0)
 
+    async def test_manual_activation_reports_invalid_expiry_without_guessing(self):
+        server = {"id": 1, "title": "Germany"}
+        live_user = {
+            "uuid": "uuid-a",
+            "name": "mohammadhosein",
+            "current_usage_GB": 0.0,
+            "package_days": 0,
+            "start_date": "2026-10-23",
+        }
+        before = agent_db.get_service_by_id(self.agent_service_id)
+
+        with patch.object(
+            servers.database,
+            "get_server_by_id",
+            return_value=server,
+        ), patch.object(
+            servers,
+            "_get_related_server_targets",
+            return_value=[server],
+        ), patch.object(
+            servers,
+            "_resolve_panel_user_uuid",
+            new=AsyncMock(return_value="uuid-a"),
+        ), patch.object(
+            servers.hiddify_api,
+            "get_user_by_uuid",
+            new=AsyncMock(return_value=live_user),
+        ), patch.object(
+            servers.hiddify_api,
+            "enable_user",
+            new=AsyncMock(),
+        ), patch.object(
+            servers,
+            "_get_panel_user_with_list_fallback",
+            new=AsyncMock(return_value=live_user),
+        ):
+            resolved_uuid, changed, total, failed = (
+                await servers._set_user_active_state_on_related_servers(
+                    1, "uuid-a", active=True
+                )
+            )
+
+        self.assertEqual(resolved_uuid, "uuid-a")
+        self.assertEqual(changed, 1)
+        self.assertEqual(total, 1)
+        self.assertIn(servers._RUNTIME_EXPIRY_SYNC_ERROR, failed)
+
+        after = agent_db.get_service_by_id(self.agent_service_id)
+        self.assertEqual(str(after["end_date"]), str(before["end_date"]))
+        self.assertEqual(str(after["expired_at"]), str(before["expired_at"]))
+        self.assertEqual(int(after["is_active"]), 0)
+
     async def test_agency_service_can_be_resolved_from_node_uuid(self):
         agent_db.add_service_node(
             self.agent_service_id,

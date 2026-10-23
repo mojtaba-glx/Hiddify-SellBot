@@ -482,6 +482,11 @@ def _parse_dt(dt_str: Optional[str]) -> Optional[datetime]:
     return None
 
 
+_RUNTIME_EXPIRY_SYNC_ERROR = (
+    "اطلاعات انقضا/حجم کاربر در پنل نامعتبر است؛ همگام‌سازی دیتابیس انجام نشد"
+)
+
+
 def _compute_package_info(user: Dict[str, Any]):
     # X-UI: already has days_left / remaining_days / expire fields
     for key in ("days_left", "remaining_days", "remaining_day"):
@@ -968,6 +973,7 @@ async def _set_user_active_state_on_related_servers(
         runtime_snapshots: List[Tuple[int, str, float, int]] = []
         now_text = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
         runtime_sync_failed: List[str] = []
+        runtime_expiry_invalid = False
         for target, target_uuid in successful_targets:
             try:
                 live_user = await _get_panel_user_with_list_fallback(target, target_uuid)
@@ -976,6 +982,7 @@ async def _set_user_active_state_on_related_servers(
                 usage_current = _to_float(live_user.get("current_usage_GB"))
                 _, _, days_left = _compute_package_info(live_user)
                 if usage_current is None or days_left is None:
+                    runtime_expiry_invalid = True
                     raise RuntimeError("live usage or remaining time is missing")
                 runtime_snapshots.append((
                     int(target.get("id") or 0),
@@ -1065,6 +1072,8 @@ async def _set_user_active_state_on_related_servers(
                     failed.append("همگام‌سازی دیتابیس نمایندگی")
         elif runtime_sync_failed:
             failed.extend(title for title in runtime_sync_failed if title not in failed)
+            if runtime_expiry_invalid and _RUNTIME_EXPIRY_SYNC_ERROR not in failed:
+                failed.append(_RUNTIME_EXPIRY_SYNC_ERROR)
     elif not active and not failed and len(successful_targets) == len(targets):
         if service_id > 0:
             try:
@@ -8421,8 +8430,9 @@ async def handle_server_inline_callback(
             if failed:
                 try:
                     await query.answer(
-                        f"⚠️ روی {changed} از {total} سرور فعال شد.",
-                        show_alert=False,
+                        f"⚠️ روی {changed} از {total} سرور فعال شد.\n"
+                        + " | ".join(failed[:3]),
+                        show_alert=True,
                     )
                 except Exception:
                     pass
@@ -8484,8 +8494,9 @@ async def handle_server_inline_callback(
                 action_title = "فعال" if not currently_active else "غیرفعال"
                 try:
                     await query.answer(
-                        f"⚠️ روی {changed} از {total} سرور {action_title} شد.",
-                        show_alert=False,
+                        f"⚠️ روی {changed} از {total} سرور {action_title} شد.\n"
+                        + " | ".join(failed[:3]),
+                        show_alert=True,
                     )
                 except Exception:
                     pass

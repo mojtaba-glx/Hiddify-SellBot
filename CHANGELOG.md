@@ -1,5 +1,13 @@
 # Changelog
 
+## Hiddify-SellBot v6.3.1 — Zero-Day Agency Renewal Guard
+- رد تمدید با مدت یا حجم صفر/منفی در `renew_subscription` پیش از کسر کیف پول و نمایش خطای واضح در ویزارد نمایندگی
+- محدودسازی `min_gb` و `min_month` به حداقل ۱ و اعتبارسنجی بازه‌های پلن پویا
+- محافظ دفاعی در `renew_service_with_policy` برای جلوگیری از ثبت `end_date=now` در تمدید reset
+- جلوگیری از تکرار باگ در مسیر تمدید سفارش CustomerBot
+- نمایش خطای روشن در فعال‌سازی دستی AdminBot وقتی اطلاعات انقضای پنل نامعتبر است، بدون حدس زدن یا تغییر بی‌دلیل تاریخ
+- افزودن تست‌های رگرسیون برای تمدید صفر/منفی، عدم کسر کیف پول، تمدید معتبر و فعال‌سازی دستی
+
 ## Hiddify-SellBot v6.3.0 — Telegram Proxy Link & QR
 - افزودن دکمه «✈️ پروکسی تلگرام» به منوی کانفیگ‌های AdminBot برای کاربران Hiddify
 - دریافت لینک‌های MTProxy/WebProxy از endpoint اختصاصی `api/v2/user/mtproxies/` هیدیفای

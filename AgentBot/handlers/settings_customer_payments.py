@@ -1464,6 +1464,11 @@ async def _renew_subscription_from_order(
     else:
         new_usage_limit = float(extra_gb)
 
+    if extra_days < 0 or new_days_left <= 0:
+        raise RuntimeError("invalid_renew_duration")
+    if vol_mode == "reset" and new_usage_limit <= 0:
+        raise RuntimeError("invalid_renew_volume")
+
     # ── پنل‌ها ── (payload مطابق مسیر تمدید نماینده در AgentBot.services.subscription_service)
     targets = get_service_panel_targets(svc)
     if not targets:

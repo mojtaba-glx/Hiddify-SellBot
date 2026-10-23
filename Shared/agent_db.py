@@ -2595,6 +2595,15 @@ def renew_service_with_policy(service_id: int, extra_days: int, extra_gb: float 
     else:
         new_usage_limit = float(extra_gb)
 
+    if int(extra_days) < 0 or new_days_left <= 0:
+        conn.rollback()
+        conn.close()
+        return False
+    if str(volume_mode).strip().lower() == "reset" and new_usage_limit <= 0:
+        conn.rollback()
+        conn.close()
+        return False
+
     # Match UserBot: renewal always resets the traffic counter and starts the
     # new accounting period now. add/reset only controls what allowance/time
     # is carried into that fresh period.

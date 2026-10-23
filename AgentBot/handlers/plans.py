@@ -35,6 +35,26 @@ from Shared import plans_storage
 
 logger = logging.getLogger(__name__)
 
+
+def _plan_range_error(min_gb, max_gb, step_gb, min_month, max_month, step_month):
+    try:
+        min_gb = int(float(min_gb))
+        max_gb = int(float(max_gb))
+        step_gb = int(float(step_gb))
+        min_month = int(float(min_month))
+        max_month = int(float(max_month))
+        step_month = int(float(step_month))
+    except (TypeError, ValueError):
+        return "❌ مقادیر بازه باید عدد باشند."
+    if min_gb < 1 or min_month < 1:
+        return "❌ حداقل حجم و حداقل مدت باید حداقل ۱ باشد."
+    if max_gb < min_gb or max_month < min_month:
+        return "❌ حداکثر حجم یا مدت نباید کمتر از حداقل باشد."
+    if step_gb < 1 or step_month < 1:
+        return "❌ گام تغییر حجم و مدت باید حداقل ۱ باشد."
+    return ""
+
+
 DISCOUNT_DEFAULTS = {
     "discount_simple_enabled": False,
     "discount_step_gb": 50,
@@ -1122,6 +1142,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
                 return True
         else:
             return False
+        range_error = _plan_range_error(
+            settings.get("min_gb", 1),
+            settings.get("max_gb", 999),
+            settings.get("step_gb", 1),
+            settings.get("min_month", 1),
+            settings.get("max_month", 12),
+            settings.get("step_month", 1),
+        )
+        if range_error:
+            await update.message.reply_text(range_error)
+            return True
         set_setting(agent_id, "dynamic_plan_settings", settings)
         context.user_data.pop(UD_STATE, None)
         context.user_data.pop(UD_DYN_FIELD, None)
@@ -1139,6 +1170,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             nums = [int(v) for v in vals]
         except ValueError:
             await update.message.reply_text("\u274c \u0647\u0645\u0647 \u0645\u0642\u0627\u062f\u06cc\u0631 \u0628\u0627\u06cc\u062f \u0639\u062f\u062f \u0628\u0627\u0634\u0646\u062f.")
+            return True
+        range_error = _plan_range_error(
+            nums[2], nums[3], nums[4], nums[5], nums[6], nums[7]
+        )
+        if range_error:
+            await update.message.reply_text(range_error)
             return True
         set_setting(agent_id, "dynamic_plan_settings", {
             "price_per_gb": nums[0], "price_per_month": nums[1],
